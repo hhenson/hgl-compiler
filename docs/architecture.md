@@ -85,10 +85,18 @@ A transpiler is a crate that depends on the analysed-program crate and the
 diagnostics crate, and on no other transpiler. `hgl_cli` selects one by
 target name. The front end does not change.
 
-First target (proposed, awaiting the owner's confirmation): Python wiring
-for [hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
+First target (owner decision, 2026-11-13): Python wiring for
+[hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
+
+## Finding source files (planned)
+
+The compiler is given one or more source roots. It reads every `.hgl` file
+under them and groups the files by the `module` line each declares. File and
+directory names carry no meaning to the compiler; keeping one module's files
+together is a convention for readers. The language does not define a file
+layout, so this is a compiler rule (owner decision, 2026-11-13).
 
 ## Planned order
 
