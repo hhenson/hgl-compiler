@@ -71,6 +71,30 @@ the lexer and the diagnostic renderer all use it, and tests lex the whole
 specification corpus under each form. CI runs the tests on Linux, macOS and
 Windows.
 
+## Parser (planned)
+
+### Generic arguments or comparison
+
+In an expression, `name <` opens generic arguments or is a comparison.
+GEN-14 decides by what `name` resolves to, which only the analyser knows.
+The parser therefore guesses and the analyser confirms (owner decision,
+2026-11-13):
+
+- The parser reads ahead to the `>` that would close the list. The generic
+  reading is possible when the tokens between form generic arguments and `(`
+  follows. When only one reading parses, that reading is the result.
+- When both parse, as in `f(a < b, c > (d))` and `a < b > (c)`, the parser
+  records its guess, the generic reading, in a node marked *undecided* that
+  keeps its tokens.
+- The analyser resolves `name`. A generic type confirms the guess; any other
+  name re-reads the node as comparisons. A generic type followed by a `<`
+  that cannot open its arguments is an invalid application, reported with no
+  fallback to comparison (GEN-14).
+- The formatter runs without the analyser, so it keeps the author's spacing
+  inside an undecided node.
+
+The language is exactly GEN-14; only the stage that applies it differs.
+
 ## Diagnostics
 
 A diagnostic has a category from the specification's list, a code, a primary
@@ -85,10 +109,18 @@ A transpiler is a crate that depends on the analysed-program crate and the
 diagnostics crate, and on no other transpiler. `hgl_cli` selects one by
 target name. The front end does not change.
 
-First target (proposed, awaiting the owner's confirmation): Python wiring
-for [hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
+First target (owner decision, 2026-11-13): Python wiring for
+[hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
+
+## Finding source files (planned)
+
+The compiler is given one or more source roots. It reads every `.hgl` file
+under them and groups the files by the `module` line each declares. File and
+directory names carry no meaning to the compiler; keeping one module's files
+together is a convention for readers. The language does not define a file
+layout, so this is a compiler rule (owner decision, 2026-11-13).
 
 ## Planned order
 
