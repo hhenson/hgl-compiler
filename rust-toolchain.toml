@@ -1,0 +1,6 @@
+# The Rust release this project is built and linted with. Pinning it keeps
+# `cargo clippy -- -D warnings` from failing when a newer release adds a
+# lint. Raise it deliberately, in its own change.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

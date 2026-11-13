@@ -1,0 +1,34 @@
+# The workspace: one crate per compiler stage, plus shared support crates.
+# docs/architecture.md describes how they fit together.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Values each crate inherits with `field.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Oldest compiler that builds this workspace (edition 2024 with `if let`
+# chains). rust-toolchain.toml pins the release actually used.
+rust-version = "1.88"
+publish = false
+repository = "https://github.com/hhenson/hgl-compiler"
+
+# One place for dependency versions. A crate opts in with
+# `name.workspace = true`.
+[workspace.dependencies]
+hgl_source = { path = "crates/hgl_source" }
+hgl_diagnostics = { path = "crates/hgl_diagnostics" }
+hgl_lexer = { path = "crates/hgl_lexer" }
+clap = { version = "4.6", features = ["derive"] }
+codespan-reporting = "0.13"
+
+# Lints every crate inherits with `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+# Every public item needs a doc comment (see AGENTS.md).
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
