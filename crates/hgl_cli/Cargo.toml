@@ -1,0 +1,22 @@
+[package]
+name = "hgl_cli"
+description = "The `hgl` command: drives the compiler stages from the command line."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+# The installed program is called `hgl`.
+[[bin]]
+name = "hgl"
+path = "src/main.rs"
+
+[dependencies]
+hgl_source.workspace = true
+hgl_diagnostics.workspace = true
+hgl_lexer.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

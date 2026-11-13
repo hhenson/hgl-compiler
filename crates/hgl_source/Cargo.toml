@@ -1,0 +1,11 @@
+[package]
+name = "hgl_source"
+description = "Source files, byte spans, and line/column lookup shared by every compiler stage."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

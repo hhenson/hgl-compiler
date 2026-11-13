@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # rust-toolchain.toml selects the compiler; rustup installs it on the
+      # first cargo command.
+      - run: cargo --version
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    # Source files come from all three platforms, so the tests run on all
+    # three. Git on the Windows runner checks text files out with CRLF.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # The corpus test reads HGL from the pinned specification submodules.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - run: cargo --version
+      - run: cargo test --workspace --locked

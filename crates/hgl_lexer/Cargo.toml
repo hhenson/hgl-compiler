@@ -1,0 +1,15 @@
+[package]
+name = "hgl_lexer"
+description = "Stage 1: turns HGL source text into tokens and decodes literal values."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hgl_source.workspace = true
+hgl_diagnostics.workspace = true
+
+[lints]
+workspace = true

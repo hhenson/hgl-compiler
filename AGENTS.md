@@ -20,8 +20,13 @@
 - Document the code for a reader new to Rust: every crate and module says what
   it is for and where it sits in the pipeline; every public item has a doc
   comment; a non-obvious Rust idiom gets one explanatory line.
-- A new third-party dependency needs the owner's agreement. Prefer the standard
-  library for small jobs.
+- Prefer an established, well-maintained tool or crate to hand-written code.
+  Drop one that cannot do the job the way the design needs: the design
+  decides, not the tool. List each dependency and its job in
+  `docs/architecture.md`.
+- Stay current. `rust-toolchain.toml` pins the latest stable Rust; merge the
+  scheduled toolchain and dependency update pull requests promptly. Declare no
+  minimum supported Rust version.
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`
   and `cargo test --workspace` pass before a push.
 - Report the exact tests run, skipped scope, and unsupported rules. Passing
