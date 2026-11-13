@@ -22,6 +22,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hgl_lexer"
+version = "0.1.0"
+dependencies = [
+ "hgl_diagnostics",
+ "hgl_source",
+]
+
+[[package]]
 name = "hgl_source"
 version = "0.1.0"
 
