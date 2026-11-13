@@ -1,0 +1,24 @@
+# Keeps the project on current releases. Each entry opens pull requests on
+# its schedule; CI decides whether an update is safe to merge.
+version: 2
+updates:
+  # The pinned Rust release in rust-toolchain.toml.
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Crates in Cargo.lock, in one pull request a week.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      crates:
+        patterns: ["*"]
+
+  # Actions used by the workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

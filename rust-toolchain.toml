@@ -1,6 +1,10 @@
-# The Rust release this project is built and linted with. Pinning it keeps
-# `cargo clippy -- -D warnings` from failing when a newer release adds a
-# lint. Raise it deliberately, in its own change.
+# The Rust release this project is built, tested and linted with.
+#
+# It follows the current stable release. Dependabot opens a pull request
+# when a new one ships (.github/dependabot.yml); merge it once CI passes.
+# The pin exists so that a new release's lints arrive in that pull request
+# and not in the middle of unrelated work. It is not a statement that older
+# or newer compilers are unsupported.
 [toolchain]
-channel = "1.98.1"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

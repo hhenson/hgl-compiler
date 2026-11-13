@@ -3,7 +3,7 @@ name = "hgl_cli"
 description = "The `hgl` command: drives the compiler stages from the command line."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 repository.workspace = true
 

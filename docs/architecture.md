@@ -106,10 +106,25 @@ no test depends on a file outside this repository.
 
 ## Dependencies
 
+An established tool is preferred to hand-written code. A tool that cannot do
+the job the way the design needs is dropped.
+
 | Crate | Used by | For |
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 
-The lexer is hand-written: durations, temporal literals and precise error
-spans do not fit a generated scanner's regular-expression table.
+Hand-written where no tool fits:
+
+- The lexer. Durations, temporal literals, "reject the whole literal, never
+  split it" and exact error spans do not fit a generated scanner's
+  regular-expression table.
+- Line lookup. `codespan-reporting` splits lines on LF only, so it is given
+  the compiler's own line index through its `Files` trait.
+
+## Toolchain
+
+`rust-toolchain.toml` pins the current stable Rust, so everyone and CI build
+and lint with the same release. Dependabot proposes the next Rust release,
+crate updates and workflow action updates weekly
+(`.github/dependabot.yml`). No minimum supported Rust version is declared.

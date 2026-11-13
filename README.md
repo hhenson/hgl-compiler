@@ -24,7 +24,7 @@ the front end. The first target is the
 
 | Stage | State |
 | --- | --- |
-| Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-14` |
+| Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-14`; LF, CRLF and CR line breaks |
 | Parser, formatter | planned |
 | Analyser, error reporting | planned |
 | Optimiser | planned |
@@ -49,3 +49,7 @@ The specification and core are pinned under `spec/` as submodules; tests read
 HGL from them.
 
 Project rules: [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE), the same as [hgraph](https://github.com/hhenson/hgraph).

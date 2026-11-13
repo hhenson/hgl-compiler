@@ -9,9 +9,9 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Oldest compiler that builds this workspace (edition 2024 with `if let`
-# chains). rust-toolchain.toml pins the release actually used.
-rust-version = "1.88"
+# No `rust-version` (minimum supported Rust): the project follows the
+# current stable release, pinned in rust-toolchain.toml.
+license = "MIT"
 publish = false
 repository = "https://github.com/hhenson/hgl-compiler"
 
