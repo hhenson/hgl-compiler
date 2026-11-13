@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # The corpus test reads HGL from the pinned specification submodules.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      # rust-toolchain.toml selects the compiler; rustup installs it on the
+      # first cargo command.
+      - run: cargo --version
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
