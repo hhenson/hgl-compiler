@@ -253,10 +253,10 @@ mod tests {
     #[test]
     fn local_codes_are_not_catalogued() {
         assert!(Code::Catalogued("syntax.expected_token").is_catalogued());
-        assert!(!Code::Local("lex.unclosed_string").is_catalogued());
+        assert!(!Code::Local("example.local_code").is_catalogued());
         assert_eq!(
-            Code::Local("lex.unclosed_string").as_str(),
-            "lex.unclosed_string"
+            Code::Local("example.local_code").as_str(),
+            "example.local_code"
         );
     }
 

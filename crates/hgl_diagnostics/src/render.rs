@@ -8,15 +8,19 @@
 //! A rendered diagnostic looks like:
 //!
 //! ```text
-//! error[parse/lex.unclosed_string]: string has no closing quote
+//! error[parse/string.unclosed]: string has no closing quote
 //!   ┌─ example.hgl:3:13
 //!   │
 //! 3 │     let s = "abc
 //!   │             ^^^^
 //!   │
 //!   = rule LEX-2
-//!   = lex.unclosed_string is a compiler-local code; the specification has not catalogued this rejection
+//!   = a string must close on the line it opens on
 //! ```
+//!
+//! The heading is the diagnostic's category and code. The notes begin with
+//! the specification rule it cites. A code the specification has not
+//! catalogued gets a further note that says it is local to this compiler.
 
 use std::io::{self, IsTerminal};
 use std::ops::Range;
@@ -168,7 +172,7 @@ mod tests {
         diagnostics.emit(
             Diagnostic::error(
                 Category::Parse,
-                Code::Local("lex.unclosed_string"),
+                Code::Local("example.local_code"),
                 Location::new(file, Span::new(8, 12)),
                 "string has no closing quote",
             )
@@ -176,7 +180,7 @@ mod tests {
         );
         let text = to_string(&sources, &diagnostics);
         assert!(
-            text.contains("error[parse/lex.unclosed_string]: string has no closing quote"),
+            text.contains("error[parse/example.local_code]: string has no closing quote"),
             "{text}"
         );
         assert!(text.contains("example.hgl:1:9"), "{text}");
@@ -194,7 +198,7 @@ mod tests {
         let mut diagnostics = Diagnostics::new();
         diagnostics.emit(Diagnostic::error(
             Category::Parse,
-            Code::Local("lex.example"),
+            Code::Local("example.local_code"),
             Location::new(file, Span::new(start, start + 1)),
             "example",
         ));

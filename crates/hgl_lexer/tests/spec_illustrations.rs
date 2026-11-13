@@ -1,14 +1,14 @@
 //! The source-text chapter's own examples.
 //!
-//! The chapter closes with a table of accepted illustrations and a list of
+//! The chapter gives tables of accepted illustrations and lists of
 //! deliberate rejections. Each one is checked here as the chapter states it.
 //! This is not a conformance claim: the chapter says conformance cases for
 //! these are still planned.
 
-use hgl_diagnostics::Diagnostics;
+use hgl_diagnostics::{Category, Diagnostics};
 use hgl_lexer::literal::{self, Date, Time, UtcOffset};
 use hgl_lexer::{Token, TokenKind, lex};
-use hgl_source::SourceMap;
+use hgl_source::{LineCol, SourceMap};
 
 /// What lexing and literal validation make of one fragment.
 struct Outcome {
@@ -25,6 +25,17 @@ fn check(text: &str) -> Outcome {
     let mut diagnostics = Diagnostics::new();
     let tokens: Vec<Token> = lex(&sources, file, &mut diagnostics);
     literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
+
+    for diagnostic in diagnostics.as_slice() {
+        // Every lexical rejection is a `parse` code of the diagnostic
+        // catalog, so each can be the subject of `# expect-error` (TST-12).
+        assert_eq!(diagnostic.category, Category::Parse);
+        assert!(
+            diagnostic.code.is_catalogued(),
+            "{} is not a catalogued code",
+            diagnostic.code.as_str()
+        );
+    }
 
     let source = sources.file(file);
     Outcome {
@@ -62,6 +73,8 @@ fn rejected(text: &str, code: &str, rule: &'static str) {
         "`{text}` should be rejected once"
     );
 }
+
+// ---- First table ----------------------------------------------------------
 
 #[test]
 fn one_duration_token_ninety_minutes() {
@@ -122,6 +135,8 @@ fn named_zone() {
     assert_eq!(value.zone, Some("Europe/London"));
 }
 
+// ---- First rejections -----------------------------------------------------
+
 #[test]
 fn duration_units_out_of_order_are_rejected() {
     rejected("30m1h", literal::codes::INVALID_DURATION, "LEX-13");
@@ -146,30 +161,249 @@ fn an_unclosed_string_is_rejected() {
     );
 }
 
-#[test]
-fn rejections_use_local_codes() {
-    // The diagnostic catalogue has no code for a lexical or literal
-    // rejection, so none of these can yet satisfy `# expect-error` (TST-12).
-    // This test fails when a code is catalogued and adopted, as a prompt to
-    // revisit the cases above.
+// ---- Line breaks (LEX-15) -------------------------------------------------
+
+/// The 1-based line and column at which each non-trivia, non-newline token
+/// of `text` begins, with the token's text.
+fn positions(text: &str) -> Vec<(String, LineCol)> {
     let mut sources = SourceMap::new();
+    let file = sources.add("lines.hgl", text).unwrap();
     let mut diagnostics = Diagnostics::new();
-    for (index, text) in ["30m1h", "0.5us", "@2026-02-29", "\"unclosed"]
+    let tokens = lex(&sources, file, &mut diagnostics);
+    assert!(diagnostics.is_empty(), "{text:?} should be accepted");
+    let source = sources.file(file);
+    tokens
         .iter()
-        .enumerate()
-    {
-        let file = sources
-            .add(format!("rejection_{index}.hgl"), *text)
-            .unwrap();
-        let tokens = lex(&sources, file, &mut diagnostics);
-        literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
+        .filter(|token| !token.kind.is_trivia() && token.kind != TokenKind::Newline)
+        .map(|token| {
+            (
+                source.slice(token.span).to_string(),
+                source.line_col(token.span.start),
+            )
+        })
+        .collect()
+}
+
+/// How many line-break tokens `text` lexes to.
+fn line_breaks(text: &str) -> usize {
+    let mut sources = SourceMap::new();
+    let file = sources.add("lines.hgl", text).unwrap();
+    let tokens = lex(&sources, file, &mut Diagnostics::new());
+    tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::Newline)
+        .count()
+}
+
+#[test]
+fn four_physical_lines_under_three_line_break_forms() {
+    // "The source `a` LF `b` CR LF `c` CR `d` has four physical lines and
+    // `d` begins line 4."
+    let text = "a\nb\r\nc\rd";
+    let mut sources = SourceMap::new();
+    let file = sources.add("lines.hgl", text).unwrap();
+    assert_eq!(sources.file(file).line_count(), 4);
+
+    let at = |line, column| LineCol { line, column };
+    assert_eq!(
+        positions(text),
+        [
+            ("a".to_string(), at(1, 1)),
+            ("b".to_string(), at(2, 1)),
+            ("c".to_string(), at(3, 1)),
+            ("d".to_string(), at(4, 1)),
+        ]
+    );
+    assert_eq!(line_breaks(text), 3);
+}
+
+#[test]
+fn a_carriage_return_pairs_only_with_the_line_feed_after_it() {
+    // "CR CR LF is two line breaks, as is LF CR."
+    assert_eq!(line_breaks("a\r\r\nb"), 2);
+    assert_eq!(line_breaks("a\n\rb"), 2);
+    assert_eq!(line_breaks("a\r\nb"), 1);
+}
+
+#[test]
+fn rewriting_line_breaks_keeps_tokens_lines_and_columns() {
+    // "A source rewritten from one form to another keeps its tokens, their
+    // lines and columns, and its meaning."
+    let unix = "let a = 1\n  let b = \"two\"\n\nlet c = @09:30\n";
+    let windows = unix.replace('\n', "\r\n");
+    let classic_mac = unix.replace('\n', "\r");
+    assert_eq!(positions(unix), positions(&windows));
+    assert_eq!(positions(unix), positions(&classic_mac));
+}
+
+// ---- Second table ---------------------------------------------------------
+
+#[test]
+fn two_closers_end_two_argument_lists() {
+    use TokenKind::*;
+    accepted(
+        "list<list<i64>>",
+        &[
+            (Ident, "list"),
+            (Lt, "<"),
+            (Ident, "list"),
+            (Lt, "<"),
+            (KwI64, "i64"),
+            (Gt, ">"),
+            (Gt, ">"),
+        ],
+    );
+}
+
+#[test]
+fn a_float_may_round_to_zero() {
+    accepted("1e-400", &[(TokenKind::Float, "1e-400")]);
+    assert_eq!(literal::decode_float("1e-400"), Ok(0.0));
+}
+
+#[test]
+fn empty_block_comment() {
+    // A block comment, not the start of a documentation comment.
+    let mut sources = SourceMap::new();
+    let file = sources.add("comment.hgl", "/**/").unwrap();
+    let mut diagnostics = Diagnostics::new();
+    let tokens = lex(&sources, file, &mut diagnostics);
+    assert!(diagnostics.is_empty());
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].kind, TokenKind::BlockComment);
+}
+
+#[test]
+fn integer_one_million() {
+    accepted("1_000_000", &[(TokenKind::Int, "1_000_000")]);
+    assert_eq!(literal::decode_integer("1_000_000"), Ok(1_000_000));
+}
+
+#[test]
+fn integer_255_in_two_bases() {
+    accepted("0xFF", &[(TokenKind::Int, "0xFF")]);
+    accepted("0b1111_1111", &[(TokenKind::Int, "0b1111_1111")]);
+    assert_eq!(literal::decode_integer("0xFF"), Ok(255));
+    assert_eq!(literal::decode_integer("0b1111_1111"), Ok(255));
+}
+
+#[test]
+fn duration_of_one_and_a_half_seconds() {
+    accepted("1_500ms", &[(TokenKind::Duration, "1_500ms")]);
+    assert_eq!(literal::decode_duration("1_500ms"), Ok(1_500_000));
+}
+
+#[test]
+fn string_of_one_character() {
+    let text = r#""\u{20AC}""#;
+    accepted(text, &[(TokenKind::Str, text)]);
+    assert_eq!(literal::decode_string(text).unwrap(), "\u{20ac}");
+}
+
+// ---- Text block -----------------------------------------------------------
+
+#[test]
+fn text_block_value_drops_four_columns_and_ends_without_a_line_feed() {
+    let block = "\"\"\"\n    Usage: run [options]\n      -v  verbose\n    \"\"\"";
+    let text = format!("let usage = {block}\n");
+    accepted(
+        &text,
+        &[
+            (TokenKind::KwLet, "let"),
+            (TokenKind::Ident, "usage"),
+            (TokenKind::Eq, "="),
+            (TokenKind::Str, block),
+            (TokenKind::Newline, "\n"),
+        ],
+    );
+    // "`usage` is `Usage: run [options]`, a line feed, then `  -v  verbose`."
+    assert_eq!(
+        literal::decode_string(block).unwrap(),
+        "Usage: run [options]\n  -v  verbose"
+    );
+}
+
+// ---- Second rejections ----------------------------------------------------
+
+#[test]
+fn a_literal_is_not_split_into_a_literal_and_a_name() {
+    // LEX-18.
+    for text in ["12abc", "1.5x", "1e", "1_", "1h_", "0x", "0b102"] {
+        rejected(text, hgl_lexer::codes::MALFORMED_NUMBER, "LEX-18");
     }
-    assert_eq!(diagnostics.len(), 4);
-    for diagnostic in diagnostics.as_slice() {
-        assert!(
-            !diagnostic.code.is_catalogued(),
-            "{} is local",
-            diagnostic.code.as_str()
-        );
+}
+
+#[test]
+fn two_separators_in_a_row_are_rejected() {
+    rejected("1__000", hgl_lexer::codes::MALFORMED_NUMBER, "LEX-22");
+}
+
+#[test]
+fn a_hexadecimal_integer_outside_the_domain_is_rejected() {
+    rejected(
+        "0xFFFF_FFFF_FFFF_FFFF",
+        literal::codes::INTEGER_RANGE,
+        "LEX-23",
+    );
+}
+
+#[test]
+fn a_surrogate_escape_is_rejected() {
+    rejected(r#""\u{D800}""#, hgl_lexer::codes::INVALID_ESCAPE, "LEX-24");
+}
+
+#[test]
+fn text_block_layout_faults_are_rejected() {
+    // LEX-25, in the chapter's order: `"""text"""` on one line; a line
+    // holding `"""` after other text; a line indented less than the closing
+    // delimiter.
+    for text in [
+        "\"\"\"text\"\"\"",
+        "\"\"\"\n    one\n    two \"\"\"",
+        "\"\"\"\n    one\n  two\n    \"\"\"",
+    ] {
+        rejected(text, hgl_lexer::codes::MALFORMED_TEXT_BLOCK, "LEX-25");
     }
+}
+
+#[test]
+fn an_offset_of_a_whole_day_is_rejected() {
+    rejected(
+        "@2026-09-03T09:30+24:00",
+        literal::codes::INVALID_TEMPORAL,
+        "LEX-19",
+    );
+}
+
+#[test]
+fn a_float_that_rounds_to_infinity_is_rejected() {
+    rejected("1e400", literal::codes::FLOAT_RANGE, "LEX-20");
+}
+
+#[test]
+fn a_closer_directly_before_equals_is_one_token() {
+    // LEX-17. The lexer's part is the token `>=`; the rejection itself is
+    // the parser's, which finds `>=` where the type's `>` should be.
+    use TokenKind::*;
+    accepted(
+        "xs: list<i64>= value",
+        &[
+            (Ident, "xs"),
+            (Colon, ":"),
+            (Ident, "list"),
+            (Lt, "<"),
+            (KwI64, "i64"),
+            (GtEq, ">="),
+            (Ident, "value"),
+        ],
+    );
+}
+
+#[test]
+fn a_form_feed_between_tokens_is_rejected() {
+    rejected(
+        "a \u{c} b",
+        hgl_lexer::codes::UNEXPECTED_CHARACTER,
+        "LEX-16",
+    );
 }

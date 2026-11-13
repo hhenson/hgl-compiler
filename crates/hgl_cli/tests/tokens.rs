@@ -105,16 +105,67 @@ fn rejected_source_reports_each_error_and_exits_one() {
     assert_eq!(
         headers,
         [
-            "error[parse/lex.invalid_duration]",
-            "error[parse/lex.invalid_duration]",
-            "error[parse/lex.invalid_temporal]",
-            "error[parse/lex.unclosed_string]",
+            "error[parse/literal.invalid_duration]",
+            "error[parse/literal.invalid_duration]",
+            "error[parse/literal.invalid_temporal]",
+            "error[parse/string.unclosed]",
         ]
     );
     for rule in ["rule LEX-13", "rule LEX-11", "rule LEX-2"] {
         assert!(stderr.contains(rule), "{stderr}");
     }
     assert!(stderr.contains("rejected.hgl:3:1"), "{stderr}");
+    // The codes are the specification's, so none is marked local.
+    assert!(!stderr.contains("compiler-local"), "{stderr}");
+}
+
+#[test]
+fn source_that_is_not_utf8_is_rejected_not_unreadable() {
+    // LEX-16: the bytes are source the language rejects, so the exit
+    // status is 1, with one diagnostic at the first offending byte.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("encoding");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("latin1.hgl");
+    // `caf\xe9` is "café" in Latin-1: 0xE9 begins no UTF-8 character here.
+    fs::write(&path, b"let a = 1\nlet b = \"caf\xe9\"\nlet c = 30m1h\n").unwrap();
+    let path = path.display().to_string();
+
+    let output = hgl(&["tokens", &path]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = text(&output.stderr);
+    let headers: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("error["))
+        .collect();
+    assert_eq!(
+        headers,
+        ["error[parse/syntax.invalid_encoding]: source is not well-formed UTF-8"]
+    );
+    assert!(stderr.contains("latin1.hgl:2:13"), "{stderr}");
+    assert!(stderr.contains("rule LEX-16"), "{stderr}");
+    assert!(stderr.contains("0xE9"), "{stderr}");
+
+    // The tokens before the byte are printed; nothing after it was read.
+    let stdout = text(&output.stdout);
+    assert!(stdout.starts_with("1:1 "), "{stdout}");
+    assert!(!stdout.contains("Duration"), "{stdout}");
+}
+
+#[test]
+fn a_leading_byte_order_mark_is_ignored() {
+    // LEX-16: positions count from the first character after it.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("encoding");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("marked.hgl");
+    fs::write(&path, b"\xef\xbb\xbflet a = 1\n").unwrap();
+
+    let output = hgl(&["tokens", &path.display().to_string()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stderr), "");
+    let stdout = text(&output.stdout);
+    let first: Vec<&str> = stdout.lines().next().unwrap().split_whitespace().collect();
+    assert_eq!(first, ["1:1", "KwLet", "\"let\""]);
 }
 
 #[test]

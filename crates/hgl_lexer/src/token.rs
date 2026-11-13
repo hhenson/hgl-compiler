@@ -48,12 +48,14 @@ macro_rules! define_token_kinds {
             Ident,
             /// The lone `_` placeholder.
             Placeholder,
-            /// An integer literal: digits only. A leading minus is a separate
-            /// operator token (LEX-7).
+            /// An integer literal: decimal `42`, hexadecimal `0x2A` or binary
+            /// `0b10_1010` (LEX-23). A leading minus is a separate operator
+            /// token (LEX-7).
             Int,
             /// A float literal: `1.5`, `1e5`, `1.5e-3`.
             Float,
-            /// A string literal in double quotes (LEX-2).
+            /// A string literal: `"..."` on one line (LEX-2) or a `"""`
+            /// text block over several (LEX-25).
             Str,
             /// A duration literal such as `1h30m` (LEX-8, LEX-13).
             Duration,
@@ -118,7 +120,6 @@ define_token_kinds! {
         KwInstantiate => "instantiate",
         KwOperator => "operator",
         KwFn => "fn",
-        KwCpp => "cpp",
         KwStruct => "struct",
         KwEnum => "enum",
         KwRequires => "requires",
@@ -158,8 +159,8 @@ define_token_kinds! {
         KwZonedTime => "zoned_time",
         KwTimezone => "timezone",
     }
-    // Every symbol the chapter grammars use as a terminal. The lexer takes
-    // the longest symbol that matches (LEX-14 states this for `<=>`).
+    // The alternatives of the PUNCTUATION production in source-text.md. Each
+    // is one token, and the lexer takes the longest that matches (LEX-17).
     punctuation {
         LParen => "(",
         RParen => ")",
@@ -181,7 +182,9 @@ define_token_kinds! {
         Star => "*",
         Slash => "/",
         SlashSlash => "//",
+        SlashSlashEq => "//=",
         Percent => "%",
+        PercentEq => "%=",
         AmpAmp => "&&",
         PipePipe => "||",
         Eq => "=",
@@ -252,17 +255,8 @@ pub struct Token {
 mod tests {
     use super::*;
 
-    #[test]
-    fn reserved_words_match_the_specification_list() {
-        // The hard reserved words, copied verbatim from source-text.md.
-        let specified = "module part use as export abstract impl instantiate operator fn cpp struct enum \
-                         requires is let var state cache inject return if else start when stop \
-                         for while yield test assert eval true false null bool i64 f64 str bytes any \
-                         date time datetime duration civil_datetime zoned_datetime zoned_time timezone";
-        let listed: Vec<&str> = TokenKind::KEYWORDS.iter().map(|&(text, _)| text).collect();
-        let expected: Vec<&str> = specified.split_whitespace().collect();
-        assert_eq!(listed, expected);
-    }
+    // `tests/spec_tables.rs` checks KEYWORDS and PUNCTUATION against the
+    // pinned source-text.md.
 
     #[test]
     fn keyword_lookup_and_spelling_round_trip() {
