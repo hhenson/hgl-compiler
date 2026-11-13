@@ -71,6 +71,30 @@ the lexer and the diagnostic renderer all use it, and tests lex the whole
 specification corpus under each form. CI runs the tests on Linux, macOS and
 Windows.
 
+## Parser (planned)
+
+### Generic arguments or comparison
+
+In an expression, `name <` opens generic arguments or is a comparison.
+GEN-14 decides by what `name` resolves to, which only the analyser knows.
+The parser therefore guesses and the analyser confirms (owner decision,
+2026-11-13):
+
+- The parser reads ahead to the `>` that would close the list. The generic
+  reading is possible when the tokens between form generic arguments and `(`
+  follows. When only one reading parses, that reading is the result.
+- When both parse, as in `f(a < b, c > (d))` and `a < b > (c)`, the parser
+  records its guess, the generic reading, in a node marked *undecided* that
+  keeps its tokens.
+- The analyser resolves `name`. A generic type confirms the guess; any other
+  name re-reads the node as comparisons. A generic type followed by a `<`
+  that cannot open its arguments is an invalid application, reported with no
+  fallback to comparison (GEN-14).
+- The formatter runs without the analyser, so it keeps the author's spacing
+  inside an undecided node.
+
+The language is exactly GEN-14; only the stage that applies it differs.
+
 ## Diagnostics
 
 A diagnostic has a category from the specification's list, a code, a primary
