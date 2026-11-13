@@ -19,6 +19,27 @@
 use std::fmt;
 use std::ops::Range;
 
+/// The length in bytes of the line break at the start of `bytes`, or `None`
+/// when `bytes` does not start with one.
+///
+/// A line break is a line feed (LF, `\n`), a carriage return followed by a
+/// line feed (CRLF, `\r\n`), or a carriage return on its own (CR, `\r`):
+/// the Linux, Windows and classic Mac conventions. The three mean the same
+/// everywhere, a file may mix them, and CRLF is one line break, not two.
+///
+/// This is the only place a line break is defined. The line index below and
+/// the lexer both call it, so they cannot disagree about where lines end.
+pub fn line_break_length(bytes: &[u8]) -> Option<usize> {
+    // A slice pattern: `[a, b, ..]` matches a slice that starts with `a`
+    // then `b`, whatever follows. Arms are tried in order, so CRLF is
+    // recognised before a carriage return on its own.
+    match bytes {
+        [b'\r', b'\n', ..] => Some(2),
+        [b'\n' | b'\r', ..] => Some(1),
+        _ => None,
+    }
+}
+
 /// A half-open byte range `start..end` within one source file.
 ///
 /// Offsets are `u32`, so a span is eight bytes and a file is limited to 4 GiB
@@ -117,8 +138,8 @@ pub struct SourceFile {
 impl SourceFile {
     /// Wraps `text` under the display name `name` (normally its path).
     ///
-    /// A line ends at a line feed (`\n`). A carriage return before it belongs
-    /// to the same line ending, so both LF and CRLF files index correctly.
+    /// A line ends at a line break as [`line_break_length`] defines it, so
+    /// LF, CRLF and CR files, and files that mix them, index alike.
     pub fn new(
         name: impl Into<String>,
         text: impl Into<String>,
@@ -129,10 +150,17 @@ impl SourceFile {
             return Err(SourceError::TooLarge { name });
         }
         let mut line_starts = vec![0];
-        for (offset, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
-                // The cast cannot truncate: the length check above passed.
-                line_starts.push(offset as u32 + 1);
+        let bytes = text.as_bytes();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match line_break_length(&bytes[offset..]) {
+                Some(length) => {
+                    // The next line starts after the whole line break. The
+                    // cast cannot truncate: the length check above passed.
+                    offset += length;
+                    line_starts.push(offset as u32);
+                }
+                None => offset += 1,
             }
         }
         Ok(SourceFile {
@@ -163,6 +191,32 @@ impl SourceFile {
         self.line_starts.len() as u32
     }
 
+    /// The zero-based index of the line that contains the byte at `offset`.
+    /// A line break belongs to the line it ends. An offset past the end is
+    /// treated as the end.
+    pub fn line_index(&self, offset: u32) -> usize {
+        let offset = (offset as usize).min(self.text.len());
+        // `partition_point` is a binary search: it returns how many line
+        // starts are at or before `offset`. That count is the 1-based line
+        // number, so one less is the index.
+        self.line_starts
+            .partition_point(|&start| start as usize <= offset)
+            - 1
+    }
+
+    /// The byte range of the line with zero-based index `line`, including
+    /// the line break that ends it, or `None` when there is no such line.
+    pub fn line_range(&self, line: usize) -> Option<Range<usize>> {
+        let start = *self.line_starts.get(line)? as usize;
+        // The line runs to the start of the next one, or to the end of the
+        // text for the last line.
+        let end = self
+            .line_starts
+            .get(line + 1)
+            .map_or(self.text.len(), |&next| next as usize);
+        Some(start..end)
+    }
+
     /// Converts a byte offset to a 1-based line and column.
     ///
     /// An offset past the end is treated as the end, and an offset inside a
@@ -172,15 +226,11 @@ impl SourceFile {
         while !self.text.is_char_boundary(offset) {
             offset -= 1;
         }
-        // `partition_point` is a binary search: it returns how many line
-        // starts are at or before `offset`, which is the 1-based line number.
-        let line = self
-            .line_starts
-            .partition_point(|&start| start as usize <= offset);
-        let line_start = self.line_starts[line - 1] as usize;
+        let line = self.line_index(offset as u32);
+        let line_start = self.line_starts[line] as usize;
         let column = self.text[line_start..offset].chars().count() + 1;
         LineCol {
-            line: line as u32,
+            line: line as u32 + 1,
             column: column as u32,
         }
     }
@@ -267,10 +317,53 @@ mod tests {
     }
 
     #[test]
-    fn crlf_line_endings_index_like_lf() {
-        let file = SourceFile::new("t.hgl", "ab\r\ncd").unwrap();
-        assert_eq!(file.line_col(4), LineCol { line: 2, column: 1 });
-        assert_eq!(file.line_col(5), LineCol { line: 2, column: 2 });
+    fn a_line_break_is_lf_crlf_or_cr() {
+        assert_eq!(line_break_length(b"\nx"), Some(1));
+        assert_eq!(line_break_length(b"\r\nx"), Some(2));
+        assert_eq!(line_break_length(b"\rx"), Some(1));
+        assert_eq!(line_break_length(b"\r"), Some(1));
+        // Two line breaks, not one: LF then CR is not a pair.
+        assert_eq!(line_break_length(b"\n\r"), Some(1));
+        assert_eq!(line_break_length(b"x\n"), None);
+        assert_eq!(line_break_length(b""), None);
+    }
+
+    #[test]
+    fn every_line_break_form_indexes_alike() {
+        // The same three lines under each convention. `cd` is line 2 and
+        // `ef` line 3 whichever line break separates them.
+        for line_break in ["\n", "\r\n", "\r"] {
+            let text = ["ab", "cd", "ef"].join(line_break);
+            let file = SourceFile::new("t.hgl", text.as_str()).unwrap();
+            assert_eq!(file.line_count(), 3, "{text:?}");
+            let c = text.find('c').unwrap() as u32;
+            let f = text.find('f').unwrap() as u32;
+            assert_eq!(file.line_col(c), LineCol { line: 2, column: 1 });
+            assert_eq!(file.line_col(f), LineCol { line: 3, column: 2 });
+            // The line break itself sits at the end of the line it ends.
+            assert_eq!(file.line_col(2), LineCol { line: 1, column: 3 });
+        }
+    }
+
+    #[test]
+    fn mixed_line_breaks_each_count_once() {
+        // LF, CRLF, CR, then CR followed by CRLF (an empty line between).
+        let file = SourceFile::new("t.hgl", "a\nb\r\nc\rd\r\r\ne").unwrap();
+        assert_eq!(file.line_count(), 6);
+        assert_eq!(file.line_col(11), LineCol { line: 6, column: 1 });
+        // Inside CRLF, the line feed is still on the line the pair ends.
+        assert_eq!(file.line_col(4), LineCol { line: 2, column: 3 });
+    }
+
+    #[test]
+    fn line_ranges_include_the_line_break() {
+        let file = SourceFile::new("t.hgl", "ab\r\ncd\re").unwrap();
+        assert_eq!(file.line_range(0), Some(0..4));
+        assert_eq!(file.line_range(1), Some(4..7));
+        assert_eq!(file.line_range(2), Some(7..8));
+        assert_eq!(file.line_range(3), None);
+        assert_eq!(file.line_index(5), 1);
+        assert_eq!(file.line_index(99), 2);
     }
 
     #[test]

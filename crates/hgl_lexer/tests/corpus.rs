@@ -7,6 +7,9 @@
 //! * no token is `Unknown`;
 //! * lexing and literal validation report nothing.
 //!
+//! A second test rewrites every item with Windows (CRLF) and classic Mac
+//! (CR) line breaks and checks that nothing but the line-break text changes.
+//!
 //! This is a smoke test of the lexer against real HGL, not conformance: it
 //! says nothing about whether the token *kinds* are the right ones. It does
 //! catch a symbol or literal form the specification uses that the lexer does
@@ -16,8 +19,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hgl_diagnostics::{Diagnostics, render};
-use hgl_lexer::{TokenKind, lex, literal};
-use hgl_source::SourceMap;
+use hgl_lexer::{Token, TokenKind, lex, literal};
+use hgl_source::{LineCol, SourceMap};
 
 /// One piece of HGL source and where it came from.
 struct Sample {
@@ -162,6 +165,73 @@ fn the_specification_corpus_lexes_cleanly() {
         samples.len(),
         failures.join("\n")
     );
+}
+
+/// What the line-break test compares for one token: its kind, where it
+/// starts, and its text with every line break written as LF.
+type Observation = (TokenKind, LineCol, String);
+
+/// Lexes `text` and returns one [`Observation`] per token, with the number
+/// of diagnostics reported.
+fn observe(origin: &str, text: &str) -> (Vec<Observation>, usize) {
+    let mut sources = SourceMap::new();
+    let file = sources.add(origin, text).unwrap();
+    let mut diagnostics = Diagnostics::new();
+    let tokens: Vec<Token> = lex(&sources, file, &mut diagnostics);
+    literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
+    let source = sources.file(file);
+    let observations = tokens
+        .iter()
+        .map(|token| {
+            // CRLF first, so its carriage return is not rewritten twice.
+            let text = source
+                .slice(token.span)
+                .replace("\r\n", "\n")
+                .replace('\r', "\n");
+            (token.kind, source.line_col(token.span.start), text)
+        })
+        .collect();
+    (observations, diagnostics.len())
+}
+
+#[test]
+fn the_corpus_lexes_alike_under_every_line_break_form() {
+    // LF, CRLF and CR are each one line break and mean the same.
+    let samples = corpus();
+    assert!(
+        !samples.is_empty(),
+        "no HGL found under spec/; run `git submodule update --init`"
+    );
+    for sample in &samples {
+        // Start from LF whatever the checkout wrote: Git on Windows may
+        // have given the `.hgl` files CRLF.
+        let with_lf = sample.text.replace("\r\n", "\n").replace('\r', "\n");
+        let (expected, expected_diagnostics) = observe(&sample.origin, &with_lf);
+        for (name, line_break) in [("CRLF", "\r\n"), ("CR", "\r")] {
+            let rewritten = with_lf.replace('\n', line_break);
+            let (observed, diagnostics) = observe(&sample.origin, &rewritten);
+            assert_eq!(
+                diagnostics, expected_diagnostics,
+                "{} with {name} line breaks",
+                sample.origin
+            );
+            // Same kinds, same line and column, same text once line breaks
+            // are written alike. `{:#?}` is not used: the lists are long.
+            assert_eq!(
+                observed.len(),
+                expected.len(),
+                "{} with {name}",
+                sample.origin
+            );
+            for (observed, expected) in observed.iter().zip(&expected) {
+                assert_eq!(
+                    observed, expected,
+                    "{} with {name} line breaks",
+                    sample.origin
+                );
+            }
+        }
+    }
 }
 
 #[test]

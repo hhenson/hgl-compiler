@@ -6,7 +6,12 @@
 //!   expressions-and-bindings chapter, verbatim;
 //! * `rejected.hgl` is the source-text chapter's four deliberate lexical
 //!   rejections, one per line.
+//!
+//! The fixtures are stored with LF line breaks. The line-break test writes
+//! its CRLF and CR copies when it runs, so it does not depend on how the
+//! fixtures were checked out.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -41,7 +46,7 @@ fn accepted_source_prints_tokens_and_exits_zero() {
 
     let stdout = text(&output.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    // `module examples.bindings`, then the line ending.
+    // `module examples.bindings`, then the line break.
     let columns = |line: &str| {
         line.split_whitespace()
             .map(str::to_string)
@@ -110,6 +115,50 @@ fn rejected_source_reports_each_error_and_exits_one() {
         assert!(stderr.contains(rule), "{stderr}");
     }
     assert!(stderr.contains("rejected.hgl:3:1"), "{stderr}");
+}
+
+#[test]
+fn every_line_break_form_gives_the_same_report() {
+    // Read as LF whatever the checkout did to the fixture.
+    let original = fs::read_to_string(fixture("rejected.hgl"))
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    // Cargo gives integration tests a scratch directory under `target/`.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("line-breaks");
+    fs::create_dir_all(&directory).unwrap();
+
+    // Runs `hgl tokens` on the fixture rewritten with `line_break`. Returns
+    // the exit code, each token's position and kind, and the report with
+    // the file's path replaced by its name.
+    let run = |name: &str, line_break: &str| {
+        let path = directory.join(name);
+        fs::write(&path, original.replace('\n', line_break)).unwrap();
+        let path = path.display().to_string();
+        let output = hgl(&["tokens", &path]);
+        let tokens: Vec<String> = text(&output.stdout)
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        let report = text(&output.stderr).replace(&path, "rejected.hgl");
+        (output.status.code(), tokens, report)
+    };
+
+    let expected = run("lf.hgl", "\n");
+    assert_eq!(expected.0, Some(1));
+    assert!(
+        expected.1.contains(&"3:1 Temporal".to_string()),
+        "{:?}",
+        expected.1
+    );
+    assert!(expected.2.contains("rejected.hgl:4:1"), "{}", expected.2);
+    assert_eq!(run("crlf.hgl", "\r\n"), expected);
+    assert_eq!(run("cr.hgl", "\r"), expected);
 }
 
 #[test]

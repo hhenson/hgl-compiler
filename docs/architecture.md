@@ -53,13 +53,23 @@ the stage that has it:
 
 | Rule | Left to | What the lexer keeps |
 | --- | --- | --- |
-| Significant line endings (LEX-5, LEX-6) | parser | every line ending as a `Newline` token |
+| Significant line breaks (LEX-5, LEX-6) | parser | every line break as one `Newline` token |
 | Contextual names (LEX-9, LEX-10) | parser | `Ident` tokens with their text |
 | Literal range under a minus (LEX-7) | analyser | `Minus` and the unsigned literal as separate tokens |
 | Documentation attachment (SDOC-1) | parser | `DocComment` tokens |
 
 The lexer settles a literal's shape. `hgl_lexer::literal` settles its value
 and the rules that need arithmetic (LEX-11 to LEX-13).
+
+### Line breaks
+
+A line break is LF, CRLF or CR. Each is one line break, they mean the same
+everywhere, and a file may mix them (owner decision, 2026-11-13; the pinned
+specification does not state it yet, so no rule is cited).
+`hgl_source::line_break_length` is the single definition. The line index,
+the lexer and the diagnostic renderer all use it, and tests lex the whole
+specification corpus under each form. CI runs the tests on Linux, macOS and
+Windows.
 
 ## Diagnostics
 

@@ -29,10 +29,13 @@ macro_rules! define_token_kinds {
         pub enum TokenKind {
             /// A run of spaces and tabs.
             Whitespace,
-            /// One line ending: `\n` or `\r\n`. Whether it ends a statement
-            /// depends on context (LEX-5), which the parser decides.
+            /// One line break: LF (`\n`), CRLF (`\r\n`) or CR (`\r`), the
+            /// Linux, Windows and classic Mac forms. All three mean the same
+            /// (see `hgl_source::line_break_length`). Whether it ends a
+            /// statement depends on context (LEX-5), which the parser
+            /// decides.
             Newline,
-            /// `# ...` up to, not including, the line ending (LEX-3).
+            /// `# ...` up to, not including, the line break (LEX-3).
             LineComment,
             /// `/* ... */`, non-nesting (LEX-3).
             BlockComment,
@@ -201,7 +204,7 @@ define_token_kinds! {
 impl TokenKind {
     /// True for whitespace and comments: text the grammar never mentions.
     ///
-    /// [`TokenKind::Newline`] is not included, because a line ending can be
+    /// [`TokenKind::Newline`] is not included, because a line break can be
     /// significant (LEX-5). [`TokenKind::DocComment`] is included here but
     /// the parser attaches it to the declaration that follows (SDOC-1).
     pub fn is_trivia(self) -> bool {

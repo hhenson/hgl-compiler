@@ -15,10 +15,10 @@
 //! to the stage that has the context, and the lexer keeps the information
 //! that stage needs:
 //!
-//! * **Significant line endings (LEX-5, LEX-6).** Whether a line ending
+//! * **Significant line breaks (LEX-5, LEX-6).** Whether a line break
 //!   ends a statement depends on enclosing brackets and neighbouring
-//!   tokens. Every line ending is a [`TokenKind::Newline`] token; the
-//!   parser decides which matter.
+//!   tokens. Every line break (LF, CRLF or CR) is one
+//!   [`TokenKind::Newline`] token; the parser decides which matter.
 //! * **Contextual names (LEX-9, LEX-10).** `const`, `list`, `switch` and
 //!   the like are special only in certain positions. They are
 //!   [`TokenKind::Ident`] tokens; the parser checks their text.

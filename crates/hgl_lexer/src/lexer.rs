@@ -15,7 +15,7 @@
 //!   the diagnostics sink and scanning continues.
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
-use hgl_source::{FileId, SourceMap, Span};
+use hgl_source::{FileId, SourceMap, Span, line_break_length};
 
 use crate::token::{Token, TokenKind};
 
@@ -27,7 +27,7 @@ use crate::token::{Token, TokenKind};
 pub mod codes {
     /// A character that cannot start a token (LEX-1).
     pub const UNEXPECTED_CHARACTER: &str = "lex.unexpected_character";
-    /// A string with no closing quote on its line (LEX-2).
+    /// A string with no closing quote before the line break (LEX-2).
     pub const UNCLOSED_STRING: &str = "lex.unclosed_string";
     /// A backslash followed by anything but `"`, `\`, `n`, `r`, `t` (LEX-2).
     pub const UNKNOWN_ESCAPE: &str = "lex.unknown_escape";
@@ -46,7 +46,7 @@ pub(crate) const DURATION_UNITS: [&str; 6] = ["d", "h", "m", "s", "ms", "us"];
 
 /// Splits one source file into tokens.
 ///
-/// Returns every token, including whitespace, line endings and comments, in
+/// Returns every token, including whitespace, line breaks and comments, in
 /// source order. Lexical errors are appended to `diagnostics`; the returned
 /// tokens are complete either way.
 ///
@@ -176,17 +176,17 @@ impl<'a> Lexer<'a> {
                 self.eat_while(|byte| byte == b' ' || byte == b'\t');
                 TokenKind::Whitespace
             }
-            b'\n' => {
-                self.pos += 1;
-                TokenKind::Newline
-            }
-            // `if` after a pattern is a guard: the arm applies only when the
-            // condition also holds.
-            b'\r' if self.peek_at(1) == Some(b'\n') => {
-                self.pos += 2;
+            // A line break is LF, CRLF or a lone CR. Each is one token and
+            // none is preferred; `line_break_length` says how long this one
+            // is.
+            b'\n' | b'\r' => {
+                self.pos += line_break_length(&self.bytes[self.pos..])
+                    .expect("a line feed or carriage return starts a line break");
                 TokenKind::Newline
             }
             b'#' => self.line_comment(),
+            // `if` after a pattern is a guard: the arm applies only when the
+            // condition also holds.
             b'/' if self.peek_at(1) == Some(b'*') => self.block_comment(),
             b'"' => self.string(),
             b'0'..=b'9' => self.number(),
@@ -198,16 +198,10 @@ impl<'a> Lexer<'a> {
 
     // ---- Comments (LEX-3) -----------------------------------------------
 
-    /// `# ...` to the end of the line. The line ending is left for the next
-    /// token: it stays meaningful (LEX-3).
+    /// `# ...` to the end of the line. The line break (LF, CRLF or CR) is
+    /// left for the next token: it stays meaningful (LEX-3).
     fn line_comment(&mut self) -> TokenKind {
-        while let Some(byte) = self.peek() {
-            let at_line_end = byte == b'\n' || (byte == b'\r' && self.peek_at(1) == Some(b'\n'));
-            if at_line_end {
-                break;
-            }
-            self.pos += 1;
-        }
+        self.eat_while(|byte| byte != b'\n' && byte != b'\r');
         TokenKind::LineComment
     }
 
@@ -243,7 +237,8 @@ impl<'a> Lexer<'a> {
     // ---- Strings (LEX-2) ------------------------------------------------
 
     /// A double-quoted string. It must close on the line it opens on: the
-    /// grammar excludes line breaks from `string_character`.
+    /// grammar excludes line breaks (LF, CRLF and CR alike) from
+    /// `string_character`.
     fn string(&mut self) -> TokenKind {
         let start = self.pos;
         self.pos += 1;
@@ -708,13 +703,9 @@ impl<'a> Lexer<'a> {
             .next()
             .expect("the cursor is before the end of the text");
         self.pos += character.len_utf8();
-        let message = if character == '\r' {
-            "carriage return without a line feed".to_string()
-        } else {
-            // `{:?}` prints the character quoted, with control characters
-            // escaped, so an invisible character is still readable.
-            format!("unexpected character {character:?}")
-        };
+        // `{:?}` prints the character quoted, with control characters
+        // escaped, so an invisible character is still readable.
+        let message = format!("unexpected character {character:?}");
         let diagnostic = self
             .error(start, self.pos, codes::UNEXPECTED_CHARACTER, message)
             .with_rule("LEX-1");
@@ -844,13 +835,47 @@ mod tests {
     }
 
     #[test]
-    fn line_endings_are_tokens() {
+    fn every_line_break_form_is_one_newline_token() {
+        // LF (Linux), CRLF (Windows) and CR (classic Mac), in one file.
         assert_eq!(
-            kinds_of("a\nb\r\nc"),
-            [Ident, Newline, Ident, Newline, Ident]
+            tokens_of("a\nb\r\nc\rd"),
+            [
+                (Ident, "a"),
+                (Newline, "\n"),
+                (Ident, "b"),
+                (Newline, "\r\n"),
+                (Ident, "c"),
+                (Newline, "\r"),
+                (Ident, "d")
+            ]
         );
-        let (codes, _) = rejected("a\rb");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER]);
+        // CRLF is one line break; CR CR and LF CR are two.
+        assert_eq!(kinds_of("\r\n"), [Newline]);
+        assert_eq!(kinds_of("\r\r"), [Newline, Newline]);
+        assert_eq!(kinds_of("\n\r"), [Newline, Newline]);
+        assert_eq!(kinds_of("\r\r\n"), [Newline, Newline]);
+    }
+
+    #[test]
+    fn line_break_forms_give_the_same_tokens() {
+        // The same source under each convention differs only in the text of
+        // its line-break tokens.
+        fn without_line_breaks(text: &str) -> Vec<(TokenKind, &str)> {
+            tokens_of(text)
+                .into_iter()
+                .filter(|(kind, _)| *kind != Newline)
+                .collect()
+        }
+        let lf = "fn f(a: i64) -> i64 {\n    # note\n    a + 1\n}\n";
+        for line_break in ["\r\n", "\r"] {
+            let text = lf.replace('\n', line_break);
+            assert_eq!(kinds_of(&text), kinds_of(lf), "{text:?}");
+            assert_eq!(
+                without_line_breaks(&text),
+                without_line_breaks(lf),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]
@@ -868,6 +893,10 @@ mod tests {
         assert_eq!(
             tokens_of("# c\r\n"),
             [(LineComment, "# c"), (Newline, "\r\n")]
+        );
+        assert_eq!(
+            tokens_of("# c\rb"),
+            [(LineComment, "# c"), (Newline, "\r"), (Ident, "b")]
         );
     }
 
@@ -947,6 +976,15 @@ mod tests {
         let (codes, tokens) = rejected("\"abc\nnext");
         assert_eq!(codes, [codes::UNCLOSED_STRING]);
         assert_eq!(tokens, [(Str, "\"abc"), (Newline, "\n"), (Ident, "next")]);
+        for line_break in ["\r\n", "\r"] {
+            let text = format!("\"abc{line_break}next");
+            let (codes, tokens) = rejected(&text);
+            assert_eq!(codes, [codes::UNCLOSED_STRING]);
+            assert_eq!(
+                tokens,
+                [(Str, "\"abc"), (Newline, line_break), (Ident, "next")]
+            );
+        }
         let (codes, _) = rejected("\"abc\\");
         assert_eq!(codes, [codes::UNCLOSED_STRING]);
         // An escaped quote does not close the string.
