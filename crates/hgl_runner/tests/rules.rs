@@ -1,10 +1,10 @@
 //! The runner against the rules of source-error expectations, TST-12 to
 //! TST-15. Each test cites the rule it checks.
 //!
-//! The catalogue's `parse` codes are the ones the compiler reports under
-//! a catalogued code so far, so the cases here are lexical and syntax
-//! errors. What is tested is the runner: which line an annotation
-//! applies to, what owns it, and how errors and annotations are matched.
+//! What is tested is the runner: which line an annotation applies to,
+//! what owns it, and how errors and annotations are matched. Most cases
+//! are lexical and syntax errors, which need no other declaration; the
+//! analyser's are in `a_name_or_module_rejection_is_a_case`.
 
 mod common;
 
@@ -451,24 +451,113 @@ fn errors_and_annotations_match_one_to_one() {
     );
 }
 
-/// TST-13: the owner is put back beside the surviving module, so an
-/// error it causes is one of its case's, wherever the analyser reports
-/// it. TST-12: "Category/code must be catalogued", so an error under a
-/// code local to this compiler meets no annotation.
+/// TST-13: "Check each selected owner independently alongside the
+/// surviving module". With the owner left out the module is accepted;
+/// put back, the owner is rejected, and that error is its case's. These
+/// are the rejections the units-and-names chapter lists for its own
+/// illustration, each with the code the catalogue gives it.
 #[test]
-fn an_error_of_the_analyser_belongs_to_the_owner_put_back() {
+fn a_name_or_module_rejection_is_a_case() {
     let ran = run_all(&[(
-        "cases.hgl",
+        "defaults.hgl",
         concat!(
-            "module m\n",
-            "fn scale() {}\n",
-            // With this declaration left out the module is accepted;
-            // put back, it is a duplicate. The catalogue has no code
-            // for that, so no annotation can expect it.
-            "# expect-error(parse, \"syntax.expected_token\")\n",
-            "fn scale() {}\n",
+            "module examples.defaults\n",
+            "\n",
+            // An import owns a case too.
+            "# expect-error(module, \"import.unknown_module\")\n",
+            "use examples.missing::{thing}\n",
+            "\n",
+            "const fn seed() -> i64 => 7\n",
+            "const fn choose(base: i64, value: i64 = seed()) -> i64 => base + value\n",
+            "\n",
+            // UNIT-7: "a default of `base` in place of `seed()` reads a
+            // formal argument".
+            "# expect-error(name, \"default.formal_argument\")\n",
+            "const fn defaulted(base: i64, value: i64 = base) -> i64 => value\n",
+            "\n",
+            // UNIT-12: "a first parameter named `seed`".
+            "# expect-error(name, \"name.duplicate\")\n",
+            "const fn first(seed: i64) -> i64 => seed\n",
+            "\n",
+            // UNIT-12: "a local named `base` in a block body".
+            "const fn local(base: i64) -> i64 {\n",
+            "    # expect-error(name, \"name.duplicate\")\n",
+            "    let base = 1\n",
+            "    return base\n",
+            "}\n",
+            "\n",
+            // UNIT-12: "a local declared in two cases of one `switch`".
+            "const fn cases(base: i64) -> i64 {\n",
+            "    switch base {\n",
+            "        case 1:\n",
+            "            let chosen = 1\n",
+            "        case 2:\n",
+            "            # expect-error(name, \"name.duplicate\")\n",
+            "            let chosen = 2\n",
+            "    }\n",
+            "    return base\n",
+            "}\n",
+            "\n",
+            // UNIT-12, TST-2: "a test helper named `choose`".
+            "test {\n",
+            "    # expect-error(name, \"name.duplicate\")\n",
+            "    const fn choose() -> i64 => 1\n",
+            "}\n",
+            "\n",
+            "test defining_closure {\n",
+            "    assert choose(1) == 8\n",
+            "}\n",
         ),
     )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection defaults.hgl:4 use examples.missing",
+            "passed rejection defaults.hgl:10 const fn defaulted",
+            "passed rejection defaults.hgl:13 const fn first",
+            "passed rejection defaults.hgl:15 const fn local",
+            "passed rejection defaults.hgl:21 const fn cases",
+            "passed rejection defaults.hgl:34 const fn choose",
+            "not-run executable examples.defaults::defining_closure",
+        ]
+    );
+}
+
+/// TST-13: an error the owner causes is its case's "wherever it is
+/// located", and must meet one of the owner's annotations. One with a
+/// different code, or one the owner causes at another declaration, does
+/// not, and the case fails.
+#[test]
+fn an_error_of_the_analyser_must_meet_an_annotation_of_its_owner() {
+    let ran = run_all(&[
+        (
+            "cases.hgl",
+            concat!(
+                "module m\n",
+                "fn scale() {}\n",
+                // Put back, this is a duplicate, which is not what its
+                // annotation expects.
+                "# expect-error(parse, \"syntax.expected_token\")\n",
+                "fn scale() {}\n",
+                // Put back, this import makes a helper's name one its module
+                // imports. The error is at the helper, which has no
+                // annotation of this owner.
+                "test {\n",
+                "    fn shared() {}\n",
+                "}\n",
+            ),
+        ),
+        ("lib.hgl", "module lib\nexport fn shared() {}\n"),
+        (
+            "part.hgl",
+            concat!(
+                "module m part second\n",
+                "# expect-error(name, \"name.duplicate\")\n",
+                "use lib::{shared}\n",
+            ),
+        ),
+    ]);
     assert_eq!(ran.stopped, NONE);
     assert_eq!(
         ran.cases,
@@ -476,6 +565,9 @@ fn an_error_of_the_analyser_belongs_to_the_owner_put_back() {
             "failed rejection cases.hgl:4 fn scale",
             "  missing parse/syntax.expected_token cases.hgl:4",
             "  unexpected name/name.duplicate cases.hgl:4:4",
+            "failed rejection part.hgl:3 use lib",
+            "  missing name/name.duplicate part.hgl:3",
+            "  unexpected name/name.duplicate cases.hgl:6:8",
         ]
     );
 }

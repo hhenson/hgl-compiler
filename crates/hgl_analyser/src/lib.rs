@@ -65,9 +65,9 @@ pub use program::{
 
 /// The diagnostic codes this stage reports.
 ///
-/// The specification's catalogue has no code yet for a module or name
-/// rejection, so every one of these is local to this compiler. A local
-/// code cannot satisfy an `expect-error` annotation (TST-12).
+/// Every one is a code of the specification's diagnostic catalogue, so an
+/// `expect-error` annotation can expect it (TST-12). The analyser's tests
+/// check each diagnostic's category and code against the catalogue.
 pub mod codes {
     /// A module has a second unnamed file (UNIT-1).
     pub const MODULE_DUPLICATE_UNNAMED: &str = "module.duplicate_unnamed";
@@ -180,8 +180,8 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     program
 }
 
-/// An error this stage reports: every one has a local code and cites the
-/// rule that requires it.
+/// An error this stage reports: every one has a catalogued code and
+/// cites the rule that requires it.
 fn error(
     category: Category,
     code: &'static str,
@@ -189,5 +189,5 @@ fn error(
     message: String,
     rule: &'static str,
 ) -> Diagnostic {
-    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
+    Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
 }

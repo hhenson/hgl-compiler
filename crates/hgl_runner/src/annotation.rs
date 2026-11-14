@@ -245,6 +245,12 @@ mod tests {
                     .to_string()
             )
         );
+        // Any row of the catalogue may be expected, not only a `parse`
+        // one.
+        assert_eq!(
+            classify("# expect-error(name, \"name.duplicate\")"),
+            Comment::Annotation(Category::Name, "name.duplicate".to_string())
+        );
         // The code is a string literal, read as one (LEX-24).
         assert_eq!(
             classify("# expect-error(parse, \"string\\u{2E}unclosed\")"),
@@ -332,8 +338,8 @@ mod tests {
             ),
             // Nor is a code local to this compiler.
             (
-                "# expect-error(name, \"name.duplicate\")",
-                "the diagnostic catalogue has no `name.duplicate` in category `name`",
+                "# expect-error(parse, \"doc.unattached\")",
+                "the diagnostic catalogue has no `doc.unattached` in category `parse`",
             ),
         ];
         for (comment, expected) in cases {

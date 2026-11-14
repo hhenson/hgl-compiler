@@ -41,9 +41,9 @@ pub struct Module {
     /// The module's path, written with dots.
     pub path: String,
     /// Its files: the unnamed one first, then the parts in order of part
-    /// name. The order is the analyser's own, so that what it reports
-    /// does not depend on the order the files were given in; it changes
-    /// no meaning (UNIT-1).
+    /// name. That is the order the diagnostic catalogue gives for "the
+    /// later of two", so what is reported does not depend on the order
+    /// the files were given in; it changes no meaning (UNIT-1).
     pub files: Vec<ModuleFile>,
     /// Every declaration of the module, test helpers included, in file
     /// order and then source order.

@@ -239,10 +239,9 @@ name is looked up innermost first, then among the imports of its file,
 then among its module's declarations (UNIT-10). A binding that would take
 a name any of those has is rejected (UNIT-12), and the first keeps it.
 
-UNIT-12 gives a scope to a block and to an anonymous function. The
-statements under a `switch` case are neither, so what a case declares is
-declared in the block the `switch` stands in: two cases may not declare
-one name. Whether a case should have a scope is asked in issue 17.
+A `switch` case has no scope of its own (UNIT-12): what a case declares
+is declared in the block the `switch` stands in, so two cases may not
+declare one name.
 
 What the pass decides beyond finding a name:
 
@@ -262,10 +261,10 @@ for the passes that know types.
 
 ### Order
 
-Nothing depends on the order the files are given in (UNIT-1). Where the
-analyser picks one of several places to report, it uses an order of its
-own: a module's unnamed file, then its parts by part name; within a file,
-source order.
+Nothing depends on the order the files are given in (UNIT-1). Where a
+catalogue row reports the later of two, the order is the catalogue's: a
+module's unnamed file, then its parts by part name; within a file, source
+order.
 
 | Problem | Where it is reported |
 | --- | --- |
@@ -291,28 +290,6 @@ specification's complete examples the list is `delta_value`, `get`,
 A file may be given with a list of declarations to leave out, and the
 program is analysed as if they were not written. A test runner checks a
 rejection case that way (TST-13).
-
-### Readings
-
-Where the chapters leave a choice the analyser takes one reading, listed in
-[hgl_spec issue 17](https://github.com/hhenson/hgl_spec/issues/17) for the
-specification to decide:
-
-| Subject | Reading |
-| --- | --- |
-| A test's name | In no scope. Unique among its module's tests; may match a declaration's |
-| An import alias | A name of its file: no declaration of the module takes it |
-| One name imported twice in a file | A duplicate, from the same module or another |
-| An operator and a function with one name | A duplicate: only a temporal and a value function share a name (FN-4) |
-| "Imports precede ordinary declarations" | Any declaration ends a file's imports, a test and a test context included |
-| A module that imports itself | An import cycle |
-| A native implementation with no declaration in its module | Rejected |
-| A name declared by a `for` pattern, an `inject` or an `each` constraint | A binding like a local: it takes no name in scope |
-| A test helper's name in a declaration outside the tests | Not in scope there: a parameter or local may take it |
-| A module alias used without `::name` | Rejected: an alias names nothing by itself |
-| A test's name used as a value | Not bound: left for the prelude like any unbound name |
-| `inject` in an anonymous function's surroundings | Not usable inside it: FN-14 lists what is, and it is not listed |
-| Two native implementations of one declaration, in different parts | Accepted: which part is selected is a target's choice (NATIVE-4). Two in one part are rejected |
 
 ## Test runner
 
@@ -360,8 +337,9 @@ case that does not match fails alone.
 
 Only a catalogued category and code can be expected (TST-12).
 `hgl_diagnostics::catalogue` lists them, and a test compares the list
-with the pinned chapter. The analyser's codes are local so far, so a case
-that expects a module or name rejection cannot be written yet.
+with the pinned chapter. Every code of the lexer and the analyser is one,
+so a case can expect a name or module rejection as it can a lexical one.
+The parser's three local codes can be expected by no case.
 
 | Exit status of `hgl test` | When |
 | --- | --- |
@@ -371,18 +349,6 @@ that expects a module or name rejection cannot be written yet.
 
 The program is analysed once more for each rejection case. That is simple
 and exact; it is revisited if a suite grows large enough to notice.
-
-Readings, in [hgl_spec issue 17](https://github.com/hhenson/hgl_spec/issues/17):
-
-| Subject | Reading |
-| --- | --- |
-| The owner of a line | Found by lines, as above |
-| A comment with the annotation's form after code on its line | Invalid metadata: an annotation stands alone |
-| The code in an annotation | Read as a string literal, escapes included, then looked up |
-| "Every primary diagnostic" | Errors. A warning rejects nothing (ERR-1) |
-| An error reported outside the owner once it is put back | One of the case's errors: it needs an annotation of the owner, so the case fails |
-| A selector | A test's `name`, or `module.path::name`; a bare name selects it in every module |
-| A run with no cases | Succeeds, and says it shows nothing (TST-15) |
 
 ## Diagnostics
 
@@ -394,9 +360,9 @@ condition but names no code). Only a catalogued code may satisfy
 `# expect-error` (TST-12). Every lexical code is catalogued. The parser
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
-`syntax.nesting_limit`. The catalogue has no code yet for a module or name
-rejection, so every code the analyser reports is local
-(`hgl_analyser::codes`, 27 of them); issue 17 proposes rows for them.
+`syntax.nesting_limit`. Every code the analyser reports is catalogued
+(`hgl_analyser::codes`, 27 of them), and its tests check each diagnostic's
+category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.

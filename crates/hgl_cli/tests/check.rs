@@ -163,7 +163,8 @@ fn a_rejected_program_reports_each_error_and_exits_one() {
     assert!(stderr.contains(&format!("{first}:2:4")), "{stderr}");
     assert!(stderr.contains("first declared here"), "{stderr}");
     assert!(stderr.contains("rule UNIT-5"), "{stderr}");
-    assert!(stderr.contains("compiler-local code"), "{stderr}");
+    // Both codes are the catalogue's.
+    assert!(!stderr.contains("compiler-local code"), "{stderr}");
     // And the parser's, for the same run.
     assert!(
         stderr.contains("error[parse/syntax.expected_token]"),
