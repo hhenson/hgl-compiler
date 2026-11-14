@@ -70,31 +70,24 @@ enum DocState {
     Repeated,
 }
 
-/// How deep a tree may be: the most nodes on any path from the root down.
-///
-/// Code that reads a tree usually calls itself for each child, and the
-/// tree library frees a tree that way, so a tree of unbounded depth could
-/// exhaust the call stack: here, or in any later stage. The parser's own
-/// nesting limit bounds most of it. What it cannot bound is a chain such
-/// as `a + b + c + ...` or a ladder of `else if`, where each link adds a
-/// level without the parser going any deeper. Past this depth [`build`]
-/// leaves a node out, keeping its tokens, and reports it.
-///
-/// Measured in an unoptimised build, freeing a tree of this depth takes
-/// about 200 KiB of stack. The smallest stack the compiler runs on is the
-/// 1 MiB of a Windows main thread.
-pub(crate) const MAX_TREE_DEPTH: usize = 500;
-
 /// Replays `events` over `input` into a tree.
 ///
 /// Every token of the input ends up in the tree, in order, whatever the
 /// events say: tokens the events never reach are put in the root. The
 /// documentation comments that document nothing are reported into
 /// `reports` (SDOC-1).
+///
+/// The tree is at most `max_depth` nodes deep
+/// ([`crate::Limits::tree_depth`]). The parser's own nesting limit bounds
+/// most of a tree's depth. What it cannot bound is a chain such as
+/// `a + b + c + ...` or a ladder of `else if`, where each link adds a
+/// level without the parser going any deeper. A node that would be too
+/// deep is left out, its tokens kept, and the first such is reported.
 pub(crate) fn build(
     input: &Input<'_>,
     events: &[Event],
     file: FileId,
+    max_depth: usize,
     reports: &mut Vec<Diagnostic>,
 ) -> GreenNode {
     let mut tree = TreeBuilder {
@@ -105,6 +98,7 @@ pub(crate) fn build(
         docs: HashMap::new(),
         heights: Vec::new(),
         parents: Vec::new(),
+        max_depth,
         too_deep: None,
     };
     // `marks[i]` is the place of the `Mark` at event `i`.
@@ -125,7 +119,8 @@ pub(crate) fn build(
                     tree.trivia_before_node(kind);
                 }
                 tree.place(&mut pending, &mut marks);
-                let fits = tree.parents.len() < MAX_TREE_DEPTH;
+                // The root is always built: a tree has one.
+                let fits = open.is_empty() || tree.parents.len() < max_depth;
                 if fits {
                     tree.parents.push(tree.heights.len());
                     tree.builder.start_node(rowan::SyntaxKind(kind.to_raw()));
@@ -145,7 +140,7 @@ pub(crate) fn build(
                 // saves measuring a long chain once for each link.
                 let fits = !place.too_deep && {
                     let wrapped = tree.heights[place.child..].iter().max().copied();
-                    tree.parents.len() + wrapped.unwrap_or(0) < MAX_TREE_DEPTH
+                    tree.parents.len() + wrapped.unwrap_or(0) < max_depth
                 };
                 if fits {
                     tree.parents.push(place.child);
@@ -216,6 +211,8 @@ struct TreeBuilder<'a> {
     /// For each open node, the index in `heights` of its first child. Its
     /// length is the depth of the node being built.
     parents: Vec<usize>,
+    /// The most nodes the tree may have on a path from the root down.
+    max_depth: usize,
     /// Index of the significant token at which a node was first left out
     /// for depth.
     too_deep: Option<usize>,
@@ -267,7 +264,10 @@ impl TreeBuilder<'_> {
             Category::Parse,
             Code::Local(codes::NESTING_LIMIT),
             Location::new(file, span),
-            format!("a syntax tree deeper than {MAX_TREE_DEPTH} levels is not built"),
+            format!(
+                "a syntax tree deeper than {} levels is not built",
+                self.max_depth
+            ),
         ));
     }
 

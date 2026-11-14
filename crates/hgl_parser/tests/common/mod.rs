@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use hgl_diagnostics::{Category, Diagnostics, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
-use hgl_parser::{Entry, SyntaxKind, SyntaxNode, outline, parse};
+use hgl_parser::{Entry, Limits, SyntaxKind, SyntaxNode, outline, parse};
 use hgl_source::SourceMap;
 
 // ---- Parsing ----
@@ -65,18 +65,23 @@ impl Outcome {
     }
 }
 
-/// Lexes `text` and parses it as `entry`.
+/// Lexes `text` and parses it as `entry`, within the default limits.
+pub fn run(entry: Entry, text: &str) -> Outcome {
+    run_within(Limits::default(), entry, text)
+}
+
+/// Lexes `text` and parses it as `entry`, within `limits`.
 ///
 /// Checks what must hold whatever the text is: the tree's text is the
 /// source text, the root is of the kind asked for, and every diagnostic is
 /// a `parse` one that points inside the text.
-pub fn run(entry: Entry, text: &str) -> Outcome {
+pub fn run_within(limits: Limits, entry: Entry, text: &str) -> Outcome {
     let mut sources = SourceMap::new();
     let file = sources.add("test.hgl", text).unwrap();
     let mut diagnostics = Diagnostics::new();
     let tokens = lex(&sources, file, &mut diagnostics);
     literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
-    let tree = parse(&sources, file, &tokens, entry, &mut diagnostics).syntax();
+    let tree = parse(&sources, file, &tokens, entry, limits, &mut diagnostics).syntax();
     diagnostics.sort_by_location();
 
     assert_eq!(tree.text().to_string(), text, "the tree is lossless");

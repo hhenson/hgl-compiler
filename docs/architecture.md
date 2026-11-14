@@ -175,18 +175,23 @@ TYPE-12 and TYPE-14.
 
 ### Limits
 
-| Limit | Value | Bounds |
-| --- | --- | --- |
-| Nesting of expressions, types, blocks and constraints | 100 | The parser's own call depth |
-| Depth of the tree | 500 | The call depth of anything that walks the tree, and of freeing it |
+| Limit | Default | Option | Bounds |
+| --- | --- | --- | --- |
+| Nesting of expressions, types, blocks and constraints | 100 | `--nesting-limit` | The parser's own call depth |
+| Depth of the tree | 500 | `--tree-depth-limit` | The call depth of anything that walks the tree, and of freeing it |
 
 Past either the parser reports `syntax.nesting_limit` and goes on; a tree
 is never deeper than the second. An `else if` ladder and a chain such as
-`a + b + ...` count towards the second only. The language sets no limit;
-these are the compiler's. In an unoptimised build the parser uses about 150
-KiB of stack at the first limit, and freeing a tree about 200 KiB at the
-second; the smallest stack the compiler runs on is the 1 MiB of a Windows
-main thread.
+`a + b + ...` count towards the second only. The language sets no limit.
+These are the compiler's and the caller sets them (`hgl_parser::Limits`):
+configurable, starting from these defaults (owner decision, 2026-11-14).
+
+Each level costs stack: in an unoptimised build, about 1.5 KiB for a level
+of nesting and 0.4 KiB for a level of tree depth. `Limits::stack_size`
+allows ten times that, and `hgl` runs a command that parses on a thread
+with a stack of that size, so raising a limit needs nothing else. The
+defaults fit in half of the smallest stack the compiler meets, the 1 MiB of
+a Windows main thread.
 
 ## Diagnostics
 

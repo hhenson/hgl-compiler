@@ -50,6 +50,9 @@ node or token per line; `--fragment declarations` or `--fragment statements`
 parses source that has no `module` line. Exit status is 0 when the source is
 accepted, 1 when it is rejected, 2 when the command could not run.
 
+The compiler reports nesting deeper than 100 levels and a syntax tree deeper
+than 500. `--nesting-limit` and `--tree-depth-limit` raise them.
+
 The specification and core are pinned under `spec/` as submodules; tests read
 HGL from them.
 

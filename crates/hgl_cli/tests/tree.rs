@@ -196,3 +196,70 @@ fn an_unknown_fragment_kind_is_a_usage_error() {
     ]);
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn a_limit_is_reported_and_can_be_raised() {
+    // 150 levels of parentheses: past the default limit of 100.
+    let nested = format!("{}a{}\n", "(".repeat(150), ")".repeat(150));
+    let path = scratch("nested.hgl", &nested);
+
+    let output = hgl(&["tree", "--fragment", "statements", &path]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains(
+            "error[parse/syntax.nesting_limit]: nesting deeper than 100 levels is not read"
+        ),
+        "{stderr}"
+    );
+    // The limit is the compiler's, so the code is too.
+    assert!(stderr.contains("compiler-local"), "{stderr}");
+
+    let output = hgl(&[
+        "tree",
+        "--fragment",
+        "statements",
+        "--nesting-limit",
+        "200",
+        &path,
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stderr), "");
+
+    // A chain is long, not nested: the other limit.
+    let chain = format!("a{}\n", " + a".repeat(600));
+    let path = scratch("chain.hgl", &chain);
+    let output = hgl(&["tree", "--fragment", "statements", &path]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stderr).contains("a syntax tree deeper than 500 levels is not built"),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = hgl(&[
+        "tree",
+        "--fragment",
+        "statements",
+        "--tree-depth-limit",
+        "1000",
+        &path,
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+
+    // Far beyond any stack a first thread has: the command runs on one
+    // sized for the limit.
+    let deep = format!("{}a{}\n", "(".repeat(20_000), ")".repeat(20_000));
+    let path = scratch("deep.hgl", &deep);
+    let output = hgl(&[
+        "tree",
+        "--fragment",
+        "statements",
+        "--nesting-limit",
+        "25000",
+        "--tree-depth-limit",
+        "50000",
+        &path,
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(text(&output.stderr), "");
+}

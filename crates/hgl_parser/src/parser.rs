@@ -34,19 +34,6 @@ use crate::event::Event;
 use crate::input::Input;
 use crate::kind::SyntaxKind;
 
-/// How deep expressions, types, blocks and constraints may nest.
-///
-/// A recursive-descent parser uses the machine's call stack: each nested
-/// `(` is a few nested function calls. Source nested without bound would
-/// overflow the stack and abort the compiler, which a stage must not do,
-/// so nesting past this depth is reported instead. The language sets no
-/// limit; this one is the compiler's.
-///
-/// Measured in an unoptimised build, parsing at this depth takes about
-/// 150 KiB of stack. The smallest stack the compiler runs on is the 1 MiB
-/// of a Windows main thread.
-pub(crate) const MAX_DEPTH: usize = 100;
-
 /// What the enclosing construct lets the cursor's tokens mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Context {
@@ -215,13 +202,17 @@ pub(crate) struct Parser<'a> {
     /// an entry starting at one of these reads the same tokens to the same
     /// end, so a probe that comes to one need not read on.
     unclosed_from: HashSet<usize>,
-    /// Current nesting depth, checked against [`MAX_DEPTH`].
+    /// Current nesting depth.
     depth: usize,
+    /// The depth past which nesting is reported, not read:
+    /// [`crate::Limits::nesting`].
+    max_depth: usize,
 }
 
 impl<'a> Parser<'a> {
-    /// A parser at the start of `input`.
-    pub(crate) fn new(input: &'a Input<'a>, file: FileId) -> Parser<'a> {
+    /// A parser at the start of `input` that reads nesting up to
+    /// `max_depth` levels deep.
+    pub(crate) fn new(input: &'a Input<'a>, file: FileId, max_depth: usize) -> Parser<'a> {
         Parser {
             input,
             file,
@@ -238,6 +229,7 @@ impl<'a> Parser<'a> {
             probing: 0,
             unclosed_from: HashSet::new(),
             depth: 0,
+            max_depth,
         }
     }
 
@@ -446,9 +438,9 @@ impl<'a> Parser<'a> {
     /// the caller then parses nothing. A true answer is paired with
     /// [`Parser::leave`].
     pub(crate) fn enter(&mut self) -> bool {
-        if self.depth >= MAX_DEPTH {
+        if self.depth >= self.max_depth {
             let span = self.input.span(self.position);
-            let message = format!("nesting deeper than {MAX_DEPTH} levels is not read");
+            let message = format!("nesting deeper than {} levels is not read", self.max_depth);
             self.report(span, Code::Local(codes::NESTING_LIMIT), message, None, None);
             return false;
         }

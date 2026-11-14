@@ -16,16 +16,12 @@
 
 mod common;
 
-use common::{Outcome, corpus, run};
+use common::{Outcome, corpus, run, run_within};
 use hgl_lexer::TokenKind;
-use hgl_parser::{Entry, SyntaxNode};
+use hgl_parser::{Entry, Limits, SyntaxNode};
 
 /// The three ways in.
 const ENTRIES: [Entry; 3] = [Entry::SourceFile, Entry::Declarations, Entry::Statements];
-
-/// The depth the parser promises not to exceed. `hgl_parser` does not
-/// export its limit; this is the documented value.
-const MAX_TREE_DEPTH: usize = 500;
 
 /// The most nodes on any path from `root` down. Walks without calling
 /// itself, so that a tree that is too deep fails the test, not the stack.
@@ -63,7 +59,10 @@ fn survives(text: &str) -> Vec<Outcome> {
         .iter()
         .map(|entry| {
             let outcome = run(*entry, text);
-            assert!(depth(&outcome.tree) <= MAX_TREE_DEPTH, "{text:.80}");
+            assert!(
+                depth(&outcome.tree) <= Limits::DEFAULT.tree_depth,
+                "{text:.80}"
+            );
             assert!(
                 !outcome.has_error_node() || !outcome.findings.is_empty(),
                 "an Error node without a diagnostic in {text:?} as {entry:?}"
@@ -299,4 +298,101 @@ fn a_long_chain_is_accepted_and_an_endless_one_reported() {
         // One report, however long the chain.
         assert_eq!(codes, ["syntax.nesting_limit"], "{text:.40}");
     }
+}
+
+#[test]
+fn the_limits_are_the_callers_to_set() {
+    // Lowered: what the defaults read is reported.
+    let shallow = Limits {
+        nesting: 3,
+        ..Limits::DEFAULT
+    };
+    assert_eq!(run_within(shallow, Entry::Statements, "((a))").findings, []);
+    let outcome = run_within(shallow, Entry::Statements, "((((a))))");
+    assert!(reports_nesting(&outcome));
+    assert_eq!(
+        outcome.findings[0].message,
+        "nesting deeper than 3 levels is not read"
+    );
+
+    let flat = Limits {
+        tree_depth: 8,
+        ..Limits::DEFAULT
+    };
+    assert_eq!(
+        run_within(flat, Entry::Statements, "a + b + c").findings,
+        []
+    );
+    let outcome = run_within(flat, Entry::Statements, "a + b + c + d + e + f + g + h + i");
+    assert!(reports_nesting(&outcome));
+    assert!(depth(&outcome.tree) <= 8);
+    assert_eq!(
+        outcome.findings[0].message,
+        "a syntax tree deeper than 8 levels is not built"
+    );
+
+    // A tree always has its root, whatever the limit.
+    let none = Limits {
+        nesting: 0,
+        tree_depth: 0,
+    };
+    let outcome = run_within(none, Entry::Statements, "a + b");
+    assert!(reports_nesting(&outcome));
+    assert_eq!(depth(&outcome.tree), 1);
+}
+
+#[test]
+fn raised_limits_read_what_the_defaults_report() {
+    let sum = format!("a{}", " + a".repeat(5000));
+    let parentheses = nested("(", "a", ")", 2000);
+    let ladder = nested("if a { b } else ", "{ c }", "", 3000);
+    for text in [&sum, &parentheses, &ladder] {
+        assert!(reports_nesting(&run(Entry::Statements, text)), "{text:.40}");
+    }
+
+    let raised = Limits {
+        nesting: 2500,
+        tree_depth: 8000,
+    };
+    // Deeper nesting takes more stack, which the caller provides:
+    // `stack_size` says how much. `spawn` starts a thread and `join`
+    // waits for it and hands back what its closure returned.
+    let clean = std::thread::Builder::new()
+        .stack_size(raised.stack_size())
+        .spawn(move || {
+            [sum, parentheses, ladder].iter().all(|text| {
+                run_within(raised, Entry::Statements, text)
+                    .findings
+                    .is_empty()
+            })
+        })
+        .expect("a thread starts")
+        .join()
+        .expect("parsing does not panic");
+    assert!(clean);
+}
+
+#[test]
+fn the_default_limits_fit_the_smallest_stack() {
+    // The smallest stack the compiler meets is the 1 MiB of a Windows main
+    // thread. Half of that is enough for the worst the default limits
+    // allow, in this unoptimised build.
+    let texts = [
+        nested("(", "a", ")", 3000),
+        nested("f(a < ", "b", ")", 3000),
+        format!("let x: {}", nested("Box<", "i64", ">", 3000)),
+        format!("a{}", " + a".repeat(50_000)),
+    ];
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            for text in &texts {
+                survives(text);
+            }
+        })
+        .expect("a thread starts")
+        .join()
+        .expect("parsing does not panic");
+    // The size advised for the defaults is well above what they need.
+    assert!(Limits::DEFAULT.stack_size() >= 2 * 1024 * 1024);
 }

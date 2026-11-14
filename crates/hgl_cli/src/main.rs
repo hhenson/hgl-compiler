@@ -32,7 +32,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_diagnostics::{Diagnostics, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
-use hgl_parser::Entry;
+use hgl_parser::{Entry, Limits};
 use hgl_source::{FileId, SourceMap};
 
 /// The source was rejected.
@@ -84,6 +84,35 @@ struct TreeArgs {
     /// document often have.
     #[arg(long, value_enum)]
     fragment: Option<Fragment>,
+
+    // `flatten` puts the options of `LimitArgs` among this command's own.
+    #[command(flatten)]
+    limits: LimitArgs,
+}
+
+/// The compiler's limits, for every command that parses. They are the
+/// compiler's and not the language's: source past one is reported, and the
+/// option raises it.
+#[derive(Args, Clone, Copy)]
+struct LimitArgs {
+    /// Report nesting of expressions, types and blocks deeper than this.
+    #[arg(long, value_name = "LEVELS", default_value_t = Limits::DEFAULT.nesting)]
+    nesting_limit: usize,
+
+    /// Report a syntax tree deeper than this. A long chain such as
+    /// `a + b + ...` or an `else if` ladder adds a level for each link.
+    #[arg(long, value_name = "LEVELS", default_value_t = Limits::DEFAULT.tree_depth)]
+    tree_depth_limit: usize,
+}
+
+impl LimitArgs {
+    /// The options as the parser takes them.
+    fn limits(self) -> Limits {
+        Limits {
+            nesting: self.nesting_limit,
+            tree_depth: self.tree_depth_limit,
+        }
+    }
 }
 
 /// What a file given to `hgl tree --fragment` holds. `ValueEnum` makes the
@@ -100,7 +129,34 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Tokens(arguments) => tokens(&arguments),
-        Command::Tree(arguments) => tree(&arguments),
+        Command::Tree(arguments) => {
+            let stack = arguments.limits.limits().stack_size();
+            // `move` gives the closure the arguments to keep, since it
+            // runs on another thread.
+            on_stack_of(stack, move || tree(&arguments))
+        }
+    }
+}
+
+/// Runs `work` on a thread of its own with `stack` bytes of stack, and
+/// gives the exit status it returns.
+///
+/// Parsing uses the call stack in proportion to the nesting it is allowed
+/// to read. The stack of a program's first thread is fixed by the system,
+/// and small on some (1 MiB on Windows), so a command that parses runs on
+/// a thread whose stack is sized for the limits it was given. That is what
+/// lets the limits be raised.
+fn on_stack_of(stack: usize, work: impl FnOnce() -> ExitCode + Send + 'static) -> ExitCode {
+    match std::thread::Builder::new().stack_size(stack).spawn(work) {
+        // `join` waits for the thread. If the thread panicked, the panic
+        // carries on here as if there had been no thread.
+        Ok(thread) => thread
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => {
+            eprintln!("hgl: cannot reserve {stack} bytes of stack for these limits: {error}");
+            ExitCode::from(EXIT_FAILED)
+        }
     }
 }
 
@@ -214,7 +270,8 @@ fn tree(arguments: &TreeArgs) -> ExitCode {
         Some(Fragment::Declarations) => Entry::Declarations,
         Some(Fragment::Statements) => Entry::Statements,
     };
-    let parse = hgl_parser::parse(&sources, file, &tokens, entry, &mut diagnostics);
+    let limits = arguments.limits.limits();
+    let parse = hgl_parser::parse(&sources, file, &tokens, entry, limits, &mut diagnostics);
     // `dump` ends every line with a line break, so `print!`, not `println!`.
     print!("{}", hgl_parser::dump(&parse.syntax()));
     report(&sources, diagnostics)
