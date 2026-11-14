@@ -18,7 +18,7 @@ impl Parser<'_> {
     /// The cursor is on the `<`.
     pub(crate) fn generic_params(&mut self) {
         self.start(GenericParams);
-        self.angle_list("a generic parameter", true, |parser| {
+        self.angle_list("a generic parameter", true, false, |parser| {
             if parser.at(Ellipsis) {
                 parser.start(GenericParam);
                 parser.bump();
@@ -53,7 +53,7 @@ impl Parser<'_> {
     /// caller that has to judge it (GEN-14).
     pub(crate) fn generic_args(&mut self) -> AngleList {
         self.start(GenericArgs);
-        let shape = self.angle_list("a type or a value", true, |parser| {
+        let shape = self.angle_list("a type or a value", true, true, |parser| {
             parser.generic_argument()
         });
         self.finish();

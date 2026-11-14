@@ -631,7 +631,7 @@ impl Parser<'_> {
         self.start(OperatorProperties);
         self.bump();
         if self.at(Lt) && !self.nl() {
-            self.angle_list("a type", false, |parser| {
+            self.angle_list("a type", false, false, |parser| {
                 parser.type_();
                 true
             });
@@ -690,7 +690,7 @@ impl Parser<'_> {
             self.expect_name("a function name");
             if self.at(Lt) && !self.nl() {
                 self.start(GenericArgs);
-                self.angle_list("a type or a value", true, |parser| {
+                self.angle_list("a type or a value", true, false, |parser| {
                     parser.materialization_argument()
                 });
                 self.finish();

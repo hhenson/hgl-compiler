@@ -933,6 +933,33 @@ fn a_comparison_that_cannot_be_a_constructor_is_a_comparison() {
 }
 
 #[test]
+fn each_name_in_a_list_is_judged_on_its_own() {
+    // GEN-14: a comparison before a constructor in one list. The failed
+    // reading of `a <` as generic arguments does not spoil `c<d>(e)`.
+    assert_eq!(
+        statements("f(a < b, c<i64>(e))"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" \
+         Arg[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]]] \",\" \
+         Arg[TypedConstructor[\"c\" GenericArgs[\"<\" ScalarType[\"i64\"] \">\"] \
+         ArgList[\"(\" Arg[NameExpr[\"e\"]] \")\"]]] \")\"]]]"
+    );
+    assert_eq!(
+        statements("f(a < b, c < d, e < g)"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" \
+         Arg[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]]] \",\" \
+         Arg[BinaryExpr[NameExpr[\"c\"] \"<\" NameExpr[\"d\"]]] \",\" \
+         Arg[BinaryExpr[NameExpr[\"e\"] \"<\" NameExpr[\"g\"]]] \")\"]]]"
+    );
+    // Nested generic arguments close one after another.
+    assert_eq!(
+        statements("Outer<Inner<i64>, f64>(x)"),
+        "ExprStmt[TypedConstructor[\"Outer\" GenericArgs[\"<\" \
+         NamedType[\"Inner\" GenericArgs[\"<\" ScalarType[\"i64\"] \">\"]] \",\" ScalarType[\"f64\"] \">\"] \
+         ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]]]"
+    );
+}
+
+#[test]
 fn tokens_that_read_both_ways_are_marked_undecided() {
     // GEN-14 decides by what the name is, which the analyser knows. The
     // parser records its guess, the constructor, in a node of its own

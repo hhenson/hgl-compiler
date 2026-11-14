@@ -174,6 +174,35 @@ fn random_runs_of_tokens_parse() {
     }
 }
 
+#[test]
+fn a_long_list_of_comparisons_is_read_once() {
+    // GEN-14: each `name <` might open generic arguments, and finding
+    // that it does not means reading ahead. Read naively, each of these
+    // would run to the closing bracket: for a list this long, minutes of
+    // work. The parser remembers where an unclosed list's entries began.
+    let count = 20_000;
+    let comparisons: Vec<String> = (0..count).map(|i| format!("a{i} < b{i}")).collect();
+    let list = comparisons.join(", ");
+    for text in [
+        format!("f({list})"),
+        format!("[{list}]"),
+        // A `>` at the end that closes nothing.
+        format!("f({list}, y > z)"),
+        // An argument that no generic argument list can hold.
+        format!("f({list}, key: value, y > (z))"),
+    ] {
+        let outcome = run(Entry::Statements, &text);
+        assert_eq!(outcome.findings, [], "{text:.40}");
+        // Every one is a comparison.
+        let comparisons = outcome
+            .tree
+            .descendants()
+            .filter(|node| node.kind() == hgl_parser::SyntaxKind::BinaryExpr)
+            .count();
+        assert!(comparisons >= count, "{comparisons} in {text:.40}");
+    }
+}
+
 /// `open` written `count` times, then `middle`, then `close` as often.
 fn nested(open: &str, middle: &str, close: &str, count: usize) -> String {
     format!("{}{middle}{}", open.repeat(count), close.repeat(count))

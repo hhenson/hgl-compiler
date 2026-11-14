@@ -23,7 +23,7 @@
 //!   ([`Parser::choose`]). Nothing is lost by this: the grammar functions
 //!   only append to lists, and taking back is cutting the lists short.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Location};
 use hgl_lexer::TokenKind;
@@ -207,6 +207,14 @@ pub(crate) struct Parser<'a> {
     /// repeat work. The key is the question, the token position and the
     /// context.
     decisions: HashMap<(Choice, usize, u8), Verdict>,
+    /// Number of probes in progress: more than one when a probe meets a
+    /// question of its own.
+    probing: usize,
+    /// Token positions at which an entry of a generic argument list has
+    /// started, in a list that then never reached its `>`. Any list with
+    /// an entry starting at one of these reads the same tokens to the same
+    /// end, so a probe that comes to one need not read on.
+    unclosed_from: HashSet<usize>,
     /// Current nesting depth, checked against [`MAX_DEPTH`].
     depth: usize,
 }
@@ -227,6 +235,8 @@ impl<'a> Parser<'a> {
             joined: None,
             no_generic_at: None,
             decisions: HashMap::new(),
+            probing: 0,
+            unclosed_from: HashSet::new(),
             depth: 0,
         }
     }
@@ -622,7 +632,9 @@ impl<'a> Parser<'a> {
         // Inside the probe every error counts, including one at a token
         // that already has a report.
         self.last_error_at = None;
+        self.probing += 1;
         let verdict = probe(self);
+        self.probing -= 1;
         self.rollback(&snapshot);
         self.no_generic_at = no_generic_at;
         if shared {
@@ -762,10 +774,19 @@ impl<'a> Parser<'a> {
     /// `entry` parses one entry and says whether it was a type. Nothing is
     /// skipped on an error: the tokens after a `<` that turns out not to
     /// open a list belong to whatever follows.
+    ///
+    /// `arguments` says the list is one of generic arguments, the kind a
+    /// probe may read only to find that `<` was a comparison. In
+    /// `f(a < b, c < d, e < f)` every `<` starts such a reading, and each
+    /// would run to the `)` before failing, which for a long list is a
+    /// great deal of reading. So where an unclosed list's entries started
+    /// is remembered, and a probe that reaches one of those places stops
+    /// there: the list it is reading cannot close either.
     pub(crate) fn angle_list(
         &mut self,
         what: &str,
         trailing: bool,
+        arguments: bool,
         mut entry: impl FnMut(&mut Self) -> bool,
     ) -> AngleList {
         let mut shape = AngleList {
@@ -774,6 +795,8 @@ impl<'a> Parser<'a> {
             closed: false,
             all_types: true,
         };
+        // Where each entry of this list started.
+        let mut starts: Vec<usize> = Vec::new();
         self.bump();
         let outer = std::mem::replace(&mut self.context, Context::ANGLE);
         loop {
@@ -785,6 +808,14 @@ impl<'a> Parser<'a> {
                 break;
             }
             let start = self.position;
+            if arguments {
+                if self.probing > 0 && self.unclosed_from.contains(&start) {
+                    // No `>` is reached from here. Outside a probe the
+                    // list is read on all the same, for its diagnostics.
+                    break;
+                }
+                starts.push(start);
+            }
             let errors = self.errors;
             let is_type = entry(self);
             if self.position == start {
@@ -809,6 +840,9 @@ impl<'a> Parser<'a> {
         }
         self.context = outer;
         shape.closed = self.close_angle();
+        if !shape.closed {
+            self.unclosed_from.extend(starts);
+        }
         shape
     }
 
