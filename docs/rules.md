@@ -265,7 +265,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-7 | transpiler | planned | One child per member; update keeps it, removal stops it |
 | CTRL-8 | analyser | planned | Traversal forms; no loop-carried accumulation in a dynamic composition loop |
 | CTRL-8 | transpiler | planned | Traversal over current values, lists in index order |
-| CTRL-9 | parser | done | The first `{` outside parentheses, brackets and configuration opens a `when` or `while` body |
+| CTRL-9 | parser | done | The first `{` outside parentheses, brackets and configuration opens the body of an `if`, `for`, `switch`, `when` or `while` |
 | SOURCE-1 | analyser | planned | What a body containing `yield` may hold |
 | SOURCE-2 | transpiler | planned | Yield evaluates its time, then its payload; target validation |
 | SOURCE-3 | transpiler | planned | Targets strictly increase; skip, publish or suspend |

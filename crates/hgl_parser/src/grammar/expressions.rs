@@ -4,6 +4,12 @@ use crate::grammar::can_start_expression;
 use crate::kind::SyntaxKind::{self, *};
 use crate::parser::{Bracket, Choice, Context, Parser, Verdict};
 
+/// CTRL-9: "An expression there that contains any other brace is
+/// parenthesized." Said where a brace stands bare between `if`, `for`,
+/// `switch`, `when` or `while` and the `{` of its body.
+const BRACE_BEFORE_BODY: &str =
+    "an expression with a brace in it is parenthesized before the `{` of a body";
+
 /// The precedence tier of `+` and `-`: where the grammar's `additive_expr`
 /// starts. A list size and a constraint operand are `additive_expr`.
 pub(crate) const ADDITIVE: u8 = 5;
@@ -306,13 +312,12 @@ impl Parser<'_> {
                 }
                 self.finish();
             }
-            // CTRL-9: in the condition of a `when` or `while`, the first
-            // `{` opens the body. It is left for the statement to take.
-            LBrace if self.context.no_brace => self.expected_with(
-                "an expression",
-                Some("CTRL-9"),
-                Some("a condition that contains a brace is parenthesized"),
-            ),
+            // CTRL-9: before the body of an `if`, `for`, `switch`, `when`
+            // or `while`, the first `{` opens the body. It is left for
+            // the statement to take.
+            LBrace if self.context.no_brace => {
+                self.expected_with("an expression", Some("CTRL-9"), Some(BRACE_BEFORE_BODY))
+            }
             LBrace => self.block(),
             _ => self.expected("an expression"),
         }
@@ -654,7 +659,8 @@ impl Parser<'_> {
                 open += 1;
                 parser.bump();
                 if parser.goes_on("a condition") {
-                    parser.expression();
+                    // CTRL-9: the first `{` opens the body.
+                    parser.subject();
                 }
                 parser.body_block();
                 // LEX-5: the matching `else` may start a line.
@@ -673,14 +679,11 @@ impl Parser<'_> {
         });
     }
 
-    /// CTRL-9: "A condition that contains any other brace is
+    /// CTRL-9: "An expression there that contains any other brace is
     /// parenthesized." Reported at an `if` or a block-bodied function
-    /// that stands bare in the condition of a `when` or `while`.
+    /// that stands bare before the body of an `if`, `for`, `switch`,
+    /// `when` or `while`.
     fn braces_in_condition(&mut self) {
-        self.error(
-            "a condition that contains a brace is parenthesized",
-            "CTRL-9",
-            None,
-        );
+        self.error(BRACE_BEFORE_BODY, "CTRL-9", None);
     }
 }
