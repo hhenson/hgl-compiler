@@ -158,7 +158,7 @@ specification to decide:
 | LEX-5: a line break in none of its listed places | Ends the line. `fn` then the name on the next line, `let x` then `= 1`, and a line that starts with `=>` or `.name` are rejected |
 | LEX-5: `requires` and `properties` on their own lines | Accepted, as SDOC-5 formats them |
 | EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
-| FN-10: "Parenthesize an anonymous function" | A suffix or binary operator directly after a block-bodied one is rejected |
+| FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
 | CTRL-9 | `when` and `while` only; the subjects of `if`, `for` and `switch` are ordinary expressions |
 | SDOC-1: what can be documented | The rule's list as written: not an enum, an enum member or a native type |
 | GEN-10: cardinalities | No production, so not parsed |
