@@ -133,7 +133,7 @@ fn a_rejection_the_catalogue_has_no_code_for_is_marked_local() {
 fn a_fragment_needs_no_module_line() {
     // EXPR-10's illustration, as the chapter writes it: an expression on
     // its own.
-    let path = scratch("fragment.hgl", "1.0 /{zero: ieee} 0.0\n");
+    let path = scratch("fragment.hgl", "1.0 /{zero: .ieee} 0.0\n");
 
     // As a file it has no `module` line (UNIT-1).
     let output = hgl(&["tree", &path]);
@@ -145,10 +145,12 @@ fn a_fragment_needs_no_module_line() {
     assert_eq!(text(&output.stderr), "");
     let stdout = text(&output.stdout);
     assert!(
-        stdout.starts_with("Fragment@0..22\n  ExprStmt@0..21\n"),
+        stdout.starts_with("Fragment@0..23\n  ExprStmt@0..22\n"),
         "{stdout}"
     );
-    assert!(stdout.contains("OperatorConfig@5..17"), "{stdout}");
+    assert!(stdout.contains("OperatorConfig@5..18"), "{stdout}");
+    // TYPE-7: `.ieee` is a member of the option's enum.
+    assert!(stdout.contains("ImpliedMember@12..17"), "{stdout}");
 
     // Statements are not declarations.
     let output = hgl(&["tree", "--fragment", "declarations", &path]);

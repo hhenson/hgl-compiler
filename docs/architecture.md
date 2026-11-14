@@ -141,6 +141,17 @@ construct read all the same. On a later line `(x)` and `[i]` begin a
 statement of their own, and in an expression a `<` apart from its name is a
 comparison.
 
+A `.` where an operand is due begins `.member`, the member of the enum
+type its position expects (TYPE-7): `side == .buy`, `/{zero: .error}`.
+After an operand a `.` reaches into it, on the same line or the next, so
+no statement begins with `.member`. Which enum it names is the analyser's
+to say.
+
+The name of a type is a reserved word and names no parameter, local,
+function or type. It is read as a member name and as the label of an
+argument, where it cannot be taken for the type (LEX-9): `quote.date`,
+a field called `list`, `outcome.error`.
+
 ### Generic arguments or comparison
 
 In an expression, `name <` opens generic arguments or is a comparison.
@@ -179,7 +190,6 @@ specification to decide:
 | --- | --- |
 | EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
 | FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
-| `error` in a type position | The built-in type, though `named_type` matches it too. It is the one built-in type name that is not reserved (issue 13, item 15) |
 
 The grammar's `value_type` is parsed as `type`. Which types are value types
 is the analyser's to check: the types chapter places that rejection under

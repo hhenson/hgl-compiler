@@ -255,7 +255,7 @@ fn body(
     let text = str(x)
     let next = fn(v: i64) -> i64 => v + 1
     let found = other::helper(x)[0].time?
-    let ratio = x /{zero: error} y
+    let ratio = x /{zero: .error} y
     start { count = 0 }
     stop { count = 0 }
     when modified(x) { count += 1 }

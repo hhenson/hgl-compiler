@@ -286,10 +286,19 @@ impl Parser<'_> {
             // `delta` is a reserved word. In an expression it begins a
             // delta constructor and nothing else.
             KwDelta => self.delta_constructor(),
+            // TYPE-7: "Where a position expects the enum's type,
+            // `.member` names one too". After an operand a `.` reaches
+            // into it; here, where an operand is due, it begins one.
+            Dot => {
+                self.start(ImpliedMember);
+                self.bump();
+                self.expect_member_name();
+                self.finish();
+            }
             // LEX-10: `str(value)` is a conversion, though `str` is
-            // reserved where a name is expected. It is a call, so its `(`
-            // touches it (LEX-27).
-            KwStr | KwBytes | KwAny if self.nth(1) == LParen && self.suffix_at(1) => {
+            // reserved where a name is expected, and `error(...)` a
+            // constructor. Each is a call, so its `(` touches it (LEX-27).
+            KwStr | KwBytes | KwAny | KwError if self.nth(1) == LParen && self.suffix_at(1) => {
                 self.start(TypeCall);
                 self.bump();
                 self.attached(Bracket::Call);

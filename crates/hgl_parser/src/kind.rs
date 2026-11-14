@@ -79,7 +79,7 @@ define_syntax_kinds! {
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
         KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef,
-        KwSignal, KwDelta,
+        KwSignal, KwDelta, KwError,
         LParen, RParen, LBracket, RBracket, LBrace, RBrace, Comma,
         Semicolon, Colon, ColonColon, Dot, Ellipsis, At, Question, Bang,
         Plus, Minus, Star, Slash, SlashSlash, SlashSlashEq, Percent,
@@ -231,6 +231,8 @@ define_syntax_kinds! {
         Literal,
         /// `price` or `pc::curve`
         NameExpr,
+        /// `.buy`: the member of the enum type its position expects
+        ImpliedMember,
         /// `(a + b)`
         ParenExpr,
         /// `(a, b)` or `(a,)`
@@ -274,9 +276,9 @@ define_syntax_kinds! {
         UnaryExpr,
         /// `a + b`: left operand, operator, any configuration, right operand
         BinaryExpr,
-        /// `{zero: error}` directly after an operator
+        /// `{zero: .error}` directly after an operator
         OperatorConfig,
-        /// `zero: error` in an operator configuration
+        /// `zero: .error` in an operator configuration
         ConfigArg,
         /// `(a, b: c)` after a callee
         ArgList,

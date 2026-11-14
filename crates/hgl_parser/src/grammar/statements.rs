@@ -114,7 +114,8 @@ impl Parser<'_> {
             }
             KwAssert => self.assert_stmt(),
             Ident => self.name_statement(),
-            kind if can_start_expression(kind) => self.expr_stmt(),
+            // `.member` begins an expression and no statement.
+            kind if can_start_expression(kind) && kind != Dot => self.expr_stmt(),
             _ => {}
         }
     }

@@ -64,6 +64,10 @@ impl Parser<'_> {
             self.leaf(SignalType);
             return true;
         }
+        if kind == KwError {
+            self.leaf(ErrorType);
+            return true;
+        }
         if let Some(node) = built_in(kind) {
             self.built_in_type(node);
             return true;
@@ -71,13 +75,6 @@ impl Parser<'_> {
         if kind != Ident {
             self.expected("a type");
             return false;
-        }
-        // LEX-10: `error` is a name, not a reserved word. Alone in a
-        // type position it is the built-in type.
-        let qualified = self.nth(1) == ColonColon && !self.nl_at(1);
-        if !qualified && self.at_word("error") {
-            self.leaf(ErrorType);
-            return true;
         }
         self.named_type();
         true

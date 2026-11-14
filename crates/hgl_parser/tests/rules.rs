@@ -163,8 +163,8 @@ fn a_line_break_inside_a_list_is_ignored() {
         ),
         (
             Statements,
-            "a /{\n    zero: error\n} b",
-            "a /{zero: error} b",
+            "a /{\n    zero: .error\n} b",
+            "a /{zero: .error} b",
         ),
     ] {
         same_tree(entry, text, plain);
@@ -536,9 +536,9 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
     // LEX-10: "Each acquires its special meaning only in its defined
     // positions. A contextual spelling is not globally reserved."
     assert_eq!(
-        statements("let error = 1\nlet type = error\nlet each = case\nlet in = default"),
-        "LocalDecl[\"let\" \"error\" \"=\" Literal[\"1\"]] \
-         LocalDecl[\"let\" \"type\" \"=\" NameExpr[\"error\"]] \
+        statements("let native = 1\nlet type = native\nlet each = case\nlet in = default"),
+        "LocalDecl[\"let\" \"native\" \"=\" Literal[\"1\"]] \
+         LocalDecl[\"let\" \"type\" \"=\" NameExpr[\"native\"]] \
          LocalDecl[\"let\" \"each\" \"=\" NameExpr[\"case\"]] \
          LocalDecl[\"let\" \"in\" \"=\" NameExpr[\"default\"]]"
     );
@@ -555,16 +555,16 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
     );
     // In its position the same spelling has its meaning.
     assert_eq!(
-        statements("let x: error = native"),
-        "LocalDecl[\"let\" \"x\" \":\" ErrorType[\"error\"] \"=\" NameExpr[\"native\"]]"
+        declarations("native type type"),
+        "NativeTypeDecl[\"native\" \"type\" \"type\"]"
     );
 }
 
 #[test]
 fn the_name_of_a_built_in_type_is_reserved() {
     // The hard reserved words include the names of the built-in types:
-    // `atomic tuple list set dict rolling result ref signal delta`. Each
-    // is the type and nothing else.
+    // `atomic tuple list set dict rolling result ref signal delta error`.
+    // Each is the type and nothing else.
     assert_eq!(
         statements("let x: list<i64> = values"),
         "LocalDecl[\"let\" \"x\" \":\" ListType[\"list\" \"<\" ScalarType[\"i64\"] \">\"] \"=\" NameExpr[\"values\"]]"
@@ -575,7 +575,13 @@ fn the_name_of_a_built_in_type_is_reserved() {
     );
     // None is a name: of a local, a function, a type or a parameter
     // (LEX-9).
-    for text in ["let list = 1", "let x = result", "for set in items { }"] {
+    for text in [
+        "let list = 1",
+        "let x = result",
+        "for set in items { }",
+        "let error = 1",
+        "let x = error",
+    ] {
         let found = rejected(Entry::Statements, text);
         assert!(!found.is_empty(), "{text}");
     }
@@ -1061,10 +1067,10 @@ fn a_question_mark_after_an_expression_propagates_a_result() {
          ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]] \"?\"]]"
     );
     assert_eq!(
-        statements("let d: f64? = (a /{zero: error} b)?"),
+        statements("let d: f64? = (a /{zero: .error} b)?"),
         "LocalDecl[\"let\" \"d\" \":\" NullableType[ScalarType[\"f64\"] \"?\"] \"=\" \
          TryExpr[ParenExpr[\"(\" BinaryExpr[NameExpr[\"a\"] \"/\" \
-         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" NameExpr[\"error\"]] \"}\"] NameExpr[\"b\"]] \")\"] \"?\"]]"
+         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" ImpliedMember[\".\" \"error\"]] \"}\"] NameExpr[\"b\"]] \")\"] \"?\"]]"
     );
 }
 
@@ -1194,13 +1200,13 @@ fn a_sequence_that_mixes_values_and_pairs_is_rejected() {
 #[test]
 fn named_braces_after_an_operator_are_its_configuration() {
     // EXPR-10: "A symbol operator may carry named configuration
-    // immediately after its token: `a /{zero: ieee} b`... A named-entry
+    // immediately after its token: `a /{zero: .ieee} b`... A named-entry
     // brace in this position is configuration, not the right operand's
     // block."
     assert_eq!(
-        statements("a /{zero: ieee} b"),
+        statements("a /{zero: .ieee} b"),
         "ExprStmt[BinaryExpr[NameExpr[\"a\"] \"/\" \
-         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" NameExpr[\"ieee\"]] \"}\"] NameExpr[\"b\"]]]"
+         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" ImpliedMember[\".\" \"ieee\"]] \"}\"] NameExpr[\"b\"]]]"
     );
     assert_eq!(
         statements("a =={abs: 1e-9, rel: 1e-6,} b"),
@@ -1229,9 +1235,9 @@ fn a_configuration_goes_where_its_operator_goes() {
     // LEX-5 with EXPR-10: an operator that needs its operand is
     // incomplete, with or without its configuration.
     for (text, plain) in [
-        ("a /\n    {zero: ieee} b", "a /{zero: ieee} b"),
-        ("a /{zero: ieee}\n    b", "a /{zero: ieee} b"),
-        ("a\n    /{zero: ieee} b", "a /{zero: ieee} b"),
+        ("a /\n    {zero: .ieee} b", "a /{zero: .ieee} b"),
+        ("a /{zero: .ieee}\n    b", "a /{zero: .ieee} b"),
+        ("a\n    /{zero: .ieee} b", "a /{zero: .ieee} b"),
         ("let x = !\n    {mode: 1} true", "let x = !{mode: 1} true"),
         ("let x = !{mode: 1}\n    true", "let x = !{mode: 1} true"),
     ] {
@@ -1762,10 +1768,10 @@ fn the_first_brace_after_when_or_while_opens_the_body() {
         )
     );
     assert_eq!(
-        statements("while a /{zero: error} b { step() }"),
+        statements("while a /{zero: .error} b { step() }"),
         format!(
             "WhileStmt[\"while\" BinaryExpr[NameExpr[\"a\"] \"/\" \
-             OperatorConfig[\"{{\" ConfigArg[\"zero\" \":\" NameExpr[\"error\"]] \"}}\"] NameExpr[\"b\"]] {step}]"
+             OperatorConfig[\"{{\" ConfigArg[\"zero\" \":\" ImpliedMember[\".\" \"error\"]] \"}}\"] NameExpr[\"b\"]] {step}]"
         )
     );
 }
@@ -1837,7 +1843,7 @@ fn the_first_brace_after_if_for_or_switch_opens_the_body() {
     // an `else if` is a condition like the first.
     for text in [
         "if [{ a }][0] { step() }",
-        "if a /{zero: error} b > 1 { step() }",
+        "if a /{zero: .error} b > 1 { step() }",
         "if a { b } else if ({ c }) { d } else { e }",
         "for item in [{ a }] { step() }",
         "switch items[{ a }] {\n    default:\n        step()\n}",
@@ -2176,6 +2182,78 @@ fn a_documentation_comment_that_documents_nothing_is_rejected() {
         .map(|finding| finding.code.as_str())
         .collect();
     assert_eq!(codes, ["doc.repeated", "doc.unattached"]);
+}
+
+// ---- TYPE-7 ----
+
+#[test]
+fn a_leading_dot_names_a_member_of_the_expected_enum() {
+    // TYPE-7: "Where a position expects the enum's type, `.member`
+    // names one too: the value of an argument or configuration option of
+    // that type, an initializer or result declared with it, an operand
+    // compared with it." The chapter's illustration:
+    assert_eq!(
+        statements("if side == .buy { return .sell }"),
+        "ExprStmt[IfExpr[\"if\" BinaryExpr[NameExpr[\"side\"] \"==\" ImpliedMember[\".\" \"buy\"]] \
+         Block[\"{\" ReturnStmt[\"return\" ImpliedMember[\".\" \"sell\"]] \"}\"]]]"
+    );
+    assert_eq!(
+        statements("assert opposite(.buy) == Side.sell"),
+        "AssertStmt[\"assert\" BinaryExpr[CallExpr[NameExpr[\"opposite\"] \
+         ArgList[\"(\" Arg[ImpliedMember[\".\" \"buy\"]] \")\"]] \"==\" \
+         MemberExpr[NameExpr[\"Side\"] \".\" \"sell\"]]]"
+    );
+    // An argument by name, an initializer, a sequence, a case label.
+    for text in [
+        "place(side: .buy, size: 1)",
+        "let side: Side = .buy",
+        "let sides: list<Side> = [.buy, .sell]",
+        "switch side {\n    case .buy:\n        step()\n}",
+    ] {
+        assert!(statements(text).contains("ImpliedMember["), "{text}");
+    }
+    // LEX-9: a type's reserved name is a member name, so the division
+    // policy `.error` is one: "`a /{zero: .ieee} b`" (EXPR-10).
+    assert_eq!(
+        statements("a /{zero: .error} b"),
+        "ExprStmt[BinaryExpr[NameExpr[\"a\"] \"/\" \
+         OperatorConfig[\"{\" ConfigArg[\"zero\" \":\" ImpliedMember[\".\" \"error\"]] \"}\"] NameExpr[\"b\"]]]"
+    );
+    // After an operand a `.` reaches into it, on the same line or the
+    // next (LEX-5): no statement begins with `.member`.
+    assert_eq!(
+        statements("let side = quote\n    .side"),
+        "LocalDecl[\"let\" \"side\" \"=\" MemberExpr[NameExpr[\"quote\"] \".\" \"side\"]]"
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "step()\n\n.buy"),
+        ["- 3:1: expected a statement, found `.`"]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let x = .5"),
+        ["- 1:10: expected a member name, found `5`"]
+    );
+}
+
+#[test]
+fn error_is_reserved_and_still_constructs_and_names_a_member() {
+    // `error` is a hard reserved word: the type, and no name.
+    assert_eq!(
+        statements("let x: error = failed"),
+        "LocalDecl[\"let\" \"x\" \":\" ErrorType[\"error\"] \"=\" NameExpr[\"failed\"]]"
+    );
+    // LEX-10: "`error(message: text)` a constructor despite `error`
+    // being so", as `str(value)` is a conversion (ERR-4).
+    assert_eq!(
+        statements("error(message: \"bad\", code: \"x.y\")"),
+        "ExprStmt[TypeCall[\"error\" ArgList[\"(\" Arg[\"message\" \":\" Literal[\"\\\"bad\\\"\"]] \",\" \
+         Arg[\"code\" \":\" Literal[\"\\\"x.y\\\"\"]] \")\"]]]"
+    );
+    // LEX-9: `.error` is a member, as ERR-3 and ERR-7 name it.
+    assert_eq!(
+        statements("outcome.error"),
+        "ExprStmt[MemberExpr[NameExpr[\"outcome\"] \".\" \"error\"]]"
+    );
 }
 
 // ---- TST-13 ----
