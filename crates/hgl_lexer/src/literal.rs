@@ -3,12 +3,18 @@
 //! The lexer settles only a literal's *shape*. This module settles its
 //! *value*, and in doing so applies the rules that need arithmetic: unit
 //! order and exact scaling for durations (LEX-13), calendar validity for
-//! dates and times (LEX-11), zone-name limits (LEX-12), and the numeric
-//! domains (LEX-7).
+//! dates and times (LEX-11), offsets (LEX-19), zone-name limits (LEX-12),
+//! and the numeric domains (LEX-7, LEX-20, LEX-23). It also gives strings
+//! their contents: escapes replaced (LEX-2, LEX-24) and, for a text block,
+//! indentation removed and lines joined (LEX-25).
 //!
 //! Each `decode_*` function takes the token's text and is pure: no source
 //! map, no diagnostics sink. [`validate_literals`] runs them over a token
 //! list and reports what they reject.
+//!
+//! The functions read a literal's shape through the same private `shape`
+//! module the lexer cuts tokens with, so text the lexer accepts as a
+//! literal is text they can decode.
 //!
 //! Nothing here consults a clock or a time-zone database. Whether a zone
 //! name exists is a provider check at run time (LEX-12), not a property of
@@ -17,23 +23,24 @@
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_source::{FileId, SourceMap};
 
-use crate::lexer::DURATION_UNITS;
+use crate::shape::{self, DURATION_UNITS, NumberForm, is_zone_character};
 use crate::token::{Token, TokenKind};
 
-/// The compiler-local diagnostic codes for literal values. As with the
-/// lexer's codes, the specification rejects these conditions without
-/// cataloguing a code for them.
+/// The diagnostic codes for literal values. Like the lexer's codes, each
+/// is a `parse` code of the specification's diagnostic catalog
+/// (errors-and-diagnostics.md), and a constant's name is its code in upper
+/// case.
 pub mod codes {
-    /// An integer literal above the i64 domain (LEX-7).
-    pub const INTEGER_RANGE: &str = "lex.integer_range";
-    /// A float literal too large for binary64 (LEX-7).
-    pub const FLOAT_RANGE: &str = "lex.float_range";
+    /// An integer literal outside the i64 domain (LEX-7).
+    pub const NUMBER_INTEGER_RANGE: &str = "number.integer_range";
+    /// A float literal that rounds to infinity (LEX-7, LEX-20).
+    pub const NUMBER_FLOAT_RANGE: &str = "number.float_range";
     /// A duration that breaks LEX-13.
-    pub const INVALID_DURATION: &str = "lex.invalid_duration";
-    /// A date or time whose fields do not exist (LEX-11).
-    pub const INVALID_TEMPORAL: &str = "lex.invalid_temporal";
+    pub const DURATION_INVALID: &str = "duration.invalid";
+    /// A date, time or offset whose fields do not exist (LEX-11, LEX-19).
+    pub const DATE_TIME_INVALID_FIELD: &str = "date_time.invalid_field";
     /// A zone name that breaks LEX-12.
-    pub const INVALID_ZONE: &str = "lex.invalid_zone";
+    pub const DATE_TIME_INVALID_ZONE: &str = "date_time.invalid_zone";
 }
 
 /// Why a literal's text has no value.
@@ -45,7 +52,7 @@ pub enum LiteralError {
     Malformed,
     /// The text has the right shape but breaks a value rule.
     Invalid {
-        /// The local code, one of [`codes`].
+        /// The catalogued code, one of [`codes`].
         code: &'static str,
         /// The specification rule broken, for example `LEX-13`.
         rule: &'static str,
@@ -69,39 +76,110 @@ fn invalid<T>(
 
 // ---- Strings --------------------------------------------------------------
 
-/// The contents of a string literal, with the quotes removed and escapes
-/// replaced (LEX-2). `text` is the whole token, quotes included.
+/// The delimiter that opens and closes a text block (LEX-25).
+const TEXT_BLOCK_DELIMITER: &str = "\"\"\"";
+
+/// The contents of a string literal: delimiters removed and escapes
+/// replaced (LEX-2, LEX-24). `text` is the whole token, quotes included.
+///
+/// A text block (LEX-25) also loses the indentation of its closing
+/// delimiter from every line, and its lines are joined by line feeds
+/// whatever line breaks the source uses:
+///
+/// ```
+/// use hgl_lexer::literal::decode_string;
+///
+/// let block = "\"\"\"\r\n    Usage: run\r\n      -v  verbose\r\n    \"\"\"";
+/// assert_eq!(decode_string(block).unwrap(), "Usage: run\n  -v  verbose");
+/// assert_eq!(decode_string(r#""\u{20AC}5""#).unwrap(), "\u{20ac}5");
+/// ```
 pub fn decode_string(text: &str) -> Result<String, LiteralError> {
-    // `strip_prefix` returns the remainder when the prefix is present. The
-    // `?` after `ok_or` returns the error from this function straight away,
-    // like an early `return` on failure.
-    let body = text.strip_prefix('"').ok_or(LiteralError::Malformed)?;
+    if text.starts_with(TEXT_BLOCK_DELIMITER) {
+        return decode_text_block(text);
+    }
+    // `strip_prefix` and `strip_suffix` return the remainder when the quote
+    // is there. The `?` after `ok_or` returns the error from this function
+    // straight away, like an early `return` on failure.
+    let content = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .ok_or(LiteralError::Malformed)?;
+    let mut value = String::with_capacity(content.len());
+    decode_content(content, false, &mut value)?;
+    Ok(value)
+}
+
+/// The contents of a text block (LEX-25). `text` is the whole token.
+fn decode_text_block(text: &str) -> Result<String, LiteralError> {
+    // Two delimiters, not one that is read as both.
+    let delimiter = TEXT_BLOCK_DELIMITER.len();
+    if text.len() < 2 * delimiter || !text.ends_with(TEXT_BLOCK_DELIMITER) {
+        return Err(LiteralError::Malformed);
+    }
+    let body = &text[delimiter..text.len() - delimiter];
+    // `map_err` replaces the error value; the lexer has already reported
+    // which part of the layout is wrong.
+    let layout = shape::text_block_layout(body).map_err(|_| LiteralError::Malformed)?;
+
     let mut value = String::with_capacity(body.len());
-    let mut characters = body.chars();
-    while let Some(character) = characters.next() {
-        match character {
-            // The closing quote must be the last character of the token.
-            '"' => {
-                return if characters.next().is_none() {
-                    Ok(value)
-                } else {
-                    Err(LiteralError::Malformed)
-                };
-            }
-            '\\' => match characters.next() {
-                Some('"') => value.push('"'),
-                Some('\\') => value.push('\\'),
-                Some('n') => value.push('\n'),
-                Some('r') => value.push('\r'),
-                Some('t') => value.push('\t'),
-                _ => return Err(LiteralError::Malformed),
-            },
-            '\n' | '\r' => return Err(LiteralError::Malformed),
-            other => value.push(other),
+    for (index, line) in layout.lines.iter().enumerate() {
+        // Lines are joined by line feeds; none follows the last.
+        if index > 0 {
+            value.push('\n');
+        }
+        let line = &body[line.clone()];
+        // A line of only spaces and tabs is an empty line.
+        if !shape::is_blank(line) {
+            decode_content(&line[layout.indentation.len()..], true, &mut value)?;
         }
     }
-    // Ran out of text without meeting the closing quote.
-    Err(LiteralError::Malformed)
+    Ok(value)
+}
+
+/// Appends the characters of `content` to `value`, with each escape
+/// replaced by the character it denotes.
+///
+/// `content` is the inside of a one-line string or one line of a text
+/// block. A text block line may hold quotes, as long as three do not stand
+/// in a row.
+fn decode_content(
+    content: &str,
+    in_text_block: bool,
+    value: &mut String,
+) -> Result<(), LiteralError> {
+    let mut rest = content;
+    while let Some(character) = rest.chars().next() {
+        let length = match character {
+            '\\' => {
+                let (length, escaped) = match rest.as_bytes().get(1) {
+                    Some(b'"') => (2, '"'),
+                    Some(b'\\') => (2, '\\'),
+                    Some(b'n') => (2, '\n'),
+                    Some(b'r') => (2, '\r'),
+                    Some(b't') => (2, '\t'),
+                    // LEX-24: an escape that names no scalar value has no
+                    // character to stand for.
+                    Some(b'u') => match shape::unicode_escape(rest.as_bytes()) {
+                        Some((length, Some(scalar))) => (length, scalar),
+                        _ => return Err(LiteralError::Malformed),
+                    },
+                    _ => return Err(LiteralError::Malformed),
+                };
+                value.push(escaped);
+                length
+            }
+            '\n' | '\r' => return Err(LiteralError::Malformed),
+            '"' if !in_text_block || rest.starts_with(TEXT_BLOCK_DELIMITER) => {
+                return Err(LiteralError::Malformed);
+            }
+            other => {
+                value.push(other);
+                other.len_utf8()
+            }
+        };
+        rest = &rest[length..];
+    }
+    Ok(())
 }
 
 // ---- Numbers --------------------------------------------------------------
@@ -114,34 +192,76 @@ pub fn decode_string(text: &str) -> Result<String, LiteralError> {
 /// sees the minus.
 pub const MAX_INTEGER_MAGNITUDE: u64 = 1 << 63;
 
-/// The magnitude of an integer literal (LEX-7). Literals carry no sign, so
-/// the result is unsigned and at most [`MAX_INTEGER_MAGNITUDE`].
-pub fn decode_integer(text: &str) -> Result<u64, LiteralError> {
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+/// The form of `text` when the whole of it is one numeric or duration
+/// literal.
+fn number_form(text: &str) -> Result<NumberForm, LiteralError> {
+    let bytes = text.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
         return Err(LiteralError::Malformed);
     }
-    // `parse` fails here only on overflow: the text is known to be digits.
-    match text.parse::<u64>() {
+    let number = shape::scan_number(bytes);
+    if number.length == bytes.len() {
+        Ok(number.form)
+    } else {
+        Err(LiteralError::Malformed)
+    }
+}
+
+/// The magnitude of an integer literal: decimal, hexadecimal or binary
+/// (LEX-7, LEX-23). Literals carry no sign, so the result is unsigned and
+/// at most [`MAX_INTEGER_MAGNITUDE`], in every base.
+///
+/// ```
+/// use hgl_lexer::literal::decode_integer;
+///
+/// assert_eq!(decode_integer("1_000_000"), Ok(1_000_000));
+/// assert_eq!(decode_integer("0xFF"), Ok(255));
+/// assert_eq!(decode_integer("0b1111_1111"), Ok(255));
+/// ```
+pub fn decode_integer(text: &str) -> Result<u64, LiteralError> {
+    let (digits, radix, rule) = match number_form(text)? {
+        NumberForm::Decimal => (text, 10, "LEX-7"),
+        // Skip the two-character prefix.
+        NumberForm::Hexadecimal => (&text[2..], 16, "LEX-23"),
+        NumberForm::Binary => (&text[2..], 2, "LEX-23"),
+        NumberForm::Float { .. } | NumberForm::Duration => return Err(LiteralError::Malformed),
+    };
+    // LEX-22: the separators do not change the value.
+    let digits = digits.replace('_', "");
+    // The parse fails here only on overflow: the text is known to be
+    // digits of the base.
+    match u64::from_str_radix(&digits, radix) {
         Ok(magnitude) if magnitude <= MAX_INTEGER_MAGNITUDE => Ok(magnitude),
         _ => invalid(
-            codes::INTEGER_RANGE,
-            "LEX-7",
+            codes::NUMBER_INTEGER_RANGE,
+            rule,
             format!("integer literal `{text}` is outside the i64 domain"),
         ),
     }
 }
 
-/// The value of a float literal (LEX-7). The nearest binary64 value is
-/// taken; a literal too large to be finite is rejected.
+/// The value of a float literal (LEX-7, LEX-20): the f64 nearest its exact
+/// decimal value, ties to even. A literal that rounds to infinity is
+/// rejected; one that rounds to zero or a subnormal is accepted.
 pub fn decode_float(text: &str) -> Result<f64, LiteralError> {
-    let value: f64 = text.parse().map_err(|_| LiteralError::Malformed)?;
+    // The shape check comes first: Rust's parser also accepts `inf`, `nan`
+    // and `.5`, which are not HGL literals.
+    if !matches!(number_form(text)?, NumberForm::Float { .. }) {
+        return Err(LiteralError::Malformed);
+    }
+    // LEX-22: the separators do not change the value. Rust's `parse`
+    // rounds correctly, to nearest with ties to even, which is LEX-20.
+    let value: f64 = text
+        .replace('_', "")
+        .parse()
+        .map_err(|_| LiteralError::Malformed)?;
     if value.is_finite() {
         Ok(value)
     } else {
         invalid(
-            codes::FLOAT_RANGE,
-            "LEX-7",
-            format!("float literal `{text}` is outside the f64 domain"),
+            codes::NUMBER_FLOAT_RANGE,
+            "LEX-20",
+            format!("float literal `{text}` is too large for f64: it rounds to infinity"),
         )
     }
 }
@@ -167,8 +287,14 @@ const UNIT_MICROSECONDS: [i128; 6] = [
 /// microseconds, and that the total fits the signed 64-bit duration domain.
 /// The result is never negative: a sign is a separate operator (LEX-7).
 pub fn decode_duration(text: &str) -> Result<i64, LiteralError> {
-    let parts = duration_parts(text)?;
-    let reject = |message: String| invalid(codes::INVALID_DURATION, "LEX-13", message);
+    if number_form(text)? != NumberForm::Duration {
+        return Err(LiteralError::Malformed);
+    }
+    // LEX-22: the separators do not change the value. The shape check has
+    // found them only between digits, so they can simply be dropped.
+    let plain = text.replace('_', "");
+    let parts = duration_parts(&plain)?;
+    let reject = |message: String| invalid(codes::DURATION_INVALID, "LEX-13", message);
 
     // Arithmetic is done in i128 so that intermediate products cannot
     // overflow before the final range check.
@@ -275,7 +401,7 @@ fn fraction_microseconds(text: &str, fraction: &str, unit: i128) -> Result<i128,
     }
     let inexact = || {
         invalid(
-            codes::INVALID_DURATION,
+            codes::DURATION_INVALID,
             "LEX-13",
             format!("duration `{text}` is not a whole number of microseconds"),
         )
@@ -356,12 +482,12 @@ pub struct TemporalLiteral<'a> {
     pub zone: Option<&'a str>,
 }
 
-/// The fields of a temporal literal (LEX-11, LEX-12). `text` is the whole
-/// token, `@` included.
+/// The fields of a temporal literal (LEX-11, LEX-12, LEX-19). `text` is
+/// the whole token, `@` included.
 ///
 /// Field values are checked: the date must exist, the time must be a real
-/// time of day (no `24:00:00`, no leap second), and a zone name must meet
-/// LEX-12's limits.
+/// time of day (no `24:00:00`, no leap second), an offset must be within a
+/// day, and a zone name must meet LEX-12's limits.
 pub fn decode_temporal(text: &str) -> Result<TemporalLiteral<'_>, LiteralError> {
     let mut reader = FieldReader { text, pos: 0 };
     if !reader.eat(b'@') {
@@ -474,7 +600,7 @@ impl<'a> FieldReader<'a> {
 
         // The casts below are safe: four digits fit u16, two fit u8.
         let (year, month, day) = (year as u16, month as u8, day as u8);
-        let reject = |message: String| invalid(codes::INVALID_TEMPORAL, "LEX-11", message);
+        let reject = |message: String| invalid(codes::DATE_TIME_INVALID_FIELD, "LEX-11", message);
         if year == 0 {
             return reject(format!("date `{written}` is outside the years 1 to 9999"));
         }
@@ -516,7 +642,7 @@ impl<'a> FieldReader<'a> {
         let written = &self.text[start..self.pos];
         if hour > 23 || minute > 59 || second > 59 {
             return invalid(
-                codes::INVALID_TEMPORAL,
+                codes::DATE_TIME_INVALID_FIELD,
                 "LEX-11",
                 format!(
                     "time `{written}` does not exist: hours are 00 to 23, minutes and seconds 00 to 59"
@@ -532,7 +658,7 @@ impl<'a> FieldReader<'a> {
     }
 
     /// `Z`, `+HH`, `-HH`, `+HH:MM` or `-HH:MM`. Minutes default to zero
-    /// (LEX-11).
+    /// (LEX-11); hours are 00 to 23 and minutes 00 to 59 (LEX-19).
     fn offset(&mut self) -> Result<UtcOffset, LiteralError> {
         let start = self.pos;
         if self.eat(b'Z') {
@@ -549,8 +675,8 @@ impl<'a> FieldReader<'a> {
         let written = &self.text[start..self.pos];
         if hours > 23 || minutes > 59 {
             return invalid(
-                codes::INVALID_TEMPORAL,
-                "LEX-11",
+                codes::DATE_TIME_INVALID_FIELD,
+                "LEX-19",
                 format!("offset `{written}` does not exist: hours are 00 to 23, minutes 00 to 59"),
             );
         }
@@ -563,6 +689,10 @@ impl<'a> FieldReader<'a> {
 
     /// `[Component/Component]`, returning the name between the brackets
     /// (LEX-12).
+    ///
+    /// Characters outside the zone alphabet are a fault of shape, which the
+    /// lexer reports. What the components may be is LEX-12's rule about the
+    /// name, checked here.
     fn zone(&mut self) -> Result<&'a str, LiteralError> {
         self.expect(b'[')?;
         let rest = &self.text[self.pos..];
@@ -570,16 +700,33 @@ impl<'a> FieldReader<'a> {
         let name = &rest[..length];
         self.pos += length + 1;
 
-        let zone_character =
-            |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+' | b'.');
+        if !name
+            .bytes()
+            .all(|byte| is_zone_character(byte) || byte == b'/')
+        {
+            return Err(LiteralError::Malformed);
+        }
+        if name.is_empty() {
+            return invalid(
+                codes::DATE_TIME_INVALID_ZONE,
+                "LEX-12",
+                "zone name is empty",
+            );
+        }
         for component in name.split('/') {
-            // An empty component is a leading, trailing or doubled slash.
-            if component.is_empty() || !component.bytes().all(zone_character) {
-                return Err(LiteralError::Malformed);
+            // An empty component is a leading, trailing or repeated slash.
+            if component.is_empty() {
+                return invalid(
+                    codes::DATE_TIME_INVALID_ZONE,
+                    "LEX-12",
+                    format!(
+                        "zone name `{name}` has an empty component: `/` stands only between two components"
+                    ),
+                );
             }
             if component == "." || component == ".." {
                 return invalid(
-                    codes::INVALID_ZONE,
+                    codes::DATE_TIME_INVALID_ZONE,
                     "LEX-12",
                     format!("zone name `{name}` has the component `{component}`"),
                 );
@@ -587,7 +734,7 @@ impl<'a> FieldReader<'a> {
         }
         if name.len() > 255 {
             return invalid(
-                codes::INVALID_ZONE,
+                codes::DATE_TIME_INVALID_ZONE,
                 "LEX-12",
                 "zone name is longer than 255 bytes",
             );
@@ -603,7 +750,8 @@ impl<'a> FieldReader<'a> {
 /// This is the check half of decoding: it discards the values. A stage that
 /// needs a value calls the matching `decode_*` function on the token's
 /// text. Tokens the lexer already reported as malformed are skipped, so a
-/// problem is reported once.
+/// problem is reported once. A file that is not UTF-8 was rejected whole by
+/// the lexer (LEX-16) and is skipped too.
 pub fn validate_literals(
     sources: &SourceMap,
     file: FileId,
@@ -611,6 +759,9 @@ pub fn validate_literals(
     diagnostics: &mut Diagnostics,
 ) {
     let source = sources.file(file);
+    if source.encoding_error().is_some() {
+        return;
+    }
     for token in tokens {
         let text = source.slice(token.span);
         // `.err()` keeps only the failure, turning Result<T, E> into
@@ -631,7 +782,7 @@ pub fn validate_literals(
         {
             let location = Location::new(file, token.span);
             diagnostics.emit(
-                Diagnostic::error(Category::Parse, Code::Local(code), location, message)
+                Diagnostic::error(Category::Parse, Code::Catalogued(code), location, message)
                     .with_rule(rule),
             );
         }
@@ -650,6 +801,15 @@ mod tests {
         }
     }
 
+    /// The rule cited by an `Invalid` error; panics on success or
+    /// `Malformed`.
+    fn invalid_rule<T: std::fmt::Debug>(result: Result<T, LiteralError>) -> &'static str {
+        match result {
+            Err(LiteralError::Invalid { rule, .. }) => rule,
+            other => panic!("expected an Invalid error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn strings_decode_escapes() {
         // LEX-2.
@@ -661,6 +821,17 @@ mod tests {
     }
 
     #[test]
+    fn unicode_escapes_denote_one_scalar_value() {
+        // LEX-24: one to six hexadecimal digits, either case.
+        assert_eq!(decode_string(r#""\u{20AC}""#).unwrap(), "\u{20ac}");
+        assert_eq!(decode_string(r#""\u{20ac}""#).unwrap(), "\u{20ac}");
+        assert_eq!(decode_string(r#""\u{41}\u{0}""#).unwrap(), "A\0");
+        assert_eq!(decode_string(r#""\u{000041}""#).unwrap(), "A");
+        assert_eq!(decode_string(r#""\u{10FFFF}""#).unwrap(), "\u{10ffff}");
+        assert_eq!(decode_string(r#""a\u{1F600}b""#).unwrap(), "a\u{1f600}b");
+    }
+
+    #[test]
     fn malformed_strings_have_no_value() {
         for text in [
             r#""abc"#,
@@ -668,9 +839,101 @@ mod tests {
             r#""abc\""#,
             r#"abc""#,
             r#""a"b""#,
+            r#"""#,
+            "\"a\nb\"",
+            // LEX-24: a surrogate, a value above 10FFFF, and escapes of the
+            // wrong shape. The lexer has reported each.
+            r#""\u{D800}""#,
+            r#""\u{110000}""#,
+            r#""\u{}""#,
+            r#""\u{0000041}""#,
+            r#""\u0041""#,
+            r#""\u{41""#,
+            r#""\u{4G}""#,
             "",
         ] {
             assert_eq!(decode_string(text), Err(LiteralError::Malformed), "{text}");
+        }
+    }
+
+    #[test]
+    fn text_blocks_drop_indentation_and_join_lines_with_line_feeds() {
+        // LEX-25, with the chapter's illustration under each line-break
+        // form (LEX-15): the value is the same.
+        for line_break in ["\n", "\r\n", "\r"] {
+            let block = [
+                "\"\"\"",
+                "    Usage: run [options]",
+                "      -v  verbose",
+                "    \"\"\"",
+            ]
+            .join(line_break);
+            assert_eq!(
+                decode_string(&block).unwrap(),
+                "Usage: run [options]\n  -v  verbose",
+                "{block:?}"
+            );
+        }
+
+        // No line feed follows the last line; no lines is the empty string.
+        assert_eq!(decode_string("\"\"\"\na\n\"\"\"").unwrap(), "a");
+        assert_eq!(decode_string("\"\"\"\n\"\"\"").unwrap(), "");
+        assert_eq!(decode_string("\"\"\"\n    \"\"\"").unwrap(), "");
+        // A line of only spaces and tabs is an empty line, whatever its
+        // length, so a final line feed is written as a blank last line.
+        assert_eq!(decode_string("\"\"\"\n\n\"\"\"").unwrap(), "");
+        assert_eq!(decode_string("\"\"\"\n  a\n\n  \"\"\"").unwrap(), "a\n");
+        assert_eq!(
+            decode_string("\"\"\"\n  a\n \t   \n  b\n  \"\"\"").unwrap(),
+            "a\n\nb"
+        );
+        // Tabs indent as well as spaces; text after the indentation stays.
+        assert_eq!(
+            decode_string("\"\"\"\n\t a \n\t\tb\n\t\"\"\"").unwrap(),
+            " a \n\tb"
+        );
+    }
+
+    #[test]
+    fn text_blocks_take_quotes_and_escapes() {
+        // LEX-25: escapes apply; a quote needs one only where it would
+        // begin three in a row.
+        assert_eq!(
+            decode_string("\"\"\"\nsay \"hi\" and \"\"\n\"\"\"").unwrap(),
+            "say \"hi\" and \"\""
+        );
+        assert_eq!(
+            decode_string("\"\"\"\n\\\"\"\" \\u{20AC}\\t\\\\\n\"\"\"").unwrap(),
+            "\"\"\" \u{20ac}\t\\"
+        );
+        // An escaped line feed is part of a line, not a line break.
+        assert_eq!(decode_string("\"\"\"\n  a\\nb\n  \"\"\"").unwrap(), "a\nb");
+    }
+
+    #[test]
+    fn malformed_text_blocks_have_no_value() {
+        // LEX-25. The lexer has reported each.
+        for text in [
+            // Text on the opening line; the delimiters alone.
+            "\"\"\"text\"\"\"",
+            "\"\"\"\"\"\"",
+            "\"\"\"",
+            "\"\"\"\"",
+            // Text before the closing delimiter.
+            "\"\"\"\n  a\n  b \"\"\"",
+            // A line indented less than the closing delimiter.
+            "\"\"\"\n  a\n b\n  \"\"\"",
+            // Not closed.
+            "\"\"\"\n  a\n",
+            // A backslash at the end of a line; an unknown escape.
+            "\"\"\"\na\\\nb\n\"\"\"",
+            "\"\"\"\na\\qb\n\"\"\"",
+        ] {
+            assert_eq!(
+                decode_string(text),
+                Err(LiteralError::Malformed),
+                "{text:?}"
+            );
         }
     }
 
@@ -687,13 +950,61 @@ mod tests {
         );
         assert_eq!(
             invalid_code(decode_integer("9223372036854775809")),
-            codes::INTEGER_RANGE
+            codes::NUMBER_INTEGER_RANGE
         );
         assert_eq!(
             invalid_code(decode_integer("99999999999999999999999999")),
-            codes::INTEGER_RANGE
+            codes::NUMBER_INTEGER_RANGE
         );
-        assert_eq!(decode_integer("12a"), Err(LiteralError::Malformed));
+        assert_eq!(invalid_rule(decode_integer("9223372036854775809")), "LEX-7");
+        for text in ["12a", "", "1.5", "1e5", "1h", "-1", "+1", " 1"] {
+            assert_eq!(decode_integer(text), Err(LiteralError::Malformed), "{text}");
+        }
+    }
+
+    #[test]
+    fn integers_take_separators_and_two_more_bases() {
+        // LEX-22: a separator does not change the value.
+        assert_eq!(decode_integer("1_000_000"), Ok(1_000_000));
+        assert_eq!(decode_integer("1_0"), Ok(10));
+        // LEX-23: hexadecimal digits in either case.
+        assert_eq!(decode_integer("0xFF"), Ok(255));
+        assert_eq!(decode_integer("0xff"), Ok(255));
+        assert_eq!(decode_integer("0x0"), Ok(0));
+        assert_eq!(decode_integer("0xDEAD_beef"), Ok(0xDEAD_BEEF));
+        assert_eq!(decode_integer("0b1111_1111"), Ok(255));
+        assert_eq!(decode_integer("0b0"), Ok(0));
+        // The domain is the same in every base, 2^63 included.
+        assert_eq!(decode_integer("0x7FFF_FFFF_FFFF_FFFF"), Ok(i64::MAX as u64));
+        assert_eq!(
+            decode_integer("0x8000_0000_0000_0000"),
+            Ok(MAX_INTEGER_MAGNITUDE)
+        );
+        let binary_limit = format!("0b1{}", "0".repeat(63));
+        assert_eq!(decode_integer(&binary_limit), Ok(MAX_INTEGER_MAGNITUDE));
+        for text in [
+            "0x8000_0000_0000_0001",
+            "0xFFFF_FFFF_FFFF_FFFF",
+            "0x1_0000_0000_0000_0000",
+        ] {
+            assert_eq!(
+                invalid_code(decode_integer(text)),
+                codes::NUMBER_INTEGER_RANGE,
+                "{text}"
+            );
+            assert_eq!(invalid_rule(decode_integer(text)), "LEX-23", "{text}");
+        }
+        let binary_over = format!("0b1{}1", "0".repeat(62));
+        assert_eq!(
+            invalid_code(decode_integer(&binary_over)),
+            codes::NUMBER_INTEGER_RANGE
+        );
+
+        for text in [
+            "1_", "_1", "1__0", "0x", "0b", "0x_FF", "0xFF_", "0XFF", "0B11", "0b102", "0xFG",
+        ] {
+            assert_eq!(decode_integer(text), Err(LiteralError::Malformed), "{text}");
+        }
     }
 
     #[test]
@@ -703,8 +1014,47 @@ mod tests {
         assert_eq!(decode_float("1e5"), Ok(100_000.0));
         assert_eq!(decode_float("2.5E-3"), Ok(0.0025));
         assert_eq!(decode_float("1.7976931348623157e308"), Ok(f64::MAX));
-        assert_eq!(invalid_code(decode_float("1e309")), codes::FLOAT_RANGE);
-        assert_eq!(decode_float("1.5q"), Err(LiteralError::Malformed));
+        assert_eq!(
+            invalid_code(decode_float("1e309")),
+            codes::NUMBER_FLOAT_RANGE
+        );
+        // LEX-22.
+        assert_eq!(decode_float("1_000.000_5"), Ok(1000.0005));
+        assert_eq!(decode_float("1e1_0"), Ok(1e10));
+        // The shape is HGL's, not that of Rust's own parser.
+        for text in [
+            "1.5q", "", "1", "0xFF", "1h", "inf", "nan", "NaN", "infinity", ".5", "5.", "1e",
+            "-1.5", "+1.5", "1_.5", "1._5", "1e_5",
+        ] {
+            assert_eq!(decode_float(text), Err(LiteralError::Malformed), "{text}");
+        }
+    }
+
+    #[test]
+    fn floats_round_to_the_nearest_f64() {
+        // LEX-20: nearest, ties to even. 2^53 + 1 lies halfway between two
+        // f64 values; the even one is 2^53.
+        assert_eq!(
+            decode_float("9007199254740993.0"),
+            Ok(9_007_199_254_740_992.0)
+        );
+        assert_eq!(decode_float("0.1"), Ok(0.1));
+        // Rounding to infinity is rejected.
+        assert_eq!(
+            invalid_code(decode_float("1e400")),
+            codes::NUMBER_FLOAT_RANGE
+        );
+        assert_eq!(invalid_rule(decode_float("1e400")), "LEX-20");
+        // The largest f64 is 1.797...e308; halfway to the next power of two
+        // rounds up to infinity.
+        assert_eq!(
+            invalid_code(decode_float("1.7976931348623159e308")),
+            codes::NUMBER_FLOAT_RANGE
+        );
+        // Rounding to zero or to a subnormal is accepted.
+        assert_eq!(decode_float("1e-400"), Ok(0.0));
+        assert_eq!(decode_float("5e-324"), Ok(f64::from_bits(1)));
+        assert_eq!(decode_float("0.0"), Ok(0.0));
     }
 
     #[test]
@@ -722,6 +1072,10 @@ mod tests {
         assert_eq!(decode_duration("0s"), Ok(0));
         // Units need not carry: 90 minutes is fine.
         assert_eq!(decode_duration("90m"), Ok(90 * 60_000_000));
+        // LEX-22: separators in a whole number and in a fraction.
+        assert_eq!(decode_duration("1_500ms"), Ok(1_500_000));
+        assert_eq!(decode_duration("1_0h3_0m"), Ok(630 * 60_000_000));
+        assert_eq!(decode_duration("1.000_5s"), Ok(1_000_500));
     }
 
     #[test]
@@ -737,15 +1091,15 @@ mod tests {
         assert_eq!(decode_duration("0.25d"), Ok(6 * 3_600_000_000));
         assert_eq!(
             invalid_code(decode_duration("0.5us")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("0.0000001s")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("0.3333333333333333333333d")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
@@ -754,19 +1108,19 @@ mod tests {
         // LEX-13.
         assert_eq!(
             invalid_code(decode_duration("30m1h")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1us1ms")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1h2h")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1.5h30m")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
@@ -776,21 +1130,26 @@ mod tests {
         assert_eq!(decode_duration("9223372036854775807us"), Ok(i64::MAX));
         assert_eq!(
             invalid_code(decode_duration("9223372036854775808us")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("106751992d")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("99999999999999999999999999s")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
     #[test]
     fn malformed_durations_have_no_value() {
-        for text in ["", "5", "5x", "h", "1.s", "1h30", "1e5m", "1 h"] {
+        // The `duration_literal` production with LEX-8, LEX-13 and LEX-22:
+        // none of these is one duration.
+        for text in [
+            "", "5", "5x", "h", "1.s", "1h30", "1e5m", "1 h", "1_h", "1h_", "1__0s", "0x1h", "1.5",
+            "1H",
+        ] {
             assert_eq!(
                 decode_duration(text),
                 Err(LiteralError::Malformed),
@@ -823,32 +1182,32 @@ mod tests {
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-02-29")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@1900-02-29")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-04-31")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-13-01")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-00-10")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-01-00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         // TYPE-2: years 1 to 9999.
         assert_eq!(
             invalid_code(decode_temporal("@0000-01-01")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert!(decode_temporal("@0001-01-01").is_ok());
         assert!(decode_temporal("@9999-12-31").is_ok());
@@ -890,19 +1249,19 @@ mod tests {
         // LEX-11.
         assert_eq!(
             invalid_code(decode_temporal("@24:00:00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@24:00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@23:59:60")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@12:60")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
     }
 
@@ -932,14 +1291,22 @@ mod tests {
         assert_eq!(zoned.zone, Some("Europe/London"));
         assert_eq!(zoned.offset, Some(UtcOffset { minutes: 60 }));
 
-        assert_eq!(
-            invalid_code(decode_temporal("@2026-09-03T09:30+24:00")),
-            codes::INVALID_TEMPORAL
-        );
-        assert_eq!(
-            invalid_code(decode_temporal("@2026-09-03T09:30+01:60")),
-            codes::INVALID_TEMPORAL
-        );
+        // LEX-19: offset hours are 00 to 23, minutes 00 to 59.
+        let widest = decode_temporal("@2026-09-03T09:30-23:59").unwrap();
+        assert_eq!(widest.offset, Some(UtcOffset { minutes: -1439 }));
+        for text in [
+            "@2026-09-03T09:30+24:00",
+            "@2026-09-03T09:30+24",
+            "@2026-09-03T09:30+01:60",
+            "@2026-09-03T09:30-99:00",
+        ] {
+            assert_eq!(
+                invalid_code(decode_temporal(text)),
+                codes::DATE_TIME_INVALID_FIELD,
+                "{text}"
+            );
+            assert_eq!(invalid_rule(decode_temporal(text)), "LEX-19", "{text}");
+        }
         // A zone without an offset is not a literal form.
         assert_eq!(
             decode_temporal("@2026-09-03T09:30[Europe/London]"),
@@ -960,11 +1327,11 @@ mod tests {
 
         assert_eq!(
             invalid_code(decode_temporal("@[Europe/..]")),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
         assert_eq!(
             invalid_code(decode_temporal("@[./London]")),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
         assert!(
             decode_temporal("@[a.b/c..d]").is_ok(),
@@ -976,17 +1343,29 @@ mod tests {
         let too_long = format!("@[{}]", "a".repeat(256));
         assert_eq!(
             invalid_code(decode_temporal(&too_long)),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
 
+        // Components are nonempty: no leading, trailing or repeated slash.
         for text in [
             "@[]",
+            "@[/]",
             "@[/Europe]",
             "@[Europe/]",
             "@[Europe//London]",
-            "@[Europe London]",
-            "@[Europe",
+            "@09:30[Europe//London]",
         ] {
+            assert_eq!(
+                invalid_code(decode_temporal(text)),
+                codes::DATE_TIME_INVALID_ZONE,
+                "{text}"
+            );
+            assert_eq!(invalid_rule(decode_temporal(text)), "LEX-12", "{text}");
+        }
+
+        // A character outside the zone alphabet, or no closing bracket, is
+        // a fault of shape: the lexer reports it.
+        for text in ["@[Europe London]", "@[Europe", "@[Europe/Lond\u{f6}n]"] {
             assert_eq!(
                 decode_temporal(text),
                 Err(LiteralError::Malformed),
@@ -997,6 +1376,8 @@ mod tests {
 
     #[test]
     fn malformed_temporal_literals_have_no_value() {
+        // The TEMPORAL_LITERAL production with LEX-11: none of these matches
+        // a form.
         for text in [
             "",
             "2026-09-03",

@@ -32,7 +32,7 @@ Rules for every stage:
 
 | Crate | Role | State |
 | --- | --- | --- |
-| `hgl_source` | Source files, spans, line and column lookup | implemented |
+| `hgl_source` | Source files (UTF-8 check, byte-order mark), spans, line and column lookup | implemented |
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_cli` | The `hgl` command | `hgl tokens` only |
@@ -48,24 +48,38 @@ A crate is created when its stage is built, not before.
 
 Context-free, lossless and total: the same text always gives the same
 tokens; the tokens cover the file exactly, comments and whitespace included;
-lexing never stops early. Four lexical rules need context and are left to
-the stage that has it:
+lexing never stops early. A token is cut by its form alone: the longest
+symbol is taken whatever surrounds it (LEX-17), and a literal that runs into
+a letter, digit or `_` is one malformed token, never a literal and a name
+(LEX-18). Five lexical rules need context and are left to the stage that has
+it:
 
 | Rule | Left to | What the lexer keeps |
 | --- | --- | --- |
 | Significant line breaks (LEX-5, LEX-6) | parser | every line break as one `Newline` token |
+| A comment over several lines counts as a line break (LEX-21) | parser | the comment as one token with its text |
 | Contextual names (LEX-9, LEX-10) | parser | `Ident` tokens with their text |
 | Literal range under a minus (LEX-7) | analyser | `Minus` and the unsigned literal as separate tokens |
 | Documentation attachment (SDOC-1) | parser | `DocComment` tokens |
 
 The lexer settles a literal's shape. `hgl_lexer::literal` settles its value
-and the rules that need arithmetic (LEX-11 to LEX-13).
+and the rules that need arithmetic: integer and float range (LEX-7, LEX-20,
+LEX-23), date, time and offset fields (LEX-11, LEX-19), zone names (LEX-12),
+durations (LEX-13), and the contents of strings and text blocks (LEX-24,
+LEX-25). Both read shapes through one private module, `shape`, so they agree
+on where a literal ends.
+
+### Encoding
+
+A source is read as bytes. One that is not well-formed UTF-8 gets one
+diagnostic, at the first offending byte; nothing else is reported for that
+file. One leading U+FEFF is dropped when the file is loaded, so offsets and
+columns count from the character after it (LEX-16).
 
 ### Line breaks
 
 A line break is LF, CRLF or CR. Each is one line break, they mean the same
-everywhere, and a file may mix them (owner decision, 2026-11-13; the pinned
-specification does not state it yet, so no rule is cited).
+everywhere, and a file may mix them (LEX-15).
 `hgl_source::line_break_length` is the single definition. The line index,
 the lexer and the diagnostic renderer all use it, and tests lex the whole
 specification corpus under each form. CI runs the tests on Linux, macOS and
@@ -101,7 +115,20 @@ A diagnostic has a category from the specification's list, a code, a primary
 location, and the rule it enforces. A code is *catalogued* (it appears in the
 specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
-`# expect-error` (TST-12). Every lexical code is local today.
+`# expect-error` (TST-12). Every lexical code is catalogued.
+`crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
+words and symbols with the pinned chapters, so a pin that changes one of
+them fails a test.
+
+Where two catalogue rows cover one condition the lexer takes one reading,
+listed in [hgl_spec issue 11](https://github.com/hhenson/hgl_spec/issues/11)
+for the specification to decide:
+
+| Condition | Code used |
+| --- | --- |
+| Text block that reaches the end of the file | `string.unclosed` |
+| Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
+| Backslash directly before a line break in a text block | `string.unknown_escape` |
 
 ## Adding a transpiler (planned)
 

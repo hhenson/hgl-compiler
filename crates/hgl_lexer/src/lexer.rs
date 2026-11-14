@@ -8,41 +8,52 @@
 //!
 //! Two properties hold for every input, valid or not:
 //!
-//! * **Lossless.** The tokens cover the source exactly, with no gaps and no
-//!   overlaps. Joining their text reproduces the file. The formatter depends
-//!   on this to preserve comments.
+//! * **Lossless.** The tokens cover the source text exactly, with no gaps
+//!   and no overlaps. Joining their text reproduces it. The formatter
+//!   depends on this to preserve comments.
 //! * **Total.** Lexing never fails or stops early. Problems are reported to
 //!   the diagnostics sink and scanning continues.
+//!
+//! A token is cut by its form alone: at every position the longest token
+//! that matches is taken, whatever came before (LEX-17).
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_source::{FileId, SourceMap, Span, line_break_length};
 
+use crate::shape::{self, NumberForm, TextBlockError, is_zone_character};
 use crate::token::{Token, TokenKind};
 
-/// The lexer's compiler-local diagnostic codes.
+/// The lexer's diagnostic codes.
 ///
-/// The specification rejects each of these conditions (the rule is cited on
-/// the diagnostic) but its catalog assigns them no code, so they are reported
-/// as [`Code::Local`].
+/// Each is a `parse` code of the specification's diagnostic catalog
+/// (errors-and-diagnostics.md), so they are reported as
+/// [`Code::Catalogued`]. The rule a rejection rests on is cited on the
+/// diagnostic. A constant's name is its code in upper case.
 pub mod codes {
-    /// A character that cannot start a token (LEX-1).
-    pub const UNEXPECTED_CHARACTER: &str = "lex.unexpected_character";
-    /// A string with no closing quote before the line break (LEX-2).
-    pub const UNCLOSED_STRING: &str = "lex.unclosed_string";
-    /// A backslash followed by anything but `"`, `\`, `n`, `r`, `t` (LEX-2).
-    pub const UNKNOWN_ESCAPE: &str = "lex.unknown_escape";
-    /// A block comment with no closing `*/` (LEX-2).
-    pub const UNCLOSED_COMMENT: &str = "lex.unclosed_comment";
-    /// A number run together with letters that are not a duration (LEX-8).
-    pub const MALFORMED_NUMBER: &str = "lex.malformed_number";
-    /// An `@` literal that matches none of the temporal forms (LEX-11,
-    /// LEX-12).
-    pub const MALFORMED_TEMPORAL: &str = "lex.malformed_temporal";
+    /// Source that is not well-formed UTF-8 (LEX-16).
+    pub const SYNTAX_INVALID_ENCODING: &str = "syntax.invalid_encoding";
+    /// A character that begins no token (LEX-16).
+    pub const SYNTAX_UNEXPECTED_CHARACTER: &str = "syntax.unexpected_character";
+    /// A string that reaches a line break or the end of the file, or a text
+    /// block that reaches the end of the file (LEX-2).
+    pub const STRING_UNCLOSED: &str = "string.unclosed";
+    /// An escape outside the admitted set (LEX-2).
+    pub const STRING_UNKNOWN_ESCAPE: &str = "string.unknown_escape";
+    /// A `\u{...}` that names no Unicode scalar value (LEX-24).
+    pub const STRING_INVALID_ESCAPE: &str = "string.invalid_escape";
+    /// A text block whose layout breaks LEX-25.
+    pub const STRING_MALFORMED_TEXT_BLOCK: &str = "string.malformed_text_block";
+    /// A block or documentation comment that reaches the end of the file
+    /// (LEX-2).
+    pub const COMMENT_UNCLOSED: &str = "comment.unclosed";
+    /// A numeric or duration run that is not one literal (LEX-8, LEX-18).
+    pub const NUMBER_MALFORMED: &str = "number.malformed";
+    /// An `@` run that matches no temporal form (LEX-18).
+    pub const DATE_TIME_MALFORMED: &str = "date_time.malformed";
 }
 
-/// The duration units, largest first (LEX-13). The position of a unit in
-/// this list is its rank: a smaller index is a larger unit.
-pub(crate) const DURATION_UNITS: [&str; 6] = ["d", "h", "m", "s", "ms", "us"];
+/// The note that lists the escapes, shown with every unknown one.
+const ESCAPES_NOTE: &str = r#"the escapes are \" \\ \n \r \t \u{...}"#;
 
 /// Splits one source file into tokens.
 ///
@@ -53,8 +64,37 @@ pub(crate) const DURATION_UNITS: [&str; 6] = ["d", "h", "m", "s", "ms", "us"];
 /// The lexer checks the *shape* of literals only. Whether `@2026-02-30` is a
 /// real date or `30m1h` orders its units correctly is decided by
 /// [`crate::literal`], which also produces the literal's value.
+///
+/// A file whose bytes are not UTF-8 (LEX-16) gets that one diagnostic and
+/// no other. Its tokens cover the text before the first offending byte.
 pub fn lex(sources: &SourceMap, file: FileId, diagnostics: &mut Diagnostics) -> Vec<Token> {
-    let text = sources.file(file).text();
+    let source = sources.file(file);
+    // `let ... else` binds the pattern or runs the `else` block, which must
+    // leave the function. Here: the usual case, a well-formed file.
+    let Some(error) = source.encoding_error() else {
+        return scan(file, source.text(), diagnostics);
+    };
+
+    let diagnostic = Diagnostic::error(
+        Category::Parse,
+        Code::Catalogued(codes::SYNTAX_INVALID_ENCODING),
+        Location::new(file, Span::empty(error.offset)),
+        "source is not well-formed UTF-8",
+    )
+    .with_rule("LEX-16")
+    .with_note(format!(
+        "the byte 0x{:02X} here begins no UTF-8 character; the rest of the file was not read",
+        error.byte
+    ));
+    diagnostics.emit(diagnostic);
+    // The text stops where the encoding broke, perhaps in the middle of a
+    // string or comment, so what the scanner would say about it is noise.
+    // It goes to a sink that is thrown away.
+    scan(file, source.text(), &mut Diagnostics::new())
+}
+
+/// Cuts `text`, the text of `file`, into tokens.
+fn scan(file: FileId, text: &str, diagnostics: &mut Diagnostics) -> Vec<Token> {
     let mut lexer = Lexer {
         file,
         text,
@@ -86,15 +126,19 @@ fn is_ident_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_'
 }
 
-/// True for a byte that can continue an identifier (LEX-1).
+/// True for a byte that can continue an identifier (LEX-1). These are also
+/// the bytes a numeric or temporal literal cannot run into (LEX-18).
 fn is_ident_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-/// True for a byte admitted in a time-zone name component (the
-/// `zone_character` production).
-fn is_zone_character(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+' | b'.')
+/// The ASCII letters `text` starts with.
+fn leading_letters(text: &str) -> &str {
+    let length = text
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphabetic())
+        .count();
+    &text[..length]
 }
 
 /// The scanner's state while lexing one file.
@@ -136,11 +180,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Consumes a run of ASCII digits (possibly empty).
-    fn eat_digits(&mut self) {
-        self.eat_while(|byte| byte.is_ascii_digit());
-    }
-
     /// True when the `count` bytes starting `ahead` positions on are all
     /// ASCII digits.
     fn digits_at(&self, ahead: usize, count: usize) -> bool {
@@ -150,8 +189,13 @@ impl<'a> Lexer<'a> {
         })
     }
 
+    /// True when the next three bytes are `"""`, the text block delimiter.
+    fn at_triple_quote(&self) -> bool {
+        self.bytes[self.pos..].starts_with(b"\"\"\"")
+    }
+
     /// Starts an error diagnostic for the bytes `start..end`. Every lexical
-    /// error is in the `parse` category and carries a local code.
+    /// error is in the `parse` category and carries one of [`codes`].
     fn error(
         &self,
         start: usize,
@@ -161,7 +205,7 @@ impl<'a> Lexer<'a> {
     ) -> Diagnostic {
         Diagnostic::error(
             Category::Parse,
-            Code::Local(code),
+            Code::Catalogued(code),
             Location::new(self.file, span(start, end)),
             message,
         )
@@ -172,13 +216,14 @@ impl<'a> Lexer<'a> {
     /// Consumes one token starting at `self.pos` and returns its kind.
     fn next_kind(&mut self) -> TokenKind {
         match self.bytes[self.pos] {
+            // LEX-16: spaces and tabs are the only whitespace.
             b' ' | b'\t' => {
                 self.eat_while(|byte| byte == b' ' || byte == b'\t');
                 TokenKind::Whitespace
             }
-            // A line break is LF, CRLF or a lone CR. Each is one token and
-            // none is preferred; `line_break_length` says how long this one
-            // is.
+            // LEX-15: a line break is LF, CRLF or a lone CR. Each is one
+            // token and none is preferred; `line_break_length` says how
+            // long this one is.
             b'\n' | b'\r' => {
                 self.pos += line_break_length(&self.bytes[self.pos..])
                     .expect("a line feed or carriage return starts a line break");
@@ -188,6 +233,9 @@ impl<'a> Lexer<'a> {
             // `if` after a pattern is a guard: the arm applies only when the
             // condition also holds.
             b'/' if self.peek_at(1) == Some(b'*') => self.block_comment(),
+            // Three quotes always open a text block; they are never an
+            // empty string followed by a quote (LEX-25).
+            b'"' if self.at_triple_quote() => self.text_block(),
             b'"' => self.string(),
             b'0'..=b'9' => self.number(),
             b'@' => self.temporal_or_at(),
@@ -196,10 +244,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ---- Comments (LEX-3) -----------------------------------------------
+    // ---- Comments (LEX-3, LEX-21) ---------------------------------------
 
     /// `# ...` to the end of the line. The line break (LF, CRLF or CR) is
-    /// left for the next token: it stays meaningful (LEX-3).
+    /// left for the next token: it stays meaningful (LEX-3, LEX-21).
     fn line_comment(&mut self) -> TokenKind {
         self.eat_while(|byte| byte != b'\n' && byte != b'\r');
         TokenKind::LineComment
@@ -207,7 +255,7 @@ impl<'a> Lexer<'a> {
 
     /// `/* ... */`. Comments do not nest, so the first `*/` closes it.
     /// A comment that opens with `/**` is a documentation comment (SDOC-1);
-    /// `/**/` is an ordinary empty comment.
+    /// `/**/` is an ordinary empty comment (LEX-21).
     fn block_comment(&mut self) -> TokenKind {
         let start = self.pos;
         self.pos += 2;
@@ -218,9 +266,9 @@ impl<'a> Lexer<'a> {
                 let diagnostic = self
                     .error(
                         start,
-                        start + 2,
-                        codes::UNCLOSED_COMMENT,
-                        "block comment has no closing `*/`",
+                        self.pos,
+                        codes::COMMENT_UNCLOSED,
+                        "comment has no closing `*/`",
                     )
                     .with_rule("LEX-2");
                 self.diagnostics.emit(diagnostic);
@@ -234,7 +282,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ---- Strings (LEX-2) ------------------------------------------------
+    // ---- Strings (LEX-2, LEX-24, LEX-25) --------------------------------
 
     /// A double-quoted string. It must close on the line it opens on: the
     /// grammar excludes line breaks (LF, CRLF and CR alike) from
@@ -249,11 +297,12 @@ impl<'a> Lexer<'a> {
                         .error(
                             start,
                             self.pos,
-                            codes::UNCLOSED_STRING,
+                            codes::STRING_UNCLOSED,
                             "string has no closing quote",
                         )
                         .with_rule("LEX-2")
-                        .with_note("a string must close on the line it opens on");
+                        .with_note("a string must close on the line it opens on")
+                        .with_note(r#"text over several lines goes in a text block: """ ... """"#);
                     self.diagnostics.emit(diagnostic);
                     break;
                 }
@@ -261,7 +310,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     break;
                 }
-                Some(b'\\') => self.escape(),
+                Some(b'\\') => self.escape(false),
                 // Any other byte, including the bytes of a multi-byte
                 // character, is string content.
                 Some(_) => self.pos += 1,
@@ -270,14 +319,115 @@ impl<'a> Lexer<'a> {
         TokenKind::Str
     }
 
+    /// A text block: a string over several lines (LEX-25).
+    ///
+    /// ```text
+    /// let usage = """        a line break directly follows the opening
+    ///     Usage: run         the text, one or more lines
+    ///     """                the closing delimiter, after spaces and tabs
+    /// ```
+    ///
+    /// The block runs to the next `"""`, wherever that is, and is one token.
+    /// Its layout is then checked; at most one layout fault is reported for
+    /// a block. The value (indentation removed, lines joined) is worked out
+    /// by [`crate::literal::decode_string`].
+    fn text_block(&mut self) -> TokenKind {
+        let start = self.pos;
+        self.pos += 3;
+        let body = self.pos;
+        loop {
+            match self.peek() {
+                None => {
+                    let diagnostic = self
+                        .error(
+                            start,
+                            self.pos,
+                            codes::STRING_UNCLOSED,
+                            r#"text block has no closing `"""`"#,
+                        )
+                        .with_rule("LEX-2");
+                    self.diagnostics.emit(diagnostic);
+                    return TokenKind::Str;
+                }
+                Some(b'"') if self.at_triple_quote() => break,
+                // An escape is skipped whole, so `\"""` does not close the
+                // block.
+                Some(b'\\') => self.escape(true),
+                // Anything else is text, line breaks included.
+                Some(_) => self.pos += 1,
+            }
+        }
+        let close = self.pos;
+        self.pos += 3;
+
+        let fault = match shape::text_block_layout(&self.text[body..close]) {
+            Ok(_) => return TokenKind::Str,
+            Err(fault) => fault,
+        };
+        // The catalog places the diagnostic at the "offending delimiter or
+        // line".
+        let diagnostic = match fault {
+            TextBlockError::Opening => self
+                .error(
+                    start,
+                    body,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
+                    r#"a line break must directly follow the opening `"""` of a text block"#,
+                )
+                .with_note(
+                    r#"the text starts on the next line; a string on one line is written "text""#,
+                ),
+            TextBlockError::Closing => self
+                .error(
+                    close,
+                    close + 3,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
+                    r#"only spaces and tabs may come before the closing `"""` of a text block"#,
+                )
+                .with_note(r#"to put `"""` in the text, escape its first quote: `\"""`"#),
+            TextBlockError::Line(line) => self
+                .error(
+                    body + line.start,
+                    body + line.end,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
+                    r#"this line does not start with the indentation of the closing `"""`"#,
+                )
+                .with_note(
+                    r#"the spaces and tabs before the closing `"""` are removed from every line, so each line with text must start with exactly them"#,
+                ),
+        };
+        self.diagnostics.emit(diagnostic.with_rule("LEX-25"));
+        TokenKind::Str
+    }
+
     /// A backslash escape inside a string, starting at the backslash.
-    fn escape(&mut self) {
+    /// `in_text_block` says which kind of string holds it: only a text block
+    /// carries on past a line break.
+    fn escape(&mut self, in_text_block: bool) {
         let start = self.pos;
         match self.peek_at(1) {
             Some(b'"' | b'\\' | b'n' | b'r' | b't') => self.pos += 2,
-            // A backslash at the end of the line: consume it and let
-            // `string` report the unclosed string.
-            None | Some(b'\n' | b'\r') => self.pos += 1,
+            Some(b'u') => self.unicode_escape(),
+            // A backslash at the end of the file: consume it and let the
+            // caller report the unclosed string.
+            None => self.pos += 1,
+            Some(b'\n' | b'\r') => {
+                self.pos += 1;
+                // On one line the caller reports the unclosed string. A
+                // text block continues, so the backslash is the fault.
+                if in_text_block {
+                    let diagnostic = self
+                        .error(
+                            start,
+                            self.pos,
+                            codes::STRING_UNKNOWN_ESCAPE,
+                            "a backslash at the end of a line is not an escape",
+                        )
+                        .with_rule("LEX-2")
+                        .with_note(ESCAPES_NOTE);
+                    self.diagnostics.emit(diagnostic);
+                }
+            }
             Some(_) => {
                 // Take the whole character after the backslash, which may be
                 // several bytes, so the span ends on a character boundary.
@@ -290,11 +440,53 @@ impl<'a> Lexer<'a> {
                     .error(
                         start,
                         self.pos,
-                        codes::UNKNOWN_ESCAPE,
+                        codes::STRING_UNKNOWN_ESCAPE,
                         format!("unknown escape `\\{escaped}`"),
                     )
                     .with_rule("LEX-2")
-                    .with_note(r#"the escapes are \" \\ \n \r \t"#);
+                    .with_note(ESCAPES_NOTE);
+                self.diagnostics.emit(diagnostic);
+            }
+        }
+    }
+
+    /// A `\u` escape, starting at the backslash.
+    ///
+    /// Two different faults are possible. Text that is not `\u{`, digits,
+    /// `}` is not an escape at all (LEX-2); only the `\u` is consumed. A
+    /// well-formed escape that names no character is consumed whole and
+    /// reported under LEX-24.
+    fn unicode_escape(&mut self) {
+        let start = self.pos;
+        match shape::unicode_escape(&self.bytes[start..]) {
+            Some((length, Some(_))) => self.pos += length,
+            Some((length, None)) => {
+                self.pos += length;
+                let escape = &self.text[start..self.pos];
+                let diagnostic = self
+                    .error(
+                        start,
+                        self.pos,
+                        codes::STRING_INVALID_ESCAPE,
+                        format!("`{escape}` names no Unicode scalar value"),
+                    )
+                    .with_rule("LEX-24")
+                    .with_note(
+                        "a scalar value is 0 to 10FFFF except the surrogates D800 to DFFF, written with one to six hexadecimal digits",
+                    );
+                self.diagnostics.emit(diagnostic);
+            }
+            None => {
+                self.pos += 2;
+                let diagnostic = self
+                    .error(
+                        start,
+                        self.pos,
+                        codes::STRING_UNKNOWN_ESCAPE,
+                        r"`\u` must be followed by `{`, one to six hexadecimal digits and `}`",
+                    )
+                    .with_rule("LEX-2")
+                    .with_note(ESCAPES_NOTE);
                 self.diagnostics.emit(diagnostic);
             }
         }
@@ -316,147 +508,154 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // ---- Numbers and durations (LEX-7, LEX-8, LEX-13) -------------------
+    // ---- Numbers and durations (LEX-7, LEX-8, LEX-18, LEX-22, LEX-23) ---
 
     /// An integer, float or duration literal, starting at a digit.
     ///
-    /// ```text
-    /// 12        Int
-    /// 12.5      Float      a `.` counts only when a digit follows it
-    /// 1e5       Float      a complete exponent makes a float
-    /// 1h30m     Duration   a digit run followed by letters is a duration
-    /// 10x       Duration   ...even when the unit is unknown: reported
-    /// 1e5m      Float      an exponent cannot take a unit: reported
-    /// ```
+    /// [`shape::scan_number`] finds the longest literal there. LEX-18 then
+    /// decides whether it stands: a literal can end only where the next
+    /// character is not a letter, digit or `_`. When one of those follows,
+    /// the whole run up to the next other character is one malformed token:
+    /// `12abc` is never `12` then `abc`.
     ///
     /// There is no sign here: `-5` is the minus operator and then `5`
     /// (LEX-7).
     fn number(&mut self) -> TokenKind {
         let start = self.pos;
-        self.eat_digits();
-        let has_fraction = self.eat_fraction();
-
-        if let Some(length) = self.exponent_length() {
-            self.pos += length;
-            if self.peek().is_some_and(is_ident_start) {
-                self.eat_while(is_ident_continue);
-                let literal = &self.text[start..self.pos];
-                let diagnostic = self
-                    .error(
-                        start,
-                        self.pos,
-                        codes::MALFORMED_NUMBER,
-                        format!("`{literal}` is not a number: letters follow the exponent"),
-                    )
-                    .with_rule("LEX-8")
-                    .with_note("a float with an exponent cannot take a duration unit");
-                self.diagnostics.emit(diagnostic);
-            }
-            return TokenKind::Float;
+        let number = shape::scan_number(&self.bytes[start..]);
+        self.pos += number.length;
+        if !self.peek().is_some_and(is_ident_continue) {
+            return match number.form {
+                NumberForm::Decimal | NumberForm::Hexadecimal | NumberForm::Binary => {
+                    TokenKind::Int
+                }
+                NumberForm::Float { .. } => TokenKind::Float,
+                NumberForm::Duration => TokenKind::Duration,
+            };
         }
-
-        if self.peek().is_some_and(is_ident_start) {
-            return self.duration_parts(start);
-        }
-        if has_fraction {
-            TokenKind::Float
-        } else {
-            TokenKind::Int
-        }
+        let literal_end = self.pos;
+        self.eat_while(is_ident_continue);
+        self.malformed_number(start, literal_end, number.form)
     }
 
-    /// Consumes `.digits` if present and reports whether it did. A `.` not
-    /// followed by a digit is left alone: `1.max` is `1`, `.`, `max`.
-    fn eat_fraction(&mut self) -> bool {
-        let present = self.peek() == Some(b'.') && self.digits_at(1, 1);
-        if present {
-            self.pos += 1;
-            self.eat_digits();
-        }
-        present
-    }
-
-    /// The length of a complete exponent (`e`, optional sign, digits) at the
-    /// cursor, or `None`. A bare `e` is not an exponent, so `2e` falls
-    /// through to the duration path and is reported as an unknown unit.
-    fn exponent_length(&self) -> Option<usize> {
-        if !matches!(self.peek(), Some(b'e' | b'E')) {
-            return None;
-        }
-        let mut length = 1;
-        if matches!(self.peek_at(length), Some(b'+' | b'-')) {
-            length += 1;
-        }
-        let digits_start = length;
-        while self.digits_at(length, 1) {
-            length += 1;
-        }
-        // `then_some` turns a bool into an Option: Some(length) when true.
-        (length > digits_start).then_some(length)
-    }
-
-    /// The rest of a duration literal. Called with the first part's number
-    /// consumed and the cursor on its unit letters; `start` is where the
-    /// literal began.
+    /// Reports the run `start..self.pos` as not one literal and returns the
+    /// kind closest to what was meant. `form` is the literal that matched up
+    /// to `literal_end`, where a letter, digit or `_` follows it.
     ///
-    /// The shape is `number unit` repeated: `1h30m`, `1.5s`. Unit order and
-    /// the placing of fractions are checked later by
-    /// [`crate::literal::decode_duration`].
-    fn duration_parts(&mut self, start: usize) -> TokenKind {
-        loop {
-            // A unit is a maximal run of letters, so `ms` is one unit and
-            // `min` is one (unknown) unit, never `m` then `in`.
-            let unit_start = self.pos;
-            self.eat_while(is_ident_start);
-            let unit = &self.text[unit_start..self.pos];
-            if !DURATION_UNITS.contains(&unit) {
-                // LEX-8: reject the whole run instead of splitting it into a
-                // number and an identifier.
-                self.eat_while(is_ident_continue);
-                let literal = &self.text[start..self.pos];
-                let diagnostic = self
-                    .error(
-                        start,
-                        self.pos,
-                        codes::MALFORMED_NUMBER,
-                        format!("`{literal}` is not a number or a duration: `{unit}` is not a duration unit"),
-                    )
-                    .with_rule("LEX-8")
-                    .with_note("digits followed by letters are read as a duration; the units are d, h, m, s, ms, us");
-                self.diagnostics.emit(diagnostic);
-                return TokenKind::Duration;
-            }
+    /// ```text
+    /// 10x       Duration   digits then letters are a duration candidate
+    /// 1e        Float      an exponent with no digits
+    /// 1e5m      Float      letters after an exponent (LEX-8)
+    /// 1__000    Int        two `_` between digits (LEX-22)
+    /// 0b102     Int        a digit outside the base
+    /// 1h30      Duration   a part with no unit
+    /// ```
+    fn malformed_number(
+        &mut self,
+        start: usize,
+        literal_end: usize,
+        form: NumberForm,
+    ) -> TokenKind {
+        let run = &self.text[start..self.pos];
+        let rest = &self.text[literal_end..self.pos];
+        let is_digit = |byte: u8| match form {
+            NumberForm::Hexadecimal => byte.is_ascii_hexdigit(),
+            _ => byte.is_ascii_digit(),
+        };
 
-            // Another part follows only if a number does.
-            if !self.digits_at(0, 1) {
-                return TokenKind::Duration;
-            }
-            self.eat_digits();
-            self.eat_fraction();
-            if !self.peek().is_some_and(is_ident_start) {
-                let literal = &self.text[start..self.pos];
-                let diagnostic = self
-                    .error(
-                        start,
-                        self.pos,
-                        codes::MALFORMED_NUMBER,
-                        format!("`{literal}` is not a duration: its last number has no unit"),
-                    )
-                    .with_rule("LEX-8")
-                    .with_note(
-                        "each part of a duration is a number followed by one of d, h, m, s, ms, us",
-                    );
-                self.diagnostics.emit(diagnostic);
-                return TokenKind::Duration;
-            }
+        // LEX-22 names the fault when underscores stand between two digits
+        // but there is more than one of them. Everything else is LEX-18,
+        // except the one case LEX-8 spells out (below).
+        let mut rule = "LEX-18";
+        if rest.starts_with("__")
+            && is_digit(self.bytes[literal_end - 1])
+            && rest
+                .trim_start_matches('_')
+                .bytes()
+                .next()
+                .is_some_and(is_digit)
+        {
+            rule = "LEX-22";
         }
+
+        let (kind, message, note) = if run.starts_with("0x") || run.starts_with("0X") {
+            (
+                TokenKind::Int,
+                format!("`{run}` is not a hexadecimal integer"),
+                "write `0x` in lowercase, then hexadecimal digits; one `_` may stand between two digits",
+            )
+        } else if run.starts_with("0b") || run.starts_with("0B") {
+            (
+                TokenKind::Int,
+                format!("`{run}` is not a binary integer"),
+                "write `0b` in lowercase, then the digits 0 and 1; one `_` may stand between two digits",
+            )
+        } else if rest.starts_with('_') {
+            let (kind, what) = match form {
+                NumberForm::Duration => (TokenKind::Duration, "a duration"),
+                NumberForm::Float { .. } => (TokenKind::Float, "a number"),
+                _ => (TokenKind::Int, "a number"),
+            };
+            (
+                kind,
+                format!("`{run}` is not {what}: `_` may stand only between two digits"),
+                "one `_` may separate two digits, as in `1_000`",
+            )
+        } else if matches!(form, NumberForm::Float { exponent: true }) {
+            rule = "LEX-8";
+            (
+                TokenKind::Float,
+                format!("`{run}` is not a number: letters follow the exponent"),
+                "a float with an exponent cannot take a duration unit",
+            )
+        } else if form == NumberForm::Duration {
+            // After the last unit comes another number. Either nothing
+            // usable follows it or its unit is unknown.
+            let number = shape::digit_run_length(rest.as_bytes(), |byte| byte.is_ascii_digit());
+            let unit = leading_letters(&rest[number..]);
+            let fault = if unit.is_empty() {
+                "its last number has no unit".to_string()
+            } else {
+                format!("`{unit}` is not a duration unit")
+            };
+            (
+                TokenKind::Duration,
+                format!("`{run}` is not a duration: {fault}"),
+                "each part of a duration is a number followed by one of d, h, m, s, ms, us",
+            )
+        } else {
+            // A decimal integer or plain float with letters after it.
+            let letters = leading_letters(rest);
+            if letters == "e" || letters == "E" {
+                (
+                    TokenKind::Float,
+                    format!("`{run}` is not a number: its exponent has no digits"),
+                    "an exponent is `e` or `E`, an optional sign, then digits: `1e5`, `2.5e-3`",
+                )
+            } else {
+                (
+                    TokenKind::Duration,
+                    format!(
+                        "`{run}` is not a number or a duration: `{letters}` is not a duration unit"
+                    ),
+                    "digits followed by letters are read as a duration; the units are d, h, m, s, ms, us",
+                )
+            }
+        };
+
+        let diagnostic = self
+            .error(start, self.pos, codes::NUMBER_MALFORMED, message)
+            .with_rule(rule)
+            .with_note(note);
+        self.diagnostics.emit(diagnostic);
+        kind
     }
 
-    // ---- Temporal literals (LEX-11, LEX-12) -----------------------------
+    // ---- Temporal literals (LEX-11, LEX-12, LEX-18) ---------------------
 
     /// A token starting with `@`: a temporal literal when a digit or `[`
-    /// follows, otherwise the `@` symbol that introduces an annotation such
-    /// as `@suppress_warning(...)`.
+    /// follows (LEX-18), otherwise the `@` symbol that introduces an
+    /// annotation such as `@suppress_warning(...)`.
     fn temporal_or_at(&mut self) -> TokenKind {
         let start = self.pos;
         self.pos += 1;
@@ -477,23 +676,35 @@ impl<'a> Lexer<'a> {
     fn zone_literal(&mut self, start: usize) {
         if let Some(length) = self.zone_annotation_length() {
             self.pos += length;
-            return;
+            if !self.peek().is_some_and(is_ident_continue) {
+                return;
+            }
+            // LEX-18: the literal runs straight into a name or number.
+            self.eat_while(is_ident_continue);
+        } else {
+            // Take the zone characters there are. If a `]` comes later on
+            // this line, take the text up to it as well, so that the whole
+            // attempt is one token.
+            self.pos += 1;
+            self.eat_while(|byte| is_zone_character(byte) || byte == b'/');
+            let rest = &self.bytes[self.pos..];
+            let line_length = rest
+                .iter()
+                .position(|&byte| byte == b'\n' || byte == b'\r')
+                .unwrap_or(rest.len());
+            if let Some(index) = rest[..line_length].iter().position(|&byte| byte == b']') {
+                self.pos += index + 1;
+            }
         }
-        // Malformed. Take the text up to a `]` on this line, if there is
-        // one, so the whole attempt is one token; otherwise just the `[`.
-        let rest = &self.bytes[self.pos..];
-        let line_length = rest
-            .iter()
-            .position(|&byte| byte == b'\n' || byte == b'\r')
-            .unwrap_or(rest.len());
-        let length = rest[..line_length]
-            .iter()
-            .position(|&byte| byte == b']')
-            .map_or(1, |index| index + 1);
-        self.pos += length;
+        let literal = &self.text[start..self.pos];
         let diagnostic = self
-            .error(start, self.pos, codes::MALFORMED_TEMPORAL, "malformed time-zone literal")
-            .with_rule("LEX-12")
+            .error(
+                start,
+                self.pos,
+                codes::DATE_TIME_MALFORMED,
+                format!("malformed time-zone literal `{literal}`"),
+            )
+            .with_rule("LEX-18")
             .with_note("write `@[Area/Location]`: components of letters, digits and `_ - + .` separated by `/`");
         self.diagnostics.emit(diagnostic);
     }
@@ -537,15 +748,21 @@ impl<'a> Lexer<'a> {
             well_formed = false;
         }
 
-        // A literal that runs straight into a letter or digit is malformed:
+        // LEX-18: a literal that matches no form, or that runs straight
+        // into a letter, digit or `_`, is rejected whole:
         // `@2026-09-03t09:30` (lowercase t), `@09:30:15.1234567` (a seventh
         // fraction digit), `@12` (neither a date nor a time).
         if !well_formed || self.peek().is_some_and(is_ident_continue) {
             self.eat_while(|byte| is_ident_continue(byte) || byte == b':');
             let literal = &self.text[start..self.pos];
             let diagnostic = self
-                .error(start, self.pos, codes::MALFORMED_TEMPORAL, format!("malformed temporal literal `{literal}`"))
-                .with_rule("LEX-11")
+                .error(
+                    start,
+                    self.pos,
+                    codes::DATE_TIME_MALFORMED,
+                    format!("malformed temporal literal `{literal}`"),
+                )
+                .with_rule("LEX-18")
                 .with_note("forms: @YYYY-MM-DD, @YYYY-MM-DDTHH:MM[:SS[.ffffff]] with optional Z or +HH[:MM], @HH:MM[:SS[.ffffff]]")
                 .with_note("`T` and `Z` are uppercase; fields have exactly the digits shown");
             self.diagnostics.emit(diagnostic);
@@ -594,7 +811,8 @@ impl<'a> Lexer<'a> {
 
     /// The length of a UTC offset at the cursor: `Z`, `+HH`, `-HH`, `+HH:MM`
     /// or `-HH:MM`; or `None`. A sign followed by anything but exactly two
-    /// digits is left as an operator.
+    /// digits is left as an operator. Whether the hours and minutes exist
+    /// (LEX-19) is checked with the literal's value.
     fn utc_offset_length(&self) -> Option<usize> {
         match self.peek() {
             Some(b'Z') => Some(1),
@@ -614,35 +832,36 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The length of a `[Component/Component]` zone annotation at the
-    /// cursor, or `None` when the text there is not a complete annotation.
-    /// Components are non-empty, so leading, trailing and doubled slashes
-    /// do not match (LEX-12).
+    /// The length of a `[...]` zone annotation at the cursor, or `None`
+    /// when the text there is not one.
+    ///
+    /// The lexer asks only that zone characters and `/` stand between the
+    /// brackets. That the components between the slashes are non-empty and
+    /// well named is LEX-12's rule about the name, checked with the
+    /// literal's value: `@[Europe//London]` is one token here and an
+    /// invalid zone there.
     fn zone_annotation_length(&self) -> Option<usize> {
         if self.peek() != Some(b'[') {
             return None;
         }
         let mut length = 1;
-        loop {
-            let component_start = length;
-            while self.peek_at(length).is_some_and(is_zone_character) {
-                length += 1;
-            }
-            if length == component_start {
-                return None;
-            }
-            match self.peek_at(length) {
-                Some(b'/') => length += 1,
-                Some(b']') => return Some(length + 1),
-                _ => return None,
-            }
+        while self
+            .peek_at(length)
+            .is_some_and(|byte| is_zone_character(byte) || byte == b'/')
+        {
+            length += 1;
         }
+        (self.peek_at(length) == Some(b']')).then_some(length + 1)
     }
 
-    // ---- Punctuation (LEX-14) -------------------------------------------
+    // ---- Punctuation (LEX-14, LEX-17) -----------------------------------
 
     /// A symbol, taking the longest that matches: `<=>` before `<=` before
-    /// `<` (LEX-14). Anything else is an unexpected character.
+    /// `<` (LEX-17). Anything else is an unexpected character.
+    ///
+    /// No symbol joins `>` to a following `>`, so the two closers of
+    /// `list<list<i64>>` are separate tokens (LEX-8). `>` directly followed
+    /// by `=` is `>=` wherever it stands.
     ///
     /// The match looks at up to three bytes. `_` in a pattern means "any
     /// value", so `(b'<', Some(b'='), _)` reads "`<`, then `=`, then
@@ -653,9 +872,11 @@ impl<'a> Lexer<'a> {
         let (kind, length) = match (self.bytes[self.pos], self.peek_at(1), self.peek_at(2)) {
             (b'.', Some(b'.'), Some(b'.')) => (Ellipsis, 3),
             (b'<', Some(b'='), Some(b'>')) => (Spaceship, 3),
+            (b'/', Some(b'/'), Some(b'=')) => (SlashSlashEq, 3),
             (b':', Some(b':'), _) => (ColonColon, 2),
             (b'/', Some(b'/'), _) => (SlashSlash, 2),
             (b'/', Some(b'='), _) => (SlashEq, 2),
+            (b'%', Some(b'='), _) => (PercentEq, 2),
             (b'&', Some(b'&'), _) => (AmpAmp, 2),
             (b'|', Some(b'|'), _) => (PipePipe, 2),
             (b'+', Some(b'='), _) => (PlusEq, 2),
@@ -693,9 +914,9 @@ impl<'a> Lexer<'a> {
         kind
     }
 
-    /// A character that starts no token. The whole character is consumed,
-    /// which may be several bytes, so the next token starts on a character
-    /// boundary.
+    /// A character that begins no token (LEX-16). The whole character is
+    /// consumed, which may be several bytes, so the next token starts on a
+    /// character boundary.
     fn unexpected_character(&mut self) -> TokenKind {
         let start = self.pos;
         let character = self.text[start..]
@@ -707,8 +928,8 @@ impl<'a> Lexer<'a> {
         // escaped, so an invisible character is still readable.
         let message = format!("unexpected character {character:?}");
         let diagnostic = self
-            .error(start, self.pos, codes::UNEXPECTED_CHARACTER, message)
-            .with_rule("LEX-1");
+            .error(start, self.pos, codes::SYNTAX_UNEXPECTED_CHARACTER, message)
+            .with_rule("LEX-16");
         self.diagnostics.emit(diagnostic);
         TokenKind::Unknown
     }
@@ -719,12 +940,18 @@ mod tests {
     use super::*;
     use TokenKind::*;
 
-    /// Lexes `text` and returns the tokens with the diagnostics' codes.
-    fn lex_text(text: &str) -> (Vec<Token>, Vec<&'static str>) {
+    /// Lexes `text` and returns the tokens with the diagnostics.
+    fn lex_all(text: &str) -> (Vec<Token>, Diagnostics) {
         let mut sources = SourceMap::new();
         let file = sources.add("test.hgl", text).unwrap();
         let mut diagnostics = Diagnostics::new();
         let tokens = lex(&sources, file, &mut diagnostics);
+        (tokens, diagnostics)
+    }
+
+    /// Lexes `text` and returns the tokens with the diagnostics' codes.
+    fn lex_text(text: &str) -> (Vec<Token>, Vec<&'static str>) {
+        let (tokens, diagnostics) = lex_all(text);
         let codes = diagnostics
             .as_slice()
             .iter()
@@ -766,6 +993,25 @@ mod tests {
         (codes, significant(text, &tokens))
     }
 
+    /// Each diagnostic for `text` as its code, the rule it cites and the
+    /// source text it points at.
+    fn reports(text: &str) -> Vec<(&'static str, &'static str, &str)> {
+        let (_, diagnostics) = lex_all(text);
+        diagnostics
+            .as_slice()
+            .iter()
+            .map(|item| {
+                assert_eq!(item.category, Category::Parse);
+                assert!(item.code.is_catalogued(), "{}", item.code.as_str());
+                (
+                    item.code.as_str(),
+                    item.rule.expect("every lexical diagnostic cites a rule"),
+                    &text[item.primary.span.range()],
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn tokens_cover_the_source_exactly() {
         // Valid and invalid input alike: no gaps, no overlaps.
@@ -775,6 +1021,9 @@ mod tests {
             "let s = \"caf\u{e9}\" # tr\u{e8}s bien\r\n",
             "\"unclosed\n/* unclosed",
             "\u{a3} \u{1f600} 10x @12 \"\\q\"",
+            "0x 1__0 0b102 1e @[a b] @[ \"\\u{D800}\\u\"",
+            "\"\"\"\n  text\n  \"\"\" \"\"\"one line\"\"\"",
+            "\"\"\"\n never closed \\",
         ] {
             let (tokens, _) = lex_text(text);
             let mut expected_start = 0;
@@ -830,13 +1079,14 @@ mod tests {
     fn non_ascii_letters_do_not_form_identifiers() {
         // LEX-1 admits ASCII letters only.
         let (codes, tokens) = rejected("caf\u{e9}");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER]);
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER]);
         assert_eq!(tokens, [(Ident, "caf"), (Unknown, "\u{e9}")]);
     }
 
     #[test]
     fn every_line_break_form_is_one_newline_token() {
-        // LF (Linux), CRLF (Windows) and CR (classic Mac), in one file.
+        // LEX-15: LF (Linux), CRLF (Windows) and CR (classic Mac), in one
+        // file.
         assert_eq!(
             tokens_of("a\nb\r\nc\rd"),
             [
@@ -858,6 +1108,7 @@ mod tests {
 
     #[test]
     fn line_break_forms_give_the_same_tokens() {
+        // LEX-15.
         // The same source under each convention differs only in the text of
         // its line-break tokens.
         fn without_line_breaks(text: &str) -> Vec<(TokenKind, &str)> {
@@ -879,8 +1130,73 @@ mod tests {
     }
 
     #[test]
+    fn only_spaces_and_tabs_are_whitespace() {
+        // LEX-16.
+        assert_eq!(kinds_of("a \t b"), [Ident, Ident]);
+        // A form feed, a vertical tab, a no-break space and a byte order
+        // mark anywhere but the start of the file begin no token.
+        for character in ['\u{c}', '\u{b}', '\u{a0}', '\u{feff}'] {
+            let text = format!("a{character}b");
+            assert_eq!(
+                reports(&text),
+                [(
+                    codes::SYNTAX_UNEXPECTED_CHARACTER,
+                    "LEX-16",
+                    &text[1..1 + character.len_utf8()]
+                )],
+                "{character:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_leading_byte_order_mark_is_ignored() {
+        // LEX-16. The source map drops it, so offsets start at the first
+        // character after it.
+        let (tokens, codes) = lex_text("\u{feff}a");
+        assert_eq!(codes, [] as [&str; 0]);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!((tokens[0].kind, tokens[0].span), (Ident, span(0, 1)));
+        // A second one is an ordinary stray character.
+        let (tokens, codes) = lex_text("\u{feff}\u{feff}a");
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER]);
+        assert_eq!((tokens[0].kind, tokens[0].span), (Unknown, span(0, 3)));
+    }
+
+    #[test]
+    fn source_that_is_not_utf8_gets_one_diagnostic() {
+        // LEX-16. 0xFF begins no UTF-8 character. The string it sits in is
+        // cut short; that is not reported as an unclosed string.
+        let mut sources = SourceMap::new();
+        let file = sources
+            .add_bytes("test.hgl", b"let a = \"x\xff\"\nlet b = 1\n".to_vec())
+            .unwrap();
+        let mut diagnostics = Diagnostics::new();
+        let tokens = lex(&sources, file, &mut diagnostics);
+
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics.as_slice()[0];
+        assert_eq!(diagnostic.category, Category::Parse);
+        assert_eq!(
+            diagnostic.code,
+            Code::Catalogued(codes::SYNTAX_INVALID_ENCODING)
+        );
+        assert_eq!(diagnostic.rule, Some("LEX-16"));
+        // The primary location is the first offending byte.
+        assert_eq!(diagnostic.primary.span, Span::empty(10));
+
+        // The tokens cover the text before that byte.
+        let text = sources.file(file).text();
+        assert_eq!(text, "let a = \"x");
+        assert_eq!(
+            significant(text, &tokens),
+            [(KwLet, "let"), (Ident, "a"), (Eq, "="), (Str, "\"x")]
+        );
+    }
+
+    #[test]
     fn line_comments_stop_before_the_line_ending() {
-        // LEX-3.
+        // LEX-3, LEX-21.
         assert_eq!(
             tokens_of("a # note \"x\" /* y\nb"),
             [
@@ -916,11 +1232,13 @@ mod tests {
             tokens_of("/* line 1\nline 2 */"),
             [(BlockComment, "/* line 1\nline 2 */")]
         );
+        // LEX-21: a comment separates tokens as whitespace does.
+        assert_eq!(kinds_of("a/* */b"), [Ident, BlockComment, Ident]);
     }
 
     #[test]
     fn documentation_comments_are_recognised() {
-        // SDOC-1.
+        // SDOC-1, LEX-21.
         assert_eq!(kinds_of("/** Doc. */"), [DocComment]);
         assert_eq!(kinds_of("/**/"), [BlockComment]);
         assert_eq!(kinds_of("/* plain */"), [BlockComment]);
@@ -928,10 +1246,19 @@ mod tests {
 
     #[test]
     fn unclosed_block_comment_is_rejected() {
-        // LEX-2.
-        let (codes, tokens) = rejected("a /* never closed\nb");
-        assert_eq!(codes, [codes::UNCLOSED_COMMENT]);
+        // LEX-2. The diagnostic points at the comment, which runs to the
+        // end of the file.
+        let text = "a /* never closed\nb";
+        let (codes, tokens) = rejected(text);
+        assert_eq!(codes, [codes::COMMENT_UNCLOSED]);
         assert_eq!(tokens, [(Ident, "a"), (BlockComment, "/* never closed\nb")]);
+        assert_eq!(
+            reports(text),
+            [(codes::COMMENT_UNCLOSED, "LEX-2", "/* never closed\nb")]
+        );
+        let (codes, tokens) = rejected("/** doc");
+        assert_eq!(codes, [codes::COMMENT_UNCLOSED]);
+        assert_eq!(tokens, [(DocComment, "/** doc")]);
     }
 
     #[test]
@@ -962,38 +1289,215 @@ mod tests {
     fn unknown_escape_is_rejected_and_the_string_continues() {
         // LEX-2.
         let (codes, tokens) = rejected(r#""a\qb" c"#);
-        assert_eq!(codes, [codes::UNKNOWN_ESCAPE]);
+        assert_eq!(codes, [codes::STRING_UNKNOWN_ESCAPE]);
         assert_eq!(tokens, [(Str, r#""a\qb""#), (Ident, "c")]);
+        assert_eq!(
+            reports(r#""a\qb" c"#),
+            [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", r"\q")]
+        );
         // A multi-byte character after the backslash is taken whole.
         let (codes, tokens) = rejected("\"\\\u{e9}\"");
-        assert_eq!(codes, [codes::UNKNOWN_ESCAPE]);
+        assert_eq!(codes, [codes::STRING_UNKNOWN_ESCAPE]);
         assert_eq!(tokens, [(Str, "\"\\\u{e9}\"")]);
+    }
+
+    #[test]
+    fn unicode_escapes_name_scalar_values() {
+        // LEX-24.
+        assert_eq!(
+            tokens_of(r#""\u{20AC}" "\u{41}\u{10ffff}" "\u{000041}""#),
+            [
+                (Str, r#""\u{20AC}""#),
+                (Str, r#""\u{41}\u{10ffff}""#),
+                (Str, r#""\u{000041}""#)
+            ]
+        );
+        // A surrogate, a number above 10FFFF and a seventh digit name no
+        // scalar value. The escape is taken whole and the string goes on.
+        for escape in [r"\u{D800}", r"\u{DFFF}", r"\u{110000}", r"\u{0000041}"] {
+            let text = format!("\"a{escape}b\" c");
+            assert_eq!(
+                reports(&text),
+                [(codes::STRING_INVALID_ESCAPE, "LEX-24", escape)],
+                "{escape}"
+            );
+            let (_, tokens) = rejected(&text);
+            assert_eq!(tokens, [(Str, &text[..text.len() - 2]), (Ident, "c")]);
+        }
+    }
+
+    #[test]
+    fn a_unicode_escape_needs_braces_and_digits() {
+        // LEX-2: without them `\u` is not one of the escapes.
+        for body in [r"\u", r"\u41", r"\u{}", r"\u{41", r"\u{4G}", r"\u{ 41}"] {
+            let text = format!("\"{body}\"");
+            assert_eq!(
+                reports(&text),
+                [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", r"\u")],
+                "{body}"
+            );
+            let (_, tokens) = rejected(&text);
+            assert_eq!(tokens, [(Str, text.as_str())], "{body}");
+        }
     }
 
     #[test]
     fn unclosed_string_ends_at_the_line_ending() {
         // LEX-2.
         let (codes, tokens) = rejected("\"abc\nnext");
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         assert_eq!(tokens, [(Str, "\"abc"), (Newline, "\n"), (Ident, "next")]);
+        assert_eq!(
+            reports("\"abc\nnext"),
+            [(codes::STRING_UNCLOSED, "LEX-2", "\"abc")]
+        );
         for line_break in ["\r\n", "\r"] {
             let text = format!("\"abc{line_break}next");
             let (codes, tokens) = rejected(&text);
-            assert_eq!(codes, [codes::UNCLOSED_STRING]);
+            assert_eq!(codes, [codes::STRING_UNCLOSED]);
             assert_eq!(
                 tokens,
                 [(Str, "\"abc"), (Newline, line_break), (Ident, "next")]
             );
         }
         let (codes, _) = rejected("\"abc\\");
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
+        // A backslash before the line break adds nothing to the report.
+        let (codes, _) = rejected("\"abc\\\nnext");
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         // An escaped quote does not close the string.
         let (codes, _) = rejected(r#""abc\""#);
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
+    }
+
+    #[test]
+    fn a_text_block_is_one_string_token() {
+        // LEX-25, with the chapter's illustration.
+        let block = "\"\"\"\n    Usage: run [options]\n      -v  verbose\n    \"\"\"";
+        let lf = format!("let usage = {block}\nnext");
+        // LEX-15: the line breaks inside may be of any form.
+        for line_break in ["\n", "\r\n", "\r"] {
+            let text = lf.replace('\n', line_break);
+            let block = block.replace('\n', line_break);
+            assert_eq!(
+                tokens_of(&text),
+                [
+                    (KwLet, "let"),
+                    (Ident, "usage"),
+                    (Eq, "="),
+                    (Str, block.as_str()),
+                    (Newline, line_break),
+                    (Ident, "next")
+                ],
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_blocks_hold_quotes_blank_lines_and_escapes() {
+        // LEX-25.
+        for text in [
+            // No lines at all.
+            "\"\"\"\n\"\"\"",
+            "\"\"\"\n    \"\"\"",
+            // One or two quotes are text.
+            "\"\"\"\n  say \"hi\" and \"\"\n  \"\"\"",
+            // Blank lines need no indentation; deeper lines keep theirs.
+            "\"\"\"\n  a\n\n      b\n \n  \"\"\"",
+            // An escaped first quote keeps `\"\"\"` from closing the block.
+            "\"\"\"\n  \\\"\"\"\n  \"\"\"",
+            "\"\"\"\n  \\u{20AC} \\n \\\\\n  \"\"\"",
+            // Tabs indent as well as spaces.
+            "\"\"\"\n\ta\n\t\"\"\"",
+        ] {
+            assert_eq!(tokens_of(text), [(Str, text)], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn three_quotes_always_open_a_text_block() {
+        // LEX-25: never an empty string and then a quote.
+        let text = "\"\"\"text\"\"\" next";
+        let (codes, tokens) = rejected(text);
+        assert_eq!(codes, [codes::STRING_MALFORMED_TEXT_BLOCK]);
+        assert_eq!(tokens, [(Str, "\"\"\"text\"\"\""), (Ident, "next")]);
+        // The diagnostic points at the opening delimiter.
+        let (_, diagnostics) = lex_all(text);
+        assert_eq!(diagnostics.as_slice()[0].primary.span, span(0, 3));
+        assert_eq!(diagnostics.as_slice()[0].rule, Some("LEX-25"));
+        // Two quotes are an empty string.
+        assert_eq!(tokens_of("\"\" x"), [(Str, "\"\""), (Ident, "x")]);
+    }
+
+    #[test]
+    fn a_text_block_closes_alone_on_its_line() {
+        // LEX-25. The diagnostic points at the closing delimiter.
+        let text = "\"\"\"\n  a\n  b \"\"\" next";
+        let (codes, tokens) = rejected(text);
+        assert_eq!(codes, [codes::STRING_MALFORMED_TEXT_BLOCK]);
+        assert_eq!(tokens, [(Str, &text[..text.len() - 5]), (Ident, "next")]);
+        let (_, diagnostics) = lex_all(text);
+        assert_eq!(diagnostics.as_slice()[0].primary.span, span(12, 15));
+        assert_eq!(diagnostics.as_slice()[0].rule, Some("LEX-25"));
+    }
+
+    #[test]
+    fn text_block_lines_start_with_the_closing_indentation() {
+        // LEX-25. The diagnostic points at the first line that does not;
+        // one is enough for a block.
+        let text = "\"\"\"\n    a\n  b\n c\n    \"\"\"";
+        assert_eq!(
+            reports(text),
+            [(codes::STRING_MALFORMED_TEXT_BLOCK, "LEX-25", "  b")]
+        );
+        let (_, tokens) = rejected(text);
+        assert_eq!(tokens, [(Str, text)]);
+        // Indentation is compared character by character: a tab is not
+        // spaces.
+        let text = "\"\"\"\n\ta\n    \"\"\"";
+        assert_eq!(
+            reports(text),
+            [(codes::STRING_MALFORMED_TEXT_BLOCK, "LEX-25", "\ta")]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_text_block_runs_to_the_end_of_the_file() {
+        // LEX-2.
+        let text = "let a = \"\"\"\n  text\n  \"\" still text\nlet b = 1\n";
+        let (codes, tokens) = rejected(text);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
+        assert_eq!(
+            tokens,
+            [(KwLet, "let"), (Ident, "a"), (Eq, "="), (Str, &text[8..])]
+        );
+        assert_eq!(
+            reports(text),
+            [(codes::STRING_UNCLOSED, "LEX-2", &text[8..])]
+        );
+    }
+
+    #[test]
+    fn a_backslash_cannot_end_a_text_block_line() {
+        // LEX-2: backslash then a line break is not an escape. The grammar
+        // gives a text line only characters and escapes.
+        for line_break in ["\n", "\r\n", "\r"] {
+            let text = format!("\"\"\"{line_break}  a\\{line_break}  b{line_break}  \"\"\"");
+            assert_eq!(
+                reports(&text),
+                [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", "\\")],
+                "{text:?}"
+            );
+            let (_, tokens) = rejected(&text);
+            assert_eq!(tokens, [(Str, text.as_str())], "{text:?}");
+        }
     }
 
     #[test]
     fn integers_and_floats() {
+        // The INTEGER_LITERAL and FLOAT_LITERAL productions. LEX-8: an exponent
+        // with no unit after it is a float.
         assert_eq!(
             tokens_of("0 42 007 1.5 0.25 1e5 1E5 2e+3 2e-3 1.5e10"),
             [
@@ -1012,7 +1516,51 @@ mod tests {
     }
 
     #[test]
+    fn hexadecimal_and_binary_integers() {
+        // LEX-23.
+        assert_eq!(
+            tokens_of("0x1F 0xff 0xDead_Beef 0x0 0b0 0b1111_1111"),
+            [
+                (Int, "0x1F"),
+                (Int, "0xff"),
+                (Int, "0xDead_Beef"),
+                (Int, "0x0"),
+                (Int, "0b0"),
+                (Int, "0b1111_1111"),
+            ]
+        );
+        // Neither is a duration candidate, though `d` is a unit: `0x1d` is
+        // 29, and `0d` is no days.
+        assert_eq!(tokens_of("0x1d 0d"), [(Int, "0x1d"), (Duration, "0d")]);
+        // What follows is still a separate token.
+        assert_eq!(
+            tokens_of("0xFF.x"),
+            [(Int, "0xFF"), (Dot, "."), (Ident, "x")]
+        );
+    }
+
+    #[test]
+    fn one_underscore_may_separate_two_digits() {
+        // LEX-22: in a whole part, a fraction, an exponent and the digits
+        // of a duration.
+        assert_eq!(
+            tokens_of("1_000 1_000_000 1.5_5 1_0.2_5e1_0 1e1_0 1_500ms 1h3_0m 1.2_5s"),
+            [
+                (Int, "1_000"),
+                (Int, "1_000_000"),
+                (Float, "1.5_5"),
+                (Float, "1_0.2_5e1_0"),
+                (Float, "1e1_0"),
+                (Duration, "1_500ms"),
+                (Duration, "1h3_0m"),
+                (Duration, "1.2_5s"),
+            ]
+        );
+    }
+
+    #[test]
     fn a_dot_needs_a_digit_to_make_a_float() {
+        // FLOAT_LITERAL has digits on both sides of its dot; LEX-17 gives `...`.
         assert_eq!(tokens_of("1.max"), [(Int, "1"), (Dot, "."), (Ident, "max")]);
         assert_eq!(
             tokens_of("1...3"),
@@ -1055,16 +1603,85 @@ mod tests {
     }
 
     #[test]
-    fn digits_followed_by_unknown_letters_are_rejected_whole() {
-        // LEX-8: "an unknown unit is rejected rather than split into a
-        // number and identifier".
-        for text in [
-            "10x", "5min", "1H", "0x1F", "1_000", "2e", "3s_total", "1.5q",
+    fn a_literal_is_never_split_into_a_literal_and_a_name() {
+        // LEX-18: a run of digits, letters and `_` that is not one literal
+        // is one malformed token. The kind says what the run most resembles;
+        // the rule is the one the run breaks.
+        for (text, kind, rule) in [
+            // LEX-8: digits then letters are a duration candidate.
+            ("12abc", Duration, "LEX-18"),
+            ("10x", Duration, "LEX-18"),
+            ("5min", Duration, "LEX-18"),
+            ("1H", Duration, "LEX-18"),
+            ("1.5x", Duration, "LEX-18"),
+            ("1.5q", Duration, "LEX-18"),
+            // An exponent with no digits.
+            ("1e", Float, "LEX-18"),
+            ("2E", Float, "LEX-18"),
+            ("1.5e", Float, "LEX-18"),
+            ("1e_1", Float, "LEX-18"),
+            // LEX-8: "`1e5` is valid, `1e5m` is not".
+            ("1e5m", Float, "LEX-8"),
+            ("1.5e-3s", Float, "LEX-8"),
+            // An underscore that is not between two digits.
+            ("1_", Int, "LEX-18"),
+            ("1_x", Int, "LEX-18"),
+            ("1.5_", Float, "LEX-18"),
+            ("1e5_", Float, "LEX-18"),
+            ("1h_", Duration, "LEX-18"),
+            ("3s_total", Duration, "LEX-18"),
+            // LEX-22: one underscore, not two.
+            ("1__000", Int, "LEX-22"),
+            ("1.5__5", Float, "LEX-22"),
+            ("0xFF__FF", Int, "LEX-22"),
+            // A duration part with no unit, or an unknown one.
+            ("1h30", Duration, "LEX-18"),
+            ("1h30x", Duration, "LEX-18"),
+            // LEX-23: a prefix with no digit, a digit outside the base, an
+            // uppercase prefix.
+            ("0x", Int, "LEX-18"),
+            ("0b", Int, "LEX-18"),
+            ("0b102", Int, "LEX-18"),
+            ("0b2", Int, "LEX-18"),
+            ("0X1F", Int, "LEX-18"),
+            ("0B11", Int, "LEX-18"),
+            ("0xFFh", Int, "LEX-18"),
+            ("0x_FF", Int, "LEX-18"),
+            ("0xFF_", Int, "LEX-18"),
         ] {
-            let (codes, tokens) = rejected(text);
-            assert_eq!(codes, [codes::MALFORMED_NUMBER], "{text}");
-            assert_eq!(tokens, [(Duration, text)], "{text}");
+            let (_, tokens) = rejected(text);
+            assert_eq!(tokens, [(kind, text)], "{text}");
+            assert_eq!(
+                reports(text),
+                [(codes::NUMBER_MALFORMED, rule, text)],
+                "{text}"
+            );
         }
+    }
+
+    #[test]
+    fn a_malformed_number_ends_where_its_run_ends() {
+        // LEX-18: the run stops at the first character that is not a
+        // letter, digit or `_`.
+        let (codes, tokens) = rejected("1e+");
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
+        assert_eq!(tokens, [(Float, "1e"), (Plus, "+")]);
+        let (codes, tokens) = rejected("12abc.x");
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
+        assert_eq!(tokens, [(Duration, "12abc"), (Dot, "."), (Ident, "x")]);
+        let (codes, tokens) = rejected("f(10x, 2)");
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
+        assert_eq!(
+            tokens,
+            [
+                (Ident, "f"),
+                (LParen, "("),
+                (Duration, "10x"),
+                (Comma, ","),
+                (Int, "2"),
+                (RParen, ")")
+            ]
+        );
     }
 
     #[test]
@@ -1072,15 +1689,8 @@ mod tests {
         // LEX-8: "`1e5` is valid, `1e5m` is not".
         assert_eq!(tokens_of("1e5"), [(Float, "1e5")]);
         let (codes, tokens) = rejected("1e5m");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
         assert_eq!(tokens, [(Float, "1e5m")]);
-    }
-
-    #[test]
-    fn a_duration_cannot_end_in_a_bare_number() {
-        let (codes, tokens) = rejected("1h30");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
-        assert_eq!(tokens, [(Duration, "1h30")]);
     }
 
     #[test]
@@ -1143,6 +1753,8 @@ mod tests {
 
     #[test]
     fn malformed_temporal_literals_are_rejected() {
+        // LEX-18: `@` then a digit or `[` begins a temporal literal, and
+        // the run is rejected when it matches no form.
         for text in [
             "@12",
             "@9:30",
@@ -1151,21 +1763,52 @@ mod tests {
             "@2026-09-03T09:30z",
             "@09:30:15.1234567",
             "@20260903",
+            "@09:30x",
+            "@2026-09-03_",
         ] {
-            let (codes, _) = rejected(text);
-            assert_eq!(codes[0], codes::MALFORMED_TEMPORAL, "{text}");
+            let (codes, tokens) = rejected(text);
+            assert_eq!(codes[0], codes::DATE_TIME_MALFORMED, "{text}");
+            assert_eq!(tokens[0].0, Temporal, "{text}");
+            assert_eq!(reports(text)[0].1, "LEX-18", "{text}");
         }
+    }
+
+    #[test]
+    fn malformed_zone_literals_are_one_token() {
+        // LEX-18. The token runs to the `]` when there is one on the line.
+        for (text, token) in [
+            ("@[Europe London] x", "@[Europe London]"),
+            ("@[Europe*] x", "@[Europe*]"),
+            ("@[", "@["),
+            ("@[UTC", "@[UTC"),
+            ("@[UTC\n]", "@[UTC"),
+            ("@[UTC]x", "@[UTC]x"),
+            ("@[UTC]_1 + 2", "@[UTC]_1"),
+        ] {
+            let (_, tokens) = rejected(text);
+            assert_eq!(tokens[0], (Temporal, token), "{text}");
+            assert_eq!(
+                reports(text),
+                [(codes::DATE_TIME_MALFORMED, "LEX-18", token)],
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn zone_names_are_checked_with_the_value() {
+        // LEX-12's limits on a zone name (non-empty components, no `.` or
+        // `..`, at most 255 bytes) are about the name, not the token. These
+        // lex; `literal` rejects them.
         for text in [
             "@[]",
             "@[Europe//London]",
             "@[/Europe]",
             "@[Europe/]",
-            "@[Europe London]",
-            "@[",
+            "@[..]",
+            "@09:30[/]",
         ] {
-            let (codes, tokens) = rejected(text);
-            assert_eq!(codes, [codes::MALFORMED_TEMPORAL], "{text}");
-            assert_eq!(tokens[0].0, Temporal, "{text}");
+            assert_eq!(tokens_of(text), [(Temporal, text)], "{text}");
         }
     }
 
@@ -1180,6 +1823,7 @@ mod tests {
 
     #[test]
     fn every_symbol_lexes_to_its_own_kind() {
+        // LEX-17: each PUNCTUATION alternative is one token.
         // Guards the hand-written matcher against the token table.
         for &(text, kind) in TokenKind::PUNCTUATION {
             assert_eq!(tokens_of(text), [(kind, text)], "{text}");
@@ -1188,28 +1832,50 @@ mod tests {
 
     #[test]
     fn the_longest_symbol_wins() {
-        // LEX-14.
+        // LEX-17; `<=>` is LEX-14.
         assert_eq!(kinds_of("a <=> b"), [Ident, Spaceship, Ident]);
         assert_eq!(kinds_of("a<=>b"), [Ident, Spaceship, Ident]);
         assert_eq!(kinds_of("a <= b"), [Ident, LtEq, Ident]);
         assert_eq!(kinds_of("a => b"), [Ident, FatArrow, Ident]);
         assert_eq!(kinds_of("a::b"), [Ident, ColonColon, Ident]);
         assert_eq!(kinds_of("a /= b"), [Ident, SlashEq, Ident]);
+        assert_eq!(kinds_of("a //= b"), [Ident, SlashSlashEq, Ident]);
+        assert_eq!(kinds_of("a//=b"), [Ident, SlashSlashEq, Ident]);
+        assert_eq!(kinds_of("a %= b"), [Ident, PercentEq, Ident]);
+        assert_eq!(kinds_of("a ... b"), [Ident, Ellipsis, Ident]);
+        // Symbols apart are separate tokens.
+        assert_eq!(kinds_of("a // = b"), [Ident, SlashSlash, Eq, Ident]);
+        assert_eq!(kinds_of("a .. b"), [Ident, Dot, Dot, Ident]);
     }
 
     #[test]
     fn nested_generic_closers_are_separate_tokens() {
-        // LEX-8.
+        // LEX-8, LEX-17: no token joins `>` to a following `>`.
         assert_eq!(
             kinds_of("list<list<i64>>"),
             [Ident, Lt, Ident, Lt, KwI64, Gt, Gt]
+        );
+        // LEX-17: `>` directly followed by `=` is `>=` even after generic
+        // arguments, so the space matters.
+        assert_eq!(
+            kinds_of("xs: list<i64>= value"),
+            [Ident, Colon, Ident, Lt, KwI64, GtEq, Ident]
+        );
+        assert_eq!(
+            kinds_of("xs: list<i64> = value"),
+            [Ident, Colon, Ident, Lt, KwI64, Gt, Eq, Ident]
+        );
+        assert_eq!(
+            kinds_of("list<list<i64>>= value"),
+            [Ident, Lt, Ident, Lt, KwI64, Gt, GtEq, Ident]
         );
     }
 
     #[test]
     fn stray_characters_are_reported_one_by_one() {
+        // LEX-16.
         let (codes, tokens) = rejected("a & b | c $ \u{1f600}");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER; 4]);
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER; 4]);
         let unknown: Vec<&str> = tokens
             .iter()
             .filter(|(kind, _)| *kind == Unknown)
@@ -1219,16 +1885,13 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_point_at_the_offending_text() {
+    fn diagnostics_carry_catalogued_codes_and_point_at_the_text() {
         let text = "let s = \"a\\qb\"";
-        let mut sources = SourceMap::new();
-        let file = sources.add("test.hgl", text).unwrap();
-        let mut diagnostics = Diagnostics::new();
-        lex(&sources, file, &mut diagnostics);
+        let (_, diagnostics) = lex_all(text);
         let diagnostic = &diagnostics.as_slice()[0];
         assert_eq!(diagnostic.category, Category::Parse);
+        assert_eq!(diagnostic.code, Code::Catalogued("string.unknown_escape"));
         assert_eq!(diagnostic.rule, Some("LEX-2"));
-        assert!(!diagnostic.code.is_catalogued());
         assert_eq!(&text[diagnostic.primary.span.range()], "\\q");
     }
 }

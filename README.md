@@ -24,7 +24,7 @@ the front end. The first target is the
 
 | Stage | State |
 | --- | --- |
-| Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-14`; LF, CRLF and CR line breaks |
+| Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-25`, less the five rules left to later stages; catalogued diagnostic codes |
 | Parser, formatter | planned |
 | Analyser, error reporting | planned |
 | Optimiser | planned |

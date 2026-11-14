@@ -20,6 +20,9 @@
 //! | 0      | The source was accepted.                                   |
 //! | 1      | The source was rejected; diagnostics are on standard error. |
 //! | 2      | The command could not run: bad arguments, unreadable file. |
+//!
+//! A file that is not UTF-8 is source the language rejects (LEX-16), so it
+//! exits with status 1 and a diagnostic like any other rejection.
 
 use std::fs;
 use std::path::PathBuf;
@@ -89,18 +92,18 @@ fn main() -> ExitCode {
 /// a literal, the value the compiler read from it.
 fn tokens(arguments: &TokensArgs) -> ExitCode {
     let name = arguments.file.display().to_string();
-    let text = match fs::read_to_string(&arguments.file) {
-        Ok(text) => text,
+    // The file is read as bytes, not as text: whether the bytes are UTF-8
+    // is the lexer's question (LEX-16), answered with a diagnostic.
+    let bytes = match fs::read(&arguments.file) {
+        Ok(bytes) => bytes,
         Err(error) => {
-            // This also covers a file that is not UTF-8, which LEX-1
-            // requires source to be.
             eprintln!("hgl: cannot read {name}: {error}");
             return ExitCode::from(EXIT_FAILED);
         }
     };
 
     let mut sources = SourceMap::new();
-    let file = match sources.add(name, text) {
+    let file = match sources.add_bytes(name, bytes) {
         Ok(file) => file,
         Err(error) => {
             eprintln!("hgl: {error}");
