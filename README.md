@@ -25,7 +25,8 @@ the front end. The first target is the
 | Stage | State |
 | --- | --- |
 | Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-25`, less the five rules left to later stages; catalogued diagnostic codes |
-| Parser, formatter | planned |
+| Parser | implemented: every production of the pinned grammar to a lossless syntax tree; the parser's part of 27 rules |
+| Formatter | planned |
 | Analyser, error reporting | planned |
 | Optimiser | planned |
 | Transpiler | planned |
@@ -39,12 +40,18 @@ Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
 git clone --recurse-submodules https://github.com/hhenson/hgl-compiler
 cargo test --workspace
 cargo run -- tokens path/to/file.hgl
+cargo run -- tree path/to/file.hgl
 cargo doc --workspace --no-deps --open
 ```
 
 `hgl tokens` prints one token per line with its position, kind, text and, for
-a literal, the value read from it. Exit status is 0 when the source is
+a literal, the value read from it. `hgl tree` prints the syntax tree, one
+node or token per line; `--fragment declarations` or `--fragment statements`
+parses source that has no `module` line. Exit status is 0 when the source is
 accepted, 1 when it is rejected, 2 when the command could not run.
+
+The compiler reports nesting deeper than 100 levels and a syntax tree deeper
+than 500. `--nesting-limit` and `--tree-depth-limit` raise them.
 
 The specification and core are pinned under `spec/` as submodules; tests read
 HGL from them.

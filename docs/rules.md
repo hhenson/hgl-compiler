@@ -21,7 +21,7 @@ specification says which is which.
 | Stage | Crates | Its part |
 | --- | --- | --- |
 | lexer | `hgl_source`, `hgl_lexer` | Source text to tokens and literal values |
-| parser | planned | Tokens to a syntax tree |
+| parser | `hgl_parser` | Tokens to a syntax tree |
 | formatter | planned | Syntax tree to source text |
 | analyser | planned | Names, types, phases and constants: every source rejection the parser cannot make |
 | optimiser | planned | Rewrites that keep what a program is observed to do |
@@ -37,12 +37,18 @@ no compiler stage implements them.
 
 ## Grammar
 
-Productions carry no rule ID. The parser implements every production of the
-pinned chapters.
+Productions carry no rule ID. `crates/hgl_parser/tests/grammar.rs` compares
+the pinned chapters' productions with the copy the parser was written
+against, so raising the pin shows which ones moved.
 
 | Productions | Stage | State |
 | --- | --- | --- |
-| All chapters | parser | planned |
+| Tokens: `source-text.md`, less `literal`, `NL` and `EOF` | lexer | done |
+| `expect_error`, `gap`, `error_category`: a comment's form | runner | planned |
+| All others | parser | done |
+
+The parser reads `value_type` and its variants as `type`. Which types are
+value types is the analyser's to check (TYPE-12, TYPE-14).
 
 ## Source text
 
@@ -53,29 +59,29 @@ pinned chapters.
 | LEX-1 | lexer | done | Identifier form; reserved words and the lone `_` are their own token kinds |
 | LEX-2 | lexer | done | String tokens; unknown escape, unclosed string and unclosed comment rejected |
 | LEX-3 | lexer | done | Line and block comments are tokens; `//` is a symbol |
-| LEX-4 | parser | planned | Braces delimit blocks; indentation ignored; `;` only in native hook markers |
-| LEX-5 | parser | planned | Which line breaks separate statements and which are ignored |
-| LEX-6 | parser | planned | Two statements on one line rejected; an inject list continues after a comma |
+| LEX-4 | parser | done | Braces delimit blocks; indentation ignored; `;` only in native hook markers |
+| LEX-5 | parser | done | Which line breaks separate statements and which are ignored |
+| LEX-6 | parser | done | Two statements on one line rejected; an inject list continues after a comma |
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
 | LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
-| LEX-9 | parser | planned | `time` as member name and argument label; `const` as modifier or name by position |
-| LEX-10 | parser | planned | Contextual names take their meaning by position; `str(value)` is a conversion |
+| LEX-9 | parser | done | `time` as member name and argument label; `const` as modifier or name by position |
+| LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion |
 | LEX-11 | lexer | done | Date, time and offset fields; civil and zoned forms |
 | LEX-12 | lexer | done | Zone name source form |
 | LEX-12 | transpiler | planned | Run provider checks zone catalogue membership and offset consistency |
 | LEX-13 | lexer | done | Duration units, their order, the final fraction, whole microseconds |
 | LEX-14 | lexer | done | `<=>` is one token |
-| LEX-14 | parser | planned | `<=>` continues a line as any binary operator does |
+| LEX-14 | parser | done | `<=>` continues a line as any binary operator does |
 | LEX-15 | lexer | done | LF, CRLF and CR are each one line break, in the line index and in every token |
 | LEX-16 | lexer | done | UTF-8 check; leading U+FEFF dropped; whitespace; a character that begins no token rejected |
 | LEX-17 | lexer | done | The longest symbol is taken; `>=` is one token even after generic arguments |
-| LEX-17 | parser | planned | `>=` is not split to close generic arguments |
+| LEX-17 | parser | done | `>=` is not split to close generic arguments |
 | LEX-18 | lexer | done | A malformed numeric, duration or temporal run is one rejected token |
 | LEX-19 | lexer | done | Offset hours 00 to 23, minutes 00 to 59 |
 | LEX-20 | lexer | done | Float value nearest, ties to even; infinity rejected; underflow accepted |
 | LEX-21 | lexer | done | Block and documentation comments are tokens; `/**/` is an empty block comment |
-| LEX-21 | parser | planned | A comment containing a line break counts as one line break |
+| LEX-21 | parser | done | A comment containing a line break counts as one line break |
 | LEX-22 | lexer | done | One `_` between two digits |
 | LEX-23 | lexer | done | Hexadecimal and binary integers |
 | LEX-24 | lexer | done | `\u{...}` escapes |
@@ -87,7 +93,7 @@ pinned chapters.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| UNIT-1 | parser | planned | One `module` line, with an optional `part`, opens a file |
+| UNIT-1 | parser | done | One `module` line, with an optional `part`, opens a file |
 | UNIT-1 | analyser | planned | Assembles a module's files: one scope, one unnamed file, unique part names |
 | UNIT-2 | analyser | planned | Imports precede declarations and bind in their file; they reach public declarations only |
 | UNIT-3 | analyser | planned | Private unless exported; operators public; `impl fn` reached through its operator; export closure; import cycles rejected |
@@ -127,9 +133,9 @@ pinned chapters.
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
 | TYPE-12 | analyser | planned | Where `ref` and `signal` are admitted |
 | TYPE-13 | analyser | planned | Result and error envelopes as ordinary atomic values |
-| TYPE-14 | parser | planned | `?` after a type |
+| TYPE-14 | parser | done | `?` after a type |
 | TYPE-14 | analyser | planned | Where a nullable type is admitted; null is no value of plain T |
-| TYPE-15 | parser | planned | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
+| TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | planned | A present null is data, distinct from an invalid input |
 
 ## Expressions and bindings
@@ -138,7 +144,7 @@ pinned chapters.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| EXPR-1 | parser | planned | Precedence, associativity, grouping; a tuple has a comma |
+| EXPR-1 | parser | done | Precedence, associativity, grouping; a tuple has a comma |
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
 | EXPR-2 | analyser | planned | Positional before named; duplicate, unknown, missing and mistyped arguments rejected |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
@@ -149,11 +155,11 @@ pinned chapters.
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
 | EXPR-7 | analyser | planned | Structural and atomic projection; `ref` access kept |
 | EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
-| EXPR-9 | parser | planned | Brackets delimit a sequence whose entries are all values or all pairs |
+| EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
 | EXPR-9 | analyser | planned | The use site and expected type give a sequence its meaning |
-| EXPR-10 | parser | planned | A named-entry brace directly after an operator is its configuration; an empty one rejected |
+| EXPR-10 | parser | done | A named-entry brace directly after an operator is its configuration; an empty one rejected |
 | EXPR-10 | analyser | planned | Configuration bound to the operator's public parameters; unknown, duplicate and unsupported options rejected |
-| EXPR-11 | parser | planned | `<=>` at the comparison tier |
+| EXPR-11 | parser | done | `<=>` at the comparison tier |
 | EXPR-11 | analyser | planned | `<=>` yields a comparison outcome, not a bool |
 | EXPR-12 | analyser | planned | Configuration that selects a result type is resolved during checking |
 | EXPR-13 | transpiler | planned | Evaluation order of a configured operator |
@@ -170,16 +176,16 @@ pinned chapters.
 | FN-2 | analyser | planned | A body is classified composition or runtime before phase checking |
 | FN-3 | analyser | planned | Phase rules for iteration, conditionals and hooks |
 | FN-4 | analyser | planned | A temporal and a value definition may share a name; role selection without fallback |
-| FN-5 | parser | planned | `const` is a modifier only where one is admitted |
+| FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
 | FN-7 | analyser | planned | Return by phase; an anonymous function takes its context from the accepting form |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
-| FN-8 | parser | planned | Pack parameter forms |
+| FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | planned | Packs follow fixed parameters, have no defaults and are not const |
 | FN-9 | analyser | planned | Capabilities propagate through value helpers |
-| FN-10 | parser | planned | Where an arrow body ends |
+| FN-10 | parser | done | Where an arrow body ends |
 | FN-11 | analyser | planned | Which lifted arguments need a valid input |
 | FN-11 | transpiler | planned | Default or null bound while the input is invalid |
 | FN-12 | transpiler | planned | Aggregate lifting: one invocation with the whole value |
@@ -199,7 +205,7 @@ pinned chapters.
 | GEN-5 | analyser | planned | Candidate selection: output first, exactly one most specific |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
-| GEN-8 | parser | planned | `_` as an `instantiate` argument |
+| GEN-8 | parser | done | `_` as an `instantiate` argument |
 | GEN-8 | analyser | planned | `instantiate` requests candidates; no explicit type arguments on ordinary calls |
 | GEN-9 | analyser | planned | Property clauses apply to explicit concrete domains |
 | GEN-9 | optimiser | planned | A recorded law licenses no reassociation across overflow or float effects |
@@ -208,10 +214,10 @@ pinned chapters.
 | GEN-11 | analyser | planned | Reference removal in inference |
 | GEN-12 | analyser | planned | Structural specificity |
 | GEN-13 | analyser | planned | Kind of a generic parameter |
-| GEN-14 | parser | planned | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
+| GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
 | GEN-14 | analyser | planned | Confirms the reading from what the name resolves to; no fallback to comparison |
-| GEN-15 | parser | planned | Constraint precedence: negation, then conjunction, then disjunction |
-| GEN-16 | parser | planned | One form for constraint calls, with an optional result arrow |
+| GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
+| GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
 | GEN-16 | analyser | planned | Predicate or operator requirement by the referenced declaration; arrow rejected on a predicate |
 
 ## Temporal model
@@ -254,7 +260,7 @@ pinned chapters.
 | CTRL-7 | transpiler | planned | One child per member; update keeps it, removal stops it |
 | CTRL-8 | analyser | planned | Traversal forms; no loop-carried accumulation in a dynamic composition loop |
 | CTRL-8 | transpiler | planned | Traversal over current values, lists in index order |
-| CTRL-9 | parser | planned | The first `{` outside parentheses, brackets and configuration opens a `when` or `while` body |
+| CTRL-9 | parser | done | The first `{` outside parentheses, brackets and configuration opens a `when` or `while` body |
 | SOURCE-1 | analyser | planned | What a body containing `yield` may hold |
 | SOURCE-2 | transpiler | planned | Yield evaluates its time, then its payload; target validation |
 | SOURCE-3 | transpiler | planned | Targets strictly increase; skip, publish or suspend |
@@ -269,7 +275,7 @@ pinned chapters.
 | --- | --- | --- | --- |
 | NATIVE-1 | analyser | planned | A native declaration is checked as an HGL callable; roles kept |
 | NATIVE-2 | analyser | planned | A selected implementation matches its declaration exactly; duplicates rejected |
-| NATIVE-3 | parser | planned | Contract body forms: none, `{}`, hook markers |
+| NATIVE-3 | parser | done | Contract body forms: none, `{}`, hook markers |
 | NATIVE-3 | analyser | planned | Graph or node by body; hooks need `when` and are unique |
 | NATIVE-4 | driver | planned | Target selection is explicit |
 | NATIVE-4 | transpiler | planned | The provider meets the declared contract |
@@ -299,7 +305,7 @@ pinned chapters.
 | ERR-8 | transpiler | planned | Capture ends the failed pass without rollback |
 | ERR-9 | analyser | planned | Required constant failures reject; no cascaded diagnostics |
 | ERR-9 | optimiser | planned | Folding keeps the failure phase of an executed operation |
-| ERR-10 | parser | planned | `@suppress_warning("...")` before a named function |
+| ERR-10 | parser | done | `@suppress_warning("...")` before a named function |
 | ERR-10 | analyser | planned | The string is checked against the warning catalogue |
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
 | ERR-12 | analyser | planned | A null test refines an immutable nullable binding |
@@ -310,7 +316,7 @@ pinned chapters.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| TST-1 | parser | planned | An unnamed test context holds functions, structs, enums and named tests only |
+| TST-1 | parser | done | An unnamed test context holds functions, structs, enums and named tests only |
 | TST-1 | analyser | planned | One test scope across parts; exports and operator implementations rejected there |
 | TST-2 | analyser | planned | Production names no test-only declaration; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
@@ -350,7 +356,7 @@ pinned chapters.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| SDOC-1 | parser | planned | A documentation comment attaches to the declaration after it; repeated or unattached ones rejected |
+| SDOC-1 | parser | done | A documentation comment attaches to the declaration after it; repeated or unattached ones rejected |
 | SDOC-2 | docs | unscheduled | Documentation text: delimiters, indentation, line breaks |
 | SDOC-3 | analyser | planned | Structured keys name real parameters, generics, requirements or domains |
 | SDOC-3 | docs | unscheduled | Section headings and their contents |

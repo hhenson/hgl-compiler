@@ -16,6 +16,7 @@ path = "src/main.rs"
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
+hgl_parser.workspace = true
 clap.workspace = true
 
 [lints]
