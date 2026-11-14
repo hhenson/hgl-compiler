@@ -445,9 +445,9 @@ fn parse_program(
 /// checked 3 files in 2 modules: no errors
 /// ```
 ///
-/// The analyser reads modules, declarations and imports so far. What is
-/// inside a function body is parsed and not yet analysed, and the output
-/// says so.
+/// The analyser reads modules, declarations and imports and resolves
+/// names so far. Types, phases and constants are not checked yet, and the
+/// output says so.
 fn check(arguments: &CheckArgs) -> ExitCode {
     let (sources, parsed, mut diagnostics) =
         match parse_program(&arguments.roots, arguments.limits.limits()) {
@@ -473,7 +473,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
             errors => count(errors, "error"),
         }
     );
-    println!("modules, declarations and imports are checked; function bodies are not yet");
+    println!("modules, declarations, imports and names are checked; types are not yet");
     print!("{}", list_prelude_names(&sources, &program));
     report(&sources, diagnostics)
 }

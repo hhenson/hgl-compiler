@@ -99,17 +99,17 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | UNIT-1 | parser | done | One `module` line, with an optional `part`, opens a file |
 | UNIT-1 | analyser | done | Assembles a module's files: one scope, one unnamed file, unique part names |
-| UNIT-2 | analyser | partial | Imports precede declarations and bind in their file; they reach public declarations only. Left: `alias::name` where it is used |
+| UNIT-2 | analyser | done | Imports precede declarations and bind in their file; they and `alias::name` reach public declarations only |
 | UNIT-3 | analyser | partial | Private unless exported; operators public; `impl fn` reached through its operator; import cycles rejected. Left: export closure |
 | UNIT-4 | analyser | planned | Module-qualified nominal identity; an alias adds none |
-| UNIT-5 | analyser | partial | Duplicate functions of one role and duplicate parts rejected. Left: parameters and locals |
-| UNIT-6 | analyser | partial | Test-only declarations are not exported; a test's name is in no scope. Left: forward reference; locals visible after declaration; production use of a test-only declaration |
-| UNIT-7 | analyser | planned | Defaults resolve in the declaration's own closure |
+| UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
+| UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
+| UNIT-7 | analyser | partial | A default reads no parameter of its declaration and no field of its struct. Left: the closure an imported default keeps |
 | UNIT-8 | analyser | planned | Defaults are required constants; which parameters may have one |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
-| UNIT-10 | analyser | planned | A name resolves to the one binding in scope |
+| UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
-| UNIT-12 | analyser | partial | No declaration or import takes a name its module or file has bound. Left: locals, parameters, generic parameters, prelude names |
+| UNIT-12 | analyser | partial | No declaration, import, local, parameter or generic parameter takes a name already in scope. Left: prelude names |
 
 ## Types and values
 
@@ -194,7 +194,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-11 | transpiler | planned | Default or null bound while the input is invalid |
 | FN-12 | transpiler | planned | Aggregate lifting: one invocation with the whole value |
 | FN-13 | transpiler | planned | Stable argument values; retained results independent of later changes |
-| FN-14 | analyser | planned | What an anonymous function may use from around it |
+| FN-14 | analyser | done | What an anonymous function may use from around it |
 
 ## Generics and operators
 
@@ -202,7 +202,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| GEN-1 | analyser | planned | Generic scope; repeated parameters agree; occurrence requirements |
+| GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
 | GEN-2 | analyser | planned | Every generic resolved; no partial application or generic default |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` binds an operator its module declares or its file imports. Left: the prelude; operator identity in selection |
@@ -220,7 +220,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-12 | analyser | planned | Structural specificity |
 | GEN-13 | analyser | planned | Kind of a generic parameter |
 | GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
-| GEN-14 | analyser | planned | Confirms the reading from what the name resolves to; no fallback to comparison |
+| GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected. Left: each argument against its parameter's kind |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
 | GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
 | GEN-16 | analyser | planned | Predicate or operator requirement by the referenced declaration; arrow rejected on a predicate |
@@ -323,7 +323,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | TST-1 | parser | done | An unnamed test context holds functions, structs, enums and named tests only |
 | TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
-| TST-2 | analyser | partial | A test-only declaration takes no name of its module; duplicate test names rejected. Left: production naming a test-only declaration |
+| TST-2 | analyser | done | Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
 | TST-3 | analyser | planned | A test is a composition block (`test.statement_phase`); eval traces stay test-local |
 | TST-4 | analyser | planned | `assert` needs a wiring-time bool |

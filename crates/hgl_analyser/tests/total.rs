@@ -8,7 +8,8 @@ mod common;
 
 use common::check_broken;
 
-/// A program that uses every kind of item the first pass reads.
+/// A program that uses every kind of item the analyser reads, and in a
+/// body every form that binds a name.
 const FILES: [(&str, &str); 3] = [
     (
         "lib.hgl",
@@ -43,7 +44,21 @@ const FILES: [(&str, &str); 3] = [
             "use lib as l\n",
             "impl fn add(left: f64, right: f64) -> f64 => left\n",
             "impl fn mul(left: f64, right: f64) -> f64 => left\n",
-            "fn main() { shared() }\n",
+            "fn main<T>(value: T, items: list<T>, const size: i64 = 2) -> T {\n",
+            "    state kept = 0\n",
+            "    inject out\n",
+            "    when modified(value) {\n",
+            "        let local = l::shared()\n",
+            "        for index, item in items { kept = index }\n",
+            "        let pick = fn(x) => x + local\n",
+            "        switch kept {\n",
+            "            case 1:\n",
+            "                return value\n",
+            "            default:\n",
+            "                return Quote<T>(bid: value).bid\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
             "test main { assert true }\n",
             "test {\n",
             "    fn helper() {}\n",

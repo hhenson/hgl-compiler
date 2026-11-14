@@ -27,7 +27,7 @@ the front end. The first target is the
 | Lexer | implemented: tokens and literal values under `LEX-1` to `LEX-25`, less the five rules left to later stages; catalogued diagnostic codes |
 | Parser | implemented: every production of the pinned grammar to a lossless syntax tree; the parser's part of 31 rules |
 | Formatter | planned |
-| Analyser, error reporting | first pass: modules, parts, declarations, imports and test scopes (`hgl check`); names in bodies, types, phases and constants planned |
+| Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
 | Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics (`hgl test`); running a test needs a target |
 | Optimiser | planned |
 | Transpiler | planned |
@@ -52,8 +52,8 @@ a literal, the value read from it. `hgl tree` prints the syntax tree, one
 node or token per line; `--fragment declarations` or `--fragment statements`
 parses source that has no `module` line. `hgl check` reads a program, every
 `.hgl` file under the source roots given, and reports what is wrong with
-its modules, declarations and imports; `--modules` lists what it found.
-Function bodies are parsed and not yet analysed. `hgl test` checks the
+its modules, declarations, imports and names; `--modules` lists what it
+found. Types, phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
 `# expect-error(category, "code")`, and lists its tests; no test can be run
 until there is a target. Exit status is 0 when the source is accepted and

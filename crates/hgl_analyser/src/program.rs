@@ -55,10 +55,20 @@ pub struct Module {
     /// mandatory module has no declarations yet, so the analyser cannot
     /// say which, and reports neither.
     pub prelude_names: Vec<PreludeName>,
+    /// Every name used in the module's signatures, bodies, types and
+    /// constraints that resolved, with what it resolved to (UNIT-10), in
+    /// file order and then source order.
+    pub uses: Vec<NameUse>,
+    /// What each `name<...>(...)` the parser left undecided was decided
+    /// to be (GEN-14).
+    pub decisions: Vec<Decision>,
     /// The module's declaration scope: for each name, the positions in
     /// `declarations` of what it is bound to. One, or the two of a
     /// temporal and value pair (FN-4).
     pub(crate) scope: HashMap<String, Vec<usize>>,
+    /// The module's `instantiate` items, each with the position of its
+    /// file in `files`. They declare nothing, and name what they request.
+    pub(crate) instantiations: Vec<(usize, SyntaxNode)>,
 }
 
 impl Module {
@@ -252,6 +262,90 @@ pub struct Test {
     pub file: usize,
     /// The test's syntax tree.
     pub syntax: SyntaxNode,
+}
+
+/// One use of a name, and what it is bound to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameUse {
+    /// The name.
+    pub name: String,
+    /// Where it is used.
+    pub at: Location,
+    /// What it is bound to.
+    pub binding: Binding,
+}
+
+/// What a name is bound to (UNIT-10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    /// A binding of the declaration the use stands in: a local, a
+    /// parameter, a generic parameter.
+    Local {
+        /// Where it is declared.
+        at: Location,
+        /// What declares it.
+        kind: LocalKind,
+    },
+    /// Declarations of a module: the use's own, or one it imports from.
+    /// One declaration, or the two of a temporal and value pair (FN-4).
+    Declarations {
+        /// The position of the module in [`Program::modules`].
+        module: usize,
+        /// The positions of the declarations in its
+        /// [`Module::declarations`].
+        declarations: Vec<usize>,
+    },
+}
+
+/// What declares a binding inside a declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalKind {
+    /// `let`.
+    Let,
+    /// `var`.
+    Var,
+    /// `state`.
+    State,
+    /// `cache`.
+    Cache,
+    /// `inject`.
+    Inject,
+    /// The names of a `for` pattern.
+    Iteration,
+    /// A parameter of a function, or of an anonymous function.
+    Parameter,
+    /// A generic parameter, or the name an `each ... in` constraint
+    /// binds.
+    GenericParameter,
+}
+
+impl LocalKind {
+    /// A few words for messages: `a parameter`, `a \`var\``.
+    pub fn describe(self) -> &'static str {
+        match self {
+            LocalKind::Let => "a `let`",
+            LocalKind::Var => "a `var`",
+            LocalKind::State => "a `state`",
+            LocalKind::Cache => "a `cache`",
+            LocalKind::Inject => "an injected capability",
+            LocalKind::Iteration => "an iteration binding",
+            LocalKind::Parameter => "a parameter",
+            LocalKind::GenericParameter => "a generic parameter",
+        }
+    }
+}
+
+/// What a `name<...>(...)` that reads two ways was decided to be
+/// (GEN-14). The parser guesses a constructor; the analyser confirms the
+/// guess when `name` is a generic type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    /// Where the node starts.
+    pub at: Location,
+    /// `Some(true)`: a constructor of a generic type. `Some(false)`:
+    /// comparisons. `None`: `name` is left for the prelude, so it is not
+    /// known which.
+    pub constructor: Option<bool>,
 }
 
 /// A name left for the prelude to bind. See [`Module::prelude_names`].
