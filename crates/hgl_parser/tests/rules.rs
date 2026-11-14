@@ -759,6 +759,28 @@ fn named_braces_after_an_operator_are_its_configuration() {
 }
 
 #[test]
+fn a_configuration_goes_where_its_operator_goes() {
+    // LEX-5 with EXPR-10: a binary operator continues a line, with its
+    // configuration; a prefix operator does not, with or without one.
+    for (text, plain) in [
+        ("a /\n    {zero: ieee} b", "a /{zero: ieee} b"),
+        ("a /{zero: ieee}\n    b", "a /{zero: ieee} b"),
+        ("a\n    /{zero: ieee} b", "a /{zero: ieee} b"),
+    ] {
+        same_tree(Entry::Statements, text, plain);
+    }
+    // The braces on the next line are then a statement of their own.
+    assert_eq!(
+        rejected(Entry::Statements, "let x = !\n{mode: 1} true")[0],
+        "- 1:10: expected an expression, found end of line"
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let x = !{mode: 1}\ntrue"),
+        ["- 1:19: expected an expression, found end of line"]
+    );
+}
+
+#[test]
 fn an_empty_operator_configuration_is_rejected() {
     // EXPR-10: "Reject empty configuration".
     assert_eq!(
@@ -1096,6 +1118,44 @@ fn a_constraint_relation_has_an_operand_on_each_side() {
     assert_eq!(
         rejected(Entry::Declarations, "fn f() requires p(T,) {}"),
         ["- 1:21: expected a type or a value, found `)`"]
+    );
+}
+
+#[test]
+fn only_the_identity_property_has_a_value() {
+    // The grammar: `operator_property = "associative" | "commutative"
+    // | "identity", "=", const_expression ;`
+    assert_eq!(
+        declarations(
+            "operator add(a: i64) -> i64 properties<i64, f64> { associative, identity = 0, }"
+        ),
+        "OperatorDecl[\"operator\" \"add\" ParamList[\"(\" Param[\"a\" \":\" ScalarType[\"i64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"i64\"]] OperatorProperties[\"properties\" \"<\" ScalarType[\"i64\"] \",\" \
+         ScalarType[\"f64\"] \">\" \"{\" OperatorProperty[\"associative\"] \",\" \
+         OperatorProperty[\"identity\" \"=\" Literal[\"0\"]] \",\" \"}\"]]"
+    );
+    let header = "operator add(a: i64) -> i64 properties<i64>";
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            &format!("{header} {{ associative = 42 }}")
+        ),
+        ["- 1:59: expected `,` or `}`, found `=`"]
+    );
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            &format!("{header} {{ commutative = true, identity = 0 }}")
+        ),
+        ["- 1:59: expected `,` or `}`, found `=`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, &format!("{header} {{ identity }}")),
+        ["- 1:56: expected `=`, found `}`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, &format!("{header} {{ idempotent }}")),
+        ["- 1:47: expected `associative`, `commutative` or `identity`, found `idempotent`"]
     );
 }
 

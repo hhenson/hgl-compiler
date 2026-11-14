@@ -667,11 +667,19 @@ impl Parser<'_> {
         self.start(OperatorProperty);
         let identity = self.at_word("identity");
         self.bump();
-        if self.at_assign() {
+        if identity {
+            if self.at_assign() {
+                self.eat_assign();
+                self.expression();
+            } else {
+                self.expected("`=`");
+            }
+        } else if self.at_assign() {
+            // Only `identity` has a value; the others are bare markers.
+            // The value is read all the same, so that the list goes on.
+            self.expected("`,` or `}`");
             self.eat_assign();
             self.expression();
-        } else if identity {
-            self.expected("`=`");
         }
         self.finish();
     }

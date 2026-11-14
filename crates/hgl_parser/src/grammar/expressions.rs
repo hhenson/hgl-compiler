@@ -84,6 +84,9 @@ impl Parser<'_> {
             self.bump();
             self.continue_line();
             self.operator_config();
+            // A configuration is part of its operator (LEX-14), so the
+            // operand may stand on the line after it as well.
+            self.continue_line();
             self.binary_expr(tier + 1);
             // Wrapping from the same mark each time nests to the left:
             // `a - b - c` is `(a - b) - c`.
@@ -105,11 +108,14 @@ impl Parser<'_> {
         }
         self.start(UnaryExpr);
         self.bump();
-        self.operator_config();
         // LEX-5: `!` does not continue a line; a prefix `-` is no binary
-        // operator and does not either.
+        // operator and does not either. So its configuration and its
+        // operand both stand on its line.
         if self.on_line("an expression") {
-            self.unary_expr();
+            self.operator_config();
+            if self.on_line("an expression") {
+                self.unary_expr();
+            }
         }
         self.finish();
         self.leave();
