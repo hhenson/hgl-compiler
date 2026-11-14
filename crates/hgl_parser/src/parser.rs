@@ -48,7 +48,7 @@ pub(crate) struct Context {
     /// `>` closes the enclosing generic argument list, so it is not a
     /// comparison here (GEN-14).
     pub(crate) no_gt: bool,
-    /// A comma here separates entries, so `a < b, c > (d)` could be two
+    /// A comma here separates entries, so `a<b, c>(d)` could be two
     /// comparisons (GEN-14).
     pub(crate) comma_list: bool,
 }
@@ -331,7 +331,43 @@ impl<'a> Parser<'a> {
     /// True when any line break that counts stands before the cursor's
     /// token.
     pub(crate) fn broken(&self) -> bool {
-        self.breaks_at(0) >= 1
+        self.broken_at(0)
+    }
+
+    /// As [`Parser::broken`], for the token `n` places after the cursor.
+    pub(crate) fn broken_at(&self, n: usize) -> bool {
+        self.breaks_at(n) >= 1
+    }
+
+    /// True when the token `n` places after the cursor directly follows
+    /// the token before it, with nothing between them (LEX-27).
+    pub(crate) fn adjacent_at(&self, n: usize) -> bool {
+        self.input.adjacent(self.position + n)
+    }
+
+    /// True when a call's `(` or an index's `[` `n` places after the
+    /// cursor belongs to the token before it (LEX-27): it touches that
+    /// token, or it stands apart on the same line, which
+    /// [`Parser::attached`] then reports. After a line break that counts
+    /// it belongs to nothing: it begins a statement of its own (LEX-5).
+    pub(crate) fn suffix_at(&self, n: usize) -> bool {
+        self.adjacent_at(n) || !self.broken_at(n)
+    }
+
+    /// LEX-27: "The `(` of a call and the `[` of an index directly follow
+    /// what they apply to". Reports the one under the cursor when
+    /// something stands between. The caller reads the call or index all
+    /// the same: what was meant is plain.
+    pub(crate) fn attached(&mut self) {
+        if self.adjacent_at(0) {
+            return;
+        }
+        let message = if self.at(SyntaxKind::LBracket) {
+            "an index's `[` directly follows what it indexes"
+        } else {
+            "a call's `(` directly follows what it calls"
+        };
+        self.error(message, "LEX-27", Some("remove what stands between them"));
     }
 
     /// Says that the cursor's token starts a statement, member or

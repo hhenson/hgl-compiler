@@ -207,19 +207,19 @@ impl Parser<'_> {
             return false;
         }
         loop {
-            // LEX-5: `(` and `[` at the start of a line begin a new
-            // statement, so a call or an index does not reach across a
-            // line break. `.` and `?` cannot begin one, and do.
-            if self.nl() {
-                break;
-            }
             let kind = match self.current() {
-                LParen => CallExpr,
-                LBracket => IndexExpr,
-                Dot => MemberExpr,
+                // LEX-27: a call's `(` and an index's `[` touch what they
+                // apply to. On a later line they begin a statement of
+                // their own (LEX-5); apart on the same line they are
+                // reported, and read.
+                LParen if self.suffix_at(0) => CallExpr,
+                LBracket if self.suffix_at(0) => IndexExpr,
+                // LEX-5: `.` and `?` cannot begin a statement, so each may
+                // start a line.
+                Dot if !self.nl() => MemberExpr,
                 // TYPE-15: `?` after an expression propagates a result;
                 // after a type it makes the type nullable.
-                Question => TryExpr,
+                Question if !self.nl() => TryExpr,
                 _ => break,
             };
             if bare_fn {
@@ -228,8 +228,14 @@ impl Parser<'_> {
                 bare_fn = false;
             }
             match kind {
-                CallExpr => self.arg_list(ArgMode::Call),
-                IndexExpr => self.index_suffix(),
+                CallExpr => {
+                    self.attached();
+                    self.arg_list(ArgMode::Call);
+                }
+                IndexExpr => {
+                    self.attached();
+                    self.index_suffix();
+                }
                 MemberExpr => self.member_suffix(),
                 _ => self.bump(),
             }
@@ -272,12 +278,12 @@ impl Parser<'_> {
             }
             Ident => self.name_expr(),
             // LEX-10: `str(value)` is a conversion, though `str` is
-            // reserved where a name is expected. Alone it is no
-            // expression, so the `(` is required and one line break
-            // before it is ignored (LEX-5).
-            KwStr | KwBytes | KwAny if self.nth(1) == LParen && !self.cut_at(1) => {
+            // reserved where a name is expected. It is a call, so its `(`
+            // touches it (LEX-27).
+            KwStr | KwBytes | KwAny if self.nth(1) == LParen && self.suffix_at(1) => {
                 self.start(TypeCall);
                 self.bump();
+                self.attached();
                 self.arg_list(ArgMode::Call);
                 self.finish();
             }
@@ -291,8 +297,9 @@ impl Parser<'_> {
             KwEval => {
                 self.start(EvalExpr);
                 self.bump();
-                // `eval` needs its `(` as well.
-                if self.at(LParen) && !self.cut() {
+                // LEX-27: `eval(...)` is a call too.
+                if self.at(LParen) && self.suffix_at(0) {
+                    self.attached();
                     self.arg_list(ArgMode::Eval);
                 } else {
                     self.expected("`(`");
@@ -366,8 +373,10 @@ impl Parser<'_> {
     ///   reads. `Yes`.
     /// * `a < b`: no `>` and `(` follow, so only the comparison reads.
     ///   `No`.
-    /// * `a < b > (c)` and `f(a < b, c > (d))`: both read. `Both`, and
-    ///   the analyser confirms or re-reads.
+    /// * `a<b>(c)` and `f(a<b, c>(d))`: both read. `Both`, and the
+    ///   analyser confirms or re-reads.
+    /// * `a < b > (c)`: the `(` stands apart from the `>`, so it is no
+    ///   call's (LEX-27), and only the comparison reads. `No`.
     fn probe_constructor(&mut self) -> Verdict {
         let start = self.position;
         let snapshot = self.snapshot();
@@ -380,12 +389,18 @@ impl Parser<'_> {
         if self.errors != errors || !shape.closed || !self.at(LParen) || self.nl() {
             return Verdict::No;
         }
+        // LEX-27: a constructor's `(` touches the `>` before it. One that
+        // stands apart is no constructor's, where the tokens read as
+        // comparisons: `a < b > (c)`. Where they do not, the constructor
+        // was meant and `constructor` reports the gap.
+        let attached = self.adjacent_at(0);
         self.arg_list(ArgMode::Call);
         let end = self.position;
 
         // The comparison reading of the same tokens, up to `end`. With one
-        // generic argument it is one expression, `a < b > (c)`. With more
-        // it is one expression for each, `a < b` and `c > (d)`, which
+        // generic argument it is one expression, `a<b>(c)` as `a < b >
+        // (c)`. With more it is one expression for each, `a < b` and
+        // `c > (d)`, which
         // needs commas to be separators where the name stands.
         let trailing_comma = shape.commas.len() == shape.count;
         if trailing_comma || (shape.count > 1 && !self.context.comma_list) {
@@ -403,10 +418,11 @@ impl Parser<'_> {
         }
         self.expression();
         // Errors past `end` are in what follows, under either reading.
-        if self.position >= end && !self.errors_between(first_report, end) {
-            Verdict::Both
-        } else {
-            Verdict::Yes
+        let comparisons = self.position >= end && !self.errors_between(first_report, end);
+        match (attached, comparisons) {
+            (true, true) => Verdict::Both,
+            (false, true) => Verdict::No,
+            (_, false) => Verdict::Yes,
         }
     }
 
@@ -426,6 +442,7 @@ impl Parser<'_> {
             (TypedConstructor, ArgMode::Call)
         };
         if self.at(LParen) && !self.nl() {
+            self.attached();
             self.arg_list(mode);
         } else {
             self.expected("`(`");

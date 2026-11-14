@@ -250,7 +250,7 @@ fn body(
     let values = [1, _, 3]
     let ticks = [1s: 7]
     let quote = Quote<f64>(bid: 1.0)
-    let either = a < b > (c)
+    let either = a<b>(c)
     let change = delta<list<f64>>(added: values)
     let text = str(x)
     let next = fn(v: i64) -> i64 => v + 1

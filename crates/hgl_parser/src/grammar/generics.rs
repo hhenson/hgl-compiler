@@ -282,7 +282,10 @@ impl Parser<'_> {
     fn constraint_call(&mut self) {
         self.start(ConstraintCall);
         self.name();
-        if self.eat(LParen) {
+        // LEX-27: a constraint call is a call.
+        if self.at(LParen) && self.suffix_at(0) {
+            self.attached();
+            self.bump();
             self.nested(Context::LIST, |parser| {
                 parser.list(RParen, "a type or a value", false, |parser| {
                     parser.constraint_operand();

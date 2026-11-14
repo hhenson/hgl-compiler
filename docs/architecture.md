@@ -126,6 +126,12 @@ two lines whatever the next one begins with (LEX-26): the lexer makes the
 line break counts as one (LEX-21), and a line that holds only a comment is
 a line. A body's opening brace stays with its header.
 
+A call's `(` and an index's `[` touch what they apply to (LEX-27; owner
+decision, 2026-11-14): `f(x)` and `x[i]`. The parser asks whether the two
+tokens are neighbours in the lexer's list. Apart on one line, as in
+`f (x)`, the gap is reported and the call read; on a later line `(x)`
+begins a statement of its own.
+
 ### Generic arguments or comparison
 
 In an expression, `name <` opens generic arguments or is a comparison.
@@ -134,14 +140,14 @@ The parser therefore guesses and the analyser confirms (owner decision,
 2026-11-13):
 
 - The parser reads the tokens both ways and takes each reading back. The
-  generic reading is possible when generic arguments parse, on the name's
-  line, and `(` follows their `>`. The comparison reading is possible when
-  the same tokens parse as expressions. When only one is possible, that
-  reading is the result: `Box<i64>(7)` is a `TypedConstructor`, `a < b` a
-  comparison.
-- When both are, as in `f(a < b, c > (d))` and `a < b > (c)`, the parser
-  records its guess, the generic reading, in an `UndecidedConstructor` node
-  that keeps its tokens.
+  generic reading is possible when generic arguments parse and `(` directly
+  follows their `>` (LEX-27). The comparison reading is possible when the
+  same tokens parse as expressions. When only one is possible, that reading
+  is the result: `Box<i64>(7)` is a `TypedConstructor`; `a < b`, and
+  `a < b > (c)` with its `(` apart from the `>`, are comparisons.
+- When both are, as in `f(a<b, c>(d))` and `a<b>(c)`, the parser records
+  its guess, the generic reading, in an `UndecidedConstructor` node that
+  keeps its tokens.
 - The analyser (planned) resolves `name`. A generic type confirms the guess;
   any other name re-reads the node as comparisons. A generic type followed
   by a `<` that cannot open its arguments is an invalid application,

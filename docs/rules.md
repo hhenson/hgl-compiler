@@ -88,6 +88,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-25 | lexer | done | Text blocks |
 | LEX-26 | lexer | done | `\` and the line break after it are one continuation token; any other `\` is rejected |
 | LEX-26 | parser | done | A continued line break is no line break |
+| LEX-27 | parser | done | A call's `(` and an index's `[` directly follow what they apply to |
 
 ## Units and names
 

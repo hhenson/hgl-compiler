@@ -126,6 +126,20 @@ impl<'a> Input<'a> {
         self.line_breaks_before(index) > 0
     }
 
+    /// True when significant token `index` directly follows the one before
+    /// it: no whitespace, comment, line break or line continuation stands
+    /// between them (LEX-27).
+    pub(crate) fn adjacent(&self, index: usize) -> bool {
+        // `checked_sub` gives `None` for the first token, which follows
+        // nothing; `?` passes that `None` on.
+        let neighbours = || {
+            let previous = self.significant.get(index.checked_sub(1)?)?;
+            let token = self.significant.get(index)?;
+            Some(token.raw == previous.raw + 1)
+        };
+        neighbours().unwrap_or(false)
+    }
+
     /// Index, in the lexer's list, of significant token `index`; the length
     /// of that list past the end.
     pub(crate) fn raw_index(&self, index: usize) -> usize {
@@ -221,6 +235,26 @@ mod tests {
         let (seen, _) = flags("a \\\n b \\  \r\n c\n d");
         let breaks: Vec<bool> = seen.iter().map(|(_, line_break)| *line_break).collect();
         assert_eq!(breaks, [false, false, false, true]);
+    }
+
+    #[test]
+    fn adjacent_tokens_have_nothing_between_them() {
+        // LEX-27.
+        let adjacent = |text: &str| {
+            let mut sources = SourceMap::new();
+            let file = sources.add("test.hgl", text).unwrap();
+            let tokens = hgl_lexer::lex(&sources, file, &mut Diagnostics::new());
+            let input = Input::new(sources.file(file), &tokens);
+            (0..=input.len())
+                .map(|index| input.adjacent(index))
+                .collect::<Vec<bool>>()
+        };
+        // `f(x)`: `(`, `x` and `)` each touch the token before.
+        assert_eq!(adjacent("f(x)"), [false, true, true, true, false]);
+        assert_eq!(adjacent("f (x)"), [false, false, true, true, false]);
+        assert_eq!(adjacent("f/* */(x)"), [false, false, true, true, false]);
+        assert_eq!(adjacent("f\n(x)"), [false, false, true, true, false]);
+        assert_eq!(adjacent("f\\\n(x)"), [false, false, true, true, false]);
     }
 
     #[test]

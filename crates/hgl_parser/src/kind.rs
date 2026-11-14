@@ -243,7 +243,7 @@ define_syntax_kinds! {
         /// `Box<i64>(value: 7)`
         TypedConstructor,
         /// A typed constructor that also reads as comparisons, as in
-        /// `a < b > (c)`. The parser guesses the constructor and the
+        /// `a<b>(c)`. The parser guesses the constructor and the
         /// analyser confirms it (GEN-14).
         UndecidedConstructor,
         /// `delta<list<f64>>(added: values)`

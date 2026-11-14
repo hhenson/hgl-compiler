@@ -193,9 +193,6 @@ fn a_line_break_in_an_incomplete_statement_is_ignored() {
         // A `-` there is the prefix operator: no operand stands before it.
         (Statements, "let a =\n    -b", "let a = -b"),
         (Statements, "let a = b *\n    -c", "let a = b * -c"),
-        // `eval` and a conversion are nothing without their `(`.
-        (Statements, "let a = eval\n    (b)", "let a = eval(b)"),
-        (Statements, "let a = str\n    (b)", "let a = str(b)"),
         (Statements, "let u:\n    i64 = 1", "let u: i64 = 1"),
         (Statements, "a.\n    b", "a.b"),
         (
@@ -289,7 +286,7 @@ fn a_line_that_cannot_begin_a_statement_continues_the_one_before() {
         "operator add(a: i64) -> i64 properties<i64> { associative }",
     );
     // A `<` that starts a line continues it, and is then read as on one
-    // line: here both as generic arguments and as comparisons (GEN-14).
+    // line.
     same_tree(
         Entry::Statements,
         "let x = a\n< b > (c)",
@@ -628,8 +625,7 @@ fn a_backslash_before_a_line_break_continues_the_line() {
     // continues the current one whatever it begins with".
     for (text, plain) in [
         ("return \\\n    value", "return value"),
-        ("let a = f \\\n    (c)", "let a = f(c)"),
-        ("let a = b \\\n    [0]", "let a = b[0]"),
+        ("when ready \\\n{ step() }", "when ready { step() }"),
         ("let a = b \\\n    !c", "let a = b !c"),
         // Spaces and tabs may stand between the `\` and the line break.
         ("return \\  \t\n    value", "return value"),
@@ -668,6 +664,119 @@ fn a_backslash_anywhere_else_begins_no_token() {
     assert_eq!(outcome.findings[0].code, "syntax.unexpected_character");
     let outcome = run(Entry::Statements, "let a = b \\ # note\n    + c");
     assert_eq!(outcome.rules(), ["LEX-26"]);
+}
+
+// ---- LEX-27 ----
+
+#[test]
+fn a_call_and_an_index_touch_what_they_apply_to() {
+    // LEX-27: "The `(` of a call and the `[` of an index directly follow
+    // what they apply to... `f(x)` is a call and `x[i]` an index."
+    assert_eq!(
+        statements("f(x)"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]]]"
+    );
+    assert_eq!(
+        statements("x[i]"),
+        "ExprStmt[IndexExpr[NameExpr[\"x\"] \"[\" NameExpr[\"i\"] \"]\"]]"
+    );
+    // The chapter's fragment: an index, then a call of what it selects.
+    assert_eq!(
+        statements("rows[0](x)"),
+        "ExprStmt[CallExpr[IndexExpr[NameExpr[\"rows\"] \"[\" Literal[\"0\"] \"]\"] \
+         ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]]]"
+    );
+    // Inside the brackets, and around a `.`, spacing is free.
+    for (text, plain) in [
+        ("f( x , y )", "f(x, y)"),
+        ("x[ i ]", "x[i]"),
+        ("a . b(c)", "a.b(c)"),
+    ] {
+        same_tree(Entry::Statements, text, plain);
+    }
+}
+
+#[test]
+fn a_call_or_an_index_that_stands_apart_is_rejected() {
+    // LEX-27: "`f (x)` and `x [i]` on one line are rejected". "A call
+    // here is a call suffix, the arguments of a typed or delta
+    // constructor, a conversion such as `str(value)`, `eval(...)`,
+    // `raises(...)`, and a constraint call."
+    let call = "a call's `(` directly follows what it calls";
+    let index = "an index's `[` directly follows what it indexes";
+    for (entry, text, at, message) in [
+        (Entry::Statements, "f (x)", "1:3", call),
+        (Entry::Statements, "x [i]", "1:3", index),
+        (Entry::Statements, "let a = g(f (x))", "1:13", call),
+        (Entry::Statements, "a.b (c)", "1:5", call),
+        (Entry::Statements, "let s = str (x)", "1:13", call),
+        (Entry::Statements, "let e = eval (f, x: [1])", "1:14", call),
+        (
+            Entry::Statements,
+            "assert raises (\"x\") { f() }",
+            "1:15",
+            call,
+        ),
+        (Entry::Statements, "x [0] = 1", "1:3", index),
+        (
+            Entry::Declarations,
+            "fn f() requires p (T) {}",
+            "1:19",
+            call,
+        ),
+        // Nothing may stand between: not a comment, not a continuation,
+        // and inside brackets not a line break either.
+        (Entry::Statements, "f/* why */(x)", "1:11", call),
+        (Entry::Statements, "let a = f \\\n    (x)", "2:5", call),
+        (Entry::Statements, "g(f\n(x))", "2:1", call),
+    ] {
+        assert_eq!(
+            rejected(entry, text),
+            [format!("LEX-27 {at}: {message}")],
+            "{text}"
+        );
+    }
+    // What was meant is plain, so the tree is the call's.
+    let outcome = run(Entry::Statements, "f (x)");
+    assert_eq!(
+        outcome.outline(),
+        "Fragment[ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[NameExpr[\"x\"]] \")\"]]]]"
+    );
+}
+
+#[test]
+fn on_the_next_line_a_bracket_begins_a_statement() {
+    // LEX-27: "on the next line, `(x)` and `[i]` begin a statement of
+    // their own (LEX-5)."
+    assert_eq!(
+        statements("f\n(x)"),
+        "ExprStmt[NameExpr[\"f\"]] ExprStmt[ParenExpr[\"(\" NameExpr[\"x\"] \")\"]]"
+    );
+    assert_eq!(
+        statements("x\n[i]"),
+        "ExprStmt[NameExpr[\"x\"]] ExprStmt[SequenceExpr[\"[\" NameExpr[\"i\"] \"]\"]]"
+    );
+    // `eval` and a conversion are nothing without their `(`.
+    assert_eq!(
+        rejected(Entry::Statements, "let a = eval\n(b)")[0],
+        "- 1:13: expected `(`, found end of line"
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let a = str\n(b)")[0],
+        "- 1:9: expected an expression, found `str`"
+    );
+    // What is not a call or an index is free: grouping, a sequence, a
+    // declaration's parameters.
+    for text in [
+        "let a = b + (c)",
+        "return (x)",
+        "let s = [1, 2]",
+        "if (a) { b }",
+        "let f = fn (x) => x",
+    ] {
+        statements(text);
+    }
+    declarations("fn f (x: i64) -> i64 => x");
 }
 
 // ---- UNIT-1 ----
@@ -1155,7 +1264,7 @@ fn a_constructor_that_cannot_be_a_comparison_is_a_constructor() {
     );
     // Two comparisons need a comma that separates; a statement has none.
     assert_eq!(
-        statements("a < b, c > (d)"),
+        statements("a<b, c>(d)"),
         "ExprStmt[TypedConstructor[\"a\" GenericArgs[\"<\" NamedType[\"b\"] \",\" NamedType[\"c\"] \">\"] \
          ArgList[\"(\" Arg[NameExpr[\"d\"]] \")\"]]]"
     );
@@ -1212,31 +1321,55 @@ fn tokens_that_read_both_ways_are_marked_undecided() {
     // parser records its guess, the constructor, in a node of its own
     // (owner decision of 2026-11-13, `docs/architecture.md`).
     assert_eq!(
-        statements("a < b > (c)"),
+        statements("a<b>(c)"),
         "ExprStmt[UndecidedConstructor[\"a\" GenericArgs[\"<\" NamedType[\"b\"] \">\"] \
          ArgList[\"(\" Arg[NameExpr[\"c\"]] \")\"]]]"
     );
     assert_eq!(
-        statements("f(a < b, c > (d))"),
+        statements("f(a<b, c>(d))"),
         "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[UndecidedConstructor[\"a\" \
          GenericArgs[\"<\" NamedType[\"b\"] \",\" NamedType[\"c\"] \">\"] \
          ArgList[\"(\" Arg[NameExpr[\"d\"]] \")\"]]] \")\"]]]"
     );
     // A generic argument may be any constant expression, so a range
-    // check with a parenthesized bound reads both ways as well.
+    // check whose bound touches its `>` reads both ways as well. Spaces
+    // inside the angle brackets change nothing.
     assert_eq!(
-        statements("a < b && c > (d)"),
+        statements("a < b && c >(d)"),
         "ExprStmt[UndecidedConstructor[\"a\" GenericArgs[\"<\" \
          BinaryExpr[NameExpr[\"b\"] \"&&\" NameExpr[\"c\"]] \">\"] ArgList[\"(\" Arg[NameExpr[\"d\"]] \")\"]]]"
     );
     // The node keeps every token, so the analyser can re-read it.
-    let outcome = run(Entry::Statements, "f(a < b, c > (d))");
+    let outcome = run(Entry::Statements, "f(a<b, c>(d))");
     let undecided = outcome
         .tree
         .descendants()
         .find(|node| node.kind() == SyntaxKind::UndecidedConstructor)
         .expect("an undecided node");
-    assert_eq!(undecided.text().to_string(), "a < b, c > (d)");
+    assert_eq!(undecided.text().to_string(), "a<b, c>(d)");
+}
+
+#[test]
+fn a_parenthesis_apart_from_the_closer_is_no_constructors() {
+    // LEX-27 settles what GEN-14 alone leaves open: a constructor's `(`
+    // touches the `>`. With a space there the tokens are comparisons.
+    assert_eq!(
+        statements("a < b > (c)"),
+        "ExprStmt[BinaryExpr[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]] \">\" \
+         ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]]"
+    );
+    assert_eq!(
+        statements("f(a < b, c > (d))"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" \
+         Arg[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]]] \",\" \
+         Arg[BinaryExpr[NameExpr[\"c\"] \">\" ParenExpr[\"(\" NameExpr[\"d\"] \")\"]]] \")\"]]]"
+    );
+    // Where the tokens cannot be comparisons, the constructor was meant,
+    // and the gap is what is wrong.
+    assert_eq!(
+        rejected(Entry::Statements, "Box<i64> (value: 7)"),
+        ["LEX-27 1:10: a call's `(` directly follows what it calls"]
+    );
 }
 
 #[test]

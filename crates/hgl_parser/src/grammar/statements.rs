@@ -253,6 +253,8 @@ impl Parser<'_> {
         if raises {
             self.start(RaisesAssertion);
             self.bump();
+            // LEX-27: `raises(...)` is a call.
+            self.attached();
             self.bump();
             self.nested(Context::LIST, |parser| {
                 parser.expression();
@@ -322,15 +324,14 @@ impl Parser<'_> {
         let mark = self.mark();
         self.leaf(NameExpr);
         loop {
-            if self.nl() {
-                break;
-            }
             match self.current() {
-                LBracket => {
+                // LEX-27: as in an expression.
+                LBracket if self.suffix_at(0) => {
+                    self.attached();
                     self.index_suffix();
                     self.wrap(mark, IndexExpr);
                 }
-                Dot => {
+                Dot if !self.nl() => {
                     self.member_suffix();
                     self.wrap(mark, MemberExpr);
                 }
