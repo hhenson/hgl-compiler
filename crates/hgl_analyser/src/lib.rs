@@ -25,7 +25,10 @@
 //!   finds the operator of each `impl fn` (GEN-4);
 //! * `resolve` walks every signature, body, type and constraint, finds
 //!   the one binding each name has in scope (UNIT-10), and rejects a
-//!   binding that takes a name already there (UNIT-12).
+//!   binding that takes a name already there (UNIT-12);
+//! * `forms` rejects the forms of a declaration that the grammar admits
+//!   and a rule does not: a pack with a default, a hook a native
+//!   implementation cannot have (FN-8, NATIVE-3).
 //!
 //! Types, phases and constants are not checked yet.
 //!
@@ -46,6 +49,7 @@
 
 mod assemble;
 mod declare;
+mod forms;
 mod imports;
 mod program;
 mod resolve;
@@ -112,6 +116,22 @@ pub mod codes {
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
+    /// A pack parameter has a default (FN-8).
+    pub const PACK_DEFAULT: &str = "pack.default";
+    /// A pack parameter is marked `const` (FN-8).
+    pub const PACK_CONST: &str = "pack.const";
+    /// A fixed parameter follows a pack (FN-8).
+    pub const PACK_ORDER: &str = "pack.order";
+    /// `...{Name}` names no type pack of its declaration (FN-8).
+    pub const PACK_UNDECLARED: &str = "pack.undeclared";
+    /// A native const implementation has a lifecycle hook (NATIVE-3).
+    pub const NATIVE_CONST_HOOK: &str = "native.const_hook";
+    /// A native implementation has `start;` or `stop;` and no `when;`
+    /// (NATIVE-3).
+    pub const NATIVE_HOOK_WITHOUT_WHEN: &str = "native.hook_without_when";
+    /// A native implementation has a second `start;` or `stop;`
+    /// (NATIVE-3).
+    pub const NATIVE_DUPLICATE_HOOK: &str = "native.duplicate_hook";
 }
 
 /// One parsed file: what the analyser is given for each source file.
@@ -156,6 +176,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     }
     imports::resolve(&mut program, diagnostics);
     resolve::resolve(&mut program, diagnostics);
+    forms::check(&program, diagnostics);
     program
 }
 
