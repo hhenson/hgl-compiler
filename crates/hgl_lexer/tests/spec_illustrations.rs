@@ -78,6 +78,7 @@ fn rejected(text: &str, code: &str, rule: &'static str) {
 
 #[test]
 fn one_duration_token_ninety_minutes() {
+    // LEX-8: digits then letters are a duration. LEX-13: its value.
     accepted("1h30m", &[(TokenKind::Duration, "1h30m")]);
     let ninety_minutes = 90 * 60 * 1_000_000;
     assert_eq!(literal::decode_duration("1h30m"), Ok(ninety_minutes));
@@ -85,6 +86,7 @@ fn one_duration_token_ninety_minutes() {
 
 #[test]
 fn minus_followed_by_a_duration_token() {
+    // LEX-7: the minus is an operator, not part of the literal.
     accepted(
         "-250ms",
         &[(TokenKind::Minus, "-"), (TokenKind::Duration, "250ms")],
@@ -94,6 +96,7 @@ fn minus_followed_by_a_duration_token() {
 
 #[test]
 fn time_with_seconds_zero() {
+    // LEX-11: seconds default to zero.
     accepted("@09:30", &[(TokenKind::Temporal, "@09:30")]);
     let value = literal::decode_temporal("@09:30").unwrap();
     let half_past_nine = Time {
@@ -108,6 +111,7 @@ fn time_with_seconds_zero() {
 
 #[test]
 fn utc_instant() {
+    // LEX-11.
     accepted(
         "@2026-09-03T09:30Z",
         &[(TokenKind::Temporal, "@2026-09-03T09:30Z")],
@@ -201,6 +205,7 @@ fn line_breaks(text: &str) -> usize {
 
 #[test]
 fn four_physical_lines_under_three_line_break_forms() {
+    // LEX-15.
     // "The source `a` LF `b` CR LF `c` CR `d` has four physical lines and
     // `d` begins line 4."
     let text = "a\nb\r\nc\rd";
@@ -223,6 +228,7 @@ fn four_physical_lines_under_three_line_break_forms() {
 
 #[test]
 fn a_carriage_return_pairs_only_with_the_line_feed_after_it() {
+    // LEX-15.
     // "CR CR LF is two line breaks, as is LF CR."
     assert_eq!(line_breaks("a\r\r\nb"), 2);
     assert_eq!(line_breaks("a\n\rb"), 2);
@@ -231,6 +237,7 @@ fn a_carriage_return_pairs_only_with_the_line_feed_after_it() {
 
 #[test]
 fn rewriting_line_breaks_keeps_tokens_lines_and_columns() {
+    // LEX-15.
     // "A source rewritten from one form to another keeps its tokens, their
     // lines and columns, and its meaning."
     let unix = "let a = 1\n  let b = \"two\"\n\nlet c = @09:30\n";
@@ -244,6 +251,7 @@ fn rewriting_line_breaks_keeps_tokens_lines_and_columns() {
 
 #[test]
 fn two_closers_end_two_argument_lists() {
+    // LEX-8, LEX-17: no token joins `>` to a following `>`.
     use TokenKind::*;
     accepted(
         "list<list<i64>>",
@@ -261,12 +269,14 @@ fn two_closers_end_two_argument_lists() {
 
 #[test]
 fn a_float_may_round_to_zero() {
+    // LEX-20.
     accepted("1e-400", &[(TokenKind::Float, "1e-400")]);
     assert_eq!(literal::decode_float("1e-400"), Ok(0.0));
 }
 
 #[test]
 fn empty_block_comment() {
+    // LEX-21.
     // A block comment, not the start of a documentation comment.
     let mut sources = SourceMap::new();
     let file = sources.add("comment.hgl", "/**/").unwrap();
@@ -279,12 +289,14 @@ fn empty_block_comment() {
 
 #[test]
 fn integer_one_million() {
+    // LEX-22.
     accepted("1_000_000", &[(TokenKind::Int, "1_000_000")]);
     assert_eq!(literal::decode_integer("1_000_000"), Ok(1_000_000));
 }
 
 #[test]
 fn integer_255_in_two_bases() {
+    // LEX-23, with LEX-22's separator in the binary form.
     accepted("0xFF", &[(TokenKind::Int, "0xFF")]);
     accepted("0b1111_1111", &[(TokenKind::Int, "0b1111_1111")]);
     assert_eq!(literal::decode_integer("0xFF"), Ok(255));
@@ -293,12 +305,14 @@ fn integer_255_in_two_bases() {
 
 #[test]
 fn duration_of_one_and_a_half_seconds() {
+    // LEX-22 in a duration. LEX-13: its value.
     accepted("1_500ms", &[(TokenKind::Duration, "1_500ms")]);
     assert_eq!(literal::decode_duration("1_500ms"), Ok(1_500_000));
 }
 
 #[test]
 fn string_of_one_character() {
+    // LEX-24.
     let text = r#""\u{20AC}""#;
     accepted(text, &[(TokenKind::Str, text)]);
     assert_eq!(literal::decode_string(text).unwrap(), "\u{20ac}");
@@ -308,6 +322,7 @@ fn string_of_one_character() {
 
 #[test]
 fn text_block_value_drops_four_columns_and_ends_without_a_line_feed() {
+    // LEX-25.
     let block = "\"\"\"\n    Usage: run [options]\n      -v  verbose\n    \"\"\"";
     let text = format!("let usage = {block}\n");
     accepted(

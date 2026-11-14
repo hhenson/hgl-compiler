@@ -405,6 +405,7 @@ mod tests {
 
     #[test]
     fn a_line_break_is_lf_crlf_or_cr() {
+        // LEX-15.
         assert_eq!(line_break_length(b"\nx"), Some(1));
         assert_eq!(line_break_length(b"\r\nx"), Some(2));
         assert_eq!(line_break_length(b"\rx"), Some(1));
@@ -417,6 +418,7 @@ mod tests {
 
     #[test]
     fn every_line_break_form_indexes_alike() {
+        // LEX-15.
         // The same three lines under each convention. `cd` is line 2 and
         // `ef` line 3 whichever line break separates them.
         for line_break in ["\n", "\r\n", "\r"] {
@@ -434,6 +436,7 @@ mod tests {
 
     #[test]
     fn mixed_line_breaks_each_count_once() {
+        // LEX-15.
         // LF, CRLF, CR, then CR followed by CRLF (an empty line between).
         let file = SourceFile::new("t.hgl", "a\nb\r\nc\rd\r\r\ne").unwrap();
         assert_eq!(file.line_count(), 6);
@@ -444,6 +447,7 @@ mod tests {
 
     #[test]
     fn line_ranges_include_the_line_break() {
+        // LEX-15: CR LF is one line break.
         let file = SourceFile::new("t.hgl", "ab\r\ncd\re").unwrap();
         assert_eq!(file.line_range(0), Some(0..4));
         assert_eq!(file.line_range(1), Some(4..7));
@@ -488,6 +492,7 @@ mod tests {
 
     #[test]
     fn well_formed_bytes_are_the_text() {
+        // LEX-16.
         let file = SourceFile::from_bytes("t.hgl", "let é = 1\n".as_bytes().to_vec()).unwrap();
         assert_eq!(file.text(), "let é = 1\n");
         assert_eq!(file.encoding_error(), None);

@@ -1108,6 +1108,7 @@ mod tests {
 
     #[test]
     fn line_break_forms_give_the_same_tokens() {
+        // LEX-15.
         // The same source under each convention differs only in the text of
         // its line-break tokens.
         fn without_line_breaks(text: &str) -> Vec<(TokenKind, &str)> {
@@ -1495,6 +1496,8 @@ mod tests {
 
     #[test]
     fn integers_and_floats() {
+        // The INTEGER_LITERAL and FLOAT_LITERAL productions. LEX-8: an exponent
+        // with no unit after it is a float.
         assert_eq!(
             tokens_of("0 42 007 1.5 0.25 1e5 1E5 2e+3 2e-3 1.5e10"),
             [
@@ -1557,6 +1560,7 @@ mod tests {
 
     #[test]
     fn a_dot_needs_a_digit_to_make_a_float() {
+        // FLOAT_LITERAL has digits on both sides of its dot; LEX-17 gives `...`.
         assert_eq!(tokens_of("1.max"), [(Int, "1"), (Dot, "."), (Ident, "max")]);
         assert_eq!(
             tokens_of("1...3"),
@@ -1819,6 +1823,7 @@ mod tests {
 
     #[test]
     fn every_symbol_lexes_to_its_own_kind() {
+        // LEX-17: each PUNCTUATION alternative is one token.
         // Guards the hand-written matcher against the token table.
         for &(text, kind) in TokenKind::PUNCTUATION {
             assert_eq!(tokens_of(text), [(kind, text)], "{text}");

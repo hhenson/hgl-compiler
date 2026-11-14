@@ -170,6 +170,7 @@ fn a_leading_byte_order_mark_is_ignored() {
 
 #[test]
 fn every_line_break_form_gives_the_same_report() {
+    // LEX-15.
     // Read as LF whatever the checkout did to the fixture.
     let original = fs::read_to_string(fixture("rejected.hgl"))
         .unwrap()

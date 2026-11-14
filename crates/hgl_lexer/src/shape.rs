@@ -312,6 +312,7 @@ mod tests {
 
     #[test]
     fn integers_in_three_bases() {
+        // LEX-23.
         assert_eq!(scanned("0"), (NumberForm::Decimal, "0"));
         assert_eq!(scanned("42 "), (NumberForm::Decimal, "42"));
         assert_eq!(scanned("0x2A"), (NumberForm::Hexadecimal, "0x2A"));
@@ -354,6 +355,7 @@ mod tests {
 
     #[test]
     fn floats_need_a_digit_after_the_dot_or_a_whole_exponent() {
+        // The FLOAT_LITERAL production.
         assert_eq!(
             scanned("1.5"),
             (NumberForm::Float { exponent: false }, "1.5")
@@ -381,6 +383,8 @@ mod tests {
 
     #[test]
     fn durations_are_numbers_each_with_a_unit() {
+        // The `duration_literal` production. LEX-8: digits then letters are a
+        // duration candidate.
         assert_eq!(scanned("1h30m"), (NumberForm::Duration, "1h30m"));
         assert_eq!(scanned("1.5s"), (NumberForm::Duration, "1.5s"));
         assert_eq!(scanned("250ms"), (NumberForm::Duration, "250ms"));
@@ -447,6 +451,7 @@ mod tests {
 
     #[test]
     fn a_text_block_layout_can_break_in_three_ways() {
+        // LEX-25.
         assert_eq!(lines_of(""), Err(TextBlockError::Opening));
         assert_eq!(lines_of("text"), Err(TextBlockError::Opening));
         assert_eq!(lines_of(" \n  a\n  "), Err(TextBlockError::Opening));

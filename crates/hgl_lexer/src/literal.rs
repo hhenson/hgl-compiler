@@ -1144,6 +1144,8 @@ mod tests {
 
     #[test]
     fn malformed_durations_have_no_value() {
+        // The `duration_literal` production with LEX-8, LEX-13 and LEX-22:
+        // none of these is one duration.
         for text in [
             "", "5", "5x", "h", "1.s", "1h30", "1e5m", "1 h", "1_h", "1h_", "1__0s", "0x1h", "1.5",
             "1H",
@@ -1374,6 +1376,8 @@ mod tests {
 
     #[test]
     fn malformed_temporal_literals_have_no_value() {
+        // The TEMPORAL_LITERAL production with LEX-11: none of these matches
+        // a form.
         for text in [
             "",
             "2026-09-03",

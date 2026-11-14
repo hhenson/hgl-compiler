@@ -196,6 +196,7 @@ fn observe(origin: &str, text: &str) -> (Vec<Observation>, usize) {
 
 #[test]
 fn the_corpus_lexes_alike_under_every_line_break_form() {
+    // LEX-15.
     // LF, CRLF and CR are each one line break and mean the same.
     let samples = corpus();
     assert!(
