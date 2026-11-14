@@ -24,7 +24,9 @@
 //! 1. `annotation` reads every `# expect-error` comment.
 //! 2. `owner` finds the item each applies to: its *owner*.
 //! 3. The program is analysed with every owner left out. What is left,
-//!    the *surviving* source, must be accepted.
+//!    the *surviving* source, must be accepted. An error of the lexer or
+//!    parser is an owner's when it is inside that owner, and the
+//!    surviving source's otherwise.
 //! 4. For each owner, the program is analysed again with that owner put
 //!    back. Every error then reported must be one an annotation expects,
 //!    by category, code, file and line, and every annotation must be met
@@ -41,7 +43,7 @@ use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
 use hgl_source::{FileId, SourceMap, Span};
 
 pub use annotation::Expectation;
-use owner::{Owner, owner_of, owners};
+use owner::{Owner, owner_of, owner_of_error, owners};
 
 /// Why no executable case is run.
 pub const NO_TARGET: &str = "this compiler has no target to run a test on yet";
@@ -200,13 +202,27 @@ pub fn run(
     owning.sort_unstable();
     owning.dedup();
 
-    // The lexer's and parser's errors, each given to the owner whose
-    // lines it is on, or to the surviving source.
+    // The lexer's and parser's errors, each given to the owner it is
+    // inside, or to the surviving source.
     let mut front_end_of: Vec<Vec<Diagnostic>> = vec![Vec::new(); candidates.len()];
+    let end_of = |file: FileId| sources.file(file).text().len() as u32;
+    // The files the end of the file cut something short in: those with
+    // an error at their end.
+    let cut_short: Vec<FileId> = errors(front_end)
+        .map(|diagnostic| diagnostic.primary)
+        .filter(|primary| primary.span.start >= end_of(primary.file))
+        .map(|primary| primary.file)
+        .collect();
     for diagnostic in errors(front_end) {
         let file = diagnostic.primary.file;
-        let line = sources.file(file).line_index(diagnostic.primary.span.start);
-        match owner_of(&candidates, file, line, last_line(file)) {
+        let owner = owner_of_error(
+            &candidates,
+            file,
+            diagnostic.primary.span,
+            end_of(file),
+            cut_short.contains(&file),
+        );
+        match owner {
             Some(owner) if owning.contains(&owner) => {
                 front_end_of[owner].push(diagnostic.clone());
             }

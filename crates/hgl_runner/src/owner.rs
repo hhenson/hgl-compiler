@@ -188,15 +188,62 @@ fn label(item: &Item) -> String {
     }
 }
 
-/// The position in `owners` of the owner of line `line` of `file`.
+/// The position in `owners` of the owner of an error of the lexer or
+/// parser whose primary range is `span`, in `file`, whose text is
+/// `end_of_file` bytes long.
+///
+/// An annotation is matched to an error by line (TST-13), but a line is
+/// too coarse to say whose an error is: text the parser could place
+/// nowhere may stand on an item's line, after it, and is no part of the
+/// item. So an error is an owner's only when it is *inside* the owner:
+///
+/// * it starts within the bytes of the owner's node; or
+/// * it is an empty range at the node's end, which is how the parser
+///   marks something missing after the item's last token; or
+/// * it is at the end of the file, and the owner is the item that ends
+///   the file. An error there is for whatever the end of the file cut
+///   short. When an unnamed test context or unplaced text ends the file,
+///   that is not an item, whichever item's line the file ends on; or
+/// * it is after the owner, the owner ends the file, and the end of the
+///   file cut it short (`cut_short`: the file has an error at its end).
+///   Nothing but comments can stand there, and they are inside what the
+///   owner left open: a comment that never closes, in a block that never
+///   closes.
+///
+/// Any other error is the surviving source's.
+pub(crate) fn owner_of_error(
+    owners: &[Owner],
+    file: FileId,
+    span: Span,
+    end_of_file: u32,
+    cut_short: bool,
+) -> Option<usize> {
+    let mut in_file = owners
+        .iter()
+        .enumerate()
+        .filter(|(_, owner)| owner.file == file);
+    let found = if span.start >= end_of_file {
+        in_file.find(|(_, owner)| owner.ends_file)
+    } else {
+        in_file.find(|(_, owner)| {
+            let inside =
+                span.start < owner.span.end || (span.is_empty() && span.start == owner.span.end);
+            let in_what_it_left_open = owner.ends_file && cut_short;
+            span.start >= owner.span.start && (inside || in_what_it_left_open)
+        })
+    };
+    found.map(|(index, _)| index)
+}
+
+/// The position in `owners` of the owner of line `line` of `file`: the
+/// item an annotation that applies to that line belongs to (TST-12).
 ///
 /// That is the item whose lines include it. The last line of a file is
 /// where an error at the end of the file is reported (TST-13), and an
 /// item cut short by the end of the file need not reach that line. So
 /// the item that ends the file owns it: the one nothing follows. When
 /// what ends the file is an unnamed test context, or text the parser
-/// could place nowhere, nothing owns the line, and an error there is
-/// one of the surviving source's.
+/// could place nowhere, nothing owns the line.
 pub(crate) fn owner_of(
     owners: &[Owner],
     file: FileId,

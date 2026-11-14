@@ -238,6 +238,118 @@ fn items_that_share_a_line_own_no_case() {
     assert_eq!(ran.cases, NONE);
 }
 
+/// TST-13: "Exclude all rejection owners from executable source", and
+/// TST-14: "surviving-source errors prevent execution." An error is an
+/// owner's only when it is inside the owner. Text the parser could place
+/// nowhere, after an item on its line, is not: with the item left out it
+/// is still there.
+#[test]
+fn an_error_beside_an_owner_is_the_surviving_sources() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn removed() {} 42\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, ["cases.hgl:3:17 parse/syntax.expected_token"]);
+    assert_eq!(ran.cases, NONE);
+
+    // With no space between them the error still starts after the item.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn removed() {}42\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, ["cases.hgl:3:16 parse/syntax.expected_token"]);
+    assert_eq!(ran.cases, NONE);
+
+    // Nor is a documentation comment that documents nothing, after the
+    // file's last item: the item is whole, and the comment is beside it.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn last() -> str => \"a\\q\" /** Documents nothing. */\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped.len(), 1, "{:?}", ran.stopped);
+    assert!(
+        ran.stopped[0].starts_with("cases.hgl:3:33 parse/doc."),
+        "{:?}",
+        ran.stopped
+    );
+    assert_eq!(ran.cases, NONE);
+
+    // Something missing after an item's last token is the item's: the
+    // parser reports it at the item's end.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn cut_short() ->\n",
+            "\n",
+            "test survives { assert true }\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection cases.hgl:3 fn cut_short",
+            "not-run executable m::survives",
+        ]
+    );
+}
+
+/// TST-12: "Unnamed context/module headers cannot own a case." A context
+/// the end of the file cuts short is what that error is for, whether or
+/// not a line break ends the file: when none does, the file ends on the
+/// last line of the context's last item, and the error is still not that
+/// item's.
+#[test]
+fn an_open_contexts_error_is_not_its_last_items() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "test {\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn helper() {}",
+        ),
+    )]);
+    assert_eq!(ran.stopped, ["cases.hgl:4:15 parse/syntax.expected_token"]);
+    assert_eq!(ran.cases, NONE);
+
+    // A top-level item that the end of the file cuts short owns that
+    // error, with or without a line break after it.
+    for ending in ["", "\n"] {
+        let text = format!(
+            "module m\nfn open() {{\n# expect-error(parse, \"syntax.expected_token\")\nstep(){ending}"
+        );
+        let ran = run_all(&[("cases.hgl", text.as_str())]);
+        assert_eq!(ran.stopped, NONE, "{ending:?}");
+        // With a line break the error is on the line after `step()`,
+        // and the annotation applies to the line of `step()`.
+        let expected: &[&str] = if ending.is_empty() {
+            &["passed rejection cases.hgl:2 fn open"]
+        } else {
+            &[
+                "failed rejection cases.hgl:2 fn open",
+                "  missing parse/syntax.expected_token cases.hgl:4",
+                "  unexpected parse/syntax.expected_token cases.hgl:5:1",
+            ]
+        };
+        assert_eq!(ran.cases, expected, "{ending:?}");
+    }
+}
+
 // ---- TST-13: owners left out, and matching ----
 
 /// TST-13: "Exclude all rejection owners from executable source. Check

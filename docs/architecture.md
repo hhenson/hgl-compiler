@@ -302,11 +302,19 @@ A rejection case is checked in four steps (TST-13):
    put back. Its errors and its annotations must match one to one, by
    category, code, file and line.
 
-A lexer or parser error belongs to the owner whose lines it is on, and to
-the surviving source when it is on none. An error at the end of the file
-is on the file's last line. The item that ends the file owns that line.
-When an unnamed test context or text the parser could not place ends the
-file, nothing owns it, and the error is the surviving source's.
+An annotation finds its owner by line. An error of the lexer or parser is
+an owner's only when it is inside the owner: within its node, or just
+after its last token for something missing there. A line is too coarse
+for that: text the parser could place nowhere may stand after an item on
+its line, and is still there with the item left out. Every other such
+error is the surviving source's.
+
+An error at the end of the file is on the file's last line (TST-13). It
+belongs to the item that ends the file, which also owns that line; the
+comments after an item the end of the file cut short are inside it. When
+an unnamed test context or unplaced text ends the file, nothing owns the
+line and the error is the surviving source's, whichever item's line the
+file ends on.
 
 Invalid metadata, an annotation with no owner, an unknown selector and an
 error in the surviving source stop the run before any case (TST-14). A
