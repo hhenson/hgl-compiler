@@ -504,6 +504,16 @@ fn a_name_or_module_rejection_is_a_case() {
             "    const fn choose() -> i64 => 1\n",
             "}\n",
             "\n",
+            // TIME-8: "`inject` names no other", and SDOC-1: a
+            // documentation comment that documents nothing.
+            "fn node(value: i64) -> i64 {\n",
+            "    # expect-error(injectable, \"inject.unknown_capability\")\n",
+            "    inject banana\n",
+            "    # expect-error(parse, \"doc.unattached\")\n",
+            "    /** In a body. */\n",
+            "    when { return value }\n",
+            "}\n",
+            "\n",
             "test defining_closure {\n",
             "    assert choose(1) == 8\n",
             "}\n",
@@ -519,6 +529,7 @@ fn a_name_or_module_rejection_is_a_case() {
             "passed rejection defaults.hgl:15 const fn local",
             "passed rejection defaults.hgl:21 const fn cases",
             "passed rejection defaults.hgl:34 const fn choose",
+            "passed rejection defaults.hgl:37 fn node",
             "not-run executable examples.defaults::defining_closure",
         ]
     );

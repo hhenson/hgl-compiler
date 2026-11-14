@@ -145,15 +145,13 @@ fn a_failed_case_says_what_did_not_match_and_exits_one() {
             "# expect-error(parse, \"string.unknown_escape\")\n",
             "const fn right() -> str => \"a\\q\"\n",
             // TST-12: only a row of the catalogue can be expected. The
-            // code for a stray documentation comment is this compiler's
-            // own, so no annotation meets it.
+            // code for this compiler's own nesting limit is no row, so
+            // no annotation meets it.
             "# expect-error(parse, \"syntax.expected_token\")\n",
-            "fn documented() {\n",
-            "    /** Documents nothing. */\n",
-            "}\n",
+            "const fn deep() -> i64 => ((((((1))))))\n",
         ),
     );
-    let output = hgl(&["test", &argument(&root)]);
+    let output = hgl(&["test", &argument(&root), "--nesting-limit", "4"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         text(&output.stdout),
@@ -165,11 +163,11 @@ fn a_failed_case_says_what_did_not_match_and_exits_one() {
                 "unknown escape `\\q`\n",
                 "passed   rejection   {file}:6 fn scale\n",
                 "passed   rejection   {file}:8 const fn right\n",
-                "FAILED   rejection   {file}:10 fn documented\n",
+                "FAILED   rejection   {file}:10 const fn deep\n",
                 "    expected parse/syntax.expected_token on line 10 of {file}: not reported\n",
-                "    reported parse/doc.unattached at {file}:11:5, not expected ",
+                "    reported parse/syntax.nesting_limit at {file}:10:31, not expected ",
                 "(a compiler-local code, which no annotation can expect): ",
-                "documentation comment documents no declaration\n",
+                "nesting deeper than 4 levels is not read\n",
                 "rejection cases: 2 passed, 2 failed\n",
                 "executable cases: none selected\n",
             ),

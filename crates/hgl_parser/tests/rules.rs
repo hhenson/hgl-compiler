@@ -47,10 +47,10 @@ fn rejected(entry: Entry, text: &str) -> Vec<String> {
         .findings
         .iter()
         .map(|finding| {
-            // The grammar has one catalogued code; the documentation
-            // comment rules have none, so theirs are local.
-            let grammar = finding.code == "syntax.expected_token";
-            assert_eq!(finding.catalogued, grammar, "{}", finding.code);
+            // Every code is the catalogue's but the one for this
+            // compiler's own limit.
+            let limit = finding.code == "syntax.nesting_limit";
+            assert_eq!(finding.catalogued, !limit, "{}", finding.code);
             format!(
                 "{} {}: {}",
                 finding.rule.unwrap_or("-"),
@@ -2171,7 +2171,7 @@ fn a_documentation_comment_that_documents_nothing_is_rejected() {
         rejected(Entry::Declarations, "/** Kept. */\ninstantiate add<i64>"),
         [format!("SDOC-1 1:1: {unattached}")]
     );
-    // Its codes are this compiler's: the catalogue has none for it.
+    // Each has its own catalogued code.
     let outcome = run(
         Entry::Declarations,
         "/** One. */\n/** Two. */\nfn f() {}\n/** End. */",

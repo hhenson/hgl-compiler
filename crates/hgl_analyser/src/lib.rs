@@ -65,10 +65,9 @@ pub use program::{
 
 /// The diagnostic codes this stage reports.
 ///
-/// Every one but those in [`codes::LOCAL`] is a code of the
-/// specification's diagnostic catalogue, so an `expect-error` annotation
-/// can expect it (TST-12). The analyser's tests check each diagnostic's
-/// category and code against the catalogue.
+/// Every one is a code of the specification's diagnostic catalogue, so an
+/// `expect-error` annotation can expect it (TST-12). The analyser's tests
+/// check each diagnostic's category and code against the catalogue.
 pub mod codes {
     /// A module has a second unnamed file (UNIT-1).
     pub const MODULE_DUPLICATE_UNNAMED: &str = "module.duplicate_unnamed";
@@ -134,13 +133,7 @@ pub mod codes {
     /// (NATIVE-3).
     pub const NATIVE_DUPLICATE_HOOK: &str = "native.duplicate_hook";
     /// An `inject` names something that is not a capability (TIME-8).
-    /// Local: the catalogue has no row for it.
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
-
-    /// The codes above that the specification's catalogue does not list.
-    /// They are reported as local to this compiler, and no `expect-error`
-    /// annotation can expect one (TST-12).
-    pub const LOCAL: &[&str] = &[INJECT_UNKNOWN_CAPABILITY];
 }
 
 /// One parsed file: what the analyser is given for each source file.
@@ -189,8 +182,8 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     program
 }
 
-/// An error this stage reports. It cites the rule that requires it, and
-/// its code is catalogued unless it is one of [`codes::LOCAL`].
+/// An error this stage reports: every one has a catalogued code and
+/// cites the rule that requires it.
 fn error(
     category: Category,
     code: &'static str,
@@ -198,12 +191,7 @@ fn error(
     message: String,
     rule: &'static str,
 ) -> Diagnostic {
-    let code = if codes::LOCAL.contains(&code) {
-        Code::Local(code)
-    } else {
-        Code::Catalogued(code)
-    };
-    Diagnostic::error(category, code, at, message).with_rule(rule)
+    Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

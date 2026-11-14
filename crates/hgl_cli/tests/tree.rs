@@ -114,9 +114,9 @@ fn rejected_source_prints_a_tree_and_exits_one() {
 }
 
 #[test]
-fn a_rejection_the_catalogue_has_no_code_for_is_marked_local() {
-    // SDOC-1 rejects a repeated documentation comment and the catalogue
-    // names no code for it.
+fn a_documentation_rejection_has_its_catalogued_code() {
+    // SDOC-1 rejects a repeated documentation comment, under the
+    // catalogue's `doc.repeated`.
     let path = scratch(
         "documented.hgl",
         "module examples.documented\n\n/** One. */\n/** Two. */\nconst fn one() -> i64 => 1\n",
@@ -126,7 +126,7 @@ fn a_rejection_the_catalogue_has_no_code_for_is_marked_local() {
     let stderr = text(&output.stderr);
     assert!(stderr.contains("error[parse/doc.repeated]"), "{stderr}");
     assert!(stderr.contains("rule SDOC-1"), "{stderr}");
-    assert!(stderr.contains("compiler-local"), "{stderr}");
+    assert!(!stderr.contains("compiler-local"), "{stderr}");
 }
 
 #[test]

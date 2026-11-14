@@ -180,16 +180,7 @@ The language is exactly GEN-14; only the stage that applies it differs.
 A bare name as a generic argument, as in `list<T, N>`, is read as a type.
 Whether it names a type or a constant is also the analyser's to say.
 
-### Readings
-
-Where the chapters leave a choice the parser takes one reading, listed in
-[hgl_spec issue 13](https://github.com/hhenson/hgl_spec/issues/13) for the
-specification to decide:
-
-| Subject | Reading |
-| --- | --- |
-| EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
-| FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
+### Value types
 
 The grammar's `value_type` is parsed as `type`. Which types are value types
 is the analyser's to check: the types chapter places that rejection under
@@ -261,7 +252,7 @@ What the pass decides beyond finding a name:
 | `alias::name` | UNIT-2 | The alias is one of its file; the name a public declaration of that module |
 | `name<...>(...)` that reads two ways | GEN-14 | A constructor when `name` is a generic type, comparisons otherwise; recorded for the passes that read it. The names inside are the same under either reading |
 | A generic type before a comparison's `<` | GEN-14 | Rejected: an application its arguments do not complete |
-| `inject` | TIME-8 | Names one of the six capabilities. Any other name is rejected, under a local code |
+| `inject` | TIME-8 | Names one of the six capabilities. Any other name is rejected |
 
 What a name *is* does not matter to this pass: a type, a function and a
 local are found alike. Whether what was found fits where it is used is
@@ -347,8 +338,9 @@ Only a catalogued category and code can be expected (TST-12).
 `hgl_diagnostics::catalogue` lists them, and a test compares the list
 with the pinned chapter. Every code of the lexer and the analyser is one,
 so a case can expect a name or module rejection as it can a lexical one.
-The parser's three local codes and the analyser's one can be expected by
-no case.
+The parser's code for its own nesting limit is local and can be expected
+by no case. Nor can an error that no item owns: a repeated documentation
+comment, or a second unnamed file of a module.
 
 | Exit status of `hgl test` | When |
 | --- | --- |
@@ -368,10 +360,11 @@ specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
 `# expect-error` (TST-12). Every lexical code is catalogued. The parser
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
-and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
-`syntax.nesting_limit`. The analyser reports 27 catalogued codes and one
-local one, `inject.unknown_capability` (`hgl_analyser::codes`), and its
-tests check each diagnostic's category and code against the catalogue.
+and its two for documentation comments, `doc.unattached` and
+`doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
+the limit is the compiler's, not the language's. The analyser reports 28
+codes, all catalogued (`hgl_analyser::codes`), and its tests check each
+diagnostic's category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
