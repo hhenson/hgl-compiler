@@ -13,6 +13,7 @@
 //! annotation matches (TST-13); the message is for people and is not a match
 //! key.
 
+pub mod catalogue;
 pub mod render;
 
 use hgl_source::{FileId, Span};
@@ -57,6 +58,28 @@ pub enum Category {
 }
 
 impl Category {
+    /// Every category, in the specification's order.
+    pub const ALL: [Category; 10] = [
+        Category::Parse,
+        Category::Name,
+        Category::Type,
+        Category::Shape,
+        Category::Constraint,
+        Category::FunctionKind,
+        Category::Phase,
+        Category::Injectable,
+        Category::Operator,
+        Category::Module,
+    ];
+
+    /// The category the specification spells `name`, for example
+    /// `function-kind`; `None` when it spells none so.
+    pub fn from_name(name: &str) -> Option<Category> {
+        Category::ALL
+            .into_iter()
+            .find(|category| category.as_str() == name)
+    }
+
     /// The category as the specification spells it, for example
     /// `function-kind`.
     pub fn as_str(self) -> &'static str {
@@ -121,6 +144,16 @@ impl Location {
     }
 }
 
+/// Another place a diagnostic points at, with what to say about it: the
+/// first declaration, when the problem is a second one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Related {
+    /// The place.
+    pub location: Location,
+    /// What it is, for example `first declared here`.
+    pub message: String,
+}
+
 /// One reported problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -140,6 +173,9 @@ pub struct Diagnostic {
     pub rule: Option<&'static str>,
     /// Extra lines of help shown under the message.
     pub notes: Vec<String>,
+    /// Other places worth showing with the problem. They help a reader
+    /// and are not what an `expect-error` annotation matches (TST-13).
+    pub related: Vec<Related>,
 }
 
 impl Diagnostic {
@@ -160,6 +196,7 @@ impl Diagnostic {
             message: message.into(),
             rule: None,
             notes: Vec::new(),
+            related: Vec::new(),
         }
     }
 
@@ -172,6 +209,15 @@ impl Diagnostic {
     /// Adds a line of help.
     pub fn with_note(mut self, note: impl Into<String>) -> Diagnostic {
         self.notes.push(note.into());
+        self
+    }
+
+    /// Adds another place to show, with what to say about it.
+    pub fn with_related(mut self, location: Location, message: impl Into<String>) -> Diagnostic {
+        self.related.push(Related {
+            location,
+            message: message.into(),
+        });
         self
     }
 }

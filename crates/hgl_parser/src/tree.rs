@@ -15,7 +15,8 @@
 
 use std::fmt::Write as _;
 
-use rowan::{GreenNode, NodeOrToken, WalkEvent};
+use hgl_source::Span;
+use rowan::{GreenNode, NodeOrToken, TextRange, WalkEvent};
 
 use crate::kind::SyntaxKind;
 
@@ -47,6 +48,35 @@ pub type SyntaxToken = rowan::SyntaxToken<HglLanguage>;
 
 /// A node or a token: what a node's children are.
 pub type SyntaxElement = rowan::SyntaxElement<HglLanguage>;
+
+/// Gives the bytes a node or token covers as a [`Span`], the form
+/// diagnostics take.
+///
+/// This is an *extension trait*: a trait written here and implemented for
+/// types that come from another crate, which adds a method to them. With
+/// it in scope (`use hgl_parser::HasSpan`), `node.span()` works on
+/// `rowan`'s nodes and tokens.
+pub trait HasSpan {
+    /// The bytes covered, counted from the start of the file.
+    fn span(&self) -> Span;
+}
+
+/// `rowan`'s byte range as a [`Span`].
+fn span_of(range: TextRange) -> Span {
+    Span::new(u32::from(range.start()), u32::from(range.end()))
+}
+
+impl HasSpan for SyntaxNode {
+    fn span(&self) -> Span {
+        span_of(self.text_range())
+    }
+}
+
+impl HasSpan for SyntaxToken {
+    fn span(&self) -> Span {
+        span_of(self.text_range())
+    }
+}
 
 /// The result of parsing: the tree. Problems found on the way are in the
 /// diagnostics sink the parser was given.

@@ -1991,3 +1991,29 @@ fn a_documentation_comment_that_documents_nothing_is_rejected() {
         .collect();
     assert_eq!(codes, ["doc.repeated", "doc.unattached"]);
 }
+
+// ---- TST-13 ----
+
+/// TST-13: "Use the primary range's first character and the EOF
+/// position's line for EOF errors." An error for what the end of the
+/// file cut short points at the end of the file, after the blank lines
+/// and comments that close it. One for what the end of a line cut short
+/// points just after the last token of that line.
+#[test]
+fn an_error_at_the_end_of_the_file_points_at_the_end_of_the_file() {
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "fn open() {\n    step()\n\n# the file ends here\n"
+        ),
+        ["- 5:1: expected `}`, found end of file"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn open() {\n    step()"),
+        ["- 2:11: expected `}`, found end of file"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn open() ->\n\nfn next() {}\n"),
+        ["- 1:13: expected a type, found end of line"]
+    );
+}

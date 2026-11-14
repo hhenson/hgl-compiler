@@ -590,16 +590,20 @@ impl<'a> Parser<'a> {
 
     /// Where an "expected" error points and what it says was found.
     ///
-    /// At the end of a line or of the file the error points just after the
-    /// last token read, which is where the missing piece belongs, not at
-    /// whatever comes next.
+    /// At the end of a line the error points just after the last token
+    /// read, which is where the missing piece belongs, not at whatever
+    /// the next line begins with. At the end of the file it points at the
+    /// end of the file, after any blank lines and comments that close
+    /// it: TST-13 matches an error there on "the EOF position's line".
     fn found(&self) -> (Span, String) {
         let after_previous = match self.position.checked_sub(1) {
             Some(index) => self.input.span(index).end,
             None => 0,
         };
         if self.at(SyntaxKind::Eof) {
-            (Span::empty(after_previous), "end of file".to_string())
+            // Past the last token, `span` is the empty span at the end
+            // of the file.
+            (self.input.span(self.position), "end of file".to_string())
         } else if self.broken() {
             (Span::empty(after_previous), "end of line".to_string())
         } else {

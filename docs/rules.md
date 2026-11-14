@@ -9,6 +9,7 @@ and a `done` row's rule is cited in its stage's code.
 | State | Meaning |
 | --- | --- |
 | `done` | The stage implements its part of the rule and a test cites the rule |
+| `partial` | The stage implements some of its part, and a test cites the rule; the row says what is left |
 | `planned` | The rule is expected to land in this stage; the row moves if building the stage shows otherwise |
 | `unscheduled` | No stage in the [planned order](architecture.md#planned-order) takes it yet |
 
@@ -23,11 +24,11 @@ specification says which is which.
 | lexer | `hgl_source`, `hgl_lexer` | Source text to tokens and literal values |
 | parser | `hgl_parser` | Tokens to a syntax tree |
 | formatter | planned | Syntax tree to source text |
-| analyser | planned | Names, types, phases and constants: every source rejection the parser cannot make |
+| analyser | `hgl_analyser` | Names, types, phases and constants: every source rejection the parser cannot make |
 | optimiser | planned | Rewrites that keep what a program is observed to do |
 | transpiler | planned | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
-| runner | planned | `hgl test`: selects cases, matches `# expect-error`, runs eval |
-| driver | `hgl_cli` | The `hgl` command: sources, target, entry and run configuration |
+| runner | `hgl_runner` | `hgl test`: selects cases, matches `# expect-error`, runs eval |
+| driver | `hgl_cli` | The `hgl` command: source roots, target, entry and run configuration |
 | diagnostics | `hgl_diagnostics` | The diagnostic model every stage reports through |
 | docs | none | Documentation extraction |
 
@@ -44,7 +45,7 @@ against, so raising the pin shows which ones moved.
 | Productions | Stage | State |
 | --- | --- | --- |
 | Tokens: `source-text.md`, less `literal`, `NL` and `EOF` | lexer | done |
-| `expect_error`, `gap`, `error_category`: a comment's form | runner | planned |
+| `expect_error`, `gap`, `error_category`: a comment's form | runner | done |
 | All others | parser | done |
 
 The parser reads `value_type` and its variants as `type`. Which types are
@@ -97,18 +98,18 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | UNIT-1 | parser | done | One `module` line, with an optional `part`, opens a file |
-| UNIT-1 | analyser | planned | Assembles a module's files: one scope, one unnamed file, unique part names |
-| UNIT-2 | analyser | planned | Imports precede declarations and bind in their file; they reach public declarations only |
-| UNIT-3 | analyser | planned | Private unless exported; operators public; `impl fn` reached through its operator; export closure; import cycles rejected |
+| UNIT-1 | analyser | done | Assembles a module's files: one scope, one unnamed file, unique part names |
+| UNIT-2 | analyser | partial | Imports precede declarations and bind in their file; they reach public declarations only. Left: `alias::name` where it is used |
+| UNIT-3 | analyser | partial | Private unless exported; operators public; `impl fn` reached through its operator; import cycles rejected. Left: export closure |
 | UNIT-4 | analyser | planned | Module-qualified nominal identity; an alias adds none |
-| UNIT-5 | analyser | planned | Duplicate functions of one role, parameters, parts and locals rejected |
-| UNIT-6 | analyser | planned | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
+| UNIT-5 | analyser | partial | Duplicate functions of one role and duplicate parts rejected. Left: parameters and locals |
+| UNIT-6 | analyser | partial | Test-only declarations are not exported; a test's name is in no scope. Left: forward reference; locals visible after declaration; production use of a test-only declaration |
 | UNIT-7 | analyser | planned | Defaults resolve in the declaration's own closure |
 | UNIT-8 | analyser | planned | Defaults are required constants; which parameters may have one |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | planned | A name resolves to the one binding in scope |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
-| UNIT-12 | analyser | planned | No binding takes a name already in scope |
+| UNIT-12 | analyser | partial | No declaration or import takes a name its module or file has bound. Left: locals, parameters, generic parameters, prelude names |
 
 ## Types and values
 
@@ -178,7 +179,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-1 | analyser | planned | Roles of `const fn`, a `const` parameter and a temporal `fn` |
 | FN-2 | analyser | planned | A body is classified composition or runtime before phase checking |
 | FN-3 | analyser | planned | Phase rules for iteration, conditionals and hooks |
-| FN-4 | analyser | planned | A temporal and a value definition may share a name; role selection without fallback |
+| FN-4 | analyser | partial | A temporal and a value definition may share a name. Left: role selection without fallback |
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
@@ -204,7 +205,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-1 | analyser | planned | Generic scope; repeated parameters agree; occurrence requirements |
 | GEN-2 | analyser | planned | Every generic resolved; no partial application or generic default |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
-| GEN-4 | analyser | planned | Operator identity; an `impl fn` binds an operator in scope |
+| GEN-4 | analyser | partial | An `impl fn` binds an operator its module declares or its file imports. Left: the prelude; operator identity in selection |
 | GEN-5 | analyser | planned | Candidate selection: output first, exactly one most specific |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
@@ -278,7 +279,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | NATIVE-1 | analyser | planned | A native declaration is checked as an HGL callable; roles kept |
-| NATIVE-2 | analyser | planned | A selected implementation matches its declaration exactly; duplicates rejected |
+| NATIVE-2 | analyser | partial | An implementation completes one declaration of its name and role; duplicates rejected. Left: the exact match of signatures; selection |
 | NATIVE-3 | parser | done | Contract body forms: none, `{}`, hook markers |
 | NATIVE-3 | analyser | planned | Graph or node by body; hooks need `when` and are unique |
 | NATIVE-4 | driver | planned | Target selection is explicit |
@@ -321,8 +322,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | TST-1 | parser | done | An unnamed test context holds functions, structs, enums and named tests only |
-| TST-1 | analyser | planned | One test scope across parts; exports and operator implementations rejected there |
-| TST-2 | analyser | planned | Production names no test-only declaration; duplicate test names rejected |
+| TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
+| TST-2 | analyser | partial | A test-only declaration takes no name of its module; duplicate test names rejected. Left: production naming a test-only declaration |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
 | TST-3 | analyser | planned | A test is a composition block (`test.statement_phase`); eval traces stay test-local |
 | TST-4 | analyser | planned | `assert` needs a wiring-time bool |
@@ -336,10 +337,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-10 | analyser | planned | `assert raises` takes one literal catalogued execution code (`test.raises_code`) |
 | TST-10 | runner | planned | The block runs once; a matching escaping error passes after cleanup |
 | TST-11 | runner | planned | What cannot satisfy `raises` |
-| TST-12 | runner | planned | `# expect-error` annotations read from line comments; the owner of each case |
-| TST-13 | runner | planned | Rejection owners excluded; diagnostics and annotations matched one to one |
-| TST-14 | runner | planned | Invalid metadata stops the run; selectors; counts reported |
-| TST-15 | runner | planned | When a run succeeds; what is reported for each case |
+| TST-12 | runner | done | `# expect-error` annotations read from line comments; the owner of each case |
+| TST-12 | diagnostics | done | The catalogue's source categories and codes, which an annotation may name |
+| TST-13 | parser | done | An error at the end of the file points at the end of the file |
+| TST-13 | runner | done | Rejection owners excluded; diagnostics and annotations matched one to one |
+| TST-14 | runner | partial | Invalid metadata and surviving-source errors stop the run; selectors; rejection counts. Left: counts of executed cases, with the first target |
+| TST-15 | runner | partial | When a run succeeds; identity, kind and outcome of each case. Left: executable cases, which are listed and not run |
 
 ## Program execution
 

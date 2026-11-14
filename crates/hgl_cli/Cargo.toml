@@ -17,7 +17,10 @@ hgl_source.workspace = true
 hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
 hgl_parser.workspace = true
+hgl_analyser.workspace = true
+hgl_runner.workspace = true
 clap.workspace = true
+walkdir.workspace = true
 
 [lints]
 workspace = true

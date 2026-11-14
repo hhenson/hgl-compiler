@@ -28,7 +28,8 @@
 //! * `grammar` is the grammar itself;
 //! * `event` turns what the grammar recorded into the tree, placing
 //!   whitespace and comments;
-//! * `kind` and `tree` define the tree.
+//! * `kind` and `tree` define the tree;
+//! * [`ast`] gives typed views of it: a function's name, a file's imports.
 //!
 //! # What the parser does not decide
 //!
@@ -48,6 +49,7 @@
 //! `fn f(a: ...T = 1)` because it has the form of a parameter, and the
 //! analyser rejects the default (FN-8).
 
+pub mod ast;
 mod event;
 mod grammar;
 mod input;
@@ -60,7 +62,9 @@ use hgl_lexer::Token;
 use hgl_source::{FileId, SourceMap};
 
 pub use kind::SyntaxKind;
-pub use tree::{HglLanguage, Parse, SyntaxElement, SyntaxNode, SyntaxToken, dump, outline};
+pub use tree::{
+    HasSpan, HglLanguage, Parse, SyntaxElement, SyntaxNode, SyntaxToken, dump, outline,
+};
 
 /// The diagnostic codes this stage reports.
 ///

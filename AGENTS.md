@@ -19,7 +19,8 @@
   code when the specification has one, and is marked local when it has not.
 - Keep `docs/rules.md` current. It lists each rule of the pinned specification
   and core against the stage that implements it. Mark a row `done` in the
-  change that implements the rule and tests it.
+  change that implements the rule and tests it, or `partial`, saying what is
+  left, in one that implements some of it.
 - Document the code for a reader new to Rust: every crate and module says what
   it is for and where it sits in the pipeline; every public item has a doc
   comment; a non-obvious Rust idiom gets one explanatory line.
