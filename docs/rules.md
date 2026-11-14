@@ -60,7 +60,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-2 | lexer | done | String tokens; unknown escape, unclosed string and unclosed comment rejected |
 | LEX-3 | lexer | done | Line and block comments are tokens; `//` is a symbol |
 | LEX-4 | parser | done | Braces delimit blocks; indentation ignored; `;` only in native hook markers |
-| LEX-5 | parser | done | Which line breaks separate statements and which are ignored |
+| LEX-5 | parser | done | A line break is ignored in a list, in an incomplete statement, and before a token that cannot begin one; two or more always separate |
 | LEX-6 | parser | done | Two statements on one line rejected; an inject list continues after a comma |
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
 | LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
@@ -72,7 +72,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-12 | transpiler | planned | Run provider checks zone catalogue membership and offset consistency |
 | LEX-13 | lexer | done | Duration units, their order, the final fraction, whole microseconds |
 | LEX-14 | lexer | done | `<=>` is one token |
-| LEX-14 | parser | done | `<=>` continues a line as any binary operator does |
+| LEX-14 | parser | done | `<=>` continues a line as the other binary operators do |
 | LEX-15 | lexer | done | LF, CRLF and CR are each one line break, in the line index and in every token |
 | LEX-16 | lexer | done | UTF-8 check; leading U+FEFF dropped; whitespace; a character that begins no token rejected |
 | LEX-17 | lexer | done | The longest symbol is taken; `>=` is one token even after generic arguments |
@@ -86,6 +86,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-23 | lexer | done | Hexadecimal and binary integers |
 | LEX-24 | lexer | done | `\u{...}` escapes |
 | LEX-25 | lexer | done | Text blocks |
+| LEX-26 | lexer | done | `\` and the line break after it are one continuation token; any other `\` is rejected |
+| LEX-26 | parser | done | A continued line break is no line break |
+| LEX-27 | parser | done | The opening bracket of a call, parameter list, index, generic list or cardinality directly follows what it applies to |
 
 ## Units and names
 
@@ -209,7 +212,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-8 | analyser | planned | `instantiate` requests candidates; no explicit type arguments on ordinary calls |
 | GEN-9 | analyser | planned | Property clauses apply to explicit concrete domains |
 | GEN-9 | optimiser | planned | A recorded law licenses no reassociation across overflow or float effects |
-| GEN-10 | analyser | planned | Pack views, `each`, cardinalities |
+| GEN-10 | parser | done | A cardinality after a pack parameter or a generic pack parameter |
+| GEN-10 | analyser | planned | Pack views, `each`, what a cardinality admits |
 | GEN-10 | transpiler | planned | `schemas(pack)` as a runtime-only borrowed view |
 | GEN-11 | analyser | planned | Reference removal in inference |
 | GEN-12 | analyser | planned | Structural specificity |

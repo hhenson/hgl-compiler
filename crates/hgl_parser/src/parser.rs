@@ -7,14 +7,15 @@
 //! Three ideas carry most of it:
 //!
 //! * **Line breaks are asked for, not read.** The cursor steps over line
-//!   breaks, and [`Parser::nl`] says whether one that counts stands before
-//!   the cursor's token. LEX-5 lists where a line break is ignored: inside
-//!   most delimiters (the [`Context`]), after a token that cannot end a
-//!   line such as `,` or `=` ([`Parser::continue_line`]), and before a
-//!   token that continues one such as a binary operator (the grammar looks
-//!   for those with [`Parser::at`], which does not ask). Everywhere else a
-//!   line break ends the line: [`Parser::eat`] and [`Parser::expect`] do
-//!   not reach across it.
+//!   breaks, and the grammar asks about the ones before the cursor's
+//!   token. LEX-5 has three cases. Inside most delimiters a line break
+//!   never counts (the [`Context`]). Two or more between two tokens, as
+//!   around a blank line, always end the statement ([`Parser::cut`]): no
+//!   required piece is taken across them. A single one is ignored where
+//!   the statement is incomplete, which is wherever the grammar requires
+//!   more, and otherwise ends the statement only when the token after it
+//!   could begin a new one ([`Parser::nl`], asked wherever a statement
+//!   could end).
 //! * **Context.** Whether a line break counts, whether `{` may start an
 //!   expression, and whether `>` compares, depend on what encloses the
 //!   cursor. [`Context`] holds those answers and each delimiter replaces it.
@@ -31,6 +32,7 @@ use hgl_source::{FileId, Span};
 
 use crate::codes;
 use crate::event::Event;
+use crate::grammar::can_begin;
 use crate::input::Input;
 use crate::kind::SyntaxKind;
 
@@ -46,7 +48,7 @@ pub(crate) struct Context {
     /// `>` closes the enclosing generic argument list, so it is not a
     /// comparison here (GEN-14).
     pub(crate) no_gt: bool,
-    /// A comma here separates entries, so `a < b, c > (d)` could be two
+    /// A comma here separates entries, so `a<b, c>(d)` could be two
     /// comparisons (GEN-14).
     pub(crate) comma_list: bool,
 }
@@ -123,6 +125,21 @@ pub(crate) enum Choice {
     Assignment,
 }
 
+/// The opening brackets that directly follow what they apply to (LEX-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bracket {
+    /// The `(` of a call: `f(x)`, `Box<i64>(x)`, `str(x)`, `eval(...)`.
+    Call,
+    /// The `[` of an index: `rows[i]`.
+    Index,
+    /// The `(` of a parameter list: `fn f(x: i64)`, `fn(x) => x`.
+    Parameters,
+    /// The `<` of generic parameters or arguments: `fn f<T>`, `list<i64>`.
+    Generics,
+    /// The `{` of a cardinality: `...T{1:*}`.
+    Cardinality,
+}
+
 /// A place in the event list a node may later be started from. See
 /// [`Event::Mark`].
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +162,7 @@ pub(crate) struct Snapshot {
     last_error_at: Option<usize>,
     context: Context,
     glued_assign: Option<usize>,
-    joined: Option<usize>,
+    entry_start: Option<usize>,
 }
 
 /// The shape of an angle-bracketed list that was just parsed.
@@ -183,9 +200,10 @@ pub(crate) struct Parser<'a> {
     /// argument list (LEX-17): the cursor is then standing where the `=`
     /// would have been, at this position.
     glued_assign: Option<usize>,
-    /// A token position whose line break, if it has one before it, does
-    /// not count: the token before it cannot end a line (LEX-5).
-    joined: Option<usize>,
+    /// The token position of the statement, member or declaration being
+    /// parsed. The line breaks before it have separated it from the one
+    /// before, and are not counted against its first token.
+    entry_start: Option<usize>,
     /// A token position at which a name is read as a plain name, not as
     /// the start of generic arguments. Set while the comparison reading of
     /// `name < ...` is tried (GEN-14).
@@ -223,7 +241,7 @@ impl<'a> Parser<'a> {
             last_error_at: None,
             context: Context::BLOCK,
             glued_assign: None,
-            joined: None,
+            entry_start: None,
             no_generic_at: None,
             decisions: HashMap::new(),
             probing: 0,
@@ -279,34 +297,110 @@ impl<'a> Parser<'a> {
         self.nth(n) == SyntaxKind::Ident && self.text(n) == word
     }
 
-    /// True when a line break that counts stands before the cursor's token
-    /// (LEX-5). Never true where the context ignores line breaks.
+    /// The line breaks that count before the token `n` places after the
+    /// cursor: 0, 1, or 2 for two or more. None counts where the context
+    /// ignores line breaks, or before the first token of an entry.
+    fn breaks_at(&self, n: usize) -> u8 {
+        let index = self.position + n;
+        if !self.context.newlines || self.entry_start == Some(index) {
+            return 0;
+        }
+        self.input.line_breaks_before(index)
+    }
+
+    /// True when the declaration or statement in progress ends before the
+    /// cursor's token, given that it can end there (LEX-5). It does when
+    /// two or more line breaks stand between, and when one does and the
+    /// cursor's token can begin a declaration or statement: such a token
+    /// begins one. A token that cannot, such as `+` or `.`, continues the
+    /// line before.
+    ///
+    /// The grammar asks this wherever what it has parsed could be all
+    /// there is: before a suffix, a binary operator, an `else`.
     pub(crate) fn nl(&self) -> bool {
         self.nl_at(0)
     }
 
     /// As [`Parser::nl`], for the token `n` places after the cursor.
     pub(crate) fn nl_at(&self, n: usize) -> bool {
-        let index = self.position + n;
-        self.context.newlines && self.joined != Some(index) && self.input.line_break_before(index)
+        match self.breaks_at(n) {
+            0 => false,
+            1 => can_begin(self.nth(n)),
+            _ => true,
+        }
     }
 
-    /// Says that the token just taken cannot end a line, so a line break
-    /// after it is ignored. LEX-5 lists them: a comma, a binary or
-    /// assignment operator, `=`, `=>`, `->`, and a colon before a type or
-    /// after an argument's name.
-    ///
-    /// Also called before the first token of a statement, member or
-    /// declaration: the line break before it has separated it from the one
-    /// before and is not counted a second time.
-    pub(crate) fn continue_line(&mut self) {
-        self.joined = Some(self.position);
+    /// True when two or more line breaks stand before the cursor's token.
+    /// LEX-5: they "always separate", so nothing the grammar requires next
+    /// is taken across them. A single line break before something
+    /// required is ignored: the statement is incomplete.
+    pub(crate) fn cut(&self) -> bool {
+        self.cut_at(0)
     }
 
-    /// True when the cursor's token is on the line being read. Reports
-    /// that `what` was expected, at the end of that line, when it is not.
-    pub(crate) fn on_line(&mut self, what: &str) -> bool {
-        if self.nl() {
+    /// As [`Parser::cut`], for the token `n` places after the cursor.
+    pub(crate) fn cut_at(&self, n: usize) -> bool {
+        self.breaks_at(n) >= 2
+    }
+
+    /// True when any line break that counts stands before the cursor's
+    /// token.
+    pub(crate) fn broken(&self) -> bool {
+        self.broken_at(0)
+    }
+
+    /// As [`Parser::broken`], for the token `n` places after the cursor.
+    pub(crate) fn broken_at(&self, n: usize) -> bool {
+        self.breaks_at(n) >= 1
+    }
+
+    /// True when the token `n` places after the cursor directly follows
+    /// the token before it, with nothing between them (LEX-27).
+    pub(crate) fn adjacent_at(&self, n: usize) -> bool {
+        self.input.adjacent(self.position + n)
+    }
+
+    /// True when a call's `(` or an index's `[` `n` places after the
+    /// cursor belongs to the token before it (LEX-27): it touches that
+    /// token, or it stands apart on the same line, which
+    /// [`Parser::attached`] then reports. After a line break that counts
+    /// it belongs to nothing: it begins a statement of its own (LEX-5).
+    pub(crate) fn suffix_at(&self, n: usize) -> bool {
+        self.adjacent_at(n) || !self.broken_at(n)
+    }
+
+    /// LEX-27: "An opening bracket directly follows what it applies to".
+    /// Reports the bracket under the cursor, as `bracket` describes it,
+    /// when something stands between it and the token before. The caller
+    /// reads on all the same: what was meant is plain.
+    pub(crate) fn attached(&mut self, bracket: Bracket) {
+        if self.adjacent_at(0) {
+            return;
+        }
+        let message = match bracket {
+            Bracket::Call => "a call's `(` directly follows what it calls",
+            Bracket::Index => "an index's `[` directly follows what it indexes",
+            Bracket::Parameters => "a parameter list's `(` directly follows what it belongs to",
+            Bracket::Generics => {
+                "the `<` of generic parameters or arguments directly follows the name"
+            }
+            Bracket::Cardinality => "a cardinality's `{` directly follows the pack it bounds",
+        };
+        self.error(message, "LEX-27", Some("remove what stands between them"));
+    }
+
+    /// Says that the cursor's token starts a statement, member or
+    /// declaration: the line breaks before it have separated it from the
+    /// one before and are not counted against it.
+    pub(crate) fn begin_entry(&mut self) {
+        self.entry_start = Some(self.position);
+    }
+
+    /// True when the statement can go on at the cursor's token: no blank
+    /// line stands before it. Reports that `what` was expected, at the end
+    /// of the last line, when one does.
+    pub(crate) fn goes_on(&mut self, what: &str) -> bool {
+        if self.cut() {
             self.expected(what);
             return false;
         }
@@ -328,20 +422,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Takes the cursor's token when it is of `kind` and on the line being
-    /// read. A token across a line break that counts is left alone: the
-    /// places where a line may go on are few, and each asks with
-    /// [`Parser::at`] instead.
+    /// Takes the cursor's token when it is of `kind`, unless a blank line
+    /// stands before it (LEX-5). A single line break is crossed: this is
+    /// for a token the grammar needs next, so the statement is incomplete
+    /// without it.
     pub(crate) fn eat(&mut self, kind: SyntaxKind) -> bool {
-        let found = self.at(kind) && !self.nl();
+        let found = self.at(kind) && !self.cut();
         if found {
             self.bump();
         }
         found
     }
 
-    /// Takes the cursor's token when it is of `kind` and on the line being
-    /// read; reports otherwise.
+    /// Takes the cursor's token as [`Parser::eat`] does; reports when it
+    /// is not of `kind`.
     pub(crate) fn expect(&mut self, kind: SyntaxKind) -> bool {
         if self.eat(kind) {
             return true;
@@ -359,9 +453,10 @@ impl<'a> Parser<'a> {
         false
     }
 
-    /// Takes the name `word`, on the line being read; reports otherwise.
+    /// Takes the name `word`, as [`Parser::eat`] takes a token; reports
+    /// when it is not there.
     pub(crate) fn expect_word(&mut self, word: &str) -> bool {
-        if self.at_word(word) && !self.nl() {
+        if self.at_word(word) && !self.cut() {
             self.bump();
             return true;
         }
@@ -381,7 +476,7 @@ impl<'a> Parser<'a> {
 
     /// Takes a member name; reports otherwise.
     pub(crate) fn expect_member_name(&mut self) -> bool {
-        if self.at_member_name() && !self.nl() {
+        if self.at_member_name() && !self.cut() {
             self.bump();
             return true;
         }
@@ -505,7 +600,7 @@ impl<'a> Parser<'a> {
         };
         if self.at(SyntaxKind::Eof) {
             (Span::empty(after_previous), "end of file".to_string())
-        } else if self.nl() {
+        } else if self.broken() {
             (Span::empty(after_previous), "end of line".to_string())
         } else {
             let text = self.text(0);
@@ -583,7 +678,7 @@ impl<'a> Parser<'a> {
             last_error_at: self.last_error_at,
             context: self.context,
             glued_assign: self.glued_assign,
-            joined: self.joined,
+            entry_start: self.entry_start,
         }
     }
 
@@ -597,7 +692,7 @@ impl<'a> Parser<'a> {
         self.last_error_at = snapshot.last_error_at;
         self.context = snapshot.context;
         self.glued_assign = snapshot.glued_assign;
-        self.joined = snapshot.joined;
+        self.entry_start = snapshot.entry_start;
     }
 
     /// Answers `choice` at the cursor by running `probe`, then takes back
@@ -642,8 +737,7 @@ impl<'a> Parser<'a> {
         self.at(SyntaxKind::Eq) || self.glued_assign == Some(self.position)
     }
 
-    /// Takes the `=` that [`Parser::at_assign`] saw. What follows it may
-    /// stand on the next line (LEX-5).
+    /// Takes the `=` that [`Parser::at_assign`] saw.
     pub(crate) fn eat_assign(&mut self) {
         if self.glued_assign == Some(self.position) {
             // The token was taken as the closing `>`; nothing is left.
@@ -651,7 +745,6 @@ impl<'a> Parser<'a> {
         } else if self.at(SyntaxKind::Eq) {
             self.bump();
         }
-        self.continue_line();
     }
 
     /// Takes the `>` that closes an angle-bracketed list.
@@ -674,7 +767,6 @@ impl<'a> Parser<'a> {
             );
             self.bump();
             self.glued_assign = Some(self.position);
-            self.continue_line();
             return true;
         }
         self.expected("`>`");
@@ -708,9 +800,9 @@ impl<'a> Parser<'a> {
     /// opening token has been taken.
     ///
     /// `entry` parses one entry and leaves the cursor where it was when it
-    /// finds none. A comma stays on its entry's line where line breaks
-    /// count (an enum body); `trailing` says whether a comma may follow
-    /// the last entry.
+    /// finds none. Where line breaks count (an enum body), a comma may
+    /// start a line but not follow a blank one (LEX-5). `trailing` says
+    /// whether a comma may follow the last entry.
     pub(crate) fn list(
         &mut self,
         close: SyntaxKind,
@@ -724,7 +816,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             // An entry may start on a new line, where line breaks count.
-            self.continue_line();
+            self.begin_entry();
             let start = self.position;
             let errors = self.errors;
             entry(self);
@@ -738,7 +830,6 @@ impl<'a> Parser<'a> {
             }
             if self.at(SyntaxKind::Comma) && !self.nl() {
                 self.bump();
-                self.continue_line();
                 if self.at(close) && !trailing {
                     self.expected(what);
                 }
@@ -859,9 +950,9 @@ impl<'a> Parser<'a> {
                 self.stray_semicolon();
                 continue;
             }
-            // The line break before this entry has done its work as a
-            // separator; the entry's first token is not "across" it.
-            self.continue_line();
+            // The line breaks before this entry have done their work as
+            // a separator; the entry's first token is not "across" them.
+            self.begin_entry();
             let start = self.position;
             let errors = self.errors;
             entry(self);
@@ -878,7 +969,7 @@ impl<'a> Parser<'a> {
                 self.stray_semicolon();
             } else if !(self.at(SyntaxKind::RBrace)
                 || self.at(SyntaxKind::Eof)
-                || self.nl()
+                || self.at_line_start()
                 || stop(self))
             {
                 self.expected_rule("a line break", rule);

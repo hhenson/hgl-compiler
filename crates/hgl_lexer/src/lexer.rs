@@ -231,6 +231,7 @@ impl<'a> Lexer<'a> {
                     .expect("a line feed or carriage return starts a line break");
                 TokenKind::Newline
             }
+            b'\\' => self.backslash(),
             b'#' => self.line_comment(),
             // `if` after a pattern is a guard: the arm applies only when the
             // condition also holds.
@@ -916,6 +917,37 @@ impl<'a> Lexer<'a> {
         kind
     }
 
+    /// A `\` between tokens: a line continuation when a line break
+    /// follows it with only spaces or tabs between, and otherwise a
+    /// character that begins no token (LEX-26).
+    fn backslash(&mut self) -> TokenKind {
+        let start = self.pos;
+        let mut end = start + 1;
+        while matches!(self.bytes.get(end), Some(b' ' | b'\t')) {
+            end += 1;
+        }
+        if let Some(line_break) = line_break_length(&self.bytes[end..]) {
+            // The token takes in the line break, so no `Newline` token
+            // follows and the parser sees no line break here.
+            self.pos = end + line_break;
+            return TokenKind::LineContinuation;
+        }
+        self.pos = start + 1;
+        let diagnostic = self
+            .error(
+                start,
+                self.pos,
+                codes::SYNTAX_UNEXPECTED_CHARACTER,
+                "unexpected character '\\\\'",
+            )
+            .with_rule("LEX-26")
+            .with_note(
+                "`\\` continues a line when only spaces or tabs stand between it and the line break",
+            );
+        self.diagnostics.emit(diagnostic);
+        TokenKind::Unknown
+    }
+
     /// A character that begins no token (LEX-16). The whole character is
     /// consumed, which may be several bytes, so the next token starts on a
     /// character boundary.
@@ -1129,6 +1161,43 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_backslash_and_its_line_break_are_one_token() {
+        // LEX-26. The token takes in the spaces and tabs between, and the
+        // whole line break, so no `Newline` follows it.
+        for (text, continuation) in [
+            ("a \\\nb", "\\\n"),
+            ("a \\\r\nb", "\\\r\n"),
+            ("a \\\rb", "\\\r"),
+            ("a \\ \t \nb", "\\ \t \n"),
+        ] {
+            assert_eq!(
+                tokens_of(text),
+                [(Ident, "a"), (LineContinuation, continuation), (Ident, "b")],
+                "{text:?}"
+            );
+        }
+        assert!(LineContinuation.is_trivia());
+        // Two in a row join three lines.
+        assert_eq!(kinds_of("a \\\n \\\n b").len(), 4);
+    }
+
+    #[test]
+    fn a_backslash_not_before_a_line_break_begins_no_token() {
+        // LEX-26. Only the `\` is rejected; lexing goes on after it.
+        for text in ["a \\ b", "a \\ # note\nb", "a \\"] {
+            assert_eq!(
+                reports(text),
+                [(codes::SYNTAX_UNEXPECTED_CHARACTER, "LEX-26", "\\")],
+                "{text:?}"
+            );
+        }
+        let (_, tokens) = rejected("a \\ b");
+        assert_eq!(tokens, [(Ident, "a"), (Unknown, "\\"), (Ident, "b")]);
+        // In a comment a backslash is text, and in a string an escape.
+        assert_eq!(kinds_of("a # \\\nb"), [Ident, LineComment, Newline, Ident]);
     }
 
     #[test]

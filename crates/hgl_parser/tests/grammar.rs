@@ -187,7 +187,7 @@ use tour.other as other
 export const fn scale<T, ...Rest, const N: i64>(
     value: T,
     const factor: f64 = 2.0,
-    rest: ...Rest,
+    rest: ...Rest{1:*},
     named: ...{str},
 ) -> f64?
     requires T in {i64, f64} && !comparable(T) || (N == 3) && each R in Rest { numeric(R) } {
@@ -250,7 +250,7 @@ fn body(
     let values = [1, _, 3]
     let ticks = [1s: 7]
     let quote = Quote<f64>(bid: 1.0)
-    let either = a < b > (c)
+    let either = a<b>(c)
     let change = delta<list<f64>>(added: values)
     let text = str(x)
     let next = fn(v: i64) -> i64 => v + 1

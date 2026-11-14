@@ -3,7 +3,7 @@
 
 use crate::grammar::{can_start_expression, can_start_type};
 use crate::kind::SyntaxKind::*;
-use crate::parser::{AngleList, Choice, Context, Parser, Verdict};
+use crate::parser::{AngleList, Bracket, Choice, Context, Parser, Verdict};
 
 use super::expressions::ADDITIVE;
 
@@ -12,17 +12,24 @@ impl Parser<'_> {
 
     /// ```text
     /// generic_parameters = "<", generic_parameter, { ",", generic_parameter }, [ "," ], ">" ;
-    /// generic_parameter = IDENTIFIER | "...", IDENTIFIER | "const", IDENTIFIER, ":", value_type ;
+    /// generic_parameter = IDENTIFIER | "...", IDENTIFIER, [ cardinality ]
+    ///                   | "const", IDENTIFIER, ":", value_type ;
     /// ```
     ///
     /// The cursor is on the `<`.
     pub(crate) fn generic_params(&mut self) {
+        // LEX-27: `fn f<T>`, not `fn f <T>`.
+        self.attached(Bracket::Generics);
         self.start(GenericParams);
         self.angle_list("a generic parameter", true, false, |parser| {
             if parser.at(Ellipsis) {
                 parser.start(GenericParam);
                 parser.bump();
                 parser.expect_name("a name");
+                // GEN-10: a cardinality follows the pack it bounds.
+                if parser.at(LBrace) {
+                    parser.cardinality();
+                }
                 parser.finish();
             } else if parser.at_word("const") && parser.nth(1) == Ident {
                 // FN-5: `const` before a name is the modifier.
@@ -43,6 +50,28 @@ impl Parser<'_> {
         self.finish();
     }
 
+    /// `cardinality = "{", INTEGER_LITERAL, [ ":", ( INTEGER_LITERAL | "*" ) ], "}" ;`
+    ///
+    /// GEN-10: how many arguments a pack may hold. `{n}` is exactly n,
+    /// `{n:*}` n or more, `{n:m}` from n to m. The cursor is on the `{`.
+    pub(crate) fn cardinality(&mut self) {
+        // LEX-27: `...T{2}`, not `...T {2}`.
+        self.attached(Bracket::Cardinality);
+        self.start(Cardinality);
+        self.bump();
+        // LEX-5: line breaks do not count inside these braces.
+        self.nested(Context::PLAIN, |parser| {
+            if !parser.eat(Int) {
+                parser.expected("an integer");
+            }
+            if parser.eat(Colon) && !(parser.eat(Star) || parser.eat(Int)) {
+                parser.expected("an integer or `*`");
+            }
+            parser.close(RBrace);
+        });
+        self.finish();
+    }
+
     // ---- Arguments ----
 
     /// ```text
@@ -52,6 +81,15 @@ impl Parser<'_> {
     /// The cursor is on the `<`. The answer describes the list, for the
     /// caller that has to judge it (GEN-14).
     pub(crate) fn generic_args(&mut self) -> AngleList {
+        // LEX-27: `Box<i64>`, not `Box <i64>`.
+        self.attached(Bracket::Generics);
+        self.generic_args_unchecked()
+    }
+
+    /// As [`Parser::generic_args`], without the report of a `<` that
+    /// stands apart from its name. The probe that weighs a constructor
+    /// against comparisons judges that gap itself.
+    pub(crate) fn generic_args_unchecked(&mut self) -> AngleList {
         self.start(GenericArgs);
         let shape = self.angle_list("a type or a value", true, true, |parser| {
             parser.generic_argument()
@@ -128,7 +166,7 @@ impl Parser<'_> {
     pub(crate) fn requires_clause(&mut self) {
         self.start(RequiresClause);
         self.bump();
-        if self.on_line("a constraint") {
+        if self.goes_on("a constraint") {
             self.constraint();
         }
         self.finish();
@@ -145,9 +183,8 @@ impl Parser<'_> {
     fn constraint(&mut self) {
         let mark = self.mark();
         self.constraint_and();
-        while self.at(PipePipe) {
+        while self.at(PipePipe) && !self.nl() {
             self.bump();
-            self.continue_line();
             self.constraint_and();
             self.wrap(mark, ConstraintBinary);
         }
@@ -157,9 +194,8 @@ impl Parser<'_> {
     fn constraint_and(&mut self) {
         let mark = self.mark();
         self.constraint_term();
-        while self.at(AmpAmp) {
+        while self.at(AmpAmp) && !self.nl() {
             self.bump();
-            self.continue_line();
             self.constraint_term();
             self.wrap(mark, ConstraintBinary);
         }
@@ -174,31 +210,25 @@ impl Parser<'_> {
     /// constraint_relation = constraint_operand, ( "==" | "in" | "is" ), constraint_operand ;
     /// ```
     fn constraint_term(&mut self) {
-        if !self.enter() {
+        if !self.goes_on("a constraint") || !self.enter() {
             return;
         }
         if self.at(Bang) {
             self.start(ConstraintNot);
             self.bump();
-            // LEX-5: `!` does not continue a line.
-            if self.on_line("a constraint") {
-                self.constraint_term();
-            }
+            self.constraint_term();
             self.finish();
         } else if self.at_word("each")
             && self.nth(1) == Ident
             && self.nth_word(2, "in")
-            && !self.nl_at(1)
-            && !self.nl_at(2)
+            && !self.cut_at(1)
+            && !self.cut_at(2)
         {
             // LEX-10: `each` and `in` are names with a meaning only here.
             self.start(ConstraintEach);
             self.bump();
             self.bump();
             self.bump();
-            // `in` stands between two operands as a binary operator does,
-            // here and in a relation, so a line may go on after it.
-            self.continue_line();
             self.constraint_operand();
             if self.eat(LBrace) {
                 // LEX-5: line breaks do not count inside these braces.
@@ -214,7 +244,6 @@ impl Parser<'_> {
             self.start(ConstraintRelation);
             self.constraint_operand();
             self.bump();
-            self.continue_line();
             self.constraint_operand();
             self.finish();
         } else if self.at(LParen) {
@@ -243,7 +272,10 @@ impl Parser<'_> {
         let verdict = self.choose(Choice::Relation, |parser| {
             let errors = parser.errors;
             parser.constraint_operand();
-            let relates = parser.at(EqEq) || parser.at(KwIs) || parser.at_word("in");
+            // An operand alone is no constraint, so the constraint is
+            // incomplete here and one line break is ignored (LEX-5).
+            let relates =
+                (parser.at(EqEq) || parser.at(KwIs) || parser.at_word("in")) && !parser.cut();
             if parser.errors == errors && relates {
                 Verdict::Yes
             } else {
@@ -263,7 +295,10 @@ impl Parser<'_> {
     fn constraint_call(&mut self) {
         self.start(ConstraintCall);
         self.name();
-        if self.eat(LParen) {
+        // LEX-27: a constraint call is a call.
+        if self.at(LParen) && self.suffix_at(0) {
+            self.attached(Bracket::Call);
+            self.bump();
             self.nested(Context::LIST, |parser| {
                 parser.list(RParen, "a type or a value", false, |parser| {
                     parser.constraint_operand();
@@ -286,6 +321,11 @@ impl Parser<'_> {
     /// Parses nothing, with a report, when no operand starts at the
     /// cursor: every place an operand goes requires one.
     fn constraint_operand(&mut self) {
+        // LEX-5: an operand is always required, and nothing required is
+        // taken across a blank line.
+        if !self.goes_on("a type or a value") {
+            return;
+        }
         // A set may hold sets; `enter` bounds that nesting.
         if self.at(LBrace) && self.enter() {
             self.start(ConstraintSet);

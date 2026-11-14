@@ -35,6 +35,10 @@ macro_rules! define_token_kinds {
             /// statement depends on context (LEX-5), which the parser
             /// decides.
             Newline,
+            /// `\` and the line break after it, with any spaces and tabs
+            /// between them (LEX-26). It continues the line: the line break
+            /// inside it is not a [`TokenKind::Newline`] and ends nothing.
+            LineContinuation,
             /// `# ...` up to, not including, the line break (LEX-3).
             LineComment,
             /// `/* ... */`, non-nesting (LEX-3).
@@ -205,7 +209,8 @@ define_token_kinds! {
 }
 
 impl TokenKind {
-    /// True for whitespace and comments: text the grammar never mentions.
+    /// True for whitespace, line continuations and comments: text the
+    /// grammar never mentions.
     ///
     /// [`TokenKind::Newline`] is not included, because a line break can be
     /// significant (LEX-5). [`TokenKind::DocComment`] is included here but
@@ -214,6 +219,7 @@ impl TokenKind {
         matches!(
             self,
             TokenKind::Whitespace
+                | TokenKind::LineContinuation
                 | TokenKind::LineComment
                 | TokenKind::BlockComment
                 | TokenKind::DocComment

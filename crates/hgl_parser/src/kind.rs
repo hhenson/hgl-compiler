@@ -68,7 +68,8 @@ macro_rules! define_syntax_kinds {
 define_syntax_kinds! {
     // The lexer's token kinds, in its order.
     tokens {
-        Whitespace, Newline, LineComment, BlockComment, DocComment, Ident,
+        Whitespace, Newline, LineContinuation, LineComment, BlockComment,
+        DocComment, Ident,
         Placeholder, Int, Float, Str, Duration, Temporal,
         KwModule, KwPart, KwUse, KwAs, KwExport, KwAbstract, KwImpl,
         KwInstantiate, KwOperator, KwFn, KwStruct, KwEnum, KwRequires, KwIs,
@@ -118,6 +119,8 @@ define_syntax_kinds! {
         Param,
         /// `{T}` after `...` in a parameter
         PackType,
+        /// `{2}`, `{1:*}` or `{1:4}` after a pack: how many it may hold
+        Cardinality,
         /// `-> f64`
         ReturnType,
         /// `=> value * 2.0`
@@ -240,7 +243,7 @@ define_syntax_kinds! {
         /// `Box<i64>(value: 7)`
         TypedConstructor,
         /// A typed constructor that also reads as comparisons, as in
-        /// `a < b > (c)`. The parser guesses the constructor and the
+        /// `a<b>(c)`. The parser guesses the constructor and the
         /// analyser confirms it (GEN-14).
         UndecidedConstructor,
         /// `delta<list<f64>>(added: values)`
@@ -348,6 +351,7 @@ impl SyntaxKind {
             self,
             SyntaxKind::Whitespace
                 | SyntaxKind::Newline
+                | SyntaxKind::LineContinuation
                 | SyntaxKind::LineComment
                 | SyntaxKind::BlockComment
                 | SyntaxKind::DocComment

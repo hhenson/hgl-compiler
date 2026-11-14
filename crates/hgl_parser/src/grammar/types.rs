@@ -2,7 +2,7 @@
 
 use crate::grammar::is_scalar_type;
 use crate::kind::SyntaxKind::{self, *};
-use crate::parser::{Context, Parser};
+use crate::parser::{Bracket, Context, Parser};
 
 use super::expressions::ADDITIVE;
 
@@ -34,7 +34,9 @@ impl Parser<'_> {
     /// The grammar's `value_type` is parsed as `type` as well: which types
     /// are value types is a question of meaning, for the analyser.
     pub(crate) fn type_(&mut self) {
-        if !self.enter() {
+        // LEX-5: a type is always something required, and nothing required
+        // is taken across a blank line.
+        if !self.goes_on("a type") || !self.enter() {
             return;
         }
         let mark = self.mark();
@@ -121,6 +123,8 @@ impl Parser<'_> {
     fn built_in_type(&mut self, kind: SyntaxKind) {
         self.start(kind);
         self.bump();
+        // LEX-27: `list<i64>`, not `list <i64>`.
+        self.attached(Bracket::Generics);
         self.bump();
         // LEX-5: line breaks do not count inside angle brackets. GEN-14:
         // `>` closes the list there and is no comparison.

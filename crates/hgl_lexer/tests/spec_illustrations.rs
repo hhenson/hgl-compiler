@@ -434,3 +434,47 @@ fn a_form_feed_between_tokens_is_rejected() {
         "LEX-16",
     );
 }
+
+// ---- Line continuation -----------------------------------------------------
+
+#[test]
+fn a_backslash_joins_a_line_to_the_next() {
+    // LEX-26, from the chapter's illustration of lines that continue:
+    // `return \` then `result`. The `\` and its line break are one token
+    // of whitespace, so no `Newline` stands between `return` and
+    // `result`, whatever the form of the line break (LEX-15).
+    use TokenKind::{Ident, KwReturn, Newline};
+    let joined = [(KwReturn, "return"), (Ident, "result")];
+    for line_break in ["\n", "\r\n", "\r"] {
+        accepted(&format!("return \\{line_break}        result"), &joined);
+    }
+    // Spaces and tabs may stand between the `\` and the line break.
+    accepted("return \\ \t\n        result", &joined);
+    // Without it the line break is there.
+    accepted(
+        "return\nresult",
+        &[(KwReturn, "return"), (Newline, "\n"), (Ident, "result")],
+    );
+}
+
+#[test]
+fn a_backslash_followed_by_anything_else_is_rejected() {
+    // LEX-26's rejections: "`\` followed on its line by a comment or by
+    // any token".
+    rejected(
+        "a \\ # note\nb",
+        hgl_lexer::codes::SYNTAX_UNEXPECTED_CHARACTER,
+        "LEX-26",
+    );
+    rejected(
+        "a \\ b",
+        hgl_lexer::codes::SYNTAX_UNEXPECTED_CHARACTER,
+        "LEX-26",
+    );
+    // At the very end of the source there is no line break to continue.
+    rejected(
+        "a \\",
+        hgl_lexer::codes::SYNTAX_UNEXPECTED_CHARACTER,
+        "LEX-26",
+    );
+}
