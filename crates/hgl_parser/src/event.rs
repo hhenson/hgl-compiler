@@ -47,7 +47,8 @@ pub(crate) enum Event {
 }
 
 /// The declarations a documentation comment can document (SDOC-1): "a
-/// module, function/native function, operator, struct, field, or test".
+/// module, function/native function, operator, struct, field, enum, enum
+/// member, native type, or test".
 fn documentable(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -57,6 +58,9 @@ fn documentable(kind: SyntaxKind) -> bool {
             | SyntaxKind::OperatorDecl
             | SyntaxKind::StructDecl
             | SyntaxKind::StructMember
+            | SyntaxKind::EnumDecl
+            | SyntaxKind::EnumMember
+            | SyntaxKind::NativeTypeDecl
             | SyntaxKind::TestDecl
     )
 }
@@ -356,7 +360,7 @@ impl TreeBuilder<'_> {
                 )
                 .with_note(
                     "`/** ... */` stands directly before a module, function, operator, \
-                     struct, field or test",
+                     struct, field, enum, enum member, native type or test",
                 ),
             };
             reports.push(diagnostic.with_rule("SDOC-1"));

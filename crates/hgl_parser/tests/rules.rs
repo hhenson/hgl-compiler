@@ -1492,13 +1492,16 @@ fn documented(entry: Entry, text: &str) -> Vec<SyntaxKind> {
 #[test]
 fn a_documentation_comment_documents_the_declaration_after_it() {
     // SDOC-1: "`/** ... */` immediately before a module, function/native
-    // function, operator, struct, field, or test documents that
-    // declaration."
+    // function, operator, struct, field, enum, enum member, native type,
+    // or test documents that declaration."
     let text = "/** The module. */\nmodule a\n\
                 /** A function. */\nexport const fn f() => 1\n\
                 /** A native. */\nnative fn n() -> i64\n\
                 /** An operator. */\noperator add(a: i64) -> i64\n\
                 /** A struct. */\nstruct Quote {\n    /** A field. */\n    bid: f64\n}\n\
+                /** An enum. */\nexport enum Side {\n    /** A member. */\n    buy,\n    \
+                /** Another. */\n    sell,\n}\n\
+                /** A native type. */\nexport native type Handle\n\
                 /** A test. */\ntest t { assert true }\n";
     assert_eq!(
         documented(Entry::SourceFile, text),
@@ -1509,6 +1512,10 @@ fn a_documentation_comment_documents_the_declaration_after_it() {
             SyntaxKind::OperatorDecl,
             SyntaxKind::StructDecl,
             SyntaxKind::StructMember,
+            SyntaxKind::EnumDecl,
+            SyntaxKind::EnumMember,
+            SyntaxKind::EnumMember,
+            SyntaxKind::NativeTypeDecl,
             SyntaxKind::TestDecl,
         ]
     );
@@ -1552,10 +1559,14 @@ fn a_documentation_comment_that_documents_nothing_is_rejected() {
         rejected(Entry::Declarations, "fn f() {}\n/** At the end. */\n"),
         [format!("SDOC-1 2:1: {unattached}")]
     );
-    // The rule lists what can be documented. An enum is not in the list
-    // (reported to the specification's issue tracker).
+    // The rule lists what can be documented. An import is not in it, nor
+    // an `instantiate` declaration.
     assert_eq!(
-        rejected(Entry::Declarations, "/** Sides. */\nenum Side { buy }"),
+        rejected(Entry::Declarations, "/** Imports. */\nuse a.b::{c}"),
+        [format!("SDOC-1 1:1: {unattached}")]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "/** Kept. */\ninstantiate add<i64>"),
         [format!("SDOC-1 1:1: {unattached}")]
     );
     // Its codes are this compiler's: the catalogue has none for it.

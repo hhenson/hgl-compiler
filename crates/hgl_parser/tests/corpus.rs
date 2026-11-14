@@ -25,16 +25,10 @@ use hgl_parser::Entry;
 /// the one diagnostic expected. Listed here, they are checked to fail in
 /// just that way, so the list cannot outlive its reason.
 ///
-/// Each is reported to the specification's issue tracker (hgl_spec issue
-/// 13), not settled here.
-const CONTRADICTIONS: &[(&str, &str)] = &[
-    // `module examples.test`: a module path is made of identifiers and
-    // `test` is a reserved word.
-    (
-        "hgl_spec/spec/language/tests-and-eval.md",
-        "expected a module name, found `test`",
-    ),
-];
+/// Each is reported to the specification's issue tracker, not settled
+/// here. An entry is the path of the sample's file under `spec/` and the
+/// diagnostic's message. There is none at the pinned revision.
+const CONTRADICTIONS: &[(&str, &str)] = &[];
 
 #[test]
 fn the_specification_corpus_parses_cleanly() {
