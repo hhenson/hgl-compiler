@@ -36,9 +36,15 @@ fn scratch(test: &str) -> PathBuf {
 }
 
 /// Writes `text` to `directory/name`, making the directories on the way,
-/// and gives the path as `hgl` will print it.
+/// and gives the path as `hgl` will print it. `name` is written with `/`
+/// between its parts on every system.
 fn write(directory: &Path, name: &str, text: &str) -> String {
-    let path = directory.join(name);
+    // Joined a part at a time, so that the path has the system's own
+    // separator throughout: `hgl` prints paths as the system gives them.
+    let mut path = directory.to_path_buf();
+    for part in name.split('/') {
+        path.push(part);
+    }
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, text).unwrap();
     path.display().to_string()
