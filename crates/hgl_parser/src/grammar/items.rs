@@ -773,7 +773,7 @@ impl Parser<'_> {
                         parser.eat(Semicolon);
                     }
                     // LEX-4: the one place a semicolon belongs.
-                    KwStart | KwWhen | KwStop if parser.nth(1) == Semicolon => {
+                    KwStart | KwWhen | KwStop if parser.nth(1) == Semicolon && !parser.nl_at(1) => {
                         parser.start(NativeHook);
                         parser.bump();
                         parser.bump();

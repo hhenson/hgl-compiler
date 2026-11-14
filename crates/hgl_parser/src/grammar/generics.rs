@@ -180,14 +180,25 @@ impl Parser<'_> {
         if self.at(Bang) {
             self.start(ConstraintNot);
             self.bump();
-            self.constraint_term();
+            // LEX-5: `!` does not continue a line.
+            if self.on_line("a constraint") {
+                self.constraint_term();
+            }
             self.finish();
-        } else if self.at_word("each") && self.nth(1) == Ident && self.nth_word(2, "in") {
+        } else if self.at_word("each")
+            && self.nth(1) == Ident
+            && self.nth_word(2, "in")
+            && !self.nl_at(1)
+            && !self.nl_at(2)
+        {
             // LEX-10: `each` and `in` are names with a meaning only here.
             self.start(ConstraintEach);
             self.bump();
             self.bump();
             self.bump();
+            // `in` stands between two operands as a binary operator does,
+            // here and in a relation, so a line may go on after it.
+            self.continue_line();
             self.constraint_operand();
             if self.eat(LBrace) {
                 // LEX-5: line breaks do not count inside these braces.

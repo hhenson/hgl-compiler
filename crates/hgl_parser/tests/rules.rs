@@ -860,6 +860,7 @@ fn an_anonymous_function_is_parenthesized_before_it_is_used() {
          ArgList[\"(\" Arg[Literal[\"7\"]] \")\"]]]"
     );
     let message = "an anonymous function is parenthesized before it is called or operated on";
+    // Called, or the left operand: reported at what is applied.
     assert_eq!(
         rejected(Entry::Statements, "fn(x) { return x }(7)"),
         [format!("FN-10 1:19: {message}")]
@@ -868,6 +869,31 @@ fn an_anonymous_function_is_parenthesized_before_it_is_used() {
         rejected(Entry::Statements, "let f = fn(x) { return x } + 1"),
         [format!("FN-10 1:28: {message}")]
     );
+    // The right operand, or a prefix operator's: reported at the function.
+    assert_eq!(
+        rejected(Entry::Statements, "let x = 1 + fn() { return 2 }"),
+        [format!("FN-10 1:13: {message}")]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let x = 1 + fn(y) => y"),
+        [format!("FN-10 1:13: {message}")]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let x = !fn() { return true }"),
+        [format!("FN-10 1:10: {message}")]
+    );
+    // Parenthesized, or a whole value, it is accepted.
+    for text in [
+        "let x = 1 + (fn() { return 2 })",
+        "let x = !(fn() { return true })",
+        "let f = fn(y) => y",
+        "f = fn(y) { return y }",
+        "apply(fn(y) => y, with: fn(z) { return z })",
+        "return fn(y) => y + 1",
+        "[fn(y) => y, fn(z) => z]",
+    ] {
+        statements(text);
+    }
 }
 
 // ---- GEN-8 ----
@@ -1122,6 +1148,43 @@ fn a_constraint_relation_has_an_operand_on_each_side() {
 }
 
 #[test]
+fn a_constraint_follows_the_line_rules_of_an_expression() {
+    // LEX-5: `&&`, `||` and a relation's operator continue a line, before
+    // and after; `!` does not.
+    for (text, plain) in [
+        (
+            "fn f() requires p(T) &&\n    q(T) {}",
+            "fn f() requires p(T) && q(T) {}",
+        ),
+        (
+            "fn f() requires p(T)\n    || q(T) {}",
+            "fn f() requires p(T) || q(T) {}",
+        ),
+        (
+            "fn f() requires T in\n    {i64, f64} {}",
+            "fn f() requires T in {i64, f64} {}",
+        ),
+        (
+            "fn f() requires T\n    == U {}",
+            "fn f() requires T == U {}",
+        ),
+    ] {
+        same_tree(Entry::Declarations, text, plain);
+    }
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f<T>() requires !\np(T) => 1")[0],
+        "- 1:21: expected a constraint, found end of line"
+    );
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "fn f<...Ts>() requires each\nT in Ts { p(T) } {}"
+        )[0],
+        "- 1:28: expected `==`, `in`, `is` or `(`, found end of line"
+    );
+}
+
+#[test]
 fn only_the_identity_property_has_a_value() {
     // The grammar: `operator_property = "associative" | "commutative"
     // | "identity", "=", const_expression ;`
@@ -1295,6 +1358,14 @@ fn a_contract_body_holds_no_statements() {
             "native fn node() -> i64 {\n    start { }\n}"
         ),
         ["NATIVE-3 2:5: expected `inject`, `start;`, `when;` or `stop;`, found `start`"]
+    );
+    // A hook marker is its word and its `;`, on one line.
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "native fn node() -> i64 {\n    when\n    ;\n}"
+        )[0],
+        "NATIVE-3 2:5: expected `inject`, `start;`, `when;` or `stop;`, found `when`"
     );
 }
 

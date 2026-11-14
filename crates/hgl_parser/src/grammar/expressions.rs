@@ -25,6 +25,17 @@ fn binary_tier(kind: SyntaxKind) -> Option<u8> {
     })
 }
 
+/// The message for FN-10: "Parenthesize an anonymous function before
+/// calling it or applying an operation to the function itself."
+///
+/// A function expression may stand bare as a whole value: an argument, the
+/// right side of `=`, a returned value. As the operand of an operator, or
+/// the thing called, indexed or reached into, it is parenthesized. The
+/// expression functions below say whether what they parsed is a bare
+/// function expression, so that whoever applies something to it can
+/// report it.
+const BARE_FN: &str = "an anonymous function is parenthesized before it is called or operated on";
+
 /// What an argument list belongs to, which decides the forms its
 /// arguments may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +71,11 @@ impl Parser<'_> {
     /// tier number and this function parses "an expression of operators at
     /// tier `lowest` or tighter". Its right operand is the same thing one
     /// tier up, which makes each operator left-associative (EXPR-1).
-    pub(crate) fn binary_expr(&mut self, lowest: u8) {
+    ///
+    /// True when what was parsed is a bare function expression (FN-10).
+    pub(crate) fn binary_expr(&mut self, lowest: u8) -> bool {
         if !self.enter() {
-            return;
+            return false;
         }
         let mark = self.mark();
         let mut bare_fn = self.unary_expr();
@@ -78,7 +91,8 @@ impl Parser<'_> {
                 break;
             }
             if bare_fn {
-                self.fn_needs_parentheses();
+                // The left operand: `fn(x) { ... } + 1`.
+                self.error(BARE_FN, "FN-10", None);
                 bare_fn = false;
             }
             self.bump();
@@ -87,18 +101,22 @@ impl Parser<'_> {
             // A configuration is part of its operator (LEX-14), so the
             // operand may stand on the line after it as well.
             self.continue_line();
-            self.binary_expr(tier + 1);
+            let operand = self.position;
+            if self.binary_expr(tier + 1) {
+                // The right operand: `1 + fn(x) => x`.
+                self.error_behind(operand, BARE_FN, "FN-10");
+            }
             // Wrapping from the same mark each time nests to the left:
             // `a - b - c` is `(a - b) - c`.
             self.wrap(mark, BinaryExpr);
         }
         self.leave();
+        bare_fn
     }
 
     /// `unary_expr = ( "-" | "!" ), [ operator_configuration ], unary_expr | postfix_expr ;`
     ///
-    /// True when what was parsed is an anonymous function with a block
-    /// body and nothing applied to it (see `fn_needs_parentheses`).
+    /// True when what was parsed is a bare function expression (FN-10).
     fn unary_expr(&mut self) -> bool {
         if !matches!(self.current(), Minus | Bang) {
             return self.postfix_expr();
@@ -114,7 +132,11 @@ impl Parser<'_> {
         if self.on_line("an expression") {
             self.operator_config();
             if self.on_line("an expression") {
-                self.unary_expr();
+                let operand = self.position;
+                if self.unary_expr() {
+                    // The operand of a prefix operator: `!fn() { ... }`.
+                    self.error_behind(operand, BARE_FN, "FN-10");
+                }
             }
         }
         self.finish();
@@ -174,7 +196,7 @@ impl Parser<'_> {
     /// member_suffix = ".", member_name ;
     /// ```
     ///
-    /// Answers as `unary_expr` does.
+    /// True when what was parsed is a bare function expression (FN-10).
     fn postfix_expr(&mut self) -> bool {
         let mark = self.mark();
         let start = self.position;
@@ -199,7 +221,8 @@ impl Parser<'_> {
                 _ => break,
             };
             if bare_fn {
-                self.fn_needs_parentheses();
+                // The thing called: `fn(x) { ... }(7)`.
+                self.error(BARE_FN, "FN-10", None);
                 bare_fn = false;
             }
             match kind {
@@ -229,18 +252,6 @@ impl Parser<'_> {
         self.expect_member_name();
     }
 
-    /// FN-10: "Parenthesize an anonymous function before calling it or
-    /// applying an operation to the function itself." With an arrow body
-    /// the question does not arise, since the body takes in whatever
-    /// follows. After a block body it does: `fn(x) { ... }(7)`.
-    fn fn_needs_parentheses(&mut self) {
-        self.error(
-            "an anonymous function is parenthesized before it is called or operated on",
-            "FN-10",
-            None,
-        );
-    }
-
     /// ```text
     /// primary_expr = literal | IDENTIFIER | qualified_name | "(", expression, ")"
     ///              | tuple_literal | sequence_literal | typed_constructor
@@ -250,7 +261,7 @@ impl Parser<'_> {
     ///         | "true" | "false" | "null" ;
     /// ```
     ///
-    /// Answers as `unary_expr` does.
+    /// True when what was parsed is a function expression (FN-10).
     fn primary_expr(&mut self) -> bool {
         match self.current() {
             // A duration is one of the forms of `TEMPORAL_LITERAL`.
@@ -268,7 +279,10 @@ impl Parser<'_> {
             }
             LParen => self.paren_expr(),
             LBracket => self.sequence_expr(),
-            KwFn => return self.function_expr(),
+            KwFn => {
+                self.function_expr();
+                return true;
+            }
             KwIf => self.if_expr(),
             KwEval => {
                 self.start(EvalExpr);
@@ -550,8 +564,9 @@ impl Parser<'_> {
     /// lambda_parameter = IDENTIFIER, [ ":", type ] ;
     /// ```
     ///
-    /// True when the body is a block.
-    fn function_expr(&mut self) -> bool {
+    /// With an arrow body the function takes in everything that follows
+    /// it (FN-10); with a block body it ends at the `}`.
+    fn function_expr(&mut self) {
         // CTRL-9 again: a block body is a brace in a condition.
         let in_condition = self.context.no_brace;
         self.start(FnExpr);
@@ -579,21 +594,17 @@ impl Parser<'_> {
         if self.at(Arrow) {
             self.return_type();
         }
-        let block = if self.at(FatArrow) && !self.nl() {
+        if self.at(FatArrow) && !self.nl() {
             self.arrow_body();
-            false
         } else if self.at(LBrace) && !self.nl() {
             if in_condition {
                 self.braces_in_condition();
             }
             self.block();
-            true
         } else {
             self.expected("`=>` or `{`");
-            false
-        };
+        }
         self.finish();
-        block
     }
 
     /// `if_expression = "if", expression, block, [ "else", ( block | if_expression ) ] ;`
