@@ -6,9 +6,9 @@
 //!
 //! So what can own one is an item of a file, or of an unnamed test
 //! context: an import, a declaration, a named test. The `module` line and
-//! the `test {` and `}` of a context cannot, and an item of a context
-//! that shares a line with either has no boundary of its own to own a
-//! case by.
+//! the `test {` and `}` of a context cannot. An owner is found by its
+//! lines, so an item that shares a line with one of those, or with
+//! another item, has no boundary of its own and owns no case either.
 
 use std::ops::RangeInclusive;
 
@@ -60,10 +60,18 @@ pub(crate) fn owners(
     // Items are taken from the front; a context's items go back on the
     // front, so the result stays in source order.
     pending.reverse();
-    // The lines that hold the `test {` or the `}` of an unnamed context.
-    // Such a line is the context's (TST-12), so an item that shares one
-    // has no lines of its own to own a case by.
-    let mut context_lines: Vec<usize> = Vec::new();
+    // Lines that are not an item's to own (TST-12): those of a `module`
+    // line, and those that hold the `test {` or the `}` of an unnamed
+    // context.
+    let mut reserved: Vec<usize> = Vec::new();
+    for header in root
+        .children()
+        .filter(|node| node.kind() == SyntaxKind::ModuleDecl)
+    {
+        let span = header.span();
+        let last = span.end.saturating_sub(1).max(span.start);
+        reserved.extend(source.line_index(span.start)..=source.line_index(last));
+    }
     while let Some(item) = pending.pop() {
         if let Item::TestContext(context) = &item {
             // The context cannot own a case; what it holds can.
@@ -73,7 +81,7 @@ pub(crate) fn owners(
                 .filter_map(|element| element.into_token())
                 .filter(|token| matches!(token.kind(), SyntaxKind::LBrace | SyntaxKind::RBrace));
             for brace in braces {
-                context_lines.push(source.line_index(brace.span().start));
+                reserved.push(source.line_index(brace.span().start));
             }
             let mut inner: Vec<Item> = context.items().collect();
             inner.reverse();
@@ -86,9 +94,6 @@ pub(crate) fn owners(
         let last = span.end.saturating_sub(1).max(span.start);
         let first_line = source.line_index(span.start);
         let lines = first_line..=source.line_index(last);
-        if context_lines.iter().any(|line| lines.contains(line)) {
-            continue;
-        }
         // A documentation comment is the node's first token (SDOC-1);
         // the declaration starts at the first token that is not one.
         let start = node
@@ -114,6 +119,31 @@ pub(crate) fn owners(
             },
         });
     }
+
+    // TST-12: "reliable source boundaries are required." An owner is
+    // found by its lines, so an item owns a case only when its lines are
+    // its own. One that shares a line with another item, a `module`
+    // line or a context's brace has no such boundary: an error on that
+    // line could be either's. It owns nothing, and the line with it.
+    //
+    // The items are in source order, so one that shares a line shares
+    // it with the item before it or the one after.
+    let shared: Vec<bool> = (0..found.len())
+        .map(|index| {
+            let lines = &found[index].lines;
+            let before = index
+                .checked_sub(1)
+                .is_some_and(|before| found[before].lines.end() >= lines.start());
+            let after = found
+                .get(index + 1)
+                .is_some_and(|after| after.lines.start() <= lines.end());
+            before || after || reserved.iter().any(|line| lines.contains(line))
+        })
+        .collect();
+    let mut shared = shared.into_iter();
+    // `retain` keeps the items for which the closure gives `true`; it
+    // visits them in order, as `shared` was made.
+    found.retain(|_| !shared.next().unwrap_or(false));
     found
 }
 

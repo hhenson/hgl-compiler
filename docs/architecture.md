@@ -293,7 +293,9 @@ A rejection case is checked in four steps (TST-13):
 2. The *owner* of each is found: the import, declaration or named test
    whose lines include that line. The `module` line, a blank or comment
    line, and the `test {` and `}` lines of an unnamed context have no
-   owner, nor has an item that shares a line with those braces.
+   owner. An item owns a case only when its lines are its own: one that
+   shares a line with another item, the `module` line or a context's
+   brace owns none, and that line has no owner.
 3. The program is analysed with every owner left out. This *surviving*
    source must be accepted.
 4. For each owner the program is analysed again with that owner alone
