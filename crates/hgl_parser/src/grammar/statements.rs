@@ -3,7 +3,7 @@
 
 use crate::grammar::can_start_expression;
 use crate::kind::SyntaxKind::{self, *};
-use crate::parser::{Choice, Context, Parser, Verdict};
+use crate::parser::{Bracket, Choice, Context, Parser, Verdict};
 
 /// True for `=` and the compound assignment operators.
 fn is_assignment_operator(kind: SyntaxKind) -> bool {
@@ -254,7 +254,7 @@ impl Parser<'_> {
             self.start(RaisesAssertion);
             self.bump();
             // LEX-27: `raises(...)` is a call.
-            self.attached();
+            self.attached(Bracket::Call);
             self.bump();
             self.nested(Context::LIST, |parser| {
                 parser.expression();
@@ -327,7 +327,7 @@ impl Parser<'_> {
             match self.current() {
                 // LEX-27: as in an expression.
                 LBracket if self.suffix_at(0) => {
-                    self.attached();
+                    self.attached(Bracket::Index);
                     self.index_suffix();
                     self.wrap(mark, IndexExpr);
                 }

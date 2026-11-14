@@ -214,7 +214,7 @@ fn a_line_break_in_an_incomplete_statement_is_ignored() {
             "struct S : A, B {}",
         ),
         (Declarations, "fn f() =>\n    1", "fn f() => 1"),
-        (Declarations, "fn\nf\n()\n-> i64 => 1", "fn f() -> i64 => 1"),
+        (Declarations, "fn\nf()\n-> i64 => 1", "fn f() -> i64 => 1"),
         (Declarations, "use a.b\n    as c", "use a.b as c"),
         (
             Declarations,
@@ -765,18 +765,128 @@ fn on_the_next_line_a_bracket_begins_a_statement() {
         rejected(Entry::Statements, "let a = str\n(b)")[0],
         "- 1:9: expected an expression, found `str`"
     );
-    // What is not a call or an index is free: grouping, a sequence, a
-    // declaration's parameters.
+    // What applies to nothing is free: grouping and a sequence.
     for text in [
         "let a = b + (c)",
         "return (x)",
         "let s = [1, 2]",
         "if (a) { b }",
-        "let f = fn (x) => x",
     ] {
         statements(text);
     }
-    declarations("fn f (x: i64) -> i64 => x");
+}
+
+#[test]
+fn a_definitions_brackets_touch_what_they_follow() {
+    // LEX-27: "the `(` of a call or a parameter list, the `[` of an
+    // index, the `<` of generic parameters or arguments, and the `{` of a
+    // cardinality: `f<T>(x)`, `rows[i]`, and `...T{2}`, never `f <T>(x)`,
+    // `f<T> (x)`, `rows [i]`, or `...T {2}`."
+    let parameters = "a parameter list's `(` directly follows what it belongs to";
+    let generics = "the `<` of generic parameters or arguments directly follows the name";
+    let cardinality = "a cardinality's `{` directly follows the pack it bounds";
+    let call = "a call's `(` directly follows what it calls";
+    for (entry, text, at, message) in [
+        (Entry::Declarations, "fn f (x: i64) => x", "1:6", parameters),
+        (Entry::Declarations, "fn f <T>(x: T) => x", "1:6", generics),
+        (
+            Entry::Declarations,
+            "fn f<T> (x: T) => x",
+            "1:9",
+            parameters,
+        ),
+        (
+            Entry::Declarations,
+            "fn f\n(x: i64) => x",
+            "2:1",
+            parameters,
+        ),
+        (Entry::Statements, "let f = fn (x) => x", "1:12", parameters),
+        (
+            Entry::Declarations,
+            "operator add <T>(a: T) -> T",
+            "1:14",
+            generics,
+        ),
+        (
+            Entry::Declarations,
+            "native fn n (a: i64) -> i64",
+            "1:13",
+            parameters,
+        ),
+        (
+            Entry::Declarations,
+            "struct Box <T> { value: T }",
+            "1:12",
+            generics,
+        ),
+        (
+            Entry::Declarations,
+            "instantiate add <i64>",
+            "1:17",
+            generics,
+        ),
+        (
+            Entry::Declarations,
+            "operator add(a: i64) -> i64 properties <i64> { associative }",
+            "1:40",
+            generics,
+        ),
+        (Entry::Statements, "var x: list <i64>", "1:13", generics),
+        (Entry::Statements, "var x: Box <i64>", "1:12", generics),
+        (
+            Entry::Declarations,
+            "fn f(values: ...f64 {2}) {}",
+            "1:21",
+            cardinality,
+        ),
+        (
+            Entry::Declarations,
+            "fn f<...Ts {2}>() {}",
+            "1:12",
+            cardinality,
+        ),
+        (
+            Entry::Declarations,
+            "@suppress_warning (\"a\")\nfn f() {}",
+            "1:19",
+            call,
+        ),
+    ] {
+        assert_eq!(
+            rejected(entry, text),
+            [format!("LEX-27 {at}: {message}")],
+            "{text}"
+        );
+    }
+    // Inside the brackets spacing is free, as is what follows them.
+    same_tree(
+        Entry::Declarations,
+        "fn f< T >( x: T ) -> T => x",
+        "fn f<T>(x: T) -> T => x",
+    );
+}
+
+#[test]
+fn a_less_than_apart_from_its_name_is_a_comparison() {
+    // LEX-27: "In an expression, a `<` that stands apart from the name
+    // before it is a comparison."
+    assert_eq!(
+        statements("a <b>(c)"),
+        "ExprStmt[BinaryExpr[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]] \">\" \
+         ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]]"
+    );
+    // One that touches its name is one too, where no constructor follows.
+    assert_eq!(
+        statements("a<b"),
+        "ExprStmt[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]]]"
+    );
+    // Where the tokens cannot be comparisons, the constructor was meant,
+    // and the gap is what is wrong.
+    assert_eq!(
+        rejected(Entry::Statements, "Box <i64>(value: 7)"),
+        ["LEX-27 1:5: the `<` of generic parameters or arguments directly follows the name"]
+    );
 }
 
 // ---- UNIT-1 ----
@@ -1335,7 +1445,7 @@ fn tokens_that_read_both_ways_are_marked_undecided() {
     // check whose bound touches its `>` reads both ways as well. Spaces
     // inside the angle brackets change nothing.
     assert_eq!(
-        statements("a < b && c >(d)"),
+        statements("a< b && c >(d)"),
         "ExprStmt[UndecidedConstructor[\"a\" GenericArgs[\"<\" \
          BinaryExpr[NameExpr[\"b\"] \"&&\" NameExpr[\"c\"]] \">\"] ArgList[\"(\" Arg[NameExpr[\"d\"]] \")\"]]]"
     );

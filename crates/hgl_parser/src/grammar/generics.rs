@@ -3,7 +3,7 @@
 
 use crate::grammar::{can_start_expression, can_start_type};
 use crate::kind::SyntaxKind::*;
-use crate::parser::{AngleList, Choice, Context, Parser, Verdict};
+use crate::parser::{AngleList, Bracket, Choice, Context, Parser, Verdict};
 
 use super::expressions::ADDITIVE;
 
@@ -18,6 +18,8 @@ impl Parser<'_> {
     ///
     /// The cursor is on the `<`.
     pub(crate) fn generic_params(&mut self) {
+        // LEX-27: `fn f<T>`, not `fn f <T>`.
+        self.attached(Bracket::Generics);
         self.start(GenericParams);
         self.angle_list("a generic parameter", true, false, |parser| {
             if parser.at(Ellipsis) {
@@ -53,6 +55,8 @@ impl Parser<'_> {
     /// GEN-10: how many arguments a pack may hold. `{n}` is exactly n,
     /// `{n:*}` n or more, `{n:m}` from n to m. The cursor is on the `{`.
     pub(crate) fn cardinality(&mut self) {
+        // LEX-27: `...T{2}`, not `...T {2}`.
+        self.attached(Bracket::Cardinality);
         self.start(Cardinality);
         self.bump();
         // LEX-5: line breaks do not count inside these braces.
@@ -77,6 +81,15 @@ impl Parser<'_> {
     /// The cursor is on the `<`. The answer describes the list, for the
     /// caller that has to judge it (GEN-14).
     pub(crate) fn generic_args(&mut self) -> AngleList {
+        // LEX-27: `Box<i64>`, not `Box <i64>`.
+        self.attached(Bracket::Generics);
+        self.generic_args_unchecked()
+    }
+
+    /// As [`Parser::generic_args`], without the report of a `<` that
+    /// stands apart from its name. The probe that weighs a constructor
+    /// against comparisons judges that gap itself.
+    pub(crate) fn generic_args_unchecked(&mut self) -> AngleList {
         self.start(GenericArgs);
         let shape = self.angle_list("a type or a value", true, true, |parser| {
             parser.generic_argument()
@@ -284,7 +297,7 @@ impl Parser<'_> {
         self.name();
         // LEX-27: a constraint call is a call.
         if self.at(LParen) && self.suffix_at(0) {
-            self.attached();
+            self.attached(Bracket::Call);
             self.bump();
             self.nested(Context::LIST, |parser| {
                 parser.list(RParen, "a type or a value", false, |parser| {

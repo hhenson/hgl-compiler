@@ -2,7 +2,7 @@
 
 use crate::grammar::can_start_expression;
 use crate::kind::SyntaxKind::{self, *};
-use crate::parser::{Choice, Context, Parser, Verdict};
+use crate::parser::{Bracket, Choice, Context, Parser, Verdict};
 
 /// The precedence tier of `+` and `-`: where the grammar's `additive_expr`
 /// starts. A list size and a constraint operand are `additive_expr`.
@@ -229,11 +229,11 @@ impl Parser<'_> {
             }
             match kind {
                 CallExpr => {
-                    self.attached();
+                    self.attached(Bracket::Call);
                     self.arg_list(ArgMode::Call);
                 }
                 IndexExpr => {
-                    self.attached();
+                    self.attached(Bracket::Index);
                     self.index_suffix();
                 }
                 MemberExpr => self.member_suffix(),
@@ -283,7 +283,7 @@ impl Parser<'_> {
             KwStr | KwBytes | KwAny if self.nth(1) == LParen && self.suffix_at(1) => {
                 self.start(TypeCall);
                 self.bump();
-                self.attached();
+                self.attached(Bracket::Call);
                 self.arg_list(ArgMode::Call);
                 self.finish();
             }
@@ -299,7 +299,7 @@ impl Parser<'_> {
                 self.bump();
                 // LEX-27: `eval(...)` is a call too.
                 if self.at(LParen) && self.suffix_at(0) {
-                    self.attached();
+                    self.attached(Bracket::Call);
                     self.arg_list(ArgMode::Eval);
                 } else {
                     self.expected("`(`");
@@ -385,15 +385,17 @@ impl Parser<'_> {
 
         // The constructor reading: generic arguments that parse, then `(`.
         self.name();
-        let shape = self.generic_args();
+        // LEX-27: a constructor's `<` touches its name and its `(` touches
+        // the `>`. With a gap at either the tokens are no constructor,
+        // where they read as comparisons: `a < b > (c)`. Where they do
+        // not, the constructor was meant and `constructor` reports the
+        // gap.
+        let mut attached = self.adjacent_at(0);
+        let shape = self.generic_args_unchecked();
         if self.errors != errors || !shape.closed || !self.at(LParen) || self.nl() {
             return Verdict::No;
         }
-        // LEX-27: a constructor's `(` touches the `>` before it. One that
-        // stands apart is no constructor's, where the tokens read as
-        // comparisons: `a < b > (c)`. Where they do not, the constructor
-        // was meant and `constructor` reports the gap.
-        let attached = self.adjacent_at(0);
+        attached &= self.adjacent_at(0);
         self.arg_list(ArgMode::Call);
         let end = self.position;
 
@@ -442,7 +444,7 @@ impl Parser<'_> {
             (TypedConstructor, ArgMode::Call)
         };
         if self.at(LParen) && !self.nl() {
-            self.attached();
+            self.attached(Bracket::Call);
             self.arg_list(mode);
         } else {
             self.expected("`(`");
@@ -594,6 +596,8 @@ impl Parser<'_> {
         self.start(FnExpr);
         self.bump();
         if self.at(LParen) && !self.cut() {
+            // LEX-27: `fn(x)`, as `fn f(x)`.
+            self.attached(Bracket::Parameters);
             self.start(ParamList);
             self.bump();
             self.nested(Context::LIST, |parser| {

@@ -2,7 +2,7 @@
 
 use crate::grammar::is_scalar_type;
 use crate::kind::SyntaxKind::{self, *};
-use crate::parser::{Context, Parser};
+use crate::parser::{Bracket, Context, Parser};
 
 use super::expressions::ADDITIVE;
 
@@ -123,6 +123,8 @@ impl Parser<'_> {
     fn built_in_type(&mut self, kind: SyntaxKind) {
         self.start(kind);
         self.bump();
+        // LEX-27: `list<i64>`, not `list <i64>`.
+        self.attached(Bracket::Generics);
         self.bump();
         // LEX-5: line breaks do not count inside angle brackets. GEN-14:
         // `>` closes the list there and is no comparison.

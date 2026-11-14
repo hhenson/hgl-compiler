@@ -5,7 +5,7 @@
 // Brings every kind into scope by its bare name, so that the grammar reads
 // `self.at(KwFn)` and not `self.at(SyntaxKind::KwFn)`.
 use crate::kind::SyntaxKind::*;
-use crate::parser::{Context, Parser};
+use crate::parser::{Bracket, Context, Parser};
 
 /// The declaration that starts at the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,7 +363,10 @@ impl Parser<'_> {
         } else {
             self.expected_rule("`suppress_warning`", "ERR-10");
         }
-        if self.eat(LParen) {
+        if self.at(LParen) && !self.cut() {
+            // LEX-27: an annotation's argument is a call's.
+            self.attached(Bracket::Call);
+            self.bump();
             self.nested(Context::PLAIN, |parser| {
                 parser.expect(Str);
                 parser.close(RParen);
@@ -396,6 +399,9 @@ impl Parser<'_> {
         // The parameter list is required, so one line break before it is
         // ignored: the declaration is incomplete without it.
         if self.at(LParen) && !self.cut() {
+            // LEX-27: `fn f(x)` and `fn f<T>(x)`, with nothing before the
+            // `(`.
+            self.attached(Bracket::Parameters);
             self.start(ParamList);
             self.bump();
             self.nested(Context::LIST, |parser| {
@@ -633,6 +639,7 @@ impl Parser<'_> {
         self.start(OperatorProperties);
         self.bump();
         if self.at(Lt) && !self.nl() {
+            self.attached(Bracket::Generics);
             self.angle_list("a type", false, false, |parser| {
                 parser.type_();
                 true
@@ -699,6 +706,7 @@ impl Parser<'_> {
             self.start(Instantiation);
             self.expect_name("a function name");
             if self.at(Lt) && !self.nl() {
+                self.attached(Bracket::Generics);
                 self.start(GenericArgs);
                 self.angle_list("a type or a value", true, false, |parser| {
                     parser.materialization_argument()

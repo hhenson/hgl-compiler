@@ -126,11 +126,14 @@ two lines whatever the next one begins with (LEX-26): the lexer makes the
 line break counts as one (LEX-21), and a line that holds only a comment is
 a line. A body's opening brace stays with its header.
 
-A call's `(` and an index's `[` touch what they apply to (LEX-27; owner
-decision, 2026-11-14): `f(x)` and `x[i]`. The parser asks whether the two
-tokens are neighbours in the lexer's list. Apart on one line, as in
-`f (x)`, the gap is reported and the call read; on a later line `(x)`
-begins a statement of its own.
+An opening bracket touches what it applies to (LEX-27; owner decisions,
+2026-11-14): the `(` of a call or a parameter list, the `[` of an index,
+the `<` of generic parameters or arguments, the `{` of a cardinality. So
+`f<T>(x)`, never `f <T>(x)` or `f<T> (x)`. The parser asks whether the two
+tokens are neighbours in the lexer's list. A gap is reported and the
+construct read all the same. On a later line `(x)` and `[i]` begin a
+statement of their own, and in an expression a `<` apart from its name is a
+comparison.
 
 ### Generic arguments or comparison
 
@@ -140,9 +143,9 @@ The parser therefore guesses and the analyser confirms (owner decision,
 2026-11-13):
 
 - The parser reads the tokens both ways and takes each reading back. The
-  generic reading is possible when generic arguments parse and `(` directly
-  follows their `>` (LEX-27). The comparison reading is possible when the
-  same tokens parse as expressions. When only one is possible, that reading
+  generic reading is possible when `<` directly follows the name, generic
+  arguments parse, and `(` directly follows their `>` (LEX-27). The
+  comparison reading is possible when the same tokens parse as expressions. When only one is possible, that reading
   is the result: `Box<i64>(7)` is a `TypedConstructor`; `a < b`, and
   `a < b > (c)` with its `(` apart from the `>`, are comparisons.
 - When both are, as in `f(a<b, c>(d))` and `a<b>(c)`, the parser records

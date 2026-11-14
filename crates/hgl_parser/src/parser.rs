@@ -125,6 +125,21 @@ pub(crate) enum Choice {
     Assignment,
 }
 
+/// The opening brackets that directly follow what they apply to (LEX-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bracket {
+    /// The `(` of a call: `f(x)`, `Box<i64>(x)`, `str(x)`, `eval(...)`.
+    Call,
+    /// The `[` of an index: `rows[i]`.
+    Index,
+    /// The `(` of a parameter list: `fn f(x: i64)`, `fn(x) => x`.
+    Parameters,
+    /// The `<` of generic parameters or arguments: `fn f<T>`, `list<i64>`.
+    Generics,
+    /// The `{` of a cardinality: `...T{1:*}`.
+    Cardinality,
+}
+
 /// A place in the event list a node may later be started from. See
 /// [`Event::Mark`].
 #[derive(Debug, Clone, Copy)]
@@ -354,18 +369,22 @@ impl<'a> Parser<'a> {
         self.adjacent_at(n) || !self.broken_at(n)
     }
 
-    /// LEX-27: "The `(` of a call and the `[` of an index directly follow
-    /// what they apply to". Reports the one under the cursor when
-    /// something stands between. The caller reads the call or index all
-    /// the same: what was meant is plain.
-    pub(crate) fn attached(&mut self) {
+    /// LEX-27: "An opening bracket directly follows what it applies to".
+    /// Reports the bracket under the cursor, as `bracket` describes it,
+    /// when something stands between it and the token before. The caller
+    /// reads on all the same: what was meant is plain.
+    pub(crate) fn attached(&mut self, bracket: Bracket) {
         if self.adjacent_at(0) {
             return;
         }
-        let message = if self.at(SyntaxKind::LBracket) {
-            "an index's `[` directly follows what it indexes"
-        } else {
-            "a call's `(` directly follows what it calls"
+        let message = match bracket {
+            Bracket::Call => "a call's `(` directly follows what it calls",
+            Bracket::Index => "an index's `[` directly follows what it indexes",
+            Bracket::Parameters => "a parameter list's `(` directly follows what it belongs to",
+            Bracket::Generics => {
+                "the `<` of generic parameters or arguments directly follows the name"
+            }
+            Bracket::Cardinality => "a cardinality's `{` directly follows the pack it bounds",
         };
         self.error(message, "LEX-27", Some("remove what stands between them"));
     }
