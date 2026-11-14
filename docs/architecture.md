@@ -206,7 +206,8 @@ of nesting and 0.4 KiB for a level of tree depth. `Limits::stack_size`
 allows ten times that, and `hgl` runs a command that parses on a thread
 with a stack of that size, so raising a limit needs nothing else. The
 defaults fit in half of the smallest stack the compiler meets, the 1 MiB of
-a Windows main thread.
+a Windows main thread. The analyser walks the tree the same way and is
+tested to fit that half at the default limits.
 
 ## Analyser
 
@@ -237,6 +238,11 @@ parameters), each block, the pattern of a `for`, an anonymous function. A
 name is looked up innermost first, then among the imports of its file,
 then among its module's declarations (UNIT-10). A binding that would take
 a name any of those has is rejected (UNIT-12), and the first keeps it.
+
+UNIT-12 gives a scope to a block and to an anonymous function. The
+statements under a `switch` case are neither, so what a case declares is
+declared in the block the `switch` stands in: two cases may not declare
+one name. Whether a case should have a scope is asked in issue 17.
 
 What the pass decides beyond finding a name:
 
@@ -305,7 +311,6 @@ specification to decide:
 | A test helper's name in a declaration outside the tests | Not in scope there: a parameter or local may take it |
 | A module alias used without `::name` | Rejected: an alias names nothing by itself |
 | A test's name used as a value | Not bound: left for the prelude like any unbound name |
-| The statements of a `switch` case | A scope of their own, as a block is |
 | `inject` in an anonymous function's surroundings | Not usable inside it: FN-14 lists what is, and it is not listed |
 | Two native implementations of one declaration, in different parts | Accepted: which part is selected is a target's choice (NATIVE-4). Two in one part are rejected |
 

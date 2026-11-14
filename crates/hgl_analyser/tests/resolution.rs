@@ -224,10 +224,6 @@ fn blocks_that_do_not_enclose_one_another_may_reuse_a_name() {
         "    if value == 1 {\n        let local = 1\n        return local\n    }\n",
         "    if value == 2 {\n        let local = 2\n        return local\n    }\n",
         "    for local in [1, 2] { }\n",
-        "    switch value {\n",
-        "        case 1:\n            let chosen = 1\n",
-        "        case 2:\n            let chosen = 2\n",
-        "    }\n",
         "    return value\n",
         "}\n",
         "const fn second<T>(value: T) -> T {\n    let local = value\n    return local\n}\n",
@@ -271,6 +267,44 @@ fn the_chapters_rejections_are_rejected() {
             "m.hgl:15:44 name/default.formal_argument UNIT-7",
         ]
     );
+}
+
+/// UNIT-12: "A block's scope is the scope around it plus its own
+/// bindings; an anonymous function's is the scope around it plus its
+/// parameters". The statements under a `switch` case are neither, and
+/// the grammar gives a case no block, so what a case declares is
+/// declared in the block the `switch` stands in. UNIT-5: "Duplicate ...
+/// local bindings in one scope are rejected."
+#[test]
+fn a_switch_case_declares_in_the_block_around_its_switch() {
+    let checked = module(concat!(
+        "const fn pick(value: i64) -> i64 {\n",
+        "    let before = early\n",
+        "    switch value {\n",
+        "        case 1:\n",
+        "            let chosen = 1\n",
+        "            let early = 2\n",
+        "        case 2:\n",
+        "            let chosen = 2\n",
+        "        default:\n",
+        "            let other = chosen\n",
+        "    }\n",
+        "    return other\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:18 name/name.used_before_declaration UNIT-6",
+            "m.hgl:9:17 name/name.duplicate UNIT-5",
+        ]
+    );
+    assert_eq!(checked.prelude_names("m"), NONE);
+    let tail: Vec<String> = uses(&checked, "m")
+        .into_iter()
+        .filter(|line| line.starts_with("chosen") || line.starts_with("other"))
+        .collect();
+    assert_eq!(tail, ["chosen 11:25 -> Let", "other 13:12 -> Let"]);
 }
 
 // ---- UNIT-6 and UNIT-7 ----
@@ -480,6 +514,9 @@ fn generic_scope_covers_the_whole_declaration() {
         // `U` is bound only inside its braces, and takes no name around
         // them.
         "fn outside<T, ...Ts>(value: T) requires each T in types(Ts) { numeric(T) } && comparable(U) {}\n",
+        // The generic parameters are in scope of one another, whatever
+        // their order: the type of `N` is the `T` after it.
+        "fn ordered<const N: T, T>(value: T) {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -488,6 +525,14 @@ fn generic_scope_covers_the_whole_declaration() {
     assert_eq!(
         checked.prelude_names("m"),
         ["types", "comparable", "numeric", "U"]
+    );
+    let ordered: Vec<String> = uses(&checked, "m")
+        .into_iter()
+        .filter(|line| line.contains(" 9:"))
+        .collect();
+    assert_eq!(
+        ordered,
+        ["T 9:21 -> GenericParameter", "T 9:34 -> GenericParameter"]
     );
     let total: Vec<String> = uses(&checked, "m")
         .into_iter()
@@ -558,6 +603,48 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         ]
     );
     assert_eq!(checked.prelude_names("m"), ["unknown"]);
+}
+
+/// GEN-14: the same holds for a generic type reached as `alias::name`
+/// or through a selective import.
+#[test]
+fn an_imported_generic_type_is_not_ordered_either() {
+    let checked = check(&[
+        ("lib.hgl", "module lib\nexport struct Box<T> { value: T }\n"),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib as l\n",
+                "const fn first(a: i64) -> bool => l::Box < a\n",
+                "const fn made(a: i64, b: i64) -> bool => l::Box<a>(b)\n",
+            ),
+        ),
+        (
+            "part.hgl",
+            concat!(
+                "module m part second\n",
+                "use lib::{Box}\n",
+                "const fn second(a: i64) -> bool => Box < a\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:38 type/generic.invalid_application GEN-14",
+            "part.hgl:3:36 type/generic.invalid_application GEN-14",
+        ]
+    );
+    let decisions: Vec<Option<bool>> = checked
+        .program
+        .module("m")
+        .unwrap()
+        .decisions
+        .iter()
+        .map(|decision| decision.constructor)
+        .collect();
+    assert_eq!(decisions, [Some(true)]);
 }
 
 // ---- Scopes of the other statements ----
