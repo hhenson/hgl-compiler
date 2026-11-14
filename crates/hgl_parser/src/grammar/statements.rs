@@ -54,7 +54,7 @@ impl Parser<'_> {
     /// header it belongs to. LEX-5: "A body's opening brace stays with its
     /// header."
     pub(crate) fn header_brace(&mut self) {
-        if self.nl() {
+        if self.broken() {
             self.error(
                 "a body's opening brace stays on its header's line",
                 "LEX-5",
@@ -102,15 +102,13 @@ impl Parser<'_> {
                 // `yield_statement = "yield", expression, ":", expression ;`
                 self.start(YieldStmt);
                 self.bump();
-                if self.on_line("an expression") {
+                if self.goes_on("an expression") {
                     self.expression();
                 }
-                // This colon is not one LEX-5 lists, so the value stays
-                // on the line.
-                if !self.eat(Colon) {
-                    self.expected("`:`");
-                } else if self.on_line("an expression") {
+                if self.eat(Colon) {
                     self.expression();
+                } else {
+                    self.expected("`:`");
                 }
                 self.finish();
             }
@@ -132,7 +130,6 @@ impl Parser<'_> {
         self.expect_name("a name");
         let typed = self.eat(Colon);
         if typed {
-            self.continue_line();
             self.type_();
         }
         if self.at_assign() && !self.nl() {
@@ -153,7 +150,6 @@ impl Parser<'_> {
         self.bump();
         self.expect_name("a name");
         if self.eat(Colon) {
-            self.continue_line();
             self.type_();
         }
         if self.at_assign() && !self.nl() {
@@ -173,7 +169,7 @@ impl Parser<'_> {
         while self.eat(Comma) {
             // LEX-6: "An inject list may continue after a comma when the
             // next line begins with a name."
-            if self.at(Ident) {
+            if self.at(Ident) && !self.cut() {
                 self.bump();
             } else {
                 break;
@@ -194,7 +190,7 @@ impl Parser<'_> {
     fn conditional(&mut self, kind: SyntaxKind) {
         self.start(kind);
         self.bump();
-        if !self.at(LBrace) && self.on_line("a condition or `{`") {
+        if !self.at(LBrace) && self.goes_on("a condition or `{`") {
             let context = Context {
                 no_brace: true,
                 ..self.context
@@ -214,11 +210,10 @@ impl Parser<'_> {
         self.bump();
         self.expect_name("a name");
         if self.eat(Comma) {
-            self.continue_line();
             self.expect_name("a name");
         }
         // LEX-10: `in` is a name with a meaning only here.
-        if self.expect_word("in") && self.on_line("an expression") {
+        if self.expect_word("in") && self.goes_on("an expression") {
             self.expression();
         }
         self.body_block();
@@ -232,7 +227,7 @@ impl Parser<'_> {
     fn assert_stmt(&mut self) {
         self.start(AssertStmt);
         self.bump();
-        if !self.on_line("an expression") {
+        if !self.goes_on("an expression") {
             self.finish();
             return;
         }
@@ -313,7 +308,6 @@ impl Parser<'_> {
             self.start(AssignStmt);
             self.place();
             self.bump();
-            self.continue_line();
             self.expression();
             self.finish();
         } else {
@@ -380,20 +374,20 @@ impl Parser<'_> {
                     break;
                 }
                 if !parser.at_switch_label() {
-                    parser.continue_line();
+                    parser.begin_entry();
                     parser.expected("`case` or `default`");
                     parser.skip_line(true);
                     continue;
                 }
                 if default_seen {
                     // The grammar puts `default` last.
-                    parser.continue_line();
+                    parser.begin_entry();
                     parser.expected("`}`");
                 }
                 if parser.at_word("case") {
                     parser.start(SwitchCase);
                     parser.bump();
-                    if parser.on_line("a value") {
+                    if parser.goes_on("a value") {
                         parser.expression();
                     }
                 } else {

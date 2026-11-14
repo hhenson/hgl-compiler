@@ -64,7 +64,7 @@ impl Parser<'_> {
                 break;
             }
             // `lines` stops at a `}`; here no block is open for it to close.
-            self.continue_line();
+            self.begin_entry();
             self.expected("a statement");
             self.leaf(Error);
         }
@@ -88,9 +88,9 @@ impl Parser<'_> {
             if self.at(Eof) || (in_test && self.at(RBrace)) {
                 break;
             }
-            // The line break before the item has separated it from the
-            // last one; its first token is on "the line being read".
-            self.continue_line();
+            // The line breaks before the item have separated it from the
+            // last one and are not counted against its first token.
+            self.begin_entry();
             let Some(item) = self.item_kind() else {
                 self.expected("a declaration");
                 self.skip_to_item(in_test);
@@ -265,7 +265,7 @@ impl Parser<'_> {
         self.bump();
         self.module_path();
         if self.eat(ColonColon) {
-            if self.at(LBrace) && !self.nl() {
+            if self.at(LBrace) && !self.cut() {
                 self.start(ImportSet);
                 self.bump();
                 // LEX-5: line breaks do not count inside an import set.
@@ -306,8 +306,8 @@ impl Parser<'_> {
         while self.at(At) {
             annotated = true;
             self.warning_annotation();
-            if self.nl() {
-                self.continue_line();
+            if self.at_line_start() {
+                self.begin_entry();
             } else if !self.at(Eof) {
                 self.expected_rule("a line break", "ERR-10");
             }
@@ -320,7 +320,7 @@ impl Parser<'_> {
 
         let mut implementation = false;
         if self.eat(KwExport) {
-            if self.at(KwImpl) && !self.nl() {
+            if self.at(KwImpl) && !self.cut() {
                 // The grammar has `export fn` and `impl fn` and no form
                 // with both: an implementation is reached through its
                 // operator.
@@ -333,7 +333,7 @@ impl Parser<'_> {
         }
         // FN-5: `const` is a modifier here because `fn` follows it. As the
         // function's name, after `fn`, it is an ordinary identifier.
-        if self.at_word("const") && self.nth(1) == KwFn && !self.nl() {
+        if self.at_word("const") && self.nth(1) == KwFn && !self.cut() {
             if implementation {
                 self.expected("`fn`");
             }
@@ -342,10 +342,8 @@ impl Parser<'_> {
         self.expect(KwFn);
         self.expect_name("a function name");
         self.callable_header();
-        if self.at(FatArrow) {
-            if self.nl() {
-                self.error("`=>` stays on its header's line", "LEX-5", None);
-            }
+        // LEX-5: `=>` cannot begin a declaration, so it may start a line.
+        if self.at(FatArrow) && !self.cut() {
             self.arrow_body();
         } else if self.at(LBrace) {
             self.body_block();
@@ -360,7 +358,7 @@ impl Parser<'_> {
         self.start(WarningAnnotation);
         self.bump();
         // LEX-10: `suppress_warning` is a name with a meaning only here.
-        if self.at_word("suppress_warning") && !self.nl() {
+        if self.at_word("suppress_warning") && !self.cut() {
             self.bump();
         } else {
             self.expected_rule("`suppress_warning`", "ERR-10");
@@ -385,7 +383,7 @@ impl Parser<'_> {
         }
         self.signature();
         // A `requires` clause may stand on its own line.
-        if self.at(KwRequires) {
+        if self.at(KwRequires) && !self.nl() {
             self.requires_clause();
         }
     }
@@ -395,7 +393,9 @@ impl Parser<'_> {
     /// parameters = parameter, { ",", parameter }, [ "," ] ;
     /// ```
     fn signature(&mut self) {
-        if self.at(LParen) && !self.nl() {
+        // The parameter list is required, so one line break before it is
+        // ignored: the declaration is incomplete without it.
+        if self.at(LParen) && !self.cut() {
             self.start(ParamList);
             self.bump();
             self.nested(Context::LIST, |parser| {
@@ -406,7 +406,7 @@ impl Parser<'_> {
             self.expected("`(`");
         }
         // LEX-5: a result arrow may start a line.
-        if self.at(Arrow) {
+        if self.at(Arrow) && !self.nl() {
             self.return_type();
         }
     }
@@ -415,7 +415,6 @@ impl Parser<'_> {
     pub(crate) fn return_type(&mut self) {
         self.start(ReturnType);
         self.bump();
-        self.continue_line();
         self.type_();
         self.finish();
     }
@@ -428,7 +427,6 @@ impl Parser<'_> {
     pub(crate) fn arrow_body(&mut self) {
         self.start(ArrowBody);
         self.bump();
-        self.continue_line();
         self.expression();
         self.finish();
     }
@@ -440,6 +438,8 @@ impl Parser<'_> {
     ///           | IDENTIFIER, ":", "...", type
     ///           | IDENTIFIER, ":", "...", "{", type, "}" ;
     /// ```
+    ///
+    /// with `[ cardinality ]` after either pack form.
     ///
     /// One permissive form is parsed: an optional `const`, a name, a type
     /// or pack, an optional default. Which combinations mean something is
@@ -469,6 +469,10 @@ impl Parser<'_> {
                     self.finish();
                 } else {
                     self.type_();
+                }
+                // GEN-10: a cardinality follows the pack it bounds.
+                if self.at(LBrace) {
+                    self.cardinality();
                 }
             } else {
                 self.type_();
@@ -503,9 +507,8 @@ impl Parser<'_> {
         if self.at(Colon) && !self.nl() {
             self.start(StructBases);
             self.bump();
-            self.continue_line();
             loop {
-                if self.at(Ident) {
+                if self.at(Ident) && !self.cut() {
                     self.named_type();
                 } else {
                     self.expected("a type name");
@@ -514,11 +517,10 @@ impl Parser<'_> {
                 if !self.eat(Comma) {
                     break;
                 }
-                self.continue_line();
             }
             self.finish();
         }
-        if self.at(KwRequires) {
+        if self.at(KwRequires) && !self.nl() {
             self.requires_clause();
         }
         if self.at(LBrace) {
@@ -552,7 +554,6 @@ impl Parser<'_> {
         self.start(StructMember);
         self.bump();
         if self.eat(Colon) {
-            self.continue_line();
             self.type_();
             if self.at_assign() && !self.nl() {
                 self.eat_assign();
@@ -617,7 +618,8 @@ impl Parser<'_> {
         self.callable_header();
         // LEX-10: `properties` is a name with a meaning only here. Like
         // `requires`, a properties clause may stand on its own line.
-        while self.at_word("properties") {
+        // LEX-5: a `properties` clause continues its operator declaration.
+        while self.at_word("properties") && !self.cut() {
             self.operator_properties();
         }
         self.finish();
@@ -638,7 +640,7 @@ impl Parser<'_> {
         } else {
             self.expected("`<`");
         }
-        if self.at(LBrace) && !self.nl() {
+        if self.at(LBrace) && !self.cut() {
             self.bump();
             // LEX-5: line breaks do not count inside a property list.
             self.nested(Context::PLAIN, |parser| {
@@ -709,10 +711,9 @@ impl Parser<'_> {
             if !self.eat(Comma) {
                 break;
             }
-            self.continue_line();
             // A comma may end the list. It goes on only when another
             // instantiation follows.
-            if !(self.at(Ident) && self.nth(1) == Lt) {
+            if !(self.at(Ident) && self.nth(1) == Lt) || self.cut() {
                 break;
             }
         }
@@ -740,7 +741,7 @@ impl Parser<'_> {
         self.start(NativeFnDecl);
         self.no_export();
         self.expect_word("native");
-        if self.at_word("const") && !self.nl() {
+        if self.at_word("const") && !self.cut() {
             self.bump();
         }
         self.expect(KwFn);
@@ -768,7 +769,7 @@ impl Parser<'_> {
                 match parser.current() {
                     RBrace | Eof => break,
                     KwInject => {
-                        parser.continue_line();
+                        parser.begin_entry();
                         parser.inject_decl();
                         parser.eat(Semicolon);
                     }
@@ -782,7 +783,7 @@ impl Parser<'_> {
                     _ => {
                         // NATIVE-3: a contract body states what the native
                         // code does; it holds no statements.
-                        parser.continue_line();
+                        parser.begin_entry();
                         parser.expected_rule("`inject`, `start;`, `when;` or `stop;`", "NATIVE-3");
                         parser.skip_line(true);
                     }

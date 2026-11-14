@@ -17,8 +17,10 @@
 //!   was when the thing is absent, and reports nothing. Its caller decides
 //!   whether absence is an error.
 //! * A token whose kind has just been checked is taken with `bump`. A
-//!   token that must follow on the same line is taken with `eat` or
-//!   `expect`, which do not reach across a line break (LEX-5).
+//!   token the grammar needs next is taken with `eat` or `expect`, which
+//!   reach across one line break and not across a blank line (LEX-5).
+//!   Where what has been parsed could be all there is, the function asks
+//!   `nl` before going on.
 //! * After an error, parsing goes on with what is there. Later stages can
 //!   rely on a node's kind, never on a node being complete.
 
@@ -55,6 +57,45 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Minus
             | SyntaxKind::Bang
     )
+}
+
+/// True for a token that can begin a declaration or a statement.
+///
+/// LEX-5: after one line break, such a token begins a new declaration or
+/// statement; any other token continues the line before. A name counts,
+/// whatever it spells, since a statement can begin with a name. So do `-`
+/// and `!`, which begin an expression, and `(`, `[` and `{`.
+pub(crate) fn can_begin(kind: SyntaxKind) -> bool {
+    can_start_expression(kind)
+        || matches!(
+            kind,
+            // Statements.
+            SyntaxKind::KwLet
+                | SyntaxKind::KwVar
+                | SyntaxKind::KwReturn
+                | SyntaxKind::KwState
+                | SyntaxKind::KwCache
+                | SyntaxKind::KwInject
+                | SyntaxKind::KwStart
+                | SyntaxKind::KwStop
+                | SyntaxKind::KwWhen
+                | SyntaxKind::KwWhile
+                | SyntaxKind::KwFor
+                | SyntaxKind::KwYield
+                | SyntaxKind::KwAssert
+                // Declarations.
+                | SyntaxKind::KwModule
+                | SyntaxKind::KwUse
+                | SyntaxKind::KwExport
+                | SyntaxKind::KwImpl
+                | SyntaxKind::KwStruct
+                | SyntaxKind::KwAbstract
+                | SyntaxKind::KwEnum
+                | SyntaxKind::KwOperator
+                | SyntaxKind::KwInstantiate
+                | SyntaxKind::KwTest
+                | SyntaxKind::At
+        )
 }
 
 /// True for a reserved word that names a scalar type.

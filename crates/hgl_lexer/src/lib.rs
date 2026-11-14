@@ -18,7 +18,9 @@
 //! * **Significant line breaks (LEX-5, LEX-6).** Whether a line break
 //!   ends a statement depends on enclosing brackets and neighbouring
 //!   tokens. Every line break (LF, CRLF or CR) is one
-//!   [`TokenKind::Newline`] token; the parser decides which matter.
+//!   [`TokenKind::Newline`] token; the parser decides which matter. One
+//!   that follows a `\` is no line break at all (LEX-26): it is part of a
+//!   [`TokenKind::LineContinuation`] token.
 //! * **Comments that span lines (LEX-21).** A block or documentation
 //!   comment that contains a line break counts as one line break where it
 //!   stands. The comment is one token with its text; the parser looks

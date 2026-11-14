@@ -124,9 +124,10 @@ fn a_line_break_inside_a_list_is_ignored() {
     // lists, and inside braces that hold a list rather than statements or
     // members: import sets, constraint sets and `each` constraints,
     // operator property lists, pack types, and operator configuration".
+    // Blank lines too: nothing in there is a line of its own.
     use Entry::{Declarations, Statements};
     for (entry, text, plain) in [
-        (Statements, "f(\n    a,\n    b\n)", "f(a, b)"),
+        (Statements, "f(\n    a,\n\n    b\n)", "f(a, b)"),
         (Statements, "[\n    a,\n    b\n]", "[a, b]"),
         (Statements, "a[\n    0\n]", "a[0]"),
         (
@@ -171,32 +172,50 @@ fn a_line_break_inside_a_list_is_ignored() {
 }
 
 #[test]
-fn a_line_break_after_a_token_that_cannot_end_a_line_is_ignored() {
-    // LEX-5: "after a comma, binary/assignment operator, `=`, `=>`, `->`,
-    // or a type/named-argument colon".
+fn a_line_break_in_an_incomplete_statement_is_ignored() {
+    // LEX-5: "ignore the one line break between two tokens where the
+    // declaration or statement before it is incomplete". What follows
+    // need not look like a continuation: nothing could have ended.
     use Entry::{Declarations, Statements};
     for (entry, text, plain) in [
+        (Statements, "let a = b +\n    c", "let a = b + c"),
+        (Statements, "let a = b &&\n    c", "let a = b && c"),
+        (Statements, "a +=\n    2", "a += 2"),
+        (Statements, "let a =\n    1", "let a = 1"),
+        (Statements, "let\n    a = 1", "let a = 1"),
+        (Statements, "let a = -\n    b", "let a = -b"),
+        (Statements, "let u:\n    i64 = 1", "let u: i64 = 1"),
+        (Statements, "a.\n    b", "a.b"),
+        (
+            Statements,
+            "when\n    ready { step() }",
+            "when ready { step() }",
+        ),
+        (Statements, "for a\n    in b { c }", "for a in b { c }"),
+        (Statements, "yield a:\n    b", "yield a: b"),
+        (
+            Statements,
+            "if a { b } else\nif c { d }",
+            "if a { b } else if c { d }",
+        ),
         (Declarations, "enum E { a,\n    b }", "enum E { a, b }"),
         (
             Declarations,
             "struct S : A,\n    B {}",
             "struct S : A, B {}",
         ),
-        (Statements, "let a = b +\n    c", "let a = b + c"),
-        (Statements, "let a = b &&\n    c", "let a = b && c"),
-        (Statements, "a +=\n    2", "a += 2"),
-        (Statements, "let a =\n    1", "let a = 1"),
         (Declarations, "fn f() =>\n    1", "fn f() => 1"),
-        (
-            Declarations,
-            "fn f() ->\n    i64 { return 1 }",
-            "fn f() -> i64 { return 1 }",
-        ),
-        (Statements, "let u:\n    i64 = 1", "let u: i64 = 1"),
+        (Declarations, "fn\nf\n()\n-> i64 => 1", "fn f() -> i64 => 1"),
+        (Declarations, "use a.b\n    as c", "use a.b as c"),
         (
             Declarations,
             "struct S { a:\n    i64 }",
             "struct S { a: i64 }",
+        ),
+        (
+            Declarations,
+            "fn f<T>() requires !\n    p(T) => 1",
+            "fn f<T>() requires !p(T) => 1",
         ),
     ] {
         same_tree(entry, text, plain);
@@ -204,47 +223,147 @@ fn a_line_break_after_a_token_that_cannot_end_a_line_is_ignored() {
 }
 
 #[test]
-fn a_line_break_before_a_token_that_continues_a_line_is_ignored() {
-    // LEX-5: "before a binary operator, result arrow, or matching `else`".
+fn a_line_that_cannot_begin_a_statement_continues_the_one_before() {
+    // LEX-5: "or where the token after it cannot begin a declaration or
+    // statement and continues the one before".
     use Entry::{Declarations, Statements};
     for (entry, text, plain) in [
         (Statements, "let a = b\n    + c", "let a = b + c"),
-        (Statements, "let a = b\n    - c", "let a = b - c"),
         (Statements, "let a = b\n    == c", "let a = b == c"),
+        (Statements, "let a = b\n    .c\n    .d()", "let a = b.c.d()"),
+        (Statements, "let a = f(x)\n    ?", "let a = f(x)?"),
+        (Statements, "let a\n    = 1", "let a = 1"),
+        (Statements, "var x: i64\n    = 1", "var x: i64 = 1"),
+        (Statements, "var a: f64\n    ?", "var a: f64?"),
+        (Statements, "total\n    += 1", "total += 1"),
+        (Statements, "f(a\n, b)", "f(a, b)"),
+        (
+            Statements,
+            "if a { b }\nelse if c { d }\nelse { e }",
+            "if a { b } else if c { d } else { e }",
+        ),
+        (
+            Declarations,
+            "fn f() -> i64\n    => 1",
+            "fn f() -> i64 => 1",
+        ),
         (
             Declarations,
             "fn f()\n    -> i64 { return 1 }",
             "fn f() -> i64 { return 1 }",
         ),
         (
-            Statements,
-            "if a { b }\nelse { c }",
-            "if a { b } else { c }",
+            Declarations,
+            "fn f<T>() -> T\n    requires T in {i64, f64}\n    => 1",
+            "fn f<T>() -> T requires T in {i64, f64} => 1",
         ),
+        (
+            Declarations,
+            "enum E {\n    a\n    , b\n}",
+            "enum E { a, b }",
+        ),
+        (Declarations, "struct S\n    : A {}", "struct S : A {}"),
     ] {
         same_tree(entry, text, plain);
     }
-}
-
-#[test]
-fn a_bang_does_not_continue_a_line() {
-    // LEX-5: "`!` does not continue a line."
-    assert_eq!(
-        statements("let a = b\n!c"),
-        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]] ExprStmt[UnaryExpr[\"!\" NameExpr[\"c\"]]]"
+    // "a `properties` clause continues its operator declaration", though
+    // `properties` is a name.
+    same_tree(
+        Entry::Declarations,
+        "operator add(a: i64) -> i64\n    properties<i64>\n    { associative }",
+        "operator add(a: i64) -> i64 properties<i64> { associative }",
+    );
+    // A `<` that starts a line continues it, and is then read as on one
+    // line: here both as generic arguments and as comparisons (GEN-14).
+    same_tree(
+        Entry::Statements,
+        "let x = a\n< b > (c)",
+        "let x = a < b > (c)",
     );
 }
 
 #[test]
-fn a_call_or_an_index_does_not_cross_a_line_break() {
-    // LEX-5: "Postfix calls/indexing do not cross a significant newline."
+fn a_line_that_can_begin_a_statement_begins_one() {
+    // LEX-5: "A token that can begin one does: `-`, `!`, `(`, and `[`
+    // start a new statement, so a prefix operator, a call, and an index
+    // do not continue a line."
+    let first = "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]]";
+    assert_eq!(
+        statements("let a = b\n    - c"),
+        format!("{first} ExprStmt[UnaryExpr[\"-\" NameExpr[\"c\"]]]")
+    );
+    assert_eq!(
+        statements("let a = b\n!c"),
+        format!("{first} ExprStmt[UnaryExpr[\"!\" NameExpr[\"c\"]]]")
+    );
     assert_eq!(
         statements("let a = b\n(c)"),
-        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]] ExprStmt[ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]"
+        format!("{first} ExprStmt[ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]")
     );
     assert_eq!(
         statements("let a = b\n[c]"),
-        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]] ExprStmt[SequenceExpr[\"[\" NameExpr[\"c\"] \"]\"]]"
+        format!("{first} ExprStmt[SequenceExpr[\"[\" NameExpr[\"c\"] \"]\"]]")
+    );
+    // A name, however far it is indented (LEX-6), and `return`'s value.
+    assert_eq!(
+        statements("let a = b\n        c"),
+        format!("{first} ExprStmt[NameExpr[\"c\"]]")
+    );
+    assert_eq!(
+        statements("return\nvalue"),
+        "ReturnStmt[\"return\"] ExprStmt[NameExpr[\"value\"]]"
+    );
+}
+
+#[test]
+fn two_line_breaks_always_separate() {
+    // LEX-5: "Two or more line breaks between two tokens, as around a
+    // blank line, always separate." What is incomplete stays so.
+    assert_eq!(
+        rejected(Entry::Statements, "let a = b +\n\n    c")[0],
+        "- 1:12: expected an expression, found end of line"
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "let a = b\n\n    + c"),
+        ["- 3:5: expected a statement, found `+`"]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "if a { b }\n\nelse { c }"),
+        ["- 3:1: expected a statement, found `else`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f() -> i64\n\n    => 1")[0],
+        "- 1:14: expected `=>` or `{`, found end of line"
+    );
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "operator add(a: i64) -> i64\n\n    properties<i64> { associative }"
+        ),
+        ["- 3:5: expected a declaration, found `properties`"]
+    );
+    // A line that holds only a comment is a line: two line breaks.
+    assert_eq!(
+        rejected(Entry::Statements, "let a = b\n    # why\n    + c"),
+        ["- 3:5: expected a statement, found `+`"]
+    );
+    // A comment at the end of a line adds none.
+    same_tree(
+        Entry::Statements,
+        "let a = b  # why\n    + c",
+        "let a = b + c",
+    );
+    // Between statements, and between the members of an enum, blank
+    // lines are where the grammar has line breaks already.
+    same_tree(
+        Entry::Statements,
+        "let a = 1\n\n\nlet b = 2",
+        "let a = 1\nlet b = 2",
+    );
+    same_tree(
+        Entry::Declarations,
+        "enum E {\n    a,\n\n    b\n}",
+        "enum E { a, b }",
     );
 }
 
@@ -265,34 +384,6 @@ fn a_bodys_opening_brace_stays_with_its_header() {
     let outcome = run(Entry::Statements, "when ready\n{ step() }\nother()");
     assert_eq!(outcome.rules(), ["LEX-5"]);
     assert!(!outcome.has_error_node());
-}
-
-#[test]
-fn a_line_break_anywhere_else_ends_the_line() {
-    // LEX-5 lists where a line break is ignored. This parser ignores one
-    // nowhere else, so a line that stops short is incomplete. (LEX-5's
-    // first sentence could be read more widely; the reading is reported
-    // to the specification's issue tracker.)
-    assert_eq!(
-        rejected(Entry::Statements, "let\n    a = 1"),
-        ["- 1:4: expected a name, found end of line"]
-    );
-    assert_eq!(
-        rejected(Entry::Statements, "let a = -\n    b"),
-        ["- 1:10: expected an expression, found end of line"]
-    );
-    assert_eq!(
-        rejected(Entry::Statements, "let a = b\n    .c"),
-        ["- 2:5: expected a statement, found `.`"]
-    );
-    assert_eq!(
-        rejected(Entry::Declarations, "fn f() -> i64\n    => 1"),
-        ["LEX-5 2:5: `=>` stays on its header's line"]
-    );
-    assert_eq!(
-        rejected(Entry::Declarations, "enum Side {\n    buy\n    , sell\n}"),
-        ["- 2:8: expected `,` or `}`, found end of line"]
-    );
 }
 
 // ---- LEX-6 ----
@@ -510,6 +601,51 @@ fn a_comment_that_holds_a_line_break_counts_as_one() {
         statements("let a = 1 # note\nlet b = 2"),
         "LocalDecl[\"let\" \"a\" \"=\" Literal[\"1\"]] LocalDecl[\"let\" \"b\" \"=\" Literal[\"2\"]]"
     );
+}
+
+// ---- LEX-26 ----
+
+#[test]
+fn a_backslash_before_a_line_break_continues_the_line() {
+    // LEX-26: "its line break is not a line break: the next line
+    // continues the current one whatever it begins with".
+    for (text, plain) in [
+        ("let a = b \\\n    - c", "let a = b - c"),
+        ("let a = f \\\n    (c)", "let a = f(c)"),
+        ("let a = b \\\n    [0]", "let a = b[0]"),
+        ("return \\\n    value", "return value"),
+        // Spaces and tabs may stand between the `\` and the line break.
+        ("let a = b \\  \t\n    - c", "let a = b - c"),
+        // Each form of line break (LEX-15).
+        ("let a = b \\\r\n    - c", "let a = b - c"),
+        ("let a = b \\\r    - c", "let a = b - c"),
+    ] {
+        same_tree(Entry::Statements, text, plain);
+    }
+    // It joins one line break. A blank line after it still separates.
+    assert_eq!(
+        statements("let a = b \\\n\n    - c"),
+        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]] ExprStmt[UnaryExpr[\"-\" NameExpr[\"c\"]]]"
+    );
+    // The tree keeps it, as it keeps all whitespace.
+    let outcome = run(Entry::Statements, "let a = b \\\n    - c");
+    assert!(
+        outcome
+            .tree
+            .descendants_with_tokens()
+            .any(|element| element.kind() == SyntaxKind::LineContinuation)
+    );
+}
+
+#[test]
+fn a_backslash_anywhere_else_begins_no_token() {
+    // LEX-26: "No comment follows the `\` on its line. Outside a string
+    // literal or comment, any other `\` begins no token".
+    let outcome = run(Entry::Statements, "let a = b \\ + c");
+    assert_eq!(outcome.rules(), ["LEX-26"]);
+    assert_eq!(outcome.findings[0].code, "syntax.unexpected_character");
+    let outcome = run(Entry::Statements, "let a = b \\ # note\n    + c");
+    assert_eq!(outcome.rules(), ["LEX-26"]);
 }
 
 // ---- UNIT-1 ----
@@ -760,23 +896,20 @@ fn named_braces_after_an_operator_are_its_configuration() {
 
 #[test]
 fn a_configuration_goes_where_its_operator_goes() {
-    // LEX-5 with EXPR-10: a binary operator continues a line, with its
-    // configuration; a prefix operator does not, with or without one.
+    // LEX-5 with EXPR-10: an operator that needs its operand is
+    // incomplete, with or without its configuration.
     for (text, plain) in [
         ("a /\n    {zero: ieee} b", "a /{zero: ieee} b"),
         ("a /{zero: ieee}\n    b", "a /{zero: ieee} b"),
         ("a\n    /{zero: ieee} b", "a /{zero: ieee} b"),
+        ("let x = !\n    {mode: 1} true", "let x = !{mode: 1} true"),
+        ("let x = !{mode: 1}\n    true", "let x = !{mode: 1} true"),
     ] {
         same_tree(Entry::Statements, text, plain);
     }
-    // The braces on the next line are then a statement of their own.
     assert_eq!(
-        rejected(Entry::Statements, "let x = !\n{mode: 1} true")[0],
-        "- 1:10: expected an expression, found end of line"
-    );
-    assert_eq!(
-        rejected(Entry::Statements, "let x = !{mode: 1}\ntrue"),
-        ["- 1:19: expected an expression, found end of line"]
+        rejected(Entry::Statements, "let x = !{mode: 1}\n\ntrue")[0],
+        "- 1:19: expected an expression, found end of line"
     );
 }
 
@@ -914,6 +1047,57 @@ fn an_underscore_keeps_an_instantiate_parameter_open() {
     );
 }
 
+// ---- GEN-10 ----
+
+#[test]
+fn a_cardinality_follows_the_pack_it_bounds() {
+    // GEN-10: "A cardinality follows the pack it bounds, on a pack
+    // parameter or a generic pack parameter: `{n}`, `{n:*}`, and `{n:m}`
+    // mean exact, minimum, and inclusive bounded arity."
+    assert_eq!(
+        declarations("operator first_of<T>(values: ...T{1:*}) -> T"),
+        "OperatorDecl[\"operator\" \"first_of\" GenericParams[\"<\" GenericParam[\"T\"] \">\"] \
+         ParamList[\"(\" Param[\"values\" \":\" \"...\" NamedType[\"T\"] \
+         Cardinality[\"{\" \"1\" \":\" \"*\" \"}\"]] \")\"] ReturnType[\"->\" NamedType[\"T\"]]]"
+    );
+    assert_eq!(
+        declarations("operator pair_of<...Ts{2}>(values: ...Ts) -> str"),
+        "OperatorDecl[\"operator\" \"pair_of\" GenericParams[\"<\" GenericParam[\"...\" \"Ts\" \
+         Cardinality[\"{\" \"2\" \"}\"]] \">\"] ParamList[\"(\" Param[\"values\" \":\" \"...\" NamedType[\"Ts\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"str\"]]]"
+    );
+    // The grammar admits one after the braced pack form as well.
+    assert_eq!(
+        declarations("operator described(fields: ...{str}{1:4}) -> str"),
+        "OperatorDecl[\"operator\" \"described\" ParamList[\"(\" Param[\"fields\" \":\" \"...\" \
+         PackType[\"{\" ScalarType[\"str\"] \"}\"] Cardinality[\"{\" \"1\" \":\" \"4\" \"}\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"str\"]]]"
+    );
+}
+
+#[test]
+fn a_cardinality_stands_nowhere_else_and_holds_integers() {
+    // The chapter's rejection: "a cardinality on a parameter that is no
+    // pack, as in `value: f64{2}`".
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f(value: f64{2}) {}"),
+        ["- 1:16: expected `,` or `)`, found `{`"]
+    );
+    // `cardinality = "{", INTEGER_LITERAL, [ ":", ( INTEGER_LITERAL | "*" ) ], "}" ;`
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f(values: ...f64{}) {}"),
+        ["- 1:21: expected an integer, found `}`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f(values: ...f64{1:}) {}"),
+        ["- 1:23: expected an integer or `*`, found `}`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f(values: ...f64{n}) {}")[0],
+        "- 1:21: expected an integer, found `n`"
+    );
+}
+
 // ---- GEN-14 ----
 
 #[test]
@@ -970,13 +1154,6 @@ fn a_comparison_that_cannot_be_a_constructor_is_a_comparison() {
         statements("a < b && c > d"),
         "ExprStmt[BinaryExpr[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]] \"&&\" \
          BinaryExpr[NameExpr[\"c\"] \">\" NameExpr[\"d\"]]]]"
-    );
-    // Generic arguments open on the name's line (LEX-5): a `<` that
-    // starts a line is a binary operator continuing the line before.
-    assert_eq!(
-        statements("let x = a\n< b > (c)"),
-        "LocalDecl[\"let\" \"x\" \"=\" BinaryExpr[BinaryExpr[NameExpr[\"a\"] \"<\" NameExpr[\"b\"]] \">\" \
-         ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]]"
     );
 }
 
@@ -1149,8 +1326,9 @@ fn a_constraint_relation_has_an_operand_on_each_side() {
 
 #[test]
 fn a_constraint_follows_the_line_rules_of_an_expression() {
-    // LEX-5: `&&`, `||` and a relation's operator continue a line, before
-    // and after; `!` does not.
+    // LEX-5: `&&`, `||` and a relation's operator cannot begin a
+    // declaration, so each may start a line; and a constraint that still
+    // needs an operand or a term is incomplete.
     for (text, plain) in [
         (
             "fn f() requires p(T) &&\n    q(T) {}",
@@ -1168,57 +1346,24 @@ fn a_constraint_follows_the_line_rules_of_an_expression() {
             "fn f() requires T\n    == U {}",
             "fn f() requires T == U {}",
         ),
+        (
+            "fn f() requires T\n    in {i64} {}",
+            "fn f() requires T in {i64} {}",
+        ),
+        (
+            "fn f<...Ts>() requires each\n    T in Ts { p(T) } {}",
+            "fn f<...Ts>() requires each T in Ts { p(T) } {}",
+        ),
     ] {
         same_tree(Entry::Declarations, text, plain);
     }
     assert_eq!(
-        rejected(Entry::Declarations, "fn f<T>() requires !\np(T) => 1")[0],
+        rejected(Entry::Declarations, "fn f<T>() requires !\n\np(T) => 1")[0],
         "- 1:21: expected a constraint, found end of line"
     );
     assert_eq!(
-        rejected(
-            Entry::Declarations,
-            "fn f<...Ts>() requires each\nT in Ts { p(T) } {}"
-        )[0],
-        "- 1:28: expected `==`, `in`, `is` or `(`, found end of line"
-    );
-}
-
-#[test]
-fn only_the_identity_property_has_a_value() {
-    // The grammar: `operator_property = "associative" | "commutative"
-    // | "identity", "=", const_expression ;`
-    assert_eq!(
-        declarations(
-            "operator add(a: i64) -> i64 properties<i64, f64> { associative, identity = 0, }"
-        ),
-        "OperatorDecl[\"operator\" \"add\" ParamList[\"(\" Param[\"a\" \":\" ScalarType[\"i64\"]] \")\"] \
-         ReturnType[\"->\" ScalarType[\"i64\"]] OperatorProperties[\"properties\" \"<\" ScalarType[\"i64\"] \",\" \
-         ScalarType[\"f64\"] \">\" \"{\" OperatorProperty[\"associative\"] \",\" \
-         OperatorProperty[\"identity\" \"=\" Literal[\"0\"]] \",\" \"}\"]]"
-    );
-    let header = "operator add(a: i64) -> i64 properties<i64>";
-    assert_eq!(
-        rejected(
-            Entry::Declarations,
-            &format!("{header} {{ associative = 42 }}")
-        ),
-        ["- 1:59: expected `,` or `}`, found `=`"]
-    );
-    assert_eq!(
-        rejected(
-            Entry::Declarations,
-            &format!("{header} {{ commutative = true, identity = 0 }}")
-        ),
-        ["- 1:59: expected `,` or `}`, found `=`"]
-    );
-    assert_eq!(
-        rejected(Entry::Declarations, &format!("{header} {{ identity }}")),
-        ["- 1:56: expected `=`, found `}`"]
-    );
-    assert_eq!(
-        rejected(Entry::Declarations, &format!("{header} {{ idempotent }}")),
-        ["- 1:47: expected `associative`, `commutative` or `identity`, found `idempotent`"]
+        rejected(Entry::Declarations, "fn f<T>() requires T in\n\n{i64} {}")[0],
+        "- 1:24: expected a type or a value, found end of line"
     );
 }
 
@@ -1359,11 +1504,11 @@ fn a_contract_body_holds_no_statements() {
         ),
         ["NATIVE-3 2:5: expected `inject`, `start;`, `when;` or `stop;`, found `start`"]
     );
-    // A hook marker is its word and its `;`, on one line.
+    // A hook marker is its word and its `;`. No blank line parts them.
     assert_eq!(
         rejected(
             Entry::Declarations,
-            "native fn node() -> i64 {\n    when\n    ;\n}"
+            "native fn node() -> i64 {\n    when\n\n    ;\n}"
         )[0],
         "NATIVE-3 2:5: expected `inject`, `start;`, `when;` or `stop;`, found `when`"
     );

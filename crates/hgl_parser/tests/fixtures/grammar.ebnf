@@ -51,14 +51,15 @@ delta_argument = member_name, ":", expression ;
 function_decl = { warning_annotation, NL }, ( [ "export" | "impl" ], "fn" | [ "export" ], "const", "fn" ), callable_name, [ generic_parameters ], function_signature, [ requires_clause ], function_body ;
 function_signature = "(", [ parameters ], ")", [ "->", type ] ;
 parameters = parameter, { ",", parameter }, [ "," ] ;
-parameter = IDENTIFIER, ":", type | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | IDENTIFIER, ":", value_type, "=", const_expression | IDENTIFIER, ":", "...", type | IDENTIFIER, ":", "...", "{", type, "}" ;
+parameter = IDENTIFIER, ":", type | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | IDENTIFIER, ":", value_type, "=", const_expression | IDENTIFIER, ":", "...", type, [ cardinality ] | IDENTIFIER, ":", "...", "{", type, "}", [ cardinality ] ;
 function_body = "=>", expression | block ;
 function_expr = "fn", "(", [ lambda_parameters ], ")", [ "->", type ], ( "=>", expression | block ) ;
 lambda_parameters = lambda_parameter, { ",", lambda_parameter }, [ "," ] ;
 lambda_parameter = IDENTIFIER, [ ":", type ] ;
 # generics-and-operators.md
 generic_parameters = "<", generic_parameter, { ",", generic_parameter }, [ "," ], ">" ;
-generic_parameter = IDENTIFIER | "...", IDENTIFIER | "const", IDENTIFIER, ":", value_type ;
+generic_parameter = IDENTIFIER | "...", IDENTIFIER, [ cardinality ] | "const", IDENTIFIER, ":", value_type ;
+cardinality = "{", INTEGER_LITERAL, [ ":", ( INTEGER_LITERAL | "*" ) ], "}" ;
 generic_arguments = "<", generic_argument, { ",", generic_argument }, [ "," ], ">" ;
 generic_argument = type | const_expression ;
 requires_clause = "requires", constraint_expression ;

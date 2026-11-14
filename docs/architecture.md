@@ -59,7 +59,7 @@ it:
 
 | Rule | Left to | What the lexer keeps |
 | --- | --- | --- |
-| Significant line breaks (LEX-5, LEX-6) | parser | every line break as one `Newline` token |
+| Significant line breaks (LEX-5, LEX-6) | parser | every line break as one `Newline` token, and a continued one inside a `LineContinuation` token (LEX-26) |
 | A comment over several lines counts as a line break (LEX-21) | parser | the comment as one token with its text |
 | Contextual names (LEX-9, LEX-10) | parser | `Ident` tokens with their text |
 | Literal range under a minus (LEX-7) | analyser | `Minus` and the unsigned literal as separate tokens |
@@ -107,17 +107,23 @@ and comments belong to the node around them.
 
 ### Line breaks
 
-The cursor steps over line breaks; the grammar asks whether one stands
-before a token. LEX-5's cases are met in three places:
+The cursor steps over line breaks; the grammar asks about the ones before
+a token. LEX-5 (owner decision, 2026-11-14: a line break is ignored where
+the statement plainly goes on) is met in four places:
 
 | Case | How |
 | --- | --- |
 | Inside parentheses, brackets, angle brackets and braces that hold a list | The delimiter sets a context in which no line break counts |
-| After a comma, a binary or assignment operator, `=`, `=>`, `->`, a type or argument colon | The grammar marks the token as one that cannot end a line |
-| Before a binary operator, a result arrow, a matching `else` | The grammar looks for these without asking |
+| The declaration or statement is incomplete: `let a = b +` | Where the grammar needs a token next it takes it across one line break |
+| The next token cannot begin a declaration or statement: `+ c`, `.name`, `=> body`, `else` | Where a statement could end, the grammar asks whether the token after the line break could begin one, and goes on when it could not |
+| Two or more line breaks between two tokens, as around a blank line | Nothing is taken across them |
 
-Everywhere else a line break ends the line. A comment that holds a line
-break counts as one (LEX-21).
+So a line that begins with a name, a literal, `(`, `[`, `-` or `!` begins a
+statement. `\` before a line break joins the two lines whatever the next
+one begins with (LEX-26): the lexer makes the `\` and its line break one
+token, and the parser sees no line break there. A comment that holds a
+line break counts as one (LEX-21), and a line that holds only a comment is
+a line. A body's opening brace stays with its header.
 
 ### Generic arguments or comparison
 
@@ -155,12 +161,9 @@ specification to decide:
 
 | Subject | Reading |
 | --- | --- |
-| LEX-5: a line break in none of its listed places | Ends the line. `fn` then the name on the next line, `let x` then `= 1`, and a line that starts with `=>` or `.name` are rejected |
-| LEX-5: `requires` and `properties` on their own lines | Accepted, as SDOC-5 formats them |
 | EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
 | FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
 | CTRL-9 | `when` and `while` only; the subjects of `if`, `for` and `switch` are ordinary expressions |
-| GEN-10: cardinalities | No production, so not parsed |
 | LEX-9: `time` as an argument label | Accepted at a call; a parameter is an identifier, so none is named `time` |
 | TST-1: `operator` and `instantiate` in a test context | Rejected, as `test_item` has neither |
 | Built-in type names | `list<...>`, `signal`, `error` and the like are the built-in types in a type position, though `named_type` matches them too |

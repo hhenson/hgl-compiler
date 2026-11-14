@@ -34,7 +34,9 @@ impl Parser<'_> {
     /// The grammar's `value_type` is parsed as `type` as well: which types
     /// are value types is a question of meaning, for the analyser.
     pub(crate) fn type_(&mut self) {
-        if !self.enter() {
+        // LEX-5: a type is always something required, and nothing required
+        // is taken across a blank line.
+        if !self.goes_on("a type") || !self.enter() {
             return;
         }
         let mark = self.mark();

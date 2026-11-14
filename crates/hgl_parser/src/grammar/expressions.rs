@@ -74,20 +74,26 @@ impl Parser<'_> {
     ///
     /// True when what was parsed is a bare function expression (FN-10).
     pub(crate) fn binary_expr(&mut self, lowest: u8) -> bool {
-        if !self.enter() {
+        // LEX-5: an expression asked for here is required, and nothing
+        // required is taken across a blank line.
+        if !self.goes_on("an expression") || !self.enter() {
             return false;
         }
         let mark = self.mark();
         let mut bare_fn = self.unary_expr();
         loop {
             let operator = self.current();
-            // LEX-5, LEX-14: no line-break check. A binary operator at the
-            // start of a line continues the line before.
             let Some(tier) = binary_tier(operator) else {
                 break;
             };
             // GEN-14: inside generic arguments `>` closes the list.
             if tier < lowest || (operator == Gt && self.context.no_gt) {
+                break;
+            }
+            // LEX-5, LEX-14: a binary operator at the start of a line
+            // continues the line before, since it cannot begin a
+            // statement. `-` can: there it is a prefix operator.
+            if self.nl() {
                 break;
             }
             if bare_fn {
@@ -96,11 +102,7 @@ impl Parser<'_> {
                 bare_fn = false;
             }
             self.bump();
-            self.continue_line();
             self.operator_config();
-            // A configuration is part of its operator (LEX-14), so the
-            // operand may stand on the line after it as well.
-            self.continue_line();
             let operand = self.position;
             if self.binary_expr(tier + 1) {
                 // The right operand: `1 + fn(x) => x`.
@@ -126,12 +128,11 @@ impl Parser<'_> {
         }
         self.start(UnaryExpr);
         self.bump();
-        // LEX-5: `!` does not continue a line; a prefix `-` is no binary
-        // operator and does not either. So its configuration and its
-        // operand both stand on its line.
-        if self.on_line("an expression") {
+        // The operand is required, so one line break before it is ignored
+        // (LEX-5): `-` alone is no expression.
+        if self.goes_on("an expression") {
             self.operator_config();
-            if self.on_line("an expression") {
+            if self.goes_on("an expression") {
                 let operand = self.position;
                 if self.unary_expr() {
                     // The operand of a prefix operator: `!fn() { ... }`.
@@ -154,7 +155,7 @@ impl Parser<'_> {
     /// after the operator; nothing is parsed when no configuration is
     /// there.
     fn operator_config(&mut self) {
-        if !self.at(LBrace) {
+        if !self.at(LBrace) || self.cut() {
             return;
         }
         let named = self.nth_member_name(1) && self.nth(2) == Colon;
@@ -206,8 +207,9 @@ impl Parser<'_> {
             return false;
         }
         loop {
-            // LEX-5: a suffix does not reach across a line break. `(` at
-            // the start of a line begins a new statement.
+            // LEX-5: `(` and `[` at the start of a line begin a new
+            // statement, so a call or an index does not reach across a
+            // line break. `.` and `?` cannot begin one, and do.
             if self.nl() {
                 break;
             }
@@ -571,7 +573,7 @@ impl Parser<'_> {
         let in_condition = self.context.no_brace;
         self.start(FnExpr);
         self.bump();
-        if self.at(LParen) && !self.nl() {
+        if self.at(LParen) && !self.cut() {
             self.start(ParamList);
             self.bump();
             self.nested(Context::LIST, |parser| {
@@ -591,7 +593,7 @@ impl Parser<'_> {
         } else {
             self.expected("`(`");
         }
-        if self.at(Arrow) {
+        if self.at(Arrow) && !self.nl() {
             self.return_type();
         }
         if self.at(FatArrow) && !self.nl() {
@@ -627,16 +629,16 @@ impl Parser<'_> {
                 parser.start(IfExpr);
                 open += 1;
                 parser.bump();
-                if parser.on_line("a condition") {
+                if parser.goes_on("a condition") {
                     parser.expression();
                 }
                 parser.body_block();
                 // LEX-5: the matching `else` may start a line.
-                if !parser.at(KwElse) {
+                if !parser.at(KwElse) || parser.nl() {
                     break;
                 }
                 parser.bump();
-                if !(parser.at(KwIf) && !parser.nl()) {
+                if !(parser.at(KwIf) && !parser.cut()) {
                     parser.body_block();
                     break;
                 }

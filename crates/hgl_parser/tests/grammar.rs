@@ -187,7 +187,7 @@ use tour.other as other
 export const fn scale<T, ...Rest, const N: i64>(
     value: T,
     const factor: f64 = 2.0,
-    rest: ...Rest,
+    rest: ...Rest{1:*},
     named: ...{str},
 ) -> f64?
     requires T in {i64, f64} && !comparable(T) || (N == 3) && each R in Rest { numeric(R) } {
