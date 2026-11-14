@@ -91,8 +91,8 @@ impl Parser<'_> {
                 break;
             }
             // LEX-5, LEX-14: a binary operator at the start of a line
-            // continues the line before, since it cannot begin a
-            // statement. `-` can: there it is a prefix operator.
+            // continues the line before, `-` among them. Only a blank
+            // line stops it.
             if self.nl() {
                 break;
             }

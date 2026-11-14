@@ -63,10 +63,14 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
 ///
 /// LEX-5: after one line break, such a token begins a new declaration or
 /// statement; any other token continues the line before. A name counts,
-/// whatever it spells, since a statement can begin with a name. So do `-`
-/// and `!`, which begin an expression, and `(`, `[` and `{`.
+/// whatever it spells, since a statement can begin with a name. So do
+/// `!`, which begins an expression, and `(`, `[` and `{`.
+///
+/// `-` does not, though it too begins an expression: "`-` at the start of
+/// a line is the binary operator: a statement that began with it would
+/// have no effect" (owner decision, 2026-11-14).
 pub(crate) fn can_begin(kind: SyntaxKind) -> bool {
-    can_start_expression(kind)
+    (can_start_expression(kind) && kind != SyntaxKind::Minus)
         || matches!(
             kind,
             // Statements.

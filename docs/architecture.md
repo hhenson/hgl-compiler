@@ -118,10 +118,11 @@ the statement plainly goes on) is met in four places:
 | The next token cannot begin a declaration or statement: `+ c`, `.name`, `=> body`, `else` | Where a statement could end, the grammar asks whether the token after the line break could begin one, and goes on when it could not |
 | Two or more line breaks between two tokens, as around a blank line | Nothing is taken across them |
 
-So a line that begins with a name, a literal, `(`, `[`, `-` or `!` begins a
-statement. `\` before a line break joins the two lines whatever the next
-one begins with (LEX-26): the lexer makes the `\` and its line break one
-token, and the parser sees no line break there. A comment that holds a
+So a line that begins with a name, a literal, `(`, `[` or `!` begins a
+statement. One that begins with `-` continues the line before: a statement
+that began with it would have no effect. `\` before a line break joins the
+two lines whatever the next one begins with (LEX-26): the lexer makes the
+`\` and its line break one token, and the parser sees no line break there. A comment that holds a
 line break counts as one (LEX-21), and a line that holds only a comment is
 a line. A body's opening brace stays with its header.
 

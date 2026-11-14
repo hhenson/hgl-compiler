@@ -230,6 +230,9 @@ fn a_line_that_cannot_begin_a_statement_continues_the_one_before() {
     for (entry, text, plain) in [
         (Statements, "let a = b\n    + c", "let a = b + c"),
         (Statements, "let a = b\n    == c", "let a = b == c"),
+        // "`-` at the start of a line is the binary operator".
+        (Statements, "let a = b\n    - c", "let a = b - c"),
+        (Statements, "return\n    -value", "return -value"),
         (Statements, "let a = b\n    .c\n    .d()", "let a = b.c.d()"),
         (Statements, "let a = f(x)\n    ?", "let a = f(x)?"),
         (Statements, "let a\n    = 1", "let a = 1"),
@@ -284,14 +287,10 @@ fn a_line_that_cannot_begin_a_statement_continues_the_one_before() {
 
 #[test]
 fn a_line_that_can_begin_a_statement_begins_one() {
-    // LEX-5: "A token that can begin one does: `-`, `!`, `(`, and `[`
-    // start a new statement, so a prefix operator, a call, and an index
-    // do not continue a line."
+    // LEX-5: "A token that can begin a declaration or statement does:
+    // `!`, `(`, and `[` start a new statement, so a prefix `!`, a call,
+    // and an index do not continue a line."
     let first = "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]]";
-    assert_eq!(
-        statements("let a = b\n    - c"),
-        format!("{first} ExprStmt[UnaryExpr[\"-\" NameExpr[\"c\"]]]")
-    );
     assert_eq!(
         statements("let a = b\n!c"),
         format!("{first} ExprStmt[UnaryExpr[\"!\" NameExpr[\"c\"]]]")
@@ -610,25 +609,30 @@ fn a_backslash_before_a_line_break_continues_the_line() {
     // LEX-26: "its line break is not a line break: the next line
     // continues the current one whatever it begins with".
     for (text, plain) in [
-        ("let a = b \\\n    - c", "let a = b - c"),
+        ("return \\\n    value", "return value"),
         ("let a = f \\\n    (c)", "let a = f(c)"),
         ("let a = b \\\n    [0]", "let a = b[0]"),
-        ("return \\\n    value", "return value"),
+        ("let a = b \\\n    !c", "let a = b !c"),
         // Spaces and tabs may stand between the `\` and the line break.
-        ("let a = b \\  \t\n    - c", "let a = b - c"),
+        ("return \\  \t\n    value", "return value"),
         // Each form of line break (LEX-15).
-        ("let a = b \\\r\n    - c", "let a = b - c"),
-        ("let a = b \\\r    - c", "let a = b - c"),
+        ("return \\\r\n    value", "return value"),
+        ("return \\\r    value", "return value"),
     ] {
-        same_tree(Entry::Statements, text, plain);
+        let joined = run(Entry::Statements, text);
+        let plain = run(Entry::Statements, plain);
+        // The same tree, and the same diagnostics: `b !c` is as wrong on
+        // one line as on two.
+        assert_eq!(joined.outline(), plain.outline(), "{text:?}");
+        assert_eq!(joined.rules(), plain.rules(), "{text:?}");
     }
     // It joins one line break. A blank line after it still separates.
     assert_eq!(
-        statements("let a = b \\\n\n    - c"),
-        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"b\"]] ExprStmt[UnaryExpr[\"-\" NameExpr[\"c\"]]]"
+        statements("return \\\n\n    value"),
+        "ReturnStmt[\"return\"] ExprStmt[NameExpr[\"value\"]]"
     );
     // The tree keeps it, as it keeps all whitespace.
-    let outcome = run(Entry::Statements, "let a = b \\\n    - c");
+    let outcome = run(Entry::Statements, "return \\\n    value");
     assert!(
         outcome
             .tree

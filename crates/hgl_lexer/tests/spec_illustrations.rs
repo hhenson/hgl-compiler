@@ -440,35 +440,20 @@ fn a_form_feed_between_tokens_is_rejected() {
 #[test]
 fn a_backslash_joins_a_line_to_the_next() {
     // LEX-26, from the chapter's illustration of lines that continue:
-    // `let result = half \` then `- margin`. The `\` and its line break
-    // are one token of whitespace, so no `Newline` stands between `half`
-    // and `-`, whatever the form of the line break (LEX-15).
-    use TokenKind::{Ident, KwLet, Minus, Newline};
-    let joined = [
-        (KwLet, "let"),
-        (Ident, "result"),
-        (TokenKind::Eq, "="),
-        (Ident, "half"),
-        (Minus, "-"),
-        (Ident, "margin"),
-    ];
+    // `return \` then `result`. The `\` and its line break are one token
+    // of whitespace, so no `Newline` stands between `return` and
+    // `result`, whatever the form of the line break (LEX-15).
+    use TokenKind::{Ident, KwReturn, Newline};
+    let joined = [(KwReturn, "return"), (Ident, "result")];
     for line_break in ["\n", "\r\n", "\r"] {
-        accepted(
-            &format!("let result = half \\{line_break}    - margin"),
-            &joined,
-        );
+        accepted(&format!("return \\{line_break}        result"), &joined);
     }
     // Spaces and tabs may stand between the `\` and the line break.
-    accepted("let result = half \\ \t\n    - margin", &joined);
+    accepted("return \\ \t\n        result", &joined);
     // Without it the line break is there.
     accepted(
-        "half\n- margin",
-        &[
-            (Ident, "half"),
-            (Newline, "\n"),
-            (Minus, "-"),
-            (Ident, "margin"),
-        ],
+        "return\nresult",
+        &[(KwReturn, "return"), (Newline, "\n"), (Ident, "result")],
     );
 }
 
