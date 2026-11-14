@@ -256,9 +256,9 @@ fn two_closers_end_two_argument_lists() {
     accepted(
         "list<list<i64>>",
         &[
-            (Ident, "list"),
+            (KwList, "list"),
             (Lt, "<"),
-            (Ident, "list"),
+            (KwList, "list"),
             (Lt, "<"),
             (KwI64, "i64"),
             (Gt, ">"),
@@ -417,7 +417,7 @@ fn a_closer_directly_before_equals_is_one_token() {
         &[
             (Ident, "xs"),
             (Colon, ":"),
-            (Ident, "list"),
+            (KwList, "list"),
             (Lt, "<"),
             (KwI64, "i64"),
             (GtEq, ">="),
@@ -440,20 +440,20 @@ fn a_form_feed_between_tokens_is_rejected() {
 #[test]
 fn a_backslash_joins_a_line_to_the_next() {
     // LEX-26, from the chapter's illustration of lines that continue:
-    // `return \` then `result`. The `\` and its line break are one token
+    // `return \` then `lowest`. The `\` and its line break are one token
     // of whitespace, so no `Newline` stands between `return` and
-    // `result`, whatever the form of the line break (LEX-15).
+    // `lowest`, whatever the form of the line break (LEX-15).
     use TokenKind::{Ident, KwReturn, Newline};
-    let joined = [(KwReturn, "return"), (Ident, "result")];
+    let joined = [(KwReturn, "return"), (Ident, "lowest")];
     for line_break in ["\n", "\r\n", "\r"] {
-        accepted(&format!("return \\{line_break}        result"), &joined);
+        accepted(&format!("return \\{line_break}        lowest"), &joined);
     }
     // Spaces and tabs may stand between the `\` and the line break.
-    accepted("return \\ \t\n        result", &joined);
+    accepted("return \\ \t\n        lowest", &joined);
     // Without it the line break is there.
     accepted(
-        "return\nresult",
-        &[(KwReturn, "return"), (Newline, "\n"), (Ident, "result")],
+        "return\nlowest",
+        &[(KwReturn, "return"), (Newline, "\n"), (Ident, "lowest")],
     );
 }
 

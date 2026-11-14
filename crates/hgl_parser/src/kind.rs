@@ -78,6 +78,8 @@ define_syntax_kinds! {
         KwEval, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
+        KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef,
+        KwSignal, KwDelta,
         LParen, RParen, LBracket, RBracket, LBrace, RBrace, Comma,
         Semicolon, Colon, ColonColon, Dot, Ellipsis, At, Question, Bang,
         Plus, Minus, Star, Slash, SlashSlash, SlashSlashEq, Percent,

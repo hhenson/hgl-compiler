@@ -283,6 +283,9 @@ impl Parser<'_> {
                 self.leaf(Literal);
             }
             Ident => self.name_expr(),
+            // `delta` is a reserved word. In an expression it begins a
+            // delta constructor and nothing else.
+            KwDelta => self.delta_constructor(),
             // LEX-10: `str(value)` is a conversion, though `str` is
             // reserved where a name is expected. It is a call, so its `(`
             // touches it (LEX-27).
@@ -437,24 +440,51 @@ impl Parser<'_> {
     /// has found there.
     fn constructor(&mut self, verdict: Verdict) {
         let mark = self.mark();
-        // LEX-10: `delta` is a name with a meaning only here and in types.
-        let delta = self.at_word("delta") && self.nth(1) == Lt;
         self.name();
-        let shape = self.generic_args();
-        let (kind, mode) = if verdict == Verdict::Both {
-            (UndecidedConstructor, ArgMode::Call)
-        } else if delta && shape.count == 1 && shape.all_types {
-            (DeltaConstructor, ArgMode::Delta)
+        self.generic_args();
+        let kind = if verdict == Verdict::Both {
+            UndecidedConstructor
         } else {
-            (TypedConstructor, ArgMode::Call)
+            TypedConstructor
         };
         if self.at(LParen) && !self.nl() {
             self.attached(Bracket::Call);
-            self.arg_list(mode);
+            self.arg_list(ArgMode::Call);
         } else {
             self.expected("`(`");
         }
         self.wrap(mark, kind);
+    }
+
+    /// `delta_constructor = "delta", "<", type, ">", "(", [ delta_arguments ], ")" ;`
+    ///
+    /// The cursor is on `delta`. The word is reserved, so nothing here
+    /// reads two ways: no name is called `delta`, and what follows it
+    /// is its one type and its arguments.
+    fn delta_constructor(&mut self) {
+        self.start(DeltaConstructor);
+        self.bump();
+        if self.at(Lt) && !self.nl() {
+            // LEX-27: `delta<...>`, not `delta <...>`.
+            self.attached(Bracket::Generics);
+            // One type, where a typed constructor has a list of
+            // arguments. It is kept in the same kind of node.
+            self.start(GenericArgs);
+            self.bump();
+            self.nested(Context::ANGLE, |parser| parser.type_());
+            self.close_angle();
+            self.finish();
+        } else {
+            self.expected("`<`");
+        }
+        if self.at(LParen) && !self.nl() {
+            // LEX-27: a constructor's `(` touches what it follows.
+            self.attached(Bracket::Call);
+            self.arg_list(ArgMode::Delta);
+        } else {
+            self.expected("`(`");
+        }
+        self.finish();
     }
 
     // ---- Arguments ----

@@ -129,13 +129,15 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
                 "a diagnostic points inside its file"
             );
             // "A diagnostic uses the catalogued category and code when
-            // the specification has one."
+            // the specification has one, and is marked local when it has
+            // not."
+            let code = diagnostic.code.as_str();
+            let listed = catalogue::contains(diagnostic.category, code);
+            let local = hgl_analyser::codes::LOCAL.contains(&code);
             assert!(
-                diagnostic.code.is_catalogued()
-                    && catalogue::contains(diagnostic.category, diagnostic.code.as_str()),
-                "{}/{} is a row of the diagnostic catalogue",
-                diagnostic.category.as_str(),
-                diagnostic.code.as_str()
+                listed != local && diagnostic.code.is_catalogued() == listed,
+                "{}/{code} is a row of the diagnostic catalogue, or a code this crate lists as local",
+                diagnostic.category.as_str()
             );
             Finding {
                 at: format!("{}:{}", source.name(), source.line_col(span.start)),

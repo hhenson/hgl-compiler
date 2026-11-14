@@ -7,21 +7,18 @@ use crate::parser::{Bracket, Context, Parser};
 use super::expressions::ADDITIVE;
 
 /// The node for a built-in type that takes arguments in angle brackets,
-/// by the name it is written with.
-///
-/// LEX-10: these are names, not reserved words. They mean the built-in
-/// type in a type position, when `<` follows.
-fn built_in(name: &str) -> Option<SyntaxKind> {
-    Some(match name {
-        "tuple" => TupleType,
-        "list" => ListType,
-        "set" => SetType,
-        "dict" => DictType,
-        "rolling" => RollingType,
-        "ref" => RefType,
-        "atomic" => AtomicType,
-        "result" => ResultType,
-        "delta" => DeltaType,
+/// by the reserved word it is written with.
+fn built_in(word: SyntaxKind) -> Option<SyntaxKind> {
+    Some(match word {
+        KwTuple => TupleType,
+        KwList => ListType,
+        KwSet => SetType,
+        KwDict => DictType,
+        KwRolling => RollingType,
+        KwRef => RefType,
+        KwAtomic => AtomicType,
+        KwResult => ResultType,
+        KwDelta => DeltaType,
         // `return None` leaves the function; the `Some(...)` around the
         // match is not reached.
         _ => return None,
@@ -62,31 +59,25 @@ impl Parser<'_> {
             self.leaf(ScalarType);
             return true;
         }
+        // The names of the built-in types are reserved words.
+        if kind == KwSignal {
+            self.leaf(SignalType);
+            return true;
+        }
+        if let Some(node) = built_in(kind) {
+            self.built_in_type(node);
+            return true;
+        }
         if kind != Ident {
             self.expected("a type");
             return false;
         }
+        // LEX-10: `error` is a name, not a reserved word. Alone in a
+        // type position it is the built-in type.
         let qualified = self.nth(1) == ColonColon && !self.nl_at(1);
-        if !qualified {
-            match self.text(0) {
-                "signal" => {
-                    self.leaf(SignalType);
-                    return true;
-                }
-                "error" => {
-                    self.leaf(ErrorType);
-                    return true;
-                }
-                name => {
-                    if self.nth(1) == Lt
-                        && !self.nl_at(1)
-                        && let Some(kind) = built_in(name)
-                    {
-                        self.built_in_type(kind);
-                        return true;
-                    }
-                }
-            }
+        if !qualified && self.at_word("error") {
+            self.leaf(ErrorType);
+            return true;
         }
         self.named_type();
         true
@@ -119,10 +110,15 @@ impl Parser<'_> {
     /// delta_type = "delta", "<", type, ">" ;
     /// ```
     ///
-    /// The cursor is on the name and `<` follows it.
+    /// The cursor is on the reserved word.
     fn built_in_type(&mut self, kind: SyntaxKind) {
         self.start(kind);
         self.bump();
+        if !self.at(Lt) || self.nl() {
+            self.expected("`<`");
+            self.finish();
+            return;
+        }
         // LEX-27: `list<i64>`, not `list <i64>`.
         self.attached(Bracket::Generics);
         self.bump();

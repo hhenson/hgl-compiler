@@ -48,6 +48,7 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwStr
             | SyntaxKind::KwBytes
             | SyntaxKind::KwAny
+            | SyntaxKind::KwDelta
             | SyntaxKind::LParen
             | SyntaxKind::LBracket
             | SyntaxKind::LBrace
@@ -123,7 +124,25 @@ pub(crate) fn is_scalar_type(kind: SyntaxKind) -> bool {
     )
 }
 
+/// True for the reserved word of a built-in type that is not a scalar:
+/// `list`, `signal` and the rest.
+pub(crate) fn is_built_in_type(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::KwAtomic
+            | SyntaxKind::KwTuple
+            | SyntaxKind::KwList
+            | SyntaxKind::KwSet
+            | SyntaxKind::KwDict
+            | SyntaxKind::KwRolling
+            | SyntaxKind::KwResult
+            | SyntaxKind::KwRef
+            | SyntaxKind::KwSignal
+            | SyntaxKind::KwDelta
+    )
+}
+
 /// True for a token that can begin a type.
 pub(crate) fn can_start_type(kind: SyntaxKind) -> bool {
-    kind == SyntaxKind::Ident || is_scalar_type(kind)
+    kind == SyntaxKind::Ident || is_scalar_type(kind) || is_built_in_type(kind)
 }

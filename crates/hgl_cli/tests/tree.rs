@@ -72,7 +72,7 @@ fn accepted_source_prints_its_tree_and_exits_zero() {
     // `const` is a name to the lexer and a modifier here (FN-5): it sits
     // inside the function's node.
     assert!(
-        stdout.contains("  FnDecl@26..131\n    Ident@26..31 \"const\"\n"),
+        stdout.contains("  FnDecl@26..128\n    Ident@26..31 \"const\"\n"),
         "{stdout}"
     );
     // The tree is lossless: whitespace and line breaks are in it.

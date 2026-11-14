@@ -30,7 +30,7 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program,
 };
-use crate::{codes, error};
+use crate::{INJECTABLES, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
@@ -374,6 +374,23 @@ impl Resolver<'_> {
             }
             SyntaxKind::InjectDecl => {
                 for name in identifiers(node) {
+                    // TIME-8: "`inject` names no other."
+                    if !INJECTABLES.contains(&name.text()) {
+                        self.diagnostics.emit(
+                            error(
+                                Category::Injectable,
+                                codes::INJECT_UNKNOWN_CAPABILITY,
+                                self.at(&name),
+                                format!("`{}` is not a capability", name.text()),
+                                "TIME-8",
+                            )
+                            .with_note(format!(
+                                "`inject` names one of `{}`",
+                                INJECTABLES.join("`, `")
+                            )),
+                        );
+                    }
+                    // It is bound all the same, so that its uses find it.
                     self.bind(&name, LocalKind::Inject);
                 }
             }

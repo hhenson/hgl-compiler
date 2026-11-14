@@ -1,9 +1,9 @@
 module examples.bindings
 
 const fn doubled(value: i64) -> i64 {
-    var result: i64 = value
-    result += value
-    return result
+    var total: i64 = value
+    total += value
+    return total
 }
 
 test arithmetic { assert doubled(3) == 6 }

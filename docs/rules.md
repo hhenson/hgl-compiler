@@ -67,7 +67,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
 | LEX-9 | parser | done | `time` as member name and argument label; `const` as modifier or name by position |
-| LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion |
+| LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion. The built-in type names but `error` are reserved words, not contextual |
 | LEX-11 | lexer | done | Date, time and offset fields; civil and zoned forms |
 | LEX-12 | lexer | done | Zone name source form |
 | LEX-12 | transpiler | planned | Run provider checks zone catalogue membership and offset consistency |
@@ -243,7 +243,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
 | TIME-7 | analyser | planned | `inject out` needs an output and is used during evaluation |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
-| TIME-8 | analyser | planned | Injectables are capabilities, used receiver-first, never passed as data |
+| TIME-8 | analyser | partial | `inject` names one of the listed capabilities. Left: capabilities used receiver-first and never passed as data; clock properties read-only |
 | TIME-9 | analyser | planned | `scheduled()`, `activate` and `passivate` are reserved; helpers inherit capabilities |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 

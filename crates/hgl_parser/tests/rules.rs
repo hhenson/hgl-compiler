@@ -499,10 +499,10 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
     // LEX-10: "Each acquires its special meaning only in its defined
     // positions. A contextual spelling is not globally reserved."
     assert_eq!(
-        statements("let list = 1\nlet delta = list\nlet result = case\nlet in = default"),
-        "LocalDecl[\"let\" \"list\" \"=\" Literal[\"1\"]] \
-         LocalDecl[\"let\" \"delta\" \"=\" NameExpr[\"list\"]] \
-         LocalDecl[\"let\" \"result\" \"=\" NameExpr[\"case\"]] \
+        statements("let error = 1\nlet type = error\nlet each = case\nlet in = default"),
+        "LocalDecl[\"let\" \"error\" \"=\" Literal[\"1\"]] \
+         LocalDecl[\"let\" \"type\" \"=\" NameExpr[\"error\"]] \
+         LocalDecl[\"let\" \"each\" \"=\" NameExpr[\"case\"]] \
          LocalDecl[\"let\" \"in\" \"=\" NameExpr[\"default\"]]"
     );
     // `switch` and `raises` begin a statement form only when the rest of
@@ -518,8 +518,59 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
     );
     // In its position the same spelling has its meaning.
     assert_eq!(
-        statements("let x: list<i64> = native"),
-        "LocalDecl[\"let\" \"x\" \":\" ListType[\"list\" \"<\" ScalarType[\"i64\"] \">\"] \"=\" NameExpr[\"native\"]]"
+        statements("let x: error = native"),
+        "LocalDecl[\"let\" \"x\" \":\" ErrorType[\"error\"] \"=\" NameExpr[\"native\"]]"
+    );
+}
+
+#[test]
+fn the_name_of_a_built_in_type_is_reserved() {
+    // The hard reserved words include the names of the built-in types:
+    // `atomic tuple list set dict rolling result ref signal delta`. Each
+    // is the type and nothing else.
+    assert_eq!(
+        statements("let x: list<i64> = values"),
+        "LocalDecl[\"let\" \"x\" \":\" ListType[\"list\" \"<\" ScalarType[\"i64\"] \">\"] \"=\" NameExpr[\"values\"]]"
+    );
+    assert_eq!(
+        statements("let x: signal = source"),
+        "LocalDecl[\"let\" \"x\" \":\" SignalType[\"signal\"] \"=\" NameExpr[\"source\"]]"
+    );
+    // None is a name: of a local, a function, a type, a parameter, a
+    // member or an argument.
+    for text in [
+        "let list = 1",
+        "let x = result",
+        "let x = quote.set",
+        "let x = f(dict: 1)",
+    ] {
+        let found = rejected(Entry::Statements, text);
+        assert_eq!(found.len(), 1, "{text}: {found:?}");
+    }
+    for text in [
+        "fn signal() {}",
+        "struct tuple { x: i64 }",
+        "fn f(ref: i64) {}",
+        "struct S { rolling: i64 }",
+    ] {
+        let found = rejected(Entry::Declarations, text);
+        assert!(!found.is_empty(), "{text}");
+    }
+    // Without its arguments a built-in type is incomplete.
+    assert_eq!(
+        rejected(Entry::Statements, "let x: list = values"),
+        ["- 1:13: expected `<`, found `=`"]
+    );
+    // `delta` begins a delta constructor in an expression, and takes
+    // one type.
+    assert_eq!(
+        statements("delta<set<i64>>(added: [1])"),
+        "ExprStmt[DeltaConstructor[\"delta\" GenericArgs[\"<\" SetType[\"set\" \"<\" ScalarType[\"i64\"] \">\"] \">\"] \
+         ArgList[\"(\" Arg[\"added\" \":\" SequenceExpr[\"[\" Literal[\"1\"] \"]\"]] \")\"]]]"
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "delta<i64, f64>(added: [1])"),
+        ["- 1:10: expected `>`, found `,`"]
     );
 }
 
