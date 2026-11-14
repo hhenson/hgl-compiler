@@ -272,8 +272,10 @@ impl Parser<'_> {
             }
             Ident => self.name_expr(),
             // LEX-10: `str(value)` is a conversion, though `str` is
-            // reserved where a name is expected.
-            KwStr | KwBytes | KwAny if self.nth(1) == LParen && !self.nl_at(1) => {
+            // reserved where a name is expected. Alone it is no
+            // expression, so the `(` is required and one line break
+            // before it is ignored (LEX-5).
+            KwStr | KwBytes | KwAny if self.nth(1) == LParen && !self.cut_at(1) => {
                 self.start(TypeCall);
                 self.bump();
                 self.arg_list(ArgMode::Call);
@@ -289,7 +291,8 @@ impl Parser<'_> {
             KwEval => {
                 self.start(EvalExpr);
                 self.bump();
-                if self.at(LParen) && !self.nl() {
+                // `eval` needs its `(` as well.
+                if self.at(LParen) && !self.cut() {
                     self.arg_list(ArgMode::Eval);
                 } else {
                     self.expected("`(`");

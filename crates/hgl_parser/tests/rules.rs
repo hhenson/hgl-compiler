@@ -184,6 +184,15 @@ fn a_line_break_in_an_incomplete_statement_is_ignored() {
         (Statements, "let a =\n    1", "let a = 1"),
         (Statements, "let\n    a = 1", "let a = 1"),
         (Statements, "let a = -\n    b", "let a = -b"),
+        // A token that could begin a statement completes this one, which
+        // cannot end where it stands.
+        (Statements, "let a =\n    (b)", "let a = (b)"),
+        (Statements, "let a =\n    [b]", "let a = [b]"),
+        (Statements, "let a =\n    !b", "let a = !b"),
+        (Statements, "let a = b +\n    (c)", "let a = b + (c)"),
+        // `eval` and a conversion are nothing without their `(`.
+        (Statements, "let a = eval\n    (b)", "let a = eval(b)"),
+        (Statements, "let a = str\n    (b)", "let a = str(b)"),
         (Statements, "let u:\n    i64 = 1", "let u: i64 = 1"),
         (Statements, "a.\n    b", "a.b"),
         (
@@ -302,6 +311,12 @@ fn a_line_that_can_begin_a_statement_begins_one() {
     assert_eq!(
         statements("let a = b\n[c]"),
         format!("{first} ExprStmt[SequenceExpr[\"[\" NameExpr[\"c\"] \"]\"]]")
+    );
+    // A call needs nothing more than its callee, so the callee can end
+    // the line; `eval` cannot, and is covered above.
+    assert_eq!(
+        statements("let a = f\n(c)"),
+        "LocalDecl[\"let\" \"a\" \"=\" NameExpr[\"f\"]] ExprStmt[ParenExpr[\"(\" NameExpr[\"c\"] \")\"]]"
     );
     // A name, however far it is indented (LEX-6), and `return`'s value.
     assert_eq!(
