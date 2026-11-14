@@ -147,10 +147,11 @@ After an operand a `.` reaches into it, on the same line or the next, so
 no statement begins with `.member`. Which enum it names is the analyser's
 to say.
 
-The name of a type is a reserved word and names no parameter, local,
-function or type. It is read as a member name and as the label of an
-argument, where it cannot be taken for the type (LEX-9): `quote.date`,
-a field called `list`, `outcome.error`.
+The name of a type is a reserved word, and a reserved word names no
+parameter, local, function or type. Any reserved word is read as a member
+name and as the label of an argument, where it cannot be taken for what
+it reserves (LEX-9): `quote.date`, a field called `list`, `outcome.error`,
+`order.if`.
 
 ### Generic arguments or comparison
 

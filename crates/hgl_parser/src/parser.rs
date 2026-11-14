@@ -32,7 +32,7 @@ use hgl_source::{FileId, Span};
 
 use crate::codes;
 use crate::event::Event;
-use crate::grammar::{can_begin, is_built_in_type, is_scalar_type};
+use crate::grammar::{can_begin, is_reserved_word};
 use crate::input::Input;
 use crate::kind::SyntaxKind;
 
@@ -464,13 +464,14 @@ impl<'a> Parser<'a> {
         false
     }
 
-    /// True at a member name: an identifier, or the reserved name of a
-    /// type.
+    /// True at a member name: an identifier, or a reserved word.
     ///
-    /// LEX-9: "The reserved name of a type is also admitted as a
-    /// field/member name and named-argument label, where it cannot be
-    /// taken for the type". So `quote.time` and a field called `list`
-    /// are read, though neither word can name a local or a function.
+    /// LEX-9: "A member name is any word of identifier form, a hard
+    /// reserved word included: the name of a struct field or enum
+    /// member, a member reached with `.`, and a named-argument label
+    /// cannot be taken for what the word reserves". So `quote.time`, a
+    /// field called `list` and `order.if` are read, though none of those
+    /// words can name a local or a function.
     pub(crate) fn at_member_name(&self) -> bool {
         self.nth_member_name(0)
     }
@@ -478,7 +479,7 @@ impl<'a> Parser<'a> {
     /// As [`Parser::at_member_name`], `n` places after the cursor.
     pub(crate) fn nth_member_name(&self, n: usize) -> bool {
         let kind = self.nth(n);
-        kind == SyntaxKind::Ident || is_scalar_type(kind) || is_built_in_type(kind)
+        kind == SyntaxKind::Ident || is_reserved_word(kind)
     }
 
     /// Takes a member name; reports otherwise.

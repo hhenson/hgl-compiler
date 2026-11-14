@@ -147,6 +147,14 @@ pub(crate) fn is_built_in_type(kind: SyntaxKind) -> bool {
     )
 }
 
+/// True for a hard reserved word: a keyword token of the lexer.
+pub(crate) fn is_reserved_word(kind: SyntaxKind) -> bool {
+    // The lexer's table lists every reserved word with its token kind.
+    hgl_lexer::TokenKind::KEYWORDS
+        .iter()
+        .any(|&(_, word)| SyntaxKind::from(word) == kind)
+}
+
 /// True for a token that can begin a type.
 pub(crate) fn can_start_type(kind: SyntaxKind) -> bool {
     kind == SyntaxKind::Ident || is_scalar_type(kind) || is_built_in_type(kind)

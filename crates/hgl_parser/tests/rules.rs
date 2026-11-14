@@ -440,10 +440,12 @@ fn an_inject_list_continues_after_a_comma() {
 // ---- LEX-9 ----
 
 #[test]
-fn a_types_name_names_a_member_and_labels_an_argument() {
-    // LEX-9: "The reserved name of a type is also admitted as a
-    // field/member name and named-argument label, where it cannot be
-    // taken for the type: `quote.time`, `ranges.list`."
+fn a_reserved_word_names_a_member_and_labels_an_argument() {
+    // LEX-9: "A member name is any word of identifier form, a hard
+    // reserved word included: the name of a struct field or enum member,
+    // a member reached with `.`, and a named-argument label cannot be
+    // taken for what the word reserves: `quote.time`, `ranges.list`,
+    // `.error`, `order.if`."
     assert_eq!(
         statements("quote.time = clock.time"),
         "AssignStmt[MemberExpr[NameExpr[\"quote\"] \".\" \"time\"] \"=\" \
@@ -457,7 +459,7 @@ fn a_types_name_names_a_member_and_labels_an_argument() {
         declarations("struct Tick { time: datetime }"),
         "StructDecl[\"struct\" \"Tick\" \"{\" StructMember[\"time\" \":\" ScalarType[\"datetime\"]] \"}\"]"
     );
-    // So is every type's name: the scalar ones and the built-in ones.
+    // So is every type's name, scalar or built-in.
     assert_eq!(
         statements("ranges.list = quote.date"),
         "AssignStmt[MemberExpr[NameExpr[\"ranges\"] \".\" \"list\"] \"=\" \
@@ -486,7 +488,38 @@ fn a_types_name_names_a_member_and_labels_an_argument() {
          Arg[TypeCall[\"str\" ArgList[\"(\" Arg[NameExpr[\"value\"]] \")\"]]] \",\" \
          Arg[\"str\" \":\" NameExpr[\"value\"]] \")\"]]]"
     );
-    // "It names no parameter, local, function, or type."
+    // And every other reserved word.
+    assert_eq!(
+        statements("order.if = quote.return"),
+        "AssignStmt[MemberExpr[NameExpr[\"order\"] \".\" \"if\"] \"=\" \
+         MemberExpr[NameExpr[\"quote\"] \".\" \"return\"]]"
+    );
+    assert_eq!(
+        declarations("struct Keywords {\n    let: i64\n    module: str = \"m\"\n    fn = 1\n}"),
+        "StructDecl[\"struct\" \"Keywords\" \"{\" \
+         StructMember[\"let\" \":\" ScalarType[\"i64\"]] \
+         StructMember[\"module\" \":\" ScalarType[\"str\"] \"=\" Literal[\"\\\"m\\\"\"]] \
+         StructMember[\"fn\" \"=\" Literal[\"1\"]] \"}\"]"
+    );
+    assert_eq!(
+        declarations("enum Keyword { if, else, true }"),
+        "EnumDecl[\"enum\" \"Keyword\" \"{\" EnumMember[\"if\"] \",\" EnumMember[\"else\"] \",\" \
+         EnumMember[\"true\"] \"}\"]"
+    );
+    assert_eq!(
+        statements("f(return: 1, true: 2, when: .if)"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[\"return\" \":\" Literal[\"1\"]] \",\" \
+         Arg[\"true\" \":\" Literal[\"2\"]] \",\" \
+         Arg[\"when\" \":\" ImpliedMember[\".\" \"if\"]] \")\"]]]"
+    );
+    // The word keeps its own meaning where no member name is due.
+    assert_eq!(
+        statements("f(true, if a { b } else { c })"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[Literal[\"true\"]] \",\" \
+         Arg[IfExpr[\"if\" NameExpr[\"a\"] Block[\"{\" ExprStmt[NameExpr[\"b\"]] \"}\"] \"else\" \
+         Block[\"{\" ExprStmt[NameExpr[\"c\"]] \"}\"]]] \")\"]]]"
+    );
+    // "A reserved word names no parameter, local, function, or type."
     assert_eq!(
         rejected(Entry::Statements, "let time = 1"),
         ["- 1:5: expected a name, found `time`"]
@@ -495,9 +528,12 @@ fn a_types_name_names_a_member_and_labels_an_argument() {
         rejected(Entry::Statements, "let x = time"),
         ["- 1:9: expected an expression, found `time`"]
     );
-    // Other reserved words are not member names.
-    assert!(!rejected(Entry::Statements, "let x = quote.if").is_empty());
-    assert!(!rejected(Entry::Declarations, "struct S { let: i64 }").is_empty());
+    assert!(!rejected(Entry::Declarations, "fn f(if: i64) {}").is_empty());
+    // The lone `_` is not a word of identifier form (LEX-1).
+    assert_eq!(
+        rejected(Entry::Statements, "let x = quote._"),
+        ["- 1:15: expected a member name, found `_`"]
+    );
 }
 
 #[test]
