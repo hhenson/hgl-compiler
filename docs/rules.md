@@ -66,7 +66,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
 | LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
-| LEX-9 | parser | done | `time` as member name and argument label; `const` as modifier or name by position |
+| LEX-9 | parser | done | A type's reserved name as member name and argument label; `const` as modifier or name by position |
 | LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion. The built-in type names but `error` are reserved words, not contextual |
 | LEX-11 | lexer | done | Date, time and offset fields; civil and zoned forms |
 | LEX-12 | lexer | done | Zone name source form |

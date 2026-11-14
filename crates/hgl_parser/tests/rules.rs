@@ -440,9 +440,10 @@ fn an_inject_list_continues_after_a_comma() {
 // ---- LEX-9 ----
 
 #[test]
-fn time_names_a_member_and_labels_an_argument() {
-    // LEX-9: "`time` is also admitted as a field/member name and
-    // named-argument label."
+fn a_types_name_names_a_member_and_labels_an_argument() {
+    // LEX-9: "The reserved name of a type is also admitted as a
+    // field/member name and named-argument label, where it cannot be
+    // taken for the type: `quote.time`, `ranges.list`."
     assert_eq!(
         statements("quote.time = clock.time"),
         "AssignStmt[MemberExpr[NameExpr[\"quote\"] \".\" \"time\"] \"=\" \
@@ -456,11 +457,47 @@ fn time_names_a_member_and_labels_an_argument() {
         declarations("struct Tick { time: datetime }"),
         "StructDecl[\"struct\" \"Tick\" \"{\" StructMember[\"time\" \":\" ScalarType[\"datetime\"]] \"}\"]"
     );
-    // Elsewhere it is the reserved type name.
+    // So is every type's name: the scalar ones and the built-in ones.
+    assert_eq!(
+        statements("ranges.list = quote.date"),
+        "AssignStmt[MemberExpr[NameExpr[\"ranges\"] \".\" \"list\"] \"=\" \
+         MemberExpr[NameExpr[\"quote\"] \".\" \"date\"]]"
+    );
+    assert_eq!(
+        statements("f(set: members, duration: 1s)"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" Arg[\"set\" \":\" NameExpr[\"members\"]] \",\" \
+         Arg[\"duration\" \":\" Literal[\"1s\"]] \")\"]]]"
+    );
+    assert_eq!(
+        declarations(
+            "struct Ranges {\n    list: list<f64>\n    result: i64 = 0\n    str = \"x\"\n}"
+        ),
+        "StructDecl[\"struct\" \"Ranges\" \"{\" \
+         StructMember[\"list\" \":\" ListType[\"list\" \"<\" ScalarType[\"f64\"] \">\"]] \
+         StructMember[\"result\" \":\" ScalarType[\"i64\"] \"=\" Literal[\"0\"]] \
+         StructMember[\"str\" \"=\" Literal[\"\\\"x\\\"\"]] \"}\"]"
+    );
+    // The label of an operator's configuration is a member name too, and
+    // a conversion is still a conversion where no `:` follows.
+    statements("a /{list: b} c");
+    assert_eq!(
+        statements("f(str(value), str: value)"),
+        "ExprStmt[CallExpr[NameExpr[\"f\"] ArgList[\"(\" \
+         Arg[TypeCall[\"str\" ArgList[\"(\" Arg[NameExpr[\"value\"]] \")\"]]] \",\" \
+         Arg[\"str\" \":\" NameExpr[\"value\"]] \")\"]]]"
+    );
+    // "It names no parameter, local, function, or type."
     assert_eq!(
         rejected(Entry::Statements, "let time = 1"),
         ["- 1:5: expected a name, found `time`"]
     );
+    assert_eq!(
+        rejected(Entry::Statements, "let x = time"),
+        ["- 1:9: expected an expression, found `time`"]
+    );
+    // Other reserved words are not member names.
+    assert!(!rejected(Entry::Statements, "let x = quote.if").is_empty());
+    assert!(!rejected(Entry::Declarations, "struct S { let: i64 }").is_empty());
 }
 
 #[test]
@@ -536,26 +573,27 @@ fn the_name_of_a_built_in_type_is_reserved() {
         statements("let x: signal = source"),
         "LocalDecl[\"let\" \"x\" \":\" SignalType[\"signal\"] \"=\" NameExpr[\"source\"]]"
     );
-    // None is a name: of a local, a function, a type, a parameter, a
-    // member or an argument.
-    for text in [
-        "let list = 1",
-        "let x = result",
-        "let x = quote.set",
-        "let x = f(dict: 1)",
-    ] {
+    // None is a name: of a local, a function, a type or a parameter
+    // (LEX-9).
+    for text in ["let list = 1", "let x = result", "for set in items { }"] {
         let found = rejected(Entry::Statements, text);
-        assert_eq!(found.len(), 1, "{text}: {found:?}");
+        assert!(!found.is_empty(), "{text}");
     }
     for text in [
         "fn signal() {}",
         "struct tuple { x: i64 }",
+        "enum dict { a }",
         "fn f(ref: i64) {}",
-        "struct S { rolling: i64 }",
+        "fn f<atomic>(x: atomic) {}",
     ] {
         let found = rejected(Entry::Declarations, text);
         assert!(!found.is_empty(), "{text}");
     }
+    // Each is safe as a member name, where it cannot be taken for the
+    // type (LEX-9).
+    statements("let x = quote.set");
+    statements("let x = Ranges(dict: 1)");
+    declarations("struct S {\n    rolling: i64\n    signal: signal\n}");
     // Without its arguments a built-in type is incomplete.
     assert_eq!(
         rejected(Entry::Statements, "let x: list = values"),

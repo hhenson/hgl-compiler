@@ -179,7 +179,6 @@ specification to decide:
 | --- | --- |
 | EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
 | FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
-| LEX-9: `time` as an argument label | Accepted at a call; a parameter is an identifier, so none is named `time` |
 | `error` in a type position | The built-in type, though `named_type` matches it too. It is the one built-in type name that is not reserved (issue 13, item 15) |
 
 The grammar's `value_type` is parsed as `type`. Which types are value types
