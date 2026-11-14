@@ -1,7 +1,7 @@
 # Architecture
 
-Status: stage 1 (lexing) is implemented. Everything marked *planned* is a
-plan, not a contract; it changes as stages are built.
+Status: stages 1 (lexing) and 2 (parsing) are implemented. Everything marked
+*planned* is a plan, not a contract; it changes as stages are built.
 
 ## Pipeline
 
@@ -9,7 +9,7 @@ plan, not a contract; it changes as stages are built.
 source text
     |  hgl_lexer
 tokens
-    |  parser (planned)
+    |  hgl_parser
 syntax tree ---------> formatter (planned) ---------> source text
     |  analyser (planned)
 analysed program ----> error reporting (`check`)
@@ -35,8 +35,8 @@ Rules for every stage:
 | `hgl_source` | Source files (UTF-8 check, byte-order mark), spans, line and column lookup | implemented |
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
-| `hgl_cli` | The `hgl` command | `hgl tokens` only |
-| parser | Tokens to a lossless syntax tree | planned |
+| `hgl_parser` | Tokens to a lossless syntax tree | implemented |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree` |
 | formatter | Syntax tree to source text | planned |
 | analyser | Names, types, phases, const evaluation | planned |
 | optimiser | Analysed program to analysed program | planned |
@@ -88,7 +88,36 @@ the lexer and the diagnostic renderer all use it, and tests lex the whole
 specification corpus under each form. CI runs the tests on Linux, macOS and
 Windows.
 
-## Parser (planned)
+## Parser
+
+Hand-written recursive descent: one function for each production, named
+after it. The result is a `rowan` tree that is lossless (its text is the
+source text, whitespace and comments included) and total (any tokens give a
+tree; what fits nowhere is kept in an `Error` node, with a diagnostic).
+`hgl tree` prints it.
+
+The grammar functions do not build the tree. They record events ("a node
+starts", "the next token", "the node ends") and one function replays them
+into the tree. That keeps whitespace and comments out of the grammar, and
+lets the parser try a reading and take it back by cutting the list short.
+
+A documentation comment directly before a declaration it can document is
+the first token of that declaration's node (SDOC-1). All other whitespace
+and comments belong to the node around them.
+
+### Line breaks
+
+The cursor steps over line breaks; the grammar asks whether one stands
+before a token. LEX-5's cases are met in three places:
+
+| Case | How |
+| --- | --- |
+| Inside parentheses, brackets, angle brackets and braces that hold a list | The delimiter sets a context in which no line break counts |
+| After a comma, a binary or assignment operator, `=`, `=>`, `->`, a type or argument colon | The grammar marks the token as one that cannot end a line |
+| Before a binary operator, a result arrow, a matching `else` | The grammar looks for these without asking |
+
+Everywhere else a line break ends the line. A comment that holds a line
+break counts as one (LEX-21).
 
 ### Generic arguments or comparison
 
@@ -97,20 +126,67 @@ GEN-14 decides by what `name` resolves to, which only the analyser knows.
 The parser therefore guesses and the analyser confirms (owner decision,
 2026-11-13):
 
-- The parser reads ahead to the `>` that would close the list. The generic
-  reading is possible when the tokens between form generic arguments and `(`
-  follows. When only one reading parses, that reading is the result.
-- When both parse, as in `f(a < b, c > (d))` and `a < b > (c)`, the parser
-  records its guess, the generic reading, in a node marked *undecided* that
-  keeps its tokens.
-- The analyser resolves `name`. A generic type confirms the guess; any other
-  name re-reads the node as comparisons. A generic type followed by a `<`
-  that cannot open its arguments is an invalid application, reported with no
-  fallback to comparison (GEN-14).
-- The formatter runs without the analyser, so it keeps the author's spacing
-  inside an undecided node.
+- The parser reads the tokens both ways and takes each reading back. The
+  generic reading is possible when generic arguments parse, on the name's
+  line, and `(` follows their `>`. The comparison reading is possible when
+  the same tokens parse as expressions. When only one is possible, that
+  reading is the result: `Box<i64>(7)` is a `TypedConstructor`, `a < b` a
+  comparison.
+- When both are, as in `f(a < b, c > (d))` and `a < b > (c)`, the parser
+  records its guess, the generic reading, in an `UndecidedConstructor` node
+  that keeps its tokens.
+- The analyser (planned) resolves `name`. A generic type confirms the guess;
+  any other name re-reads the node as comparisons. A generic type followed
+  by a `<` that cannot open its arguments is an invalid application,
+  reported with no fallback to comparison (GEN-14).
+- The formatter (planned) runs without the analyser, so it keeps the
+  author's spacing inside an undecided node.
 
 The language is exactly GEN-14; only the stage that applies it differs.
+
+A bare name as a generic argument, as in `list<T, N>`, is read as a type.
+Whether it names a type or a constant is also the analyser's to say.
+
+### Readings
+
+Where the chapters leave a choice the parser takes one reading, listed in
+[hgl_spec issue 13](https://github.com/hhenson/hgl_spec/issues/13) for the
+specification to decide:
+
+| Subject | Reading |
+| --- | --- |
+| LEX-5: a line break in none of its listed places | Ends the line. `fn` then the name on the next line, `let x` then `= 1`, and a line that starts with `=>` or `.name` are rejected |
+| LEX-5: `requires` and `properties` on their own lines | Accepted, as SDOC-5 formats them |
+| EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
+| FN-10: "Parenthesize an anonymous function" | A suffix or binary operator directly after a block-bodied one is rejected |
+| CTRL-9 | `when` and `while` only; the subjects of `if`, `for` and `switch` are ordinary expressions |
+| SDOC-1: what can be documented | The rule's list as written: not an enum, an enum member or a native type |
+| GEN-10: cardinalities | No production, so not parsed |
+| LEX-9: `time` as an argument label | Accepted at a call; a parameter is an identifier, so none is named `time` |
+| TST-1: `operator` and `instantiate` in a test context | Rejected, as `test_item` has neither |
+| Built-in type names | `list<...>`, `signal`, `error` and the like are the built-in types in a type position, though `named_type` matches them too |
+
+`module examples.test`, in the tests-and-eval chapter, is rejected: `test`
+is a reserved word. The corpus test lists it as the one known contradiction.
+
+The grammar's `value_type` is parsed as `type`. Which types are value types
+is the analyser's to check: the types chapter places that rejection under
+TYPE-12 and TYPE-14.
+
+### Limits
+
+| Limit | Value | Bounds |
+| --- | --- | --- |
+| Nesting of expressions, types, blocks and constraints | 100 | The parser's own call depth |
+| Depth of the tree | 500 | The call depth of anything that walks the tree, and of freeing it |
+
+Past either the parser reports `syntax.nesting_limit` and goes on; a tree
+is never deeper than the second. An `else if` ladder and a chain such as
+`a + b + ...` count towards the second only. The language sets no limit;
+these are the compiler's. In an unoptimised build the parser uses about 150
+KiB of stack at the first limit, and freeing a tree about 200 KiB at the
+second; the smallest stack the compiler runs on is the 1 MiB of a Windows
+main thread.
 
 ## Diagnostics
 
@@ -118,7 +194,10 @@ A diagnostic has a category from the specification's list, a code, a primary
 location, and the rule it enforces. A code is *catalogued* (it appears in the
 specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
-`# expect-error` (TST-12). Every lexical code is catalogued.
+`# expect-error` (TST-12). Every lexical code is catalogued. The parser
+reports the catalogue's one code for the grammar, `syntax.expected_token`,
+and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
+`syntax.nesting_limit`.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
@@ -154,8 +233,8 @@ layout, so this is a compiler rule (owner decision, 2026-11-13).
 
 ## Planned order
 
-1. Lexer (this stage).
-2. Parser for every grammar in the specification; formatter.
+1. Lexer (done).
+2. Parser for every grammar in the specification (done); formatter.
 3. Analyser for the scalar slice; `hgl check`; `# expect-error` matching.
 4. Transpiler for hgraph; `hgl test` running the core conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
@@ -175,6 +254,7 @@ the job the way the design needs is dropped.
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
+| `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 
 Hand-written where no tool fits:
 
@@ -183,6 +263,10 @@ Hand-written where no tool fits:
   regular-expression table.
 - Line lookup. `codespan-reporting` splits lines on LF only, so it is given
   the compiler's own line index through its `Files` trait.
+- The parser. Line breaks that count by position, names that are keywords by
+  position, and `name<...>(...)` read two ways (GEN-14) do not fit a parser
+  generator's grammar file, and recovery after an error is easier to keep
+  exact by hand. The tree it builds is `rowan`'s.
 
 ## Toolchain
 

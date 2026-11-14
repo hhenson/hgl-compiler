@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 /// `done` fails until its crates are added here.
 const STAGES: [(&str, &[&str]); 10] = [
     ("lexer", &["hgl_source", "hgl_lexer"]),
-    ("parser", &[]),
+    ("parser", &["hgl_parser"]),
     ("formatter", &[]),
     ("analyser", &[]),
     ("optimiser", &[]),
