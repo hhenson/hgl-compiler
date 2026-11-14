@@ -441,15 +441,15 @@ impl Parser<'_> {
     /// parameter = IDENTIFIER, ":", type
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
     ///           | IDENTIFIER, ":", value_type, "=", const_expression
-    ///           | IDENTIFIER, ":", "...", type
-    ///           | IDENTIFIER, ":", "...", "{", type, "}" ;
+    ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
+    /// pack = "...", type, [ cardinality ]
+    ///      | "...", "{", type, "}", [ cardinality ] ;
     /// ```
     ///
-    /// with `[ cardinality ]` after either pack form.
-    ///
     /// One permissive form is parsed: an optional `const`, a name, a type
-    /// or pack, an optional default. Which combinations mean something is
-    /// for the analyser (FN-8).
+    /// or pack, an optional default. The grammar admits `const` and a
+    /// default on a pack so that FN-8 rejects them by rule; that and
+    /// which other combinations mean something is for the analyser.
     fn parameter(&mut self) {
         if !self.at(Ident) {
             return;
