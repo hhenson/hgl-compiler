@@ -17,6 +17,9 @@
 - Cite the specification rule (for example `LEX-8`) where code implements one
   and where a test checks one. A diagnostic uses the catalogued category and
   code when the specification has one, and is marked local when it has not.
+- Keep `docs/rules.md` current. It lists each rule of the pinned specification
+  and core against the stage that implements it. Mark a row `done` in the
+  change that implements the rule and tests it.
 - Document the code for a reader new to Rust: every crate and module says what
   it is for and where it sits in the pipeline; every public item has a doc
   comment; a non-obvious Rust idiom gets one explanatory line.

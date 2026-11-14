@@ -31,6 +31,7 @@ the front end. The first target is the
 | Transpiler | planned |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
+Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
 
 ## Use
 
