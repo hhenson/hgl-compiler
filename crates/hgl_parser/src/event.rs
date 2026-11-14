@@ -16,6 +16,8 @@
 //! declaration it documents (SDOC-1), which becomes the first token of that
 //! declaration's node.
 
+use std::collections::HashMap;
+
 use hgl_diagnostics::{Category, Code, Diagnostic, Location};
 use hgl_lexer::TokenKind;
 use hgl_source::FileId;
@@ -100,7 +102,7 @@ pub(crate) fn build(
         builder: GreenNodeBuilder::new(),
         raw: 0,
         significant: 0,
-        docs: Vec::new(),
+        docs: HashMap::new(),
         heights: Vec::new(),
         parents: Vec::new(),
         too_deep: None,
@@ -205,7 +207,7 @@ struct TreeBuilder<'a> {
     significant: usize,
     /// The documentation comments accounted for, by index in the lexer's
     /// list. One not listed here is unattached.
-    docs: Vec<(usize, DocState)>,
+    docs: HashMap<usize, DocState>,
     /// The height of each finished child of the nodes still open, in
     /// order: 0 for a token, and for a node one more than its tallest
     /// child. The children of an open node are the entries from its index
@@ -309,7 +311,7 @@ impl TreeBuilder<'_> {
             }
             if index > self.raw && tokens[index - 1].kind == TokenKind::DocComment {
                 keep_from = index - 1;
-                self.docs.push((keep_from, DocState::Attached));
+                self.docs.insert(keep_from, DocState::Attached);
                 // A documentation comment directly before that one
                 // documents nothing: the declaration has its comment.
                 let mut earlier = keep_from;
@@ -319,7 +321,7 @@ impl TreeBuilder<'_> {
                     }
                     if earlier > self.raw && tokens[earlier - 1].kind == TokenKind::DocComment {
                         earlier -= 1;
-                        self.docs.push((earlier, DocState::Repeated));
+                        self.docs.insert(earlier, DocState::Repeated);
                     } else {
                         break;
                     }
@@ -335,13 +337,10 @@ impl TreeBuilder<'_> {
             if token.kind != TokenKind::DocComment {
                 continue;
             }
-            let state = self
-                .docs
-                .iter()
-                .find(|(index, _)| *index == raw)
-                .map(|(_, state)| *state);
             let location = Location::new(file, token.span);
-            let diagnostic = match state {
+            // `get` looks the index up; `copied` turns the borrowed state
+            // it finds into a state.
+            let diagnostic = match self.docs.get(&raw).copied() {
                 Some(DocState::Attached) => continue,
                 Some(DocState::Repeated) => Diagnostic::error(
                     Category::Parse,
