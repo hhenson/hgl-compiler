@@ -22,6 +22,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     let mut walk = Walk {
         declarations: Vec::new(),
         tests: Vec::new(),
+        instantiations: Vec::new(),
         diagnostics,
     };
     for (index, file) in module.files.iter_mut().enumerate() {
@@ -60,6 +61,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     }
     module.declarations = walk.declarations;
     module.tests = walk.tests;
+    module.instantiations = walk.instantiations;
     bind_declarations(module, diagnostics);
     bind_native_implementations(module, diagnostics);
     check_tests(module, diagnostics);
@@ -108,6 +110,7 @@ fn read_import(import: &UseDecl, file: FileId, imports: &mut Vec<Import>) {
 struct Walk<'a> {
     declarations: Vec<Declaration>,
     tests: Vec<Test>,
+    instantiations: Vec<(usize, SyntaxNode)>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -123,8 +126,14 @@ impl Walk<'_> {
             // TST-1: a context holds no import. The parser has said so.
             Item::Use(_) => return,
             // GEN-8: `instantiate` requests candidates and declares
-            // nothing.
-            Item::Instantiate(_) => return,
+            // nothing. It is kept for the names it uses. One in a test
+            // context has been rejected by the parser (TST-1).
+            Item::Instantiate(_) => {
+                if !in_test {
+                    self.instantiations.push((index, syntax));
+                }
+                return;
+            }
             Item::TestContext(context) => {
                 // TST-1: contexts make no namespace of their own, so one
                 // inside another, which the parser has reported, adds to

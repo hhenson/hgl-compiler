@@ -12,7 +12,8 @@
 //!
 //! # What is built so far
 //!
-//! The first pass: the program's modules and what each declares.
+//! The program's modules, what each declares, and what each name in it
+//! is bound to.
 //!
 //! * `assemble` groups the files into modules by the `module` line of
 //!   each (UNIT-1);
@@ -21,10 +22,12 @@
 //!   UNIT-12, TST-1, TST-2, NATIVE-2);
 //! * `imports` finds what each `use` line names, and rejects a missing
 //!   or private declaration and a cycle of imports (UNIT-2, UNIT-3), then
-//!   finds the operator of each `impl fn` (GEN-4).
+//!   finds the operator of each `impl fn` (GEN-4);
+//! * `resolve` walks every signature, body, type and constraint, finds
+//!   the one binding each name has in scope (UNIT-10), and rejects a
+//!   binding that takes a name already there (UNIT-12).
 //!
-//! Function bodies, types and constants are not read yet. Resolving the
-//! names inside them is the next pass.
+//! Types, phases and constants are not checked yet.
 //!
 //! # The prelude
 //!
@@ -45,14 +48,15 @@ mod assemble;
 mod declare;
 mod imports;
 mod program;
+mod resolve;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
 use hgl_source::{FileId, Span};
 
 pub use program::{
-    Declaration, DeclarationKind, Import, ImportKind, Module, ModuleFile, OperatorRef, PreludeName,
-    Program, Role, Test,
+    Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
+    ModuleFile, NameUse, OperatorRef, PreludeName, Program, Role, Test,
 };
 
 /// The diagnostic codes this stage reports.
@@ -90,6 +94,24 @@ pub mod codes {
     pub const IMPL_UNKNOWN_OPERATOR: &str = "impl.unknown_operator";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";
+    /// A local is used before the statement that declares it (UNIT-6).
+    pub const NAME_USED_BEFORE_DECLARATION: &str = "name.used_before_declaration";
+    /// A declaration outside the tests uses one declared for them
+    /// (TST-2).
+    pub const NAME_TEST_ONLY: &str = "name.test_only";
+    /// An anonymous function uses a `var`, `state`, `cache` or injected
+    /// capability of the function around it (FN-14).
+    pub const NAME_CAPTURED: &str = "name.captured";
+    /// A default reads a parameter of its declaration or a field of its
+    /// struct (UNIT-7).
+    pub const DEFAULT_FORMAL_ARGUMENT: &str = "default.formal_argument";
+    /// A module alias is used without `::name` after it (UNIT-2).
+    pub const ALIAS_UNQUALIFIED: &str = "alias.unqualified";
+    /// The name before `::` is not a module alias of its file (UNIT-2).
+    pub const ALIAS_UNKNOWN: &str = "alias.unknown";
+    /// A generic type's name stands before a `<` that does not open its
+    /// arguments (GEN-14).
+    pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";
 }
 
 /// One parsed file: what the analyser is given for each source file.
@@ -133,6 +155,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
         declare::declare(module, omits, diagnostics);
     }
     imports::resolve(&mut program, diagnostics);
+    resolve::resolve(&mut program, diagnostics);
     program
 }
 

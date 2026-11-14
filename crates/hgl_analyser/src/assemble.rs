@@ -84,7 +84,10 @@ pub(crate) fn assemble<'a>(
             declarations: Vec::new(),
             tests: Vec::new(),
             prelude_names: Vec::new(),
+            uses: Vec::new(),
+            decisions: Vec::new(),
             scope: Default::default(),
+            instantiations: Vec::new(),
         });
     }
     (program, omits)

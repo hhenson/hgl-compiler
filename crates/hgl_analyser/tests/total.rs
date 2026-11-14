@@ -8,7 +8,8 @@ mod common;
 
 use common::check_broken;
 
-/// A program that uses every kind of item the first pass reads.
+/// A program that uses every kind of item the analyser reads, and in a
+/// body every form that binds a name.
 const FILES: [(&str, &str); 3] = [
     (
         "lib.hgl",
@@ -43,7 +44,21 @@ const FILES: [(&str, &str); 3] = [
             "use lib as l\n",
             "impl fn add(left: f64, right: f64) -> f64 => left\n",
             "impl fn mul(left: f64, right: f64) -> f64 => left\n",
-            "fn main() { shared() }\n",
+            "fn main<T>(value: T, items: list<T>, const size: i64 = 2) -> T {\n",
+            "    state kept = 0\n",
+            "    inject out\n",
+            "    when modified(value) {\n",
+            "        let local = l::shared()\n",
+            "        for index, item in items { kept = index }\n",
+            "        let pick = fn(x) => x + local\n",
+            "        switch kept {\n",
+            "            case 1:\n",
+            "                return value\n",
+            "            default:\n",
+            "                return Quote<T>(bid: value).bid\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
             "test main { assert true }\n",
             "test {\n",
             "    fn helper() {}\n",
@@ -111,4 +126,44 @@ fn declarations_with_missing_parts_are_analysed() {
     // unnamed files.
     assert_eq!(checked.program.modules.len(), 1);
     assert_eq!(checked.program.modules[0].files.len(), 3);
+}
+
+/// The analyser walks the tree by calling itself for each level, so its
+/// use of the call stack grows with the tree's depth. The parser bounds
+/// that depth (`hgl_parser::Limits`). At the default limits the analyser
+/// fits in the stack the parser's own defaults are sized for: half of
+/// the smallest stack the compiler meets, the 1 MiB of a Windows main
+/// thread.
+#[test]
+fn the_default_limits_fit_a_small_stack() {
+    let limits = hgl_parser::Limits::default();
+    // An `if` and its block are two levels of nesting, and four of the
+    // tree. Blocks nest nearly as deep as nesting may, and inside them a
+    // chain takes the tree nearly as deep as it may be.
+    let blocks = limits.nesting / 2 - 5;
+    let chain = vec!["value"; limits.tree_depth - 4 * blocks - 20].join(" + ");
+    let mut text = String::from("module m\nconst fn deep(value: i64) -> i64 {\n");
+    for _ in 0..blocks {
+        text.push_str("if value == 1 {\n");
+    }
+    text.push_str(&format!("let total = {chain}\n"));
+    for _ in 0..blocks {
+        text.push_str("}\n");
+    }
+    text.push_str("return value\n}\n");
+
+    let worker = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            let checked = check_broken(&[("m.hgl", text.as_str())]);
+            (
+                checked.front_end_errors,
+                checked.report.clone(),
+                checked.summary(),
+            )
+        })
+        .expect("a thread starts");
+    let (front_end_errors, report, findings) = worker.join().expect("the analyser fits the stack");
+    assert_eq!(front_end_errors, 0, "{report}");
+    assert_eq!(findings, [] as [&str; 0]);
 }

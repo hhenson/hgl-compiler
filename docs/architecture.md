@@ -1,8 +1,8 @@
 # Architecture
 
 Status: stages 1 (lexing) and 2 (parsing) are implemented, the first
-pass of stage 3 (analysis): modules, declarations and imports, and the
-test runner's rejection cases. Everything marked *planned* is a plan, not
+passes of stage 3 (analysis): modules, declarations, imports and name
+resolution, and the test runner's rejection cases. Everything marked *planned* is a plan, not
 a contract; it changes as stages are built.
 
 ## Pipeline
@@ -38,7 +38,7 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports; names, types, phases and constants planned |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution; types, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
 | formatter | Syntax tree to source text | planned |
@@ -206,15 +206,16 @@ of nesting and 0.4 KiB for a level of tree depth. `Limits::stack_size`
 allows ten times that, and `hgl` runs a command that parses on a thread
 with a stack of that size, so raising a limit needs nothing else. The
 defaults fit in half of the smallest stack the compiler meets, the 1 MiB of
-a Windows main thread.
+a Windows main thread. The analyser walks the tree the same way and is
+tested to fit that half at the default limits.
 
 ## Analyser
 
 The first stage that reads a program whole: every file of every module at
 once, because its answers cross files. It reads the tree through typed
 views (`hgl_parser::ast`): a function's name, a file's imports. It gives
-the *analysed program*: the modules, what each declares, and what each
-import names.
+the *analysed program*: the modules, what each declares, what each
+import names, and what each name used in it is bound to.
 
 It is built in passes:
 
@@ -223,11 +224,40 @@ It is built in passes:
 | Modules | Files grouped into modules and parts by their `module` lines | UNIT-1 | done |
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each `impl fn` | UNIT-2, UNIT-3, GEN-4 | done |
-| Resolution | Every name in a signature, body, type and constraint; locals and parameters; undecided generic applications | UNIT-6, UNIT-10, UNIT-12, FN-8, FN-14, GEN-14 | planned |
+| Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Types, phases, constants | The rest of the rules | | planned |
 
-`hgl check` says which passes ran: what is inside a function body is not
-analysed yet.
+`hgl check` says which passes ran: names are resolved, and types, phases
+and constants are not checked yet.
+
+### Resolution
+
+Scopes nest as the source does: a declaration (its generic parameters and
+parameters), each block, the pattern of a `for`, an anonymous function. A
+name is looked up innermost first, then among the imports of its file,
+then among its module's declarations (UNIT-10). A binding that would take
+a name any of those has is rejected (UNIT-12), and the first keeps it.
+
+UNIT-12 gives a scope to a block and to an anonymous function. The
+statements under a `switch` case are neither, so what a case declares is
+declared in the block the `switch` stands in: two cases may not declare
+one name. Whether a case should have a scope is asked in issue 17.
+
+What the pass decides beyond finding a name:
+
+| Subject | Rule | What is done |
+| --- | --- | --- |
+| A local used before its statement | UNIT-6 | Rejected. A module declaration may be used before it is written |
+| A default | UNIT-7 | Reads no parameter of its declaration and no field of its struct |
+| An anonymous function | FN-14 | Uses parameters, generic parameters, `let` locals and iteration bindings of what is around it; a `var`, `state`, `cache` or injected capability is rejected |
+| A test helper used outside the tests | TST-2 | Rejected. A test and a helper see the helpers |
+| `alias::name` | UNIT-2 | The alias is one of its file; the name a public declaration of that module |
+| `name<...>(...)` that reads two ways | GEN-14 | A constructor when `name` is a generic type, comparisons otherwise; recorded for the passes that read it. The names inside are the same under either reading |
+| A generic type before a comparison's `<` | GEN-14 | Rejected: an application its arguments do not complete |
+
+What a name *is* does not matter to this pass: a type, a function and a
+local are found alike. Whether what was found fits where it is used is
+for the passes that know types.
 
 ### Order
 
@@ -250,8 +280,10 @@ The other place is shown with the diagnostic, as "first declared here".
 Every module sees the public declarations of core's mandatory module
 without importing them (UNIT-11). Core declares none yet. Until it does, a
 name that nothing in the program binds is not reported: the analysed
-program lists it as left for the prelude, and `hgl check` prints the list.
-So far that is the operator of an `impl fn`.
+program lists it as left for the prelude, once for each module, and
+`hgl check` prints the list. Over core's conformance cases and the
+specification's complete examples the list is `delta_value`, `get`,
+`info`, `invalidate`, `modified` and `valid`.
 
 ### Leaving declarations out
 
@@ -274,6 +306,11 @@ specification to decide:
 | "Imports precede ordinary declarations" | Any declaration ends a file's imports, a test and a test context included |
 | A module that imports itself | An import cycle |
 | A native implementation with no declaration in its module | Rejected |
+| A name declared by a `for` pattern, an `inject` or an `each` constraint | A binding like a local: it takes no name in scope |
+| A test helper's name in a declaration outside the tests | Not in scope there: a parameter or local may take it |
+| A module alias used without `::name` | Rejected: an alias names nothing by itself |
+| A test's name used as a value | Not bound: left for the prelude like any unbound name |
+| `inject` in an anonymous function's surroundings | Not usable inside it: FN-14 lists what is, and it is not listed |
 | Two native implementations of one declaration, in different parts | Accepted: which part is selected is a target's choice (NATIVE-4). Two in one part are rejected |
 
 ## Test runner
@@ -358,7 +395,7 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
 `syntax.nesting_limit`. The catalogue has no code yet for a module or name
 rejection, so every code the analyser reports is local
-(`hgl_analyser::codes`); issue 17 proposes rows for them.
+(`hgl_analyser::codes`, 20 of them); issue 17 proposes rows for them.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
@@ -403,7 +440,8 @@ one of the roots given: nothing is searched for elsewhere.
 2. Parser for every grammar in the specification (done); formatter.
 3. Analyser: modules, declarations, imports and `hgl check` (done);
    `# expect-error` matching and `hgl test` for rejection cases (done);
-   name resolution; types for the scalar slice.
+   name resolution (done); the checks the parser left (FN-8, NATIVE-3);
+   types for the scalar slice.
 4. Transpiler for hgraph; `hgl test` running the core conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
 
