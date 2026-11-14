@@ -338,8 +338,8 @@ mod tests {
             ),
             // Nor is a code local to this compiler.
             (
-                "# expect-error(parse, \"doc.unattached\")",
-                "the diagnostic catalogue has no `doc.unattached` in category `parse`",
+                "# expect-error(parse, \"syntax.nesting_limit\")",
+                "the diagnostic catalogue has no `syntax.nesting_limit` in category `parse`",
             ),
         ];
         for (comment, expected) in cases {

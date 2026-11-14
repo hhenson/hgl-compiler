@@ -72,7 +72,7 @@ fn accepted_source_prints_its_tree_and_exits_zero() {
     // `const` is a name to the lexer and a modifier here (FN-5): it sits
     // inside the function's node.
     assert!(
-        stdout.contains("  FnDecl@26..131\n    Ident@26..31 \"const\"\n"),
+        stdout.contains("  FnDecl@26..128\n    Ident@26..31 \"const\"\n"),
         "{stdout}"
     );
     // The tree is lossless: whitespace and line breaks are in it.
@@ -114,9 +114,9 @@ fn rejected_source_prints_a_tree_and_exits_one() {
 }
 
 #[test]
-fn a_rejection_the_catalogue_has_no_code_for_is_marked_local() {
-    // SDOC-1 rejects a repeated documentation comment and the catalogue
-    // names no code for it.
+fn a_documentation_rejection_has_its_catalogued_code() {
+    // SDOC-1 rejects a repeated documentation comment, under the
+    // catalogue's `doc.repeated`.
     let path = scratch(
         "documented.hgl",
         "module examples.documented\n\n/** One. */\n/** Two. */\nconst fn one() -> i64 => 1\n",
@@ -126,14 +126,14 @@ fn a_rejection_the_catalogue_has_no_code_for_is_marked_local() {
     let stderr = text(&output.stderr);
     assert!(stderr.contains("error[parse/doc.repeated]"), "{stderr}");
     assert!(stderr.contains("rule SDOC-1"), "{stderr}");
-    assert!(stderr.contains("compiler-local"), "{stderr}");
+    assert!(!stderr.contains("compiler-local"), "{stderr}");
 }
 
 #[test]
 fn a_fragment_needs_no_module_line() {
     // EXPR-10's illustration, as the chapter writes it: an expression on
     // its own.
-    let path = scratch("fragment.hgl", "1.0 /{zero: ieee} 0.0\n");
+    let path = scratch("fragment.hgl", "1.0 /{zero: .ieee} 0.0\n");
 
     // As a file it has no `module` line (UNIT-1).
     let output = hgl(&["tree", &path]);
@@ -145,10 +145,12 @@ fn a_fragment_needs_no_module_line() {
     assert_eq!(text(&output.stderr), "");
     let stdout = text(&output.stdout);
     assert!(
-        stdout.starts_with("Fragment@0..22\n  ExprStmt@0..21\n"),
+        stdout.starts_with("Fragment@0..23\n  ExprStmt@0..22\n"),
         "{stdout}"
     );
-    assert!(stdout.contains("OperatorConfig@5..17"), "{stdout}");
+    assert!(stdout.contains("OperatorConfig@5..18"), "{stdout}");
+    // TYPE-7: `.ieee` is a member of the option's enum.
+    assert!(stdout.contains("ImpliedMember@12..17"), "{stdout}");
 
     // Statements are not declarations.
     let output = hgl(&["tree", "--fragment", "declarations", &path]);

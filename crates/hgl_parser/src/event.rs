@@ -348,13 +348,13 @@ impl TreeBuilder<'_> {
                 Some(DocState::Attached) => continue,
                 Some(DocState::Repeated) => Diagnostic::error(
                     Category::Parse,
-                    Code::Local(codes::DOC_REPEATED),
+                    Code::Catalogued(codes::DOC_REPEATED),
                     location,
                     "a declaration has one documentation comment",
                 ),
                 None => Diagnostic::error(
                     Category::Parse,
-                    Code::Local(codes::DOC_UNATTACHED),
+                    Code::Catalogued(codes::DOC_UNATTACHED),
                     location,
                     "documentation comment documents no declaration",
                 )

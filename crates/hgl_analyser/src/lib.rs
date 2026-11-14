@@ -132,6 +132,8 @@ pub mod codes {
     /// A native implementation has a second `start;` or `stop;`
     /// (NATIVE-3).
     pub const NATIVE_DUPLICATE_HOOK: &str = "native.duplicate_hook";
+    /// An `inject` names something that is not a capability (TIME-8).
+    pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
 }
 
 /// One parsed file: what the analyser is given for each source file.
@@ -191,3 +193,15 @@ fn error(
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
 }
+
+/// The names `inject` may name (TIME-8): "The injectables are `out`,
+/// `logger`, `clock`, and `scheduler`, and the proposed `alarm` and
+/// `global_state` below; `inject` names no other."
+pub const INJECTABLES: [&str; 6] = [
+    "out",
+    "logger",
+    "clock",
+    "scheduler",
+    "alarm",
+    "global_state",
+];

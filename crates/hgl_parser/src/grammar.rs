@@ -48,6 +48,9 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwStr
             | SyntaxKind::KwBytes
             | SyntaxKind::KwAny
+            | SyntaxKind::KwDelta
+            | SyntaxKind::KwError
+            | SyntaxKind::Dot
             | SyntaxKind::LParen
             | SyntaxKind::LBracket
             | SyntaxKind::LBrace
@@ -68,9 +71,11 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
 ///
 /// `-` does not, though it too begins an expression: "`-` at the start of
 /// a line is the binary operator: a statement that began with it would
-/// have no effect" (owner decision, 2026-11-14).
+/// have no effect" (owner decision, 2026-11-14). Nor does `.`: at the
+/// start of a line it reaches into what the line before ended with, and
+/// `.member` alone (TYPE-7) is a value with nothing to give it a type.
 pub(crate) fn can_begin(kind: SyntaxKind) -> bool {
-    (can_start_expression(kind) && kind != SyntaxKind::Minus)
+    (can_start_expression(kind) && kind != SyntaxKind::Minus && kind != SyntaxKind::Dot)
         || matches!(
             kind,
             // Statements.
@@ -123,7 +128,34 @@ pub(crate) fn is_scalar_type(kind: SyntaxKind) -> bool {
     )
 }
 
+/// True for the reserved word of a built-in type that is not a scalar:
+/// `list`, `signal` and the rest.
+pub(crate) fn is_built_in_type(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::KwAtomic
+            | SyntaxKind::KwTuple
+            | SyntaxKind::KwList
+            | SyntaxKind::KwSet
+            | SyntaxKind::KwDict
+            | SyntaxKind::KwRolling
+            | SyntaxKind::KwResult
+            | SyntaxKind::KwRef
+            | SyntaxKind::KwSignal
+            | SyntaxKind::KwDelta
+            | SyntaxKind::KwError
+    )
+}
+
+/// True for a hard reserved word: a keyword token of the lexer.
+pub(crate) fn is_reserved_word(kind: SyntaxKind) -> bool {
+    // The lexer's table lists every reserved word with its token kind.
+    hgl_lexer::TokenKind::KEYWORDS
+        .iter()
+        .any(|&(_, word)| SyntaxKind::from(word) == kind)
+}
+
 /// True for a token that can begin a type.
 pub(crate) fn can_start_type(kind: SyntaxKind) -> bool {
-    kind == SyntaxKind::Ident || is_scalar_type(kind)
+    kind == SyntaxKind::Ident || is_scalar_type(kind) || is_built_in_type(kind)
 }

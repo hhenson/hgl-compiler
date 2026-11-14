@@ -441,15 +441,15 @@ impl Parser<'_> {
     /// parameter = IDENTIFIER, ":", type
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
     ///           | IDENTIFIER, ":", value_type, "=", const_expression
-    ///           | IDENTIFIER, ":", "...", type
-    ///           | IDENTIFIER, ":", "...", "{", type, "}" ;
+    ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
+    /// pack = "...", type, [ cardinality ]
+    ///      | "...", "{", type, "}", [ cardinality ] ;
     /// ```
     ///
-    /// with `[ cardinality ]` after either pack form.
-    ///
     /// One permissive form is parsed: an optional `const`, a name, a type
-    /// or pack, an optional default. Which combinations mean something is
-    /// for the analyser (FN-8).
+    /// or pack, an optional default. The grammar admits `const` and a
+    /// default on a pack so that FN-8 rejects them by rule; that and
+    /// which other combinations mean something is for the analyser.
     fn parameter(&mut self) {
         if !self.at(Ident) {
             return;
@@ -577,7 +577,7 @@ impl Parser<'_> {
     /// ```text
     /// enum_decl = [ "export" ], "enum", IDENTIFIER,
     ///     "{", [ NL ], [ enum_member, { ",", [ NL ], enum_member }, [ "," ] ], [ NL ], "}" ;
-    /// enum_member = IDENTIFIER, [ "=", const_expression ] ;
+    /// enum_member = member_name, [ "=", const_expression ] ;
     /// ```
     fn enum_decl(&mut self) {
         self.start(EnumDecl);
@@ -592,7 +592,9 @@ impl Parser<'_> {
             // them in just those places.
             self.nested(Context::BLOCK, |parser| {
                 parser.list(RBrace, "an enum member", true, |parser| {
-                    if !parser.at(Ident) {
+                    // LEX-9: a member may take a type's reserved name,
+                    // as the `error` of `/{zero: .error}` does.
+                    if !parser.at_member_name() {
                         return;
                     }
                     parser.start(EnumMember);

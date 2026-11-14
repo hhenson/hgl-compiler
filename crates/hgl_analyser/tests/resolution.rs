@@ -666,9 +666,9 @@ fn every_binding_form_binds_in_its_scope() {
         "    }\n",
         "    stop { seen = index }\n",
         "}\n",
-        "native fn tick(value: i64) -> i64\n",
-        "native fn tick(value: i64) -> i64 {\n    inject out, value\n    when;\n}\n",
-        "fn clash(kept: i64) {\n    state kept = 0\n    inject clash\n}\n",
+        "native fn tick(clock: i64) -> i64\n",
+        "native fn tick(clock: i64) -> i64 {\n    inject out, clock\n    when;\n}\n",
+        "fn logger(kept: i64) {\n    state kept = 0\n    inject logger\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -680,4 +680,58 @@ fn every_binding_form_binds_in_its_scope() {
     );
     // `index` is bound for the `for` body alone.
     assert_eq!(checked.prelude_names("m"), ["index"]);
+}
+
+// ---- TIME-8: capabilities ----
+
+/// TIME-8: "The injectables are `out`, `logger`, `clock`, and
+/// `scheduler`, and the proposed `alarm` and `global_state` below;
+/// `inject` names no other."
+#[test]
+fn inject_names_a_capability() {
+    let checked = module(concat!(
+        "fn node(value: i64) -> i64 {\n",
+        "    inject out, logger, clock\n",
+        "    inject scheduler, alarm, global_state\n",
+        "    inject banana, value_store\n",
+        "    when { return value }\n",
+        "}\n",
+        "native fn tick() -> i64\n",
+        "native fn tick() -> i64 {\n    inject out, engine\n    when;\n}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:12 injectable/inject.unknown_capability TIME-8",
+            "m.hgl:5:20 injectable/inject.unknown_capability TIME-8",
+            "m.hgl:10:17 injectable/inject.unknown_capability TIME-8",
+        ]
+    );
+    assert!(
+        checked.report.contains(
+            "`inject` names one of `out`, `logger`, `clock`, `scheduler`, `alarm`, `global_state`"
+        ),
+        "{}",
+        checked.report
+    );
+}
+
+/// The crate's list is TIME-8's, so a pin that changes the rule's list
+/// fails here.
+#[test]
+fn the_capability_names_are_the_chapters_list() {
+    let path = common::spec_root().join("hgl_spec/spec/language/temporal-model.md");
+    let chapter = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    // The rule's first sentence, up to where it says the list is closed.
+    let start = chapter
+        .find("The injectables are")
+        .expect("TIME-8 lists them");
+    let end = chapter[start..]
+        .find("`inject` names no other")
+        .expect("TIME-8 closes the list")
+        + start;
+    // The names are the odd pieces: between a pair of backquotes.
+    let listed: Vec<&str> = chapter[start..end].split('`').skip(1).step_by(2).collect();
+    assert_eq!(listed, hgl_analyser::INJECTABLES);
 }

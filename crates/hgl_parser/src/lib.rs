@@ -69,18 +69,17 @@ pub use tree::{
 /// The diagnostic codes this stage reports.
 ///
 /// The specification's catalogue has one code for the grammar,
-/// `syntax.expected_token`. The others name conditions the specification
-/// rejects without naming a code, or a limit of this compiler, and are
-/// reported as local codes.
+/// `syntax.expected_token`, and two for documentation comments. The
+/// last names a limit of this compiler and is reported as a local code.
 pub mod codes {
     /// A required token is missing, or a token or the end of the file
     /// stands where the grammar allows neither. Catalogued.
     pub const SYNTAX_EXPECTED_TOKEN: &str = "syntax.expected_token";
     /// A documentation comment that documents no declaration (SDOC-1).
-    /// Local.
+    /// Catalogued.
     pub const DOC_UNATTACHED: &str = "doc.unattached";
     /// A documentation comment directly before another one (SDOC-1).
-    /// Local.
+    /// Catalogued.
     pub const DOC_REPEATED: &str = "doc.repeated";
     /// Source nested more deeply than this compiler was asked to read
     /// ([`crate::Limits`]). Local: the language sets no limit.

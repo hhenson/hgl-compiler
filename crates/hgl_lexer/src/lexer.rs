@@ -1098,15 +1098,35 @@ mod tests {
     fn contextual_names_are_identifiers() {
         // LEX-9, LEX-10: meaning comes from position, which the parser knows.
         for name in [
-            "const", "atomic", "tuple", "list", "set", "dict", "rolling", "result", "error",
+            "const",
+            "native",
+            "type",
+            "switch",
+            "case",
+            "default",
+            "in",
+            "each",
+            "unbounded",
+            "properties",
+            "raises",
         ] {
             assert_eq!(kinds_of(name), [Ident], "{name}");
         }
-        for name in [
-            "ref", "signal", "delta", "native", "type", "switch", "case", "default", "in", "each",
-        ] {
-            assert_eq!(kinds_of(name), [Ident], "{name}");
-        }
+    }
+
+    #[test]
+    fn built_in_type_names_are_reserved() {
+        // The hard reserved words: the names of the types the language
+        // defines are reserved, as the scalar type names are.
+        assert_eq!(
+            kinds_of("atomic tuple list set dict rolling result ref signal delta error"),
+            [
+                KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef, KwSignal,
+                KwDelta, KwError
+            ]
+        );
+        // A longer name that starts with one is a name (LEX-1).
+        assert_eq!(kinds_of("listing results set_point"), [Ident, Ident, Ident]);
     }
 
     #[test]
@@ -1924,21 +1944,21 @@ mod tests {
         // LEX-8, LEX-17: no token joins `>` to a following `>`.
         assert_eq!(
             kinds_of("list<list<i64>>"),
-            [Ident, Lt, Ident, Lt, KwI64, Gt, Gt]
+            [KwList, Lt, KwList, Lt, KwI64, Gt, Gt]
         );
         // LEX-17: `>` directly followed by `=` is `>=` even after generic
         // arguments, so the space matters.
         assert_eq!(
             kinds_of("xs: list<i64>= value"),
-            [Ident, Colon, Ident, Lt, KwI64, GtEq, Ident]
+            [Ident, Colon, KwList, Lt, KwI64, GtEq, Ident]
         );
         assert_eq!(
             kinds_of("xs: list<i64> = value"),
-            [Ident, Colon, Ident, Lt, KwI64, Gt, Eq, Ident]
+            [Ident, Colon, KwList, Lt, KwI64, Gt, Eq, Ident]
         );
         assert_eq!(
             kinds_of("list<list<i64>>= value"),
-            [Ident, Lt, Ident, Lt, KwI64, Gt, GtEq, Ident]
+            [KwList, Lt, KwList, Lt, KwI64, Gt, GtEq, Ident]
         );
     }
 

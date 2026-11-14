@@ -66,8 +66,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
 | LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
-| LEX-9 | parser | done | `time` as member name and argument label; `const` as modifier or name by position |
-| LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion |
+| LEX-9 | parser | done | Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position |
+| LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor |
 | LEX-11 | lexer | done | Date, time and offset fields; civil and zoned forms |
 | LEX-12 | lexer | done | Zone name source form |
 | LEX-12 | transpiler | planned | Run provider checks zone catalogue membership and offset consistency |
@@ -127,7 +127,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
 | TYPE-6 | analyser | planned | Recursive struct edges; inheritance and collection cycles rejected |
-| TYPE-7 | analyser | planned | Enum members as typed constants; numbering, range and duplicates; checked construction |
+| TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
+| TYPE-7 | analyser | planned | Enum members as typed constants; `.member` given its enum by the type its position expects; numbering, range and duplicates; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
 | TYPE-8 | analyser | planned | Typing of `any` |
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |
@@ -243,7 +244,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
 | TIME-7 | analyser | planned | `inject out` needs an output and is used during evaluation |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
-| TIME-8 | analyser | planned | Injectables are capabilities, used receiver-first, never passed as data |
+| TIME-8 | analyser | partial | `inject` names one of the listed capabilities. Left: capabilities used receiver-first and never passed as data; clock properties read-only |
 | TIME-9 | analyser | planned | `scheduled()`, `activate` and `passivate` are reserved; helpers inherit capabilities |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 

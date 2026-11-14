@@ -162,6 +162,17 @@ define_token_kinds! {
         KwZonedDatetime => "zoned_datetime",
         KwZonedTime => "zoned_time",
         KwTimezone => "timezone",
+        KwAtomic => "atomic",
+        KwTuple => "tuple",
+        KwList => "list",
+        KwSet => "set",
+        KwDict => "dict",
+        KwRolling => "rolling",
+        KwResult => "result",
+        KwRef => "ref",
+        KwSignal => "signal",
+        KwDelta => "delta",
+        KwError => "error",
     }
     // The alternatives of the PUNCTUATION production in source-text.md. Each
     // is one token, and the lexer takes the longest that matches (LEX-17).
@@ -279,9 +290,14 @@ mod tests {
             "`const` is contextual (LEX-9)"
         );
         assert_eq!(
-            TokenKind::keyword("list"),
+            TokenKind::keyword("native"),
             None,
-            "`list` is contextual (LEX-10)"
+            "`native` is contextual (LEX-10)"
+        );
+        assert_eq!(
+            TokenKind::keyword("list"),
+            Some(TokenKind::KwList),
+            "the name of a built-in type is reserved"
         );
         assert_eq!(TokenKind::Ident.fixed_text(), None);
     }
