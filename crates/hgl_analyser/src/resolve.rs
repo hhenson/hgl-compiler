@@ -354,46 +354,20 @@ impl Resolver<'_> {
     }
 
     /// Walks one node: binds what it declares, looks up what it uses.
+    ///
+    /// This function calls itself, through `children`, once for every
+    /// level of the tree, so what it keeps on the call stack is paid for
+    /// at every level. It therefore only chooses: the work of each kind
+    /// of node is in a function of its own, whose locals are on the
+    /// stack only while that node is being read. `inline(never)` on
+    /// those keeps an optimising build from folding them back in.
     fn walk(&mut self, node: &SyntaxNode) {
         match node.kind() {
             SyntaxKind::Block => self.block(node),
             SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
-                // The initialiser first: `let x = x` does not read
-                // itself (UNIT-6: a local is visible after it is
-                // declared).
-                self.children(node);
-                let kind = match node.first_token().map(|token| token.kind()) {
-                    Some(SyntaxKind::KwVar) => LocalKind::Var,
-                    Some(SyntaxKind::KwState) => LocalKind::State,
-                    Some(SyntaxKind::KwCache) => LocalKind::Cache,
-                    _ => LocalKind::Let,
-                };
-                if let Some(name) = identifiers(node).next() {
-                    self.bind(&name, kind);
-                }
+                self.local(node);
             }
-            SyntaxKind::InjectDecl => {
-                for name in identifiers(node) {
-                    // TIME-8: "`inject` names no other."
-                    if !INJECTABLES.contains(&name.text()) {
-                        self.diagnostics.emit(
-                            error(
-                                Category::Injectable,
-                                codes::INJECT_UNKNOWN_CAPABILITY,
-                                self.at(&name),
-                                format!("`{}` is not a capability", name.text()),
-                                "TIME-8",
-                            )
-                            .with_note(format!(
-                                "`inject` names one of `{}`",
-                                INJECTABLES.join("`, `")
-                            )),
-                        );
-                    }
-                    // It is bound all the same, so that its uses find it.
-                    self.bind(&name, LocalKind::Inject);
-                }
-            }
+            SyntaxKind::InjectDecl => self.inject(node),
             SyntaxKind::ForStmt => self.for_statement(node),
             SyntaxKind::FnExpr => self.function_expression(node),
             SyntaxKind::ConstraintEach => self.each_constraint(node),
@@ -401,32 +375,87 @@ impl Resolver<'_> {
             | SyntaxKind::NamedType
             | SyntaxKind::TypedConstructor
             | SyntaxKind::ConstraintCall
-            | SyntaxKind::Instantiation => {
-                self.name_of(node);
-                self.children(node);
-            }
-            SyntaxKind::UndecidedConstructor => {
-                // GEN-14: "directly following a name resolved to a
-                // generic type in an expression, `<` opens generic
-                // arguments rather than a comparison."
-                let binding = self.name_of(node);
-                self.decisions.push(Decision {
-                    at: Location::new(self.file_id, node.span()),
-                    constructor: binding.map(|binding| self.is_generic_type(&binding)),
-                });
-                // The names inside are the same names under either
-                // reading, so they are resolved as they stand.
-                self.children(node);
-            }
-            SyntaxKind::BinaryExpr => {
-                self.children(node);
-                self.check_application(node);
-            }
+            | SyntaxKind::Instantiation => self.name_use(node),
+            SyntaxKind::UndecidedConstructor => self.undecided(node),
+            SyntaxKind::BinaryExpr => self.binary(node),
             // The two names of `alias::name` are read by the node that
             // holds them.
             SyntaxKind::QualifiedName => {}
             _ => self.children(node),
         }
+    }
+
+    /// `let`, `var`, `state` or `cache`.
+    #[inline(never)]
+    fn local(&mut self, node: &SyntaxNode) {
+        // The initialiser first: `let x = x` does not read itself
+        // (UNIT-6: a local is visible after it is declared).
+        self.children(node);
+        let kind = match node.first_token().map(|token| token.kind()) {
+            Some(SyntaxKind::KwVar) => LocalKind::Var,
+            Some(SyntaxKind::KwState) => LocalKind::State,
+            Some(SyntaxKind::KwCache) => LocalKind::Cache,
+            _ => LocalKind::Let,
+        };
+        if let Some(name) = identifiers(node).next() {
+            self.bind(&name, kind);
+        }
+    }
+
+    /// `inject out, clock`.
+    #[inline(never)]
+    fn inject(&mut self, node: &SyntaxNode) {
+        for name in identifiers(node) {
+            // TIME-8: "`inject` names no other."
+            if !INJECTABLES.contains(&name.text()) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Injectable,
+                        codes::INJECT_UNKNOWN_CAPABILITY,
+                        self.at(&name),
+                        format!("`{}` is not a capability", name.text()),
+                        "TIME-8",
+                    )
+                    .with_note(format!(
+                        "`inject` names one of `{}`",
+                        INJECTABLES.join("`, `")
+                    )),
+                );
+            }
+            // It is bound all the same, so that its uses find it.
+            self.bind(&name, LocalKind::Inject);
+        }
+    }
+
+    /// A node that uses a name: an expression, a type, a constructor, a
+    /// constraint, an instantiation.
+    #[inline(never)]
+    fn name_use(&mut self, node: &SyntaxNode) {
+        self.name_of(node);
+        self.children(node);
+    }
+
+    /// `name<...>(...)` that reads two ways.
+    #[inline(never)]
+    fn undecided(&mut self, node: &SyntaxNode) {
+        // GEN-14: "directly following a name resolved to a generic type
+        // in an expression, `<` opens generic arguments rather than a
+        // comparison."
+        let binding = self.name_of(node);
+        self.decisions.push(Decision {
+            at: Location::new(self.file_id, node.span()),
+            constructor: binding.map(|binding| self.is_generic_type(&binding)),
+        });
+        // The names inside are the same names under either reading, so
+        // they are resolved as they stand.
+        self.children(node);
+    }
+
+    /// `a + b`. A chain of these is as deep as the tree may be, so this
+    /// keeps nothing on the stack across its operands.
+    fn binary(&mut self, node: &SyntaxNode) {
+        self.children(node);
+        self.check_application(node);
     }
 
     /// A block: "A block's scope is the scope around it plus its own
@@ -898,6 +927,7 @@ impl Resolver<'_> {
     /// "Reject an invalid application without comparison fallback." A
     /// generic type's name before a `<` that the parser read as a
     /// comparison is an application its arguments do not complete.
+    #[inline(never)]
     fn check_application(&mut self, node: &SyntaxNode) {
         let less_than = node
             .children_with_tokens()
