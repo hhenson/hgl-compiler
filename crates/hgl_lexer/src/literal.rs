@@ -763,6 +763,11 @@ pub fn validate_literals(
         return;
     }
     for token in tokens {
+        // LEX-18 rejects the whole malformed token. An invalid field in
+        // its prefix does not need a second report.
+        if token.malformed {
+            continue;
+        }
         let text = source.slice(token.span);
         // `.err()` keeps only the failure, turning Result<T, E> into
         // Option<E>, so the four value types can share one variable.

@@ -249,6 +249,8 @@ pub struct Token {
     pub kind: TokenKind,
     /// Where it is.
     pub span: Span,
+    /// Whether lexing rejected this token. Keep its kind and span for recovery.
+    pub malformed: bool,
 }
 
 #[cfg(test)]
