@@ -28,28 +28,28 @@ use crate::token::{Token, TokenKind};
 /// Each is a `parse` code of the specification's diagnostic catalog
 /// (errors-and-diagnostics.md), so they are reported as
 /// [`Code::Catalogued`]. The rule a rejection rests on is cited on the
-/// diagnostic.
+/// diagnostic. A constant's name is its code in upper case.
 pub mod codes {
     /// Source that is not well-formed UTF-8 (LEX-16).
-    pub const INVALID_ENCODING: &str = "syntax.invalid_encoding";
+    pub const SYNTAX_INVALID_ENCODING: &str = "syntax.invalid_encoding";
     /// A character that begins no token (LEX-16).
-    pub const UNEXPECTED_CHARACTER: &str = "syntax.unexpected_character";
+    pub const SYNTAX_UNEXPECTED_CHARACTER: &str = "syntax.unexpected_character";
     /// A string that reaches a line break or the end of the file, or a text
     /// block that reaches the end of the file (LEX-2).
-    pub const UNCLOSED_STRING: &str = "string.unclosed";
+    pub const STRING_UNCLOSED: &str = "string.unclosed";
     /// An escape outside the admitted set (LEX-2).
-    pub const UNKNOWN_ESCAPE: &str = "string.unknown_escape";
+    pub const STRING_UNKNOWN_ESCAPE: &str = "string.unknown_escape";
     /// A `\u{...}` that names no Unicode scalar value (LEX-24).
-    pub const INVALID_ESCAPE: &str = "string.invalid_escape";
+    pub const STRING_INVALID_ESCAPE: &str = "string.invalid_escape";
     /// A text block whose layout breaks LEX-25.
-    pub const MALFORMED_TEXT_BLOCK: &str = "string.malformed_text_block";
+    pub const STRING_MALFORMED_TEXT_BLOCK: &str = "string.malformed_text_block";
     /// A block or documentation comment that reaches the end of the file
     /// (LEX-2).
-    pub const UNCLOSED_COMMENT: &str = "comment.unclosed";
+    pub const COMMENT_UNCLOSED: &str = "comment.unclosed";
     /// A numeric or duration run that is not one literal (LEX-8, LEX-18).
-    pub const MALFORMED_NUMBER: &str = "literal.malformed_number";
+    pub const NUMBER_MALFORMED: &str = "number.malformed";
     /// An `@` run that matches no temporal form (LEX-18).
-    pub const MALFORMED_TEMPORAL: &str = "literal.malformed_temporal";
+    pub const DATE_TIME_MALFORMED: &str = "date_time.malformed";
 }
 
 /// The note that lists the escapes, shown with every unknown one.
@@ -77,7 +77,7 @@ pub fn lex(sources: &SourceMap, file: FileId, diagnostics: &mut Diagnostics) -> 
 
     let diagnostic = Diagnostic::error(
         Category::Parse,
-        Code::Catalogued(codes::INVALID_ENCODING),
+        Code::Catalogued(codes::SYNTAX_INVALID_ENCODING),
         Location::new(file, Span::empty(error.offset)),
         "source is not well-formed UTF-8",
     )
@@ -267,7 +267,7 @@ impl<'a> Lexer<'a> {
                     .error(
                         start,
                         self.pos,
-                        codes::UNCLOSED_COMMENT,
+                        codes::COMMENT_UNCLOSED,
                         "comment has no closing `*/`",
                     )
                     .with_rule("LEX-2");
@@ -297,7 +297,7 @@ impl<'a> Lexer<'a> {
                         .error(
                             start,
                             self.pos,
-                            codes::UNCLOSED_STRING,
+                            codes::STRING_UNCLOSED,
                             "string has no closing quote",
                         )
                         .with_rule("LEX-2")
@@ -342,7 +342,7 @@ impl<'a> Lexer<'a> {
                         .error(
                             start,
                             self.pos,
-                            codes::UNCLOSED_STRING,
+                            codes::STRING_UNCLOSED,
                             r#"text block has no closing `"""`"#,
                         )
                         .with_rule("LEX-2");
@@ -371,7 +371,7 @@ impl<'a> Lexer<'a> {
                 .error(
                     start,
                     body,
-                    codes::MALFORMED_TEXT_BLOCK,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
                     r#"a line break must directly follow the opening `"""` of a text block"#,
                 )
                 .with_note(
@@ -381,7 +381,7 @@ impl<'a> Lexer<'a> {
                 .error(
                     close,
                     close + 3,
-                    codes::MALFORMED_TEXT_BLOCK,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
                     r#"only spaces and tabs may come before the closing `"""` of a text block"#,
                 )
                 .with_note(r#"to put `"""` in the text, escape its first quote: `\"""`"#),
@@ -389,7 +389,7 @@ impl<'a> Lexer<'a> {
                 .error(
                     body + line.start,
                     body + line.end,
-                    codes::MALFORMED_TEXT_BLOCK,
+                    codes::STRING_MALFORMED_TEXT_BLOCK,
                     r#"this line does not start with the indentation of the closing `"""`"#,
                 )
                 .with_note(
@@ -420,7 +420,7 @@ impl<'a> Lexer<'a> {
                         .error(
                             start,
                             self.pos,
-                            codes::UNKNOWN_ESCAPE,
+                            codes::STRING_UNKNOWN_ESCAPE,
                             "a backslash at the end of a line is not an escape",
                         )
                         .with_rule("LEX-2")
@@ -440,7 +440,7 @@ impl<'a> Lexer<'a> {
                     .error(
                         start,
                         self.pos,
-                        codes::UNKNOWN_ESCAPE,
+                        codes::STRING_UNKNOWN_ESCAPE,
                         format!("unknown escape `\\{escaped}`"),
                     )
                     .with_rule("LEX-2")
@@ -467,7 +467,7 @@ impl<'a> Lexer<'a> {
                     .error(
                         start,
                         self.pos,
-                        codes::INVALID_ESCAPE,
+                        codes::STRING_INVALID_ESCAPE,
                         format!("`{escape}` names no Unicode scalar value"),
                     )
                     .with_rule("LEX-24")
@@ -482,7 +482,7 @@ impl<'a> Lexer<'a> {
                     .error(
                         start,
                         self.pos,
-                        codes::UNKNOWN_ESCAPE,
+                        codes::STRING_UNKNOWN_ESCAPE,
                         r"`\u` must be followed by `{`, one to six hexadecimal digits and `}`",
                     )
                     .with_rule("LEX-2")
@@ -644,7 +644,7 @@ impl<'a> Lexer<'a> {
         };
 
         let diagnostic = self
-            .error(start, self.pos, codes::MALFORMED_NUMBER, message)
+            .error(start, self.pos, codes::NUMBER_MALFORMED, message)
             .with_rule(rule)
             .with_note(note);
         self.diagnostics.emit(diagnostic);
@@ -701,7 +701,7 @@ impl<'a> Lexer<'a> {
             .error(
                 start,
                 self.pos,
-                codes::MALFORMED_TEMPORAL,
+                codes::DATE_TIME_MALFORMED,
                 format!("malformed time-zone literal `{literal}`"),
             )
             .with_rule("LEX-18")
@@ -759,7 +759,7 @@ impl<'a> Lexer<'a> {
                 .error(
                     start,
                     self.pos,
-                    codes::MALFORMED_TEMPORAL,
+                    codes::DATE_TIME_MALFORMED,
                     format!("malformed temporal literal `{literal}`"),
                 )
                 .with_rule("LEX-18")
@@ -928,7 +928,7 @@ impl<'a> Lexer<'a> {
         // escaped, so an invisible character is still readable.
         let message = format!("unexpected character {character:?}");
         let diagnostic = self
-            .error(start, self.pos, codes::UNEXPECTED_CHARACTER, message)
+            .error(start, self.pos, codes::SYNTAX_UNEXPECTED_CHARACTER, message)
             .with_rule("LEX-16");
         self.diagnostics.emit(diagnostic);
         TokenKind::Unknown
@@ -1079,7 +1079,7 @@ mod tests {
     fn non_ascii_letters_do_not_form_identifiers() {
         // LEX-1 admits ASCII letters only.
         let (codes, tokens) = rejected("caf\u{e9}");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER]);
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER]);
         assert_eq!(tokens, [(Ident, "caf"), (Unknown, "\u{e9}")]);
     }
 
@@ -1139,7 +1139,7 @@ mod tests {
             assert_eq!(
                 reports(&text),
                 [(
-                    codes::UNEXPECTED_CHARACTER,
+                    codes::SYNTAX_UNEXPECTED_CHARACTER,
                     "LEX-16",
                     &text[1..1 + character.len_utf8()]
                 )],
@@ -1158,7 +1158,7 @@ mod tests {
         assert_eq!((tokens[0].kind, tokens[0].span), (Ident, span(0, 1)));
         // A second one is an ordinary stray character.
         let (tokens, codes) = lex_text("\u{feff}\u{feff}a");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER]);
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER]);
         assert_eq!((tokens[0].kind, tokens[0].span), (Unknown, span(0, 3)));
     }
 
@@ -1176,7 +1176,10 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = &diagnostics.as_slice()[0];
         assert_eq!(diagnostic.category, Category::Parse);
-        assert_eq!(diagnostic.code, Code::Catalogued(codes::INVALID_ENCODING));
+        assert_eq!(
+            diagnostic.code,
+            Code::Catalogued(codes::SYNTAX_INVALID_ENCODING)
+        );
         assert_eq!(diagnostic.rule, Some("LEX-16"));
         // The primary location is the first offending byte.
         assert_eq!(diagnostic.primary.span, Span::empty(10));
@@ -1246,14 +1249,14 @@ mod tests {
         // end of the file.
         let text = "a /* never closed\nb";
         let (codes, tokens) = rejected(text);
-        assert_eq!(codes, [codes::UNCLOSED_COMMENT]);
+        assert_eq!(codes, [codes::COMMENT_UNCLOSED]);
         assert_eq!(tokens, [(Ident, "a"), (BlockComment, "/* never closed\nb")]);
         assert_eq!(
             reports(text),
-            [(codes::UNCLOSED_COMMENT, "LEX-2", "/* never closed\nb")]
+            [(codes::COMMENT_UNCLOSED, "LEX-2", "/* never closed\nb")]
         );
         let (codes, tokens) = rejected("/** doc");
-        assert_eq!(codes, [codes::UNCLOSED_COMMENT]);
+        assert_eq!(codes, [codes::COMMENT_UNCLOSED]);
         assert_eq!(tokens, [(DocComment, "/** doc")]);
     }
 
@@ -1285,15 +1288,15 @@ mod tests {
     fn unknown_escape_is_rejected_and_the_string_continues() {
         // LEX-2.
         let (codes, tokens) = rejected(r#""a\qb" c"#);
-        assert_eq!(codes, [codes::UNKNOWN_ESCAPE]);
+        assert_eq!(codes, [codes::STRING_UNKNOWN_ESCAPE]);
         assert_eq!(tokens, [(Str, r#""a\qb""#), (Ident, "c")]);
         assert_eq!(
             reports(r#""a\qb" c"#),
-            [(codes::UNKNOWN_ESCAPE, "LEX-2", r"\q")]
+            [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", r"\q")]
         );
         // A multi-byte character after the backslash is taken whole.
         let (codes, tokens) = rejected("\"\\\u{e9}\"");
-        assert_eq!(codes, [codes::UNKNOWN_ESCAPE]);
+        assert_eq!(codes, [codes::STRING_UNKNOWN_ESCAPE]);
         assert_eq!(tokens, [(Str, "\"\\\u{e9}\"")]);
     }
 
@@ -1314,7 +1317,7 @@ mod tests {
             let text = format!("\"a{escape}b\" c");
             assert_eq!(
                 reports(&text),
-                [(codes::INVALID_ESCAPE, "LEX-24", escape)],
+                [(codes::STRING_INVALID_ESCAPE, "LEX-24", escape)],
                 "{escape}"
             );
             let (_, tokens) = rejected(&text);
@@ -1329,7 +1332,7 @@ mod tests {
             let text = format!("\"{body}\"");
             assert_eq!(
                 reports(&text),
-                [(codes::UNKNOWN_ESCAPE, "LEX-2", r"\u")],
+                [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", r"\u")],
                 "{body}"
             );
             let (_, tokens) = rejected(&text);
@@ -1341,29 +1344,29 @@ mod tests {
     fn unclosed_string_ends_at_the_line_ending() {
         // LEX-2.
         let (codes, tokens) = rejected("\"abc\nnext");
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         assert_eq!(tokens, [(Str, "\"abc"), (Newline, "\n"), (Ident, "next")]);
         assert_eq!(
             reports("\"abc\nnext"),
-            [(codes::UNCLOSED_STRING, "LEX-2", "\"abc")]
+            [(codes::STRING_UNCLOSED, "LEX-2", "\"abc")]
         );
         for line_break in ["\r\n", "\r"] {
             let text = format!("\"abc{line_break}next");
             let (codes, tokens) = rejected(&text);
-            assert_eq!(codes, [codes::UNCLOSED_STRING]);
+            assert_eq!(codes, [codes::STRING_UNCLOSED]);
             assert_eq!(
                 tokens,
                 [(Str, "\"abc"), (Newline, line_break), (Ident, "next")]
             );
         }
         let (codes, _) = rejected("\"abc\\");
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         // A backslash before the line break adds nothing to the report.
         let (codes, _) = rejected("\"abc\\\nnext");
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         // An escaped quote does not close the string.
         let (codes, _) = rejected(r#""abc\""#);
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
     }
 
     #[test]
@@ -1416,7 +1419,7 @@ mod tests {
         // LEX-25: never an empty string and then a quote.
         let text = "\"\"\"text\"\"\" next";
         let (codes, tokens) = rejected(text);
-        assert_eq!(codes, [codes::MALFORMED_TEXT_BLOCK]);
+        assert_eq!(codes, [codes::STRING_MALFORMED_TEXT_BLOCK]);
         assert_eq!(tokens, [(Str, "\"\"\"text\"\"\""), (Ident, "next")]);
         // The diagnostic points at the opening delimiter.
         let (_, diagnostics) = lex_all(text);
@@ -1431,7 +1434,7 @@ mod tests {
         // LEX-25. The diagnostic points at the closing delimiter.
         let text = "\"\"\"\n  a\n  b \"\"\" next";
         let (codes, tokens) = rejected(text);
-        assert_eq!(codes, [codes::MALFORMED_TEXT_BLOCK]);
+        assert_eq!(codes, [codes::STRING_MALFORMED_TEXT_BLOCK]);
         assert_eq!(tokens, [(Str, &text[..text.len() - 5]), (Ident, "next")]);
         let (_, diagnostics) = lex_all(text);
         assert_eq!(diagnostics.as_slice()[0].primary.span, span(12, 15));
@@ -1445,7 +1448,7 @@ mod tests {
         let text = "\"\"\"\n    a\n  b\n c\n    \"\"\"";
         assert_eq!(
             reports(text),
-            [(codes::MALFORMED_TEXT_BLOCK, "LEX-25", "  b")]
+            [(codes::STRING_MALFORMED_TEXT_BLOCK, "LEX-25", "  b")]
         );
         let (_, tokens) = rejected(text);
         assert_eq!(tokens, [(Str, text)]);
@@ -1454,7 +1457,7 @@ mod tests {
         let text = "\"\"\"\n\ta\n    \"\"\"";
         assert_eq!(
             reports(text),
-            [(codes::MALFORMED_TEXT_BLOCK, "LEX-25", "\ta")]
+            [(codes::STRING_MALFORMED_TEXT_BLOCK, "LEX-25", "\ta")]
         );
     }
 
@@ -1463,14 +1466,14 @@ mod tests {
         // LEX-2.
         let text = "let a = \"\"\"\n  text\n  \"\" still text\nlet b = 1\n";
         let (codes, tokens) = rejected(text);
-        assert_eq!(codes, [codes::UNCLOSED_STRING]);
+        assert_eq!(codes, [codes::STRING_UNCLOSED]);
         assert_eq!(
             tokens,
             [(KwLet, "let"), (Ident, "a"), (Eq, "="), (Str, &text[8..])]
         );
         assert_eq!(
             reports(text),
-            [(codes::UNCLOSED_STRING, "LEX-2", &text[8..])]
+            [(codes::STRING_UNCLOSED, "LEX-2", &text[8..])]
         );
     }
 
@@ -1482,7 +1485,7 @@ mod tests {
             let text = format!("\"\"\"{line_break}  a\\{line_break}  b{line_break}  \"\"\"");
             assert_eq!(
                 reports(&text),
-                [(codes::UNKNOWN_ESCAPE, "LEX-2", "\\")],
+                [(codes::STRING_UNKNOWN_ESCAPE, "LEX-2", "\\")],
                 "{text:?}"
             );
             let (_, tokens) = rejected(&text);
@@ -1646,7 +1649,7 @@ mod tests {
             assert_eq!(tokens, [(kind, text)], "{text}");
             assert_eq!(
                 reports(text),
-                [(codes::MALFORMED_NUMBER, rule, text)],
+                [(codes::NUMBER_MALFORMED, rule, text)],
                 "{text}"
             );
         }
@@ -1657,13 +1660,13 @@ mod tests {
         // LEX-18: the run stops at the first character that is not a
         // letter, digit or `_`.
         let (codes, tokens) = rejected("1e+");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
         assert_eq!(tokens, [(Float, "1e"), (Plus, "+")]);
         let (codes, tokens) = rejected("12abc.x");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
         assert_eq!(tokens, [(Duration, "12abc"), (Dot, "."), (Ident, "x")]);
         let (codes, tokens) = rejected("f(10x, 2)");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
         assert_eq!(
             tokens,
             [
@@ -1682,7 +1685,7 @@ mod tests {
         // LEX-8: "`1e5` is valid, `1e5m` is not".
         assert_eq!(tokens_of("1e5"), [(Float, "1e5")]);
         let (codes, tokens) = rejected("1e5m");
-        assert_eq!(codes, [codes::MALFORMED_NUMBER]);
+        assert_eq!(codes, [codes::NUMBER_MALFORMED]);
         assert_eq!(tokens, [(Float, "1e5m")]);
     }
 
@@ -1760,7 +1763,7 @@ mod tests {
             "@2026-09-03_",
         ] {
             let (codes, tokens) = rejected(text);
-            assert_eq!(codes[0], codes::MALFORMED_TEMPORAL, "{text}");
+            assert_eq!(codes[0], codes::DATE_TIME_MALFORMED, "{text}");
             assert_eq!(tokens[0].0, Temporal, "{text}");
             assert_eq!(reports(text)[0].1, "LEX-18", "{text}");
         }
@@ -1782,7 +1785,7 @@ mod tests {
             assert_eq!(tokens[0], (Temporal, token), "{text}");
             assert_eq!(
                 reports(text),
-                [(codes::MALFORMED_TEMPORAL, "LEX-18", token)],
+                [(codes::DATE_TIME_MALFORMED, "LEX-18", token)],
                 "{text}"
             );
         }
@@ -1867,7 +1870,7 @@ mod tests {
     fn stray_characters_are_reported_one_by_one() {
         // LEX-16.
         let (codes, tokens) = rejected("a & b | c $ \u{1f600}");
-        assert_eq!(codes, [codes::UNEXPECTED_CHARACTER; 4]);
+        assert_eq!(codes, [codes::SYNTAX_UNEXPECTED_CHARACTER; 4]);
         let unknown: Vec<&str> = tokens
             .iter()
             .filter(|(kind, _)| *kind == Unknown)

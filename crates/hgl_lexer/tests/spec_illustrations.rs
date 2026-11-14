@@ -139,24 +139,28 @@ fn named_zone() {
 
 #[test]
 fn duration_units_out_of_order_are_rejected() {
-    rejected("30m1h", literal::codes::INVALID_DURATION, "LEX-13");
+    rejected("30m1h", literal::codes::DURATION_INVALID, "LEX-13");
 }
 
 #[test]
 fn a_fraction_of_a_microsecond_is_rejected() {
-    rejected("0.5us", literal::codes::INVALID_DURATION, "LEX-13");
+    rejected("0.5us", literal::codes::DURATION_INVALID, "LEX-13");
 }
 
 #[test]
 fn a_date_that_does_not_exist_is_rejected() {
-    rejected("@2026-02-29", literal::codes::INVALID_TEMPORAL, "LEX-11");
+    rejected(
+        "@2026-02-29",
+        literal::codes::DATE_TIME_INVALID_FIELD,
+        "LEX-11",
+    );
 }
 
 #[test]
 fn an_unclosed_string_is_rejected() {
     rejected(
         "let name = \"unclosed\n",
-        hgl_lexer::codes::UNCLOSED_STRING,
+        hgl_lexer::codes::STRING_UNCLOSED,
         "LEX-2",
     );
 }
@@ -329,27 +333,31 @@ fn text_block_value_drops_four_columns_and_ends_without_a_line_feed() {
 fn a_literal_is_not_split_into_a_literal_and_a_name() {
     // LEX-18.
     for text in ["12abc", "1.5x", "1e", "1_", "1h_", "0x", "0b102"] {
-        rejected(text, hgl_lexer::codes::MALFORMED_NUMBER, "LEX-18");
+        rejected(text, hgl_lexer::codes::NUMBER_MALFORMED, "LEX-18");
     }
 }
 
 #[test]
 fn two_separators_in_a_row_are_rejected() {
-    rejected("1__000", hgl_lexer::codes::MALFORMED_NUMBER, "LEX-22");
+    rejected("1__000", hgl_lexer::codes::NUMBER_MALFORMED, "LEX-22");
 }
 
 #[test]
 fn a_hexadecimal_integer_outside_the_domain_is_rejected() {
     rejected(
         "0xFFFF_FFFF_FFFF_FFFF",
-        literal::codes::INTEGER_RANGE,
+        literal::codes::NUMBER_INTEGER_RANGE,
         "LEX-23",
     );
 }
 
 #[test]
 fn a_surrogate_escape_is_rejected() {
-    rejected(r#""\u{D800}""#, hgl_lexer::codes::INVALID_ESCAPE, "LEX-24");
+    rejected(
+        r#""\u{D800}""#,
+        hgl_lexer::codes::STRING_INVALID_ESCAPE,
+        "LEX-24",
+    );
 }
 
 #[test]
@@ -362,7 +370,11 @@ fn text_block_layout_faults_are_rejected() {
         "\"\"\"\n    one\n    two \"\"\"",
         "\"\"\"\n    one\n  two\n    \"\"\"",
     ] {
-        rejected(text, hgl_lexer::codes::MALFORMED_TEXT_BLOCK, "LEX-25");
+        rejected(
+            text,
+            hgl_lexer::codes::STRING_MALFORMED_TEXT_BLOCK,
+            "LEX-25",
+        );
     }
 }
 
@@ -370,14 +382,14 @@ fn text_block_layout_faults_are_rejected() {
 fn an_offset_of_a_whole_day_is_rejected() {
     rejected(
         "@2026-09-03T09:30+24:00",
-        literal::codes::INVALID_TEMPORAL,
+        literal::codes::DATE_TIME_INVALID_FIELD,
         "LEX-19",
     );
 }
 
 #[test]
 fn a_float_that_rounds_to_infinity_is_rejected() {
-    rejected("1e400", literal::codes::FLOAT_RANGE, "LEX-20");
+    rejected("1e400", literal::codes::NUMBER_FLOAT_RANGE, "LEX-20");
 }
 
 #[test]
@@ -403,7 +415,7 @@ fn a_closer_directly_before_equals_is_one_token() {
 fn a_form_feed_between_tokens_is_rejected() {
     rejected(
         "a \u{c} b",
-        hgl_lexer::codes::UNEXPECTED_CHARACTER,
+        hgl_lexer::codes::SYNTAX_UNEXPECTED_CHARACTER,
         "LEX-16",
     );
 }

@@ -127,7 +127,7 @@ for the specification to decide:
 | Condition | Code used |
 | --- | --- |
 | Text block that reaches the end of the file | `string.unclosed` |
-| Empty zone component, as in `@[Europe//London]` | `literal.invalid_zone` |
+| Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
 | Backslash directly before a line break in a text block | `string.unknown_escape` |
 
 ## Adding a transpiler (planned)

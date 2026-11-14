@@ -105,9 +105,9 @@ fn rejected_source_reports_each_error_and_exits_one() {
     assert_eq!(
         headers,
         [
-            "error[parse/literal.invalid_duration]",
-            "error[parse/literal.invalid_duration]",
-            "error[parse/literal.invalid_temporal]",
+            "error[parse/duration.invalid]",
+            "error[parse/duration.invalid]",
+            "error[parse/date_time.invalid_field]",
             "error[parse/string.unclosed]",
         ]
     );

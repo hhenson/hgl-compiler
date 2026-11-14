@@ -16,20 +16,20 @@ use hgl_lexer::{TokenKind, codes, literal};
 
 /// Every diagnostic code the lexer and the literal checks can report.
 const LEXICAL_CODES: [&str; 14] = [
-    codes::INVALID_ENCODING,
-    codes::UNEXPECTED_CHARACTER,
-    codes::UNCLOSED_STRING,
-    codes::UNKNOWN_ESCAPE,
-    codes::INVALID_ESCAPE,
-    codes::MALFORMED_TEXT_BLOCK,
-    codes::UNCLOSED_COMMENT,
-    codes::MALFORMED_NUMBER,
-    codes::MALFORMED_TEMPORAL,
-    literal::codes::INTEGER_RANGE,
-    literal::codes::FLOAT_RANGE,
-    literal::codes::INVALID_DURATION,
-    literal::codes::INVALID_TEMPORAL,
-    literal::codes::INVALID_ZONE,
+    codes::SYNTAX_INVALID_ENCODING,
+    codes::SYNTAX_UNEXPECTED_CHARACTER,
+    codes::STRING_UNCLOSED,
+    codes::STRING_UNKNOWN_ESCAPE,
+    codes::STRING_INVALID_ESCAPE,
+    codes::STRING_MALFORMED_TEXT_BLOCK,
+    codes::COMMENT_UNCLOSED,
+    codes::NUMBER_MALFORMED,
+    codes::DATE_TIME_MALFORMED,
+    literal::codes::NUMBER_INTEGER_RANGE,
+    literal::codes::NUMBER_FLOAT_RANGE,
+    literal::codes::DURATION_INVALID,
+    literal::codes::DATE_TIME_INVALID_FIELD,
+    literal::codes::DATE_TIME_INVALID_ZONE,
 ];
 
 /// Reads one chapter of the pinned language specification.

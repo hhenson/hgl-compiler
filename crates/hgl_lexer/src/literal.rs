@@ -28,18 +28,19 @@ use crate::token::{Token, TokenKind};
 
 /// The diagnostic codes for literal values. Like the lexer's codes, each
 /// is a `parse` code of the specification's diagnostic catalog
-/// (errors-and-diagnostics.md).
+/// (errors-and-diagnostics.md), and a constant's name is its code in upper
+/// case.
 pub mod codes {
     /// An integer literal outside the i64 domain (LEX-7).
-    pub const INTEGER_RANGE: &str = "literal.integer_range";
+    pub const NUMBER_INTEGER_RANGE: &str = "number.integer_range";
     /// A float literal that rounds to infinity (LEX-7, LEX-20).
-    pub const FLOAT_RANGE: &str = "literal.float_range";
+    pub const NUMBER_FLOAT_RANGE: &str = "number.float_range";
     /// A duration that breaks LEX-13.
-    pub const INVALID_DURATION: &str = "literal.invalid_duration";
+    pub const DURATION_INVALID: &str = "duration.invalid";
     /// A date, time or offset whose fields do not exist (LEX-11, LEX-19).
-    pub const INVALID_TEMPORAL: &str = "literal.invalid_temporal";
+    pub const DATE_TIME_INVALID_FIELD: &str = "date_time.invalid_field";
     /// A zone name that breaks LEX-12.
-    pub const INVALID_ZONE: &str = "literal.invalid_zone";
+    pub const DATE_TIME_INVALID_ZONE: &str = "date_time.invalid_zone";
 }
 
 /// Why a literal's text has no value.
@@ -232,7 +233,7 @@ pub fn decode_integer(text: &str) -> Result<u64, LiteralError> {
     match u64::from_str_radix(&digits, radix) {
         Ok(magnitude) if magnitude <= MAX_INTEGER_MAGNITUDE => Ok(magnitude),
         _ => invalid(
-            codes::INTEGER_RANGE,
+            codes::NUMBER_INTEGER_RANGE,
             rule,
             format!("integer literal `{text}` is outside the i64 domain"),
         ),
@@ -258,7 +259,7 @@ pub fn decode_float(text: &str) -> Result<f64, LiteralError> {
         Ok(value)
     } else {
         invalid(
-            codes::FLOAT_RANGE,
+            codes::NUMBER_FLOAT_RANGE,
             "LEX-20",
             format!("float literal `{text}` is too large for f64: it rounds to infinity"),
         )
@@ -293,7 +294,7 @@ pub fn decode_duration(text: &str) -> Result<i64, LiteralError> {
     // found them only between digits, so they can simply be dropped.
     let plain = text.replace('_', "");
     let parts = duration_parts(&plain)?;
-    let reject = |message: String| invalid(codes::INVALID_DURATION, "LEX-13", message);
+    let reject = |message: String| invalid(codes::DURATION_INVALID, "LEX-13", message);
 
     // Arithmetic is done in i128 so that intermediate products cannot
     // overflow before the final range check.
@@ -400,7 +401,7 @@ fn fraction_microseconds(text: &str, fraction: &str, unit: i128) -> Result<i128,
     }
     let inexact = || {
         invalid(
-            codes::INVALID_DURATION,
+            codes::DURATION_INVALID,
             "LEX-13",
             format!("duration `{text}` is not a whole number of microseconds"),
         )
@@ -599,7 +600,7 @@ impl<'a> FieldReader<'a> {
 
         // The casts below are safe: four digits fit u16, two fit u8.
         let (year, month, day) = (year as u16, month as u8, day as u8);
-        let reject = |message: String| invalid(codes::INVALID_TEMPORAL, "LEX-11", message);
+        let reject = |message: String| invalid(codes::DATE_TIME_INVALID_FIELD, "LEX-11", message);
         if year == 0 {
             return reject(format!("date `{written}` is outside the years 1 to 9999"));
         }
@@ -641,7 +642,7 @@ impl<'a> FieldReader<'a> {
         let written = &self.text[start..self.pos];
         if hour > 23 || minute > 59 || second > 59 {
             return invalid(
-                codes::INVALID_TEMPORAL,
+                codes::DATE_TIME_INVALID_FIELD,
                 "LEX-11",
                 format!(
                     "time `{written}` does not exist: hours are 00 to 23, minutes and seconds 00 to 59"
@@ -674,7 +675,7 @@ impl<'a> FieldReader<'a> {
         let written = &self.text[start..self.pos];
         if hours > 23 || minutes > 59 {
             return invalid(
-                codes::INVALID_TEMPORAL,
+                codes::DATE_TIME_INVALID_FIELD,
                 "LEX-19",
                 format!("offset `{written}` does not exist: hours are 00 to 23, minutes 00 to 59"),
             );
@@ -706,13 +707,17 @@ impl<'a> FieldReader<'a> {
             return Err(LiteralError::Malformed);
         }
         if name.is_empty() {
-            return invalid(codes::INVALID_ZONE, "LEX-12", "zone name is empty");
+            return invalid(
+                codes::DATE_TIME_INVALID_ZONE,
+                "LEX-12",
+                "zone name is empty",
+            );
         }
         for component in name.split('/') {
             // An empty component is a leading, trailing or repeated slash.
             if component.is_empty() {
                 return invalid(
-                    codes::INVALID_ZONE,
+                    codes::DATE_TIME_INVALID_ZONE,
                     "LEX-12",
                     format!(
                         "zone name `{name}` has an empty component: `/` stands only between two components"
@@ -721,7 +726,7 @@ impl<'a> FieldReader<'a> {
             }
             if component == "." || component == ".." {
                 return invalid(
-                    codes::INVALID_ZONE,
+                    codes::DATE_TIME_INVALID_ZONE,
                     "LEX-12",
                     format!("zone name `{name}` has the component `{component}`"),
                 );
@@ -729,7 +734,7 @@ impl<'a> FieldReader<'a> {
         }
         if name.len() > 255 {
             return invalid(
-                codes::INVALID_ZONE,
+                codes::DATE_TIME_INVALID_ZONE,
                 "LEX-12",
                 "zone name is longer than 255 bytes",
             );
@@ -945,11 +950,11 @@ mod tests {
         );
         assert_eq!(
             invalid_code(decode_integer("9223372036854775809")),
-            codes::INTEGER_RANGE
+            codes::NUMBER_INTEGER_RANGE
         );
         assert_eq!(
             invalid_code(decode_integer("99999999999999999999999999")),
-            codes::INTEGER_RANGE
+            codes::NUMBER_INTEGER_RANGE
         );
         assert_eq!(invalid_rule(decode_integer("9223372036854775809")), "LEX-7");
         for text in ["12a", "", "1.5", "1e5", "1h", "-1", "+1", " 1"] {
@@ -984,7 +989,7 @@ mod tests {
         ] {
             assert_eq!(
                 invalid_code(decode_integer(text)),
-                codes::INTEGER_RANGE,
+                codes::NUMBER_INTEGER_RANGE,
                 "{text}"
             );
             assert_eq!(invalid_rule(decode_integer(text)), "LEX-23", "{text}");
@@ -992,7 +997,7 @@ mod tests {
         let binary_over = format!("0b1{}1", "0".repeat(62));
         assert_eq!(
             invalid_code(decode_integer(&binary_over)),
-            codes::INTEGER_RANGE
+            codes::NUMBER_INTEGER_RANGE
         );
 
         for text in [
@@ -1009,7 +1014,10 @@ mod tests {
         assert_eq!(decode_float("1e5"), Ok(100_000.0));
         assert_eq!(decode_float("2.5E-3"), Ok(0.0025));
         assert_eq!(decode_float("1.7976931348623157e308"), Ok(f64::MAX));
-        assert_eq!(invalid_code(decode_float("1e309")), codes::FLOAT_RANGE);
+        assert_eq!(
+            invalid_code(decode_float("1e309")),
+            codes::NUMBER_FLOAT_RANGE
+        );
         // LEX-22.
         assert_eq!(decode_float("1_000.000_5"), Ok(1000.0005));
         assert_eq!(decode_float("1e1_0"), Ok(1e10));
@@ -1032,13 +1040,16 @@ mod tests {
         );
         assert_eq!(decode_float("0.1"), Ok(0.1));
         // Rounding to infinity is rejected.
-        assert_eq!(invalid_code(decode_float("1e400")), codes::FLOAT_RANGE);
+        assert_eq!(
+            invalid_code(decode_float("1e400")),
+            codes::NUMBER_FLOAT_RANGE
+        );
         assert_eq!(invalid_rule(decode_float("1e400")), "LEX-20");
         // The largest f64 is 1.797...e308; halfway to the next power of two
         // rounds up to infinity.
         assert_eq!(
             invalid_code(decode_float("1.7976931348623159e308")),
-            codes::FLOAT_RANGE
+            codes::NUMBER_FLOAT_RANGE
         );
         // Rounding to zero or to a subnormal is accepted.
         assert_eq!(decode_float("1e-400"), Ok(0.0));
@@ -1080,15 +1091,15 @@ mod tests {
         assert_eq!(decode_duration("0.25d"), Ok(6 * 3_600_000_000));
         assert_eq!(
             invalid_code(decode_duration("0.5us")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("0.0000001s")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("0.3333333333333333333333d")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
@@ -1097,19 +1108,19 @@ mod tests {
         // LEX-13.
         assert_eq!(
             invalid_code(decode_duration("30m1h")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1us1ms")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1h2h")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("1.5h30m")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
@@ -1119,15 +1130,15 @@ mod tests {
         assert_eq!(decode_duration("9223372036854775807us"), Ok(i64::MAX));
         assert_eq!(
             invalid_code(decode_duration("9223372036854775808us")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("106751992d")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
         assert_eq!(
             invalid_code(decode_duration("99999999999999999999999999s")),
-            codes::INVALID_DURATION
+            codes::DURATION_INVALID
         );
     }
 
@@ -1169,32 +1180,32 @@ mod tests {
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-02-29")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@1900-02-29")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-04-31")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-13-01")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-00-10")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@2026-01-00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         // TYPE-2: years 1 to 9999.
         assert_eq!(
             invalid_code(decode_temporal("@0000-01-01")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert!(decode_temporal("@0001-01-01").is_ok());
         assert!(decode_temporal("@9999-12-31").is_ok());
@@ -1236,19 +1247,19 @@ mod tests {
         // LEX-11.
         assert_eq!(
             invalid_code(decode_temporal("@24:00:00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@24:00")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@23:59:60")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
         assert_eq!(
             invalid_code(decode_temporal("@12:60")),
-            codes::INVALID_TEMPORAL
+            codes::DATE_TIME_INVALID_FIELD
         );
     }
 
@@ -1289,7 +1300,7 @@ mod tests {
         ] {
             assert_eq!(
                 invalid_code(decode_temporal(text)),
-                codes::INVALID_TEMPORAL,
+                codes::DATE_TIME_INVALID_FIELD,
                 "{text}"
             );
             assert_eq!(invalid_rule(decode_temporal(text)), "LEX-19", "{text}");
@@ -1314,11 +1325,11 @@ mod tests {
 
         assert_eq!(
             invalid_code(decode_temporal("@[Europe/..]")),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
         assert_eq!(
             invalid_code(decode_temporal("@[./London]")),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
         assert!(
             decode_temporal("@[a.b/c..d]").is_ok(),
@@ -1330,7 +1341,7 @@ mod tests {
         let too_long = format!("@[{}]", "a".repeat(256));
         assert_eq!(
             invalid_code(decode_temporal(&too_long)),
-            codes::INVALID_ZONE
+            codes::DATE_TIME_INVALID_ZONE
         );
 
         // Components are nonempty: no leading, trailing or repeated slash.
@@ -1344,7 +1355,7 @@ mod tests {
         ] {
             assert_eq!(
                 invalid_code(decode_temporal(text)),
-                codes::INVALID_ZONE,
+                codes::DATE_TIME_INVALID_ZONE,
                 "{text}"
             );
             assert_eq!(invalid_rule(decode_temporal(text)), "LEX-12", "{text}");
