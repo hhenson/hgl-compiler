@@ -186,6 +186,7 @@ dependencies = [
  "hgl_diagnostics",
  "hgl_lexer",
  "hgl_parser",
+ "hgl_runner",
  "hgl_source",
  "walkdir",
 ]
@@ -214,6 +215,17 @@ dependencies = [
  "hgl_lexer",
  "hgl_source",
  "rowan",
+]
+
+[[package]]
+name = "hgl_runner"
+version = "0.1.0"
+dependencies = [
+ "hgl_analyser",
+ "hgl_diagnostics",
+ "hgl_lexer",
+ "hgl_parser",
+ "hgl_source",
 ]
 
 [[package]]

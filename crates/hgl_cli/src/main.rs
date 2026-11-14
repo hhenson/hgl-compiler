@@ -7,10 +7,11 @@
 //! hgl tokens <file>     source text --[lex]--> tokens, printed one per line
 //! hgl tree <file>       tokens --[parse]--> syntax tree, printed as an outline
 //! hgl check <roots>     syntax trees --[analyse]--> program; its errors reported
+//! hgl test <roots>      the program's cases, each checked; the outcome of each
 //! ```
 //!
-//! `tokens` and `tree` read one file. `check` reads a program: every
-//! `.hgl` file under the source roots it is given.
+//! `tokens` and `tree` read one file. `check` and `test` read a program:
+//! every `.hgl` file under the source roots they are given.
 //!
 //! This file contains no compiler logic. It reads arguments, finds and
 //! reads files, calls the stage crates, and prints. Argument parsing is delegated to the `clap`
@@ -22,9 +23,9 @@
 //!
 //! | Status | Meaning                                                    |
 //! | ------ | ---------------------------------------------------------- |
-//! | 0      | The source was accepted.                                   |
-//! | 1      | The source was rejected; diagnostics are on standard error. |
-//! | 2      | The command could not run: bad arguments, unreadable file. |
+//! | 0      | The source was accepted; every selected case passed.       |
+//! | 1      | The source was rejected, or a case failed; the reasons are on standard error. |
+//! | 2      | The command could not run: bad arguments, unreadable file, a selected case that nothing can run yet. |
 //!
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
@@ -39,6 +40,7 @@ use hgl_analyser::{DeclarationKind, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::{Entry, Limits};
+use hgl_runner::{Case, CaseKind, Outcome, Report, Selection};
 use hgl_source::{FileId, SourceMap};
 use walkdir::WalkDir;
 
@@ -70,6 +72,9 @@ enum Command {
     Tree(TreeArgs),
     /// Check a program: every `.hgl` file under the source roots.
     Check(CheckArgs),
+    /// Run the cases of a program: its tests and its `# expect-error`
+    /// rejection cases.
+    Test(TestArgs),
 }
 
 /// Arguments of `hgl tokens`.
@@ -113,6 +118,27 @@ struct CheckArgs {
     /// and tests.
     #[arg(long)]
     modules: bool,
+
+    #[command(flatten)]
+    limits: LimitArgs,
+}
+
+/// Arguments of `hgl test`.
+#[derive(Args)]
+struct TestArgs {
+    /// Source roots, as for `hgl check`.
+    #[arg(required = true, value_name = "ROOT")]
+    roots: Vec<PathBuf>,
+
+    /// Run the test with this name only, given as `name` or
+    /// `module.path::name`. May be repeated. A rejection case owned by a
+    /// declaration or an import always runs.
+    #[arg(long = "test", value_name = "NAME")]
+    tests: Vec<String>,
+
+    /// Check the rejection cases and run no test.
+    #[arg(long)]
+    rejections_only: bool,
 
     #[command(flatten)]
     limits: LimitArgs,
@@ -166,6 +192,10 @@ fn main() -> ExitCode {
         Command::Check(arguments) => {
             let stack = arguments.limits.limits().stack_size();
             on_stack_of(stack, move || check(&arguments))
+        }
+        Command::Test(arguments) => {
+            let stack = arguments.limits.limits().stack_size();
+            on_stack_of(stack, move || test(&arguments))
         }
     }
 }
@@ -377,6 +407,35 @@ fn tree(arguments: &TreeArgs) -> ExitCode {
     report(&sources, diagnostics)
 }
 
+/// Finds, reads, lexes and parses every source file under `roots`.
+///
+/// Gives the sources, the parsed files in the order found, and what the
+/// lexer and parser reported.
+fn parse_program(
+    roots: &[PathBuf],
+    limits: Limits,
+) -> Result<(SourceMap, Vec<ParsedFile>, Diagnostics), ExitCode> {
+    let paths = find_sources(roots)?;
+    let mut sources = SourceMap::new();
+    let mut diagnostics = Diagnostics::new();
+    let mut parsed = Vec::new();
+    for path in &paths {
+        let file = load_into(&mut sources, path)?;
+        let tokens = lex(&sources, file, &mut diagnostics);
+        literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
+        let parse = hgl_parser::parse(
+            &sources,
+            file,
+            &tokens,
+            Entry::SourceFile,
+            limits,
+            &mut diagnostics,
+        );
+        parsed.push(ParsedFile::new(file, parse.syntax()));
+    }
+    Ok((sources, parsed, diagnostics))
+}
+
 /// `hgl check`: lexes and parses every source file of a program, analyses
 /// the program, and reports what is wrong with it.
 ///
@@ -390,31 +449,11 @@ fn tree(arguments: &TreeArgs) -> ExitCode {
 /// inside a function body is parsed and not yet analysed, and the output
 /// says so.
 fn check(arguments: &CheckArgs) -> ExitCode {
-    let paths = match find_sources(&arguments.roots) {
-        Ok(paths) => paths,
-        Err(status) => return status,
-    };
-    let limits = arguments.limits.limits();
-    let mut sources = SourceMap::new();
-    let mut diagnostics = Diagnostics::new();
-    let mut parsed = Vec::new();
-    for path in &paths {
-        let file = match load_into(&mut sources, path) {
-            Ok(file) => file,
+    let (sources, parsed, mut diagnostics) =
+        match parse_program(&arguments.roots, arguments.limits.limits()) {
+            Ok(program) => program,
             Err(status) => return status,
         };
-        let tokens = lex(&sources, file, &mut diagnostics);
-        literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
-        let parse = hgl_parser::parse(
-            &sources,
-            file,
-            &tokens,
-            Entry::SourceFile,
-            limits,
-            &mut diagnostics,
-        );
-        parsed.push(ParsedFile::new(file, parse.syntax()));
-    }
     let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
 
     if arguments.modules {
@@ -427,7 +466,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         .count();
     println!(
         "checked {} in {}: {}",
-        count(paths.len(), "file"),
+        count(parsed.len(), "file"),
         count(program.modules.len(), "module"),
         match errors {
             0 => "no errors".to_string(),
@@ -437,6 +476,151 @@ fn check(arguments: &CheckArgs) -> ExitCode {
     println!("modules, declarations and imports are checked; function bodies are not yet");
     print!("{}", list_prelude_names(&sources, &program));
     report(&sources, diagnostics)
+}
+
+/// `hgl test`: checks the cases of a program and prints the outcome of
+/// each (TST-15).
+///
+/// ```text
+/// passed   rejection   cases/rolling.hgl:4 fn invalid
+/// FAILED   rejection   examples.rejection::bad_default
+///     expected type/rolling.size_kind on line 9 of cases/rolling.hgl: not reported
+/// not run  executable  examples.rejection::survives
+/// rejection cases: 1 passed, 1 failed
+/// executable cases: 1 not run: this compiler has no target to run a test on yet
+/// ```
+///
+/// A rejection case is a declaration, import or test marked with
+/// `# expect-error` annotations (TST-12). An executable case is a named
+/// test; none can be run until the compiler has a target.
+fn test(arguments: &TestArgs) -> ExitCode {
+    let (sources, parsed, front_end) =
+        match parse_program(&arguments.roots, arguments.limits.limits()) {
+            Ok(program) => program,
+            Err(status) => return status,
+        };
+    let selection = Selection {
+        tests: arguments.tests.clone(),
+        rejections_only: arguments.rejections_only,
+    };
+    let report = hgl_runner::run(&sources, &parsed, &front_end, &selection);
+
+    // TST-14: invalid metadata and errors in the surviving source stop
+    // the run before any case.
+    if report.prevented() {
+        for problem in &report.problems {
+            match problem.at {
+                Some(at) => {
+                    let source = sources.file(at.file);
+                    eprintln!(
+                        "{}:{}: {}",
+                        source.name(),
+                        source.line_col(at.span.start),
+                        problem.message
+                    );
+                }
+                None => eprintln!("hgl: {}", problem.message),
+            }
+        }
+        if let Err(error) = render::to_stderr(&sources, &report.surviving) {
+            eprintln!("hgl: cannot write diagnostics: {error}");
+            return ExitCode::from(EXIT_FAILED);
+        }
+        println!("no case was run");
+        return ExitCode::from(EXIT_REJECTED);
+    }
+
+    for case in &report.cases {
+        print_case(&sources, case);
+    }
+    print_counts(&report);
+    if report.succeeded() {
+        ExitCode::SUCCESS
+    } else if report
+        .cases
+        .iter()
+        .any(|case| matches!(case.outcome, Outcome::Failed { .. }))
+    {
+        ExitCode::from(EXIT_REJECTED)
+    } else {
+        // Nothing failed, and something could not be run.
+        ExitCode::from(EXIT_FAILED)
+    }
+}
+
+/// Prints one case: its outcome, kind and identity, and under a failed
+/// one each annotation no error met and each error no annotation
+/// expects (TST-13).
+fn print_case(sources: &SourceMap, case: &Case) {
+    let outcome = match case.outcome {
+        Outcome::Passed => "passed",
+        Outcome::Failed { .. } => "FAILED",
+        Outcome::NotRun(_) => "not run",
+    };
+    let kind = match case.kind {
+        CaseKind::Executable => "executable",
+        CaseKind::Rejection => "rejection",
+    };
+    println!("{outcome:<8} {kind:<11} {}", case.identity);
+    let Outcome::Failed {
+        missing,
+        unexpected,
+    } = &case.outcome
+    else {
+        return;
+    };
+    for expectation in missing {
+        println!(
+            "    expected {}/{} on line {} of {}: not reported",
+            expectation.category.as_str(),
+            expectation.code,
+            expectation.line + 1,
+            sources.file(expectation.at.file).name()
+        );
+    }
+    for diagnostic in unexpected {
+        let source = sources.file(diagnostic.primary.file);
+        let local = if diagnostic.code.is_catalogued() {
+            ""
+        } else {
+            " (a compiler-local code, which no annotation can expect)"
+        };
+        println!(
+            "    reported {}/{} at {}:{}, not expected{local}: {}",
+            diagnostic.category.as_str(),
+            diagnostic.code.as_str(),
+            source.name(),
+            source.line_col(diagnostic.primary.span.start),
+            diagnostic.message
+        );
+    }
+}
+
+/// Prints how many cases of each kind passed, failed and were not run,
+/// the two kinds apart (TST-14).
+fn print_counts(report: &Report) {
+    if report.cases.is_empty() {
+        // TST-15: "A run with no cases supplies no conformance evidence."
+        println!("no case was selected: this run shows nothing");
+        return;
+    }
+    let passed = |outcome: &Outcome| *outcome == Outcome::Passed;
+    let failed = |outcome: &Outcome| matches!(outcome, Outcome::Failed { .. });
+    let not_run = |outcome: &Outcome| matches!(outcome, Outcome::NotRun(_));
+    println!(
+        "rejection cases: {} passed, {} failed",
+        report.count(CaseKind::Rejection, passed),
+        report.count(CaseKind::Rejection, failed)
+    );
+    let waiting = report.count(CaseKind::Executable, not_run);
+    if waiting > 0 {
+        println!(
+            "executable cases: {waiting} not run: {}",
+            hgl_runner::NO_TARGET
+        );
+    } else {
+        println!("executable cases: none selected");
+    }
 }
 
 /// `1 file`, `2 files`.

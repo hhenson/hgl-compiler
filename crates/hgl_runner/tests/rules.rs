@@ -1,0 +1,516 @@
+//! The runner against the rules of source-error expectations, TST-12 to
+//! TST-15. Each test cites the rule it checks.
+//!
+//! The catalogue's `parse` codes are the ones the compiler reports under
+//! a catalogued code so far, so the cases here are lexical and syntax
+//! errors. What is tested is the runner: which line an annotation
+//! applies to, what owns it, and how errors and annotations are matched.
+
+mod common;
+
+use common::{run_all, run_selected};
+use hgl_runner::{CaseKind, Outcome, Selection};
+
+/// No lines.
+const NONE: [&str; 0] = [];
+
+// ---- TST-12: annotations and owners ----
+
+/// TST-12: an annotation "applies to the next physical source line that
+/// is not itself an annotation, so several may precede one line", and
+/// "The enclosing named test/declaration/import owns the whole rejection
+/// case".
+#[test]
+fn an_annotation_applies_to_the_next_line_and_its_item_owns_the_case() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module examples.rejection\n",
+            // An import owns a case.
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "use lib::{}\n",
+            "\n",
+            // A declaration, with the annotation directly before it.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn one() -> str => \"a\\q\"\n",
+            "\n",
+            // Two errors on one line take two annotations.
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "\t#expect-error( parse ,\t\"string.unclosed\" )\t\n",
+            "const fn two() -> str => \"a\\q\" + \"b\n",
+            "\n",
+            // The annotation stands inside its owner, before the line.
+            "const fn three() -> str {\n",
+            "    let fine = \"a\"\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    return \"a\\q\"\n",
+            "}\n",
+            "\n",
+            // A named test owns a case, and so does a helper in a context.
+            "test rejected {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    assert \"a\\q\" == \"a\"\n",
+            "}\n",
+            "test {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    const fn helper() -> str => \"a\\q\"\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection cases.hgl:3 use lib",
+            "passed rejection cases.hgl:6 const fn one",
+            "passed rejection cases.hgl:10 const fn two",
+            "passed rejection cases.hgl:12 const fn three",
+            "passed rejection examples.rejection::rejected",
+            "passed rejection cases.hgl:24 const fn helper",
+        ]
+    );
+    assert!(ran.report.succeeded());
+}
+
+/// TST-12: "A line comment that begins `expect-error` after `#` and any
+/// spaces or tabs, without that form, is invalid metadata (TST-14)", and
+/// an annotation is "alone on its line". TST-14: "Invalid metadata ...
+/// prevent execution."
+#[test]
+fn invalid_metadata_stops_the_run() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse \"string.unclosed\")\n",
+            "fn a() {}\n",
+            "# expect-error(parse, \"no.such_code\")\n",
+            "fn b() {}\n",
+            "fn c() {} # expect-error(parse, \"string.unclosed\")\n",
+            "# expect-error (parse, \"string.unclosed\")\n",
+            "fn d() {}\n",
+            // An ordinary comment that mentions the word is no annotation.
+            "# see expect-error(parse, \"string.unclosed\") above\n",
+            "test survives { assert true }\n",
+        ),
+    )]);
+    assert_eq!(
+        ran.stopped,
+        [
+            "cases.hgl:2:1 invalid `expect-error` annotation: a comma follows the category (TST-12)",
+            "cases.hgl:4:1 invalid `expect-error` annotation: the diagnostic catalogue has no \
+             `no.such_code` in category `parse` (TST-12)",
+            "cases.hgl:6:11 an `expect-error` annotation stands alone on its line (TST-12)",
+            "cases.hgl:7:1 invalid `expect-error` annotation: `(` directly follows `expect-error` \
+             (TST-12)",
+        ]
+    );
+    assert_eq!(ran.cases, NONE, "no case is run");
+    assert!(ran.report.prevented());
+    assert!(!ran.report.succeeded());
+}
+
+/// TST-12: "Unnamed context/module headers cannot own a case." Nor can a
+/// line of no item at all.
+#[test]
+fn an_annotation_with_no_owner_stops_the_run() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "module m\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "\n",
+            "fn a() {}\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "# an ordinary comment is a line, and no item\n",
+            "fn b() {}\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "test {\n",
+            "    fn helper() {}\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "}\n",
+            "# expect-error(parse, \"syntax.expected_token\")",
+        ),
+    )]);
+    assert_eq!(
+        ran.stopped,
+        [
+            "cases.hgl:14:1 an `expect-error` annotation applies to the next line, and none \
+             follows (TST-12)",
+            "cases.hgl:1:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:3:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:6:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:9:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:12:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+        ]
+    );
+    assert_eq!(ran.cases, NONE);
+}
+
+// ---- TST-13: owners left out, and matching ----
+
+/// TST-13: "Exclude all rejection owners from executable source. Check
+/// each selected owner independently alongside the surviving module".
+#[test]
+fn each_owner_is_checked_alone_beside_the_surviving_source() {
+    let ran = run_all(&[
+        (
+            "cases.hgl",
+            concat!(
+                "module examples.rejection\n",
+                "fn scale() {}\n",
+                // Two owners with one name: each is checked without the
+                // other, so neither is a duplicate of the other.
+                "# expect-error(parse, \"string.unknown_escape\")\n",
+                "const fn twin() -> str => \"a\\q\"\n",
+                "# expect-error(parse, \"string.unknown_escape\")\n",
+                "const fn twin() -> str => \"b\\q\"\n",
+                "test survives { assert true }\n",
+            ),
+        ),
+        (
+            "part.hgl",
+            concat!(
+                "module examples.rejection part more\n",
+                "# expect-error(parse, \"string.unclosed\")\n",
+                "const fn other() -> str => \"a\n",
+            ),
+        ),
+    ]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection cases.hgl:4 const fn twin",
+            "passed rejection cases.hgl:6 const fn twin",
+            "passed rejection part.hgl:3 const fn other",
+            "not-run executable examples.rejection::survives",
+        ]
+    );
+}
+
+/// TST-13: "Every primary diagnostic must match one annotation exactly by
+/// category, code, file, and next-line location; every annotation must
+/// match once." TST-14: "A rejection mismatch fails that case while other
+/// valid cases continue."
+#[test]
+fn errors_and_annotations_match_one_to_one() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            // The wrong code.
+            "# expect-error(parse, \"string.unclosed\")\n",
+            "const fn code() -> str => \"a\\q\"\n",
+            // The wrong line: the error is on the line after.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn line() -> str =>\n",
+            "    \"a\\q\"\n",
+            // One error, expected twice.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn twice() -> str => \"a\\q\"\n",
+            // Two errors, one expected.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn more() -> str => \"a\\q\" + \"b\\q\"\n",
+            // Nothing wrong with it.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn accepted() -> str => \"a\"\n",
+            // And one that is right, after the others.
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn right() -> str => \"a\\q\"\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "failed rejection cases.hgl:3 const fn code",
+            "  missing parse/string.unclosed cases.hgl:3",
+            "  unexpected parse/string.unknown_escape cases.hgl:3:29",
+            "failed rejection cases.hgl:5 const fn line",
+            "  missing parse/string.unknown_escape cases.hgl:5",
+            "  unexpected parse/string.unknown_escape cases.hgl:6:7",
+            "failed rejection cases.hgl:9 const fn twice",
+            "  missing parse/string.unknown_escape cases.hgl:9",
+            "failed rejection cases.hgl:11 const fn more",
+            "  unexpected parse/string.unknown_escape cases.hgl:11:37",
+            "failed rejection cases.hgl:13 const fn accepted",
+            "  missing parse/string.unknown_escape cases.hgl:13",
+            "passed rejection cases.hgl:15 const fn right",
+        ]
+    );
+    assert!(!ran.report.succeeded());
+    assert_eq!(
+        ran.report
+            .count(CaseKind::Rejection, |outcome| *outcome == Outcome::Passed),
+        1
+    );
+}
+
+/// TST-13: the owner is put back beside the surviving module, so an
+/// error it causes is one of its case's, wherever the analyser reports
+/// it. TST-12: "Category/code must be catalogued", so an error under a
+/// code local to this compiler meets no annotation.
+#[test]
+fn an_error_of_the_analyser_belongs_to_the_owner_put_back() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "fn scale() {}\n",
+            // With this declaration left out the module is accepted;
+            // put back, it is a duplicate. The catalogue has no code
+            // for that, so no annotation can expect it.
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn scale() {}\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "failed rejection cases.hgl:4 fn scale",
+            "  missing parse/syntax.expected_token cases.hgl:4",
+            "  unexpected name/name.duplicate cases.hgl:4:4",
+        ]
+    );
+}
+
+/// TST-14: "surviving-source errors prevent execution." An error with no
+/// annotation, in an item that owns no case, is one.
+#[test]
+fn an_error_in_the_surviving_source_stops_the_run() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn expected() -> str => \"a\\q\"\n",
+            "const fn stray() -> str => \"b\\q\"\n",
+            "fn twice() {}\n",
+            "fn twice() {}\n",
+        ),
+    )]);
+    assert_eq!(
+        ran.stopped,
+        [
+            "cases.hgl:4:30 parse/string.unknown_escape",
+            "cases.hgl:6:4 name/name.duplicate",
+        ]
+    );
+    assert_eq!(ran.cases, NONE);
+    assert!(ran.report.prevented());
+}
+
+/// TST-13: "Use the primary range's first character and the EOF
+/// position's line for EOF errors."
+#[test]
+fn an_error_at_the_end_of_the_file_is_on_its_last_line() {
+    // The block is never closed: the parser reports the missing `}` at
+    // the end of the file, which is the empty line after the annotation.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "test survives { assert true }\n",
+            "fn open() {\n",
+            "    # expect-error(parse, \"syntax.expected_token\")\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection cases.hgl:3 fn open",
+            "not-run executable m::survives",
+        ]
+    );
+
+    // The primary range's first character: a comment that never closes
+    // is reported where it opens, though it runs to the end of the file.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"comment.unclosed\")\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn open() { /* never closed",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(ran.cases, ["passed rejection cases.hgl:4 fn open"]);
+}
+
+// ---- TST-14 and TST-15: selection and what is reported ----
+
+/// A program with two tests to run, a test that is a rejection case, and
+/// a declaration that is one.
+const SELECTABLE: [(&str, &str); 2] = [
+    (
+        "a.hgl",
+        concat!(
+            "module one\n",
+            "test first { assert true }\n",
+            "test rejected {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    assert \"a\\q\" == \"a\"\n",
+            "}\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn declared() -> str => \"a\\q\"\n",
+        ),
+    ),
+    (
+        "b.hgl",
+        "module two\ntest first { assert true }\ntest second { assert true }\n",
+    ),
+];
+
+/// TST-15: "Report each selected case's identity, kind, and outcome;
+/// declaration-owned identities include original file and owner-start
+/// line." TST-14: "Report executed/rejected counts separately".
+#[test]
+fn every_case_is_reported_with_its_identity_kind_and_outcome() {
+    let ran = run_all(&SELECTABLE);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection one::rejected",
+            "passed rejection a.hgl:8 const fn declared",
+            "not-run executable one::first",
+            "not-run executable two::first",
+            "not-run executable two::second",
+        ]
+    );
+    let passed = |outcome: &Outcome| *outcome == Outcome::Passed;
+    assert_eq!(ran.report.count(CaseKind::Rejection, passed), 2);
+    assert_eq!(ran.report.count(CaseKind::Executable, passed), 0);
+    assert_eq!(
+        ran.report.count(CaseKind::Executable, |outcome| matches!(
+            outcome,
+            Outcome::NotRun(_)
+        )),
+        3
+    );
+    // TST-15: "Success requires every selected executable and required
+    // rejection case to pass." A test that was not run did not pass.
+    assert!(!ran.report.succeeded());
+}
+
+/// TST-15: "A rejection-only run is valid."
+#[test]
+fn a_rejection_only_run_selects_no_test_to_run() {
+    let selection = Selection {
+        tests: Vec::new(),
+        rejections_only: true,
+    };
+    let ran = run_selected(&SELECTABLE, &selection);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection one::rejected",
+            "passed rejection a.hgl:8 const fn declared",
+        ]
+    );
+    assert!(ran.report.succeeded());
+}
+
+/// TST-14: "Named selectors include rejection tests; declaration-owned
+/// cases always run."
+#[test]
+fn a_selector_names_tests_and_declaration_owned_cases_always_run() {
+    let select = |tests: &[&str]| {
+        let selection = Selection {
+            tests: tests.iter().map(|name| name.to_string()).collect(),
+            rejections_only: false,
+        };
+        run_selected(&SELECTABLE, &selection).cases
+    };
+    // A bare name selects the test of that name in every module.
+    assert_eq!(
+        select(&["first"]),
+        [
+            "passed rejection a.hgl:8 const fn declared",
+            "not-run executable one::first",
+            "not-run executable two::first",
+        ]
+    );
+    // A name with its module selects one.
+    assert_eq!(
+        select(&["two::first", "rejected"]),
+        [
+            "passed rejection one::rejected",
+            "passed rejection a.hgl:8 const fn declared",
+            "not-run executable two::first",
+        ]
+    );
+}
+
+/// TST-14: "Unknown selectors reject."
+#[test]
+fn an_unknown_selector_stops_the_run() {
+    let selection = Selection {
+        tests: vec![
+            "first".to_string(),
+            "third".to_string(),
+            "one::second".to_string(),
+        ],
+        rejections_only: false,
+    };
+    let ran = run_selected(&SELECTABLE, &selection);
+    assert_eq!(
+        ran.stopped,
+        [
+            "no test is named `third` (TST-14)",
+            "no test is named `one::second` (TST-14)",
+        ]
+    );
+    assert_eq!(ran.cases, NONE);
+}
+
+/// TST-15: "A run with no cases supplies no conformance evidence." It is
+/// not a failure either.
+#[test]
+fn a_program_with_no_cases_has_none_to_report() {
+    let ran = run_all(&[("m.hgl", "module m\nfn f() {}\n")]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(ran.cases, NONE);
+    assert!(ran.report.succeeded());
+    assert!(ran.report.cases.is_empty());
+}
+
+/// LEX-15: a line break is LF, CRLF or CR, and they mean the same. The
+/// lines an annotation and an error are on are counted alike under each.
+#[test]
+fn lines_are_counted_alike_under_every_line_break() {
+    let text = concat!(
+        "module m\n",
+        "# expect-error(parse, \"string.unknown_escape\")\n",
+        "# expect-error(parse, \"string.unclosed\")\n",
+        "const fn two() -> str => \"a\\q\" + \"b\n",
+        "test rejected {\n",
+        "    # expect-error(parse, \"string.unknown_escape\")\n",
+        "    assert \"a\\q\" == \"a\"\n",
+        "}\n",
+        "fn open() {\n",
+        "    # expect-error(parse, \"syntax.expected_token\")\n",
+    );
+    let expected = [
+        "passed rejection cases.hgl:4 const fn two",
+        "passed rejection m::rejected",
+        "passed rejection cases.hgl:9 fn open",
+    ];
+    for line_break in ["\n", "\r\n", "\r"] {
+        let text = text.replace('\n', line_break);
+        let ran = run_all(&[("cases.hgl", text.as_str())]);
+        assert_eq!(ran.stopped, NONE, "{line_break:?}");
+        assert_eq!(ran.cases, expected, "{line_break:?}");
+    }
+}

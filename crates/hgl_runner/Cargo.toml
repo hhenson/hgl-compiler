@@ -1,0 +1,18 @@
+[package]
+name = "hgl_runner"
+description = "The test runner: reads `# expect-error` annotations and checks rejection cases."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hgl_source.workspace = true
+hgl_diagnostics.workspace = true
+hgl_lexer.workspace = true
+hgl_parser.workspace = true
+hgl_analyser.workspace = true
+
+[lints]
+workspace = true

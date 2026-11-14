@@ -13,6 +13,7 @@
 //! annotation matches (TST-13); the message is for people and is not a match
 //! key.
 
+pub mod catalogue;
 pub mod render;
 
 use hgl_source::{FileId, Span};
@@ -57,6 +58,28 @@ pub enum Category {
 }
 
 impl Category {
+    /// Every category, in the specification's order.
+    pub const ALL: [Category; 10] = [
+        Category::Parse,
+        Category::Name,
+        Category::Type,
+        Category::Shape,
+        Category::Constraint,
+        Category::FunctionKind,
+        Category::Phase,
+        Category::Injectable,
+        Category::Operator,
+        Category::Module,
+    ];
+
+    /// The category the specification spells `name`, for example
+    /// `function-kind`; `None` when it spells none so.
+    pub fn from_name(name: &str) -> Option<Category> {
+        Category::ALL
+            .into_iter()
+            .find(|category| category.as_str() == name)
+    }
+
     /// The category as the specification spells it, for example
     /// `function-kind`.
     pub fn as_str(self) -> &'static str {

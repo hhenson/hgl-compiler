@@ -27,7 +27,7 @@ specification says which is which.
 | analyser | `hgl_analyser` | Names, types, phases and constants: every source rejection the parser cannot make |
 | optimiser | planned | Rewrites that keep what a program is observed to do |
 | transpiler | planned | The generated program and the runtime it runs on. A rule here may need a change to the runtime, not to generated code |
-| runner | planned | `hgl test`: selects cases, matches `# expect-error`, runs eval |
+| runner | `hgl_runner` | `hgl test`: selects cases, matches `# expect-error`, runs eval |
 | driver | `hgl_cli` | The `hgl` command: source roots, target, entry and run configuration |
 | diagnostics | `hgl_diagnostics` | The diagnostic model every stage reports through |
 | docs | none | Documentation extraction |
@@ -45,7 +45,7 @@ against, so raising the pin shows which ones moved.
 | Productions | Stage | State |
 | --- | --- | --- |
 | Tokens: `source-text.md`, less `literal`, `NL` and `EOF` | lexer | done |
-| `expect_error`, `gap`, `error_category`: a comment's form | runner | planned |
+| `expect_error`, `gap`, `error_category`: a comment's form | runner | done |
 | All others | parser | done |
 
 The parser reads `value_type` and its variants as `type`. Which types are
@@ -337,10 +337,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-10 | analyser | planned | `assert raises` takes one literal catalogued execution code (`test.raises_code`) |
 | TST-10 | runner | planned | The block runs once; a matching escaping error passes after cleanup |
 | TST-11 | runner | planned | What cannot satisfy `raises` |
-| TST-12 | runner | planned | `# expect-error` annotations read from line comments; the owner of each case |
-| TST-13 | runner | planned | Rejection owners excluded; diagnostics and annotations matched one to one |
-| TST-14 | runner | planned | Invalid metadata stops the run; selectors; counts reported |
-| TST-15 | runner | planned | When a run succeeds; what is reported for each case |
+| TST-12 | runner | done | `# expect-error` annotations read from line comments; the owner of each case |
+| TST-12 | diagnostics | done | The catalogue's source categories and codes, which an annotation may name |
+| TST-13 | parser | done | An error at the end of the file points at the end of the file |
+| TST-13 | runner | done | Rejection owners excluded; diagnostics and annotations matched one to one |
+| TST-14 | runner | partial | Invalid metadata and surviving-source errors stop the run; selectors; rejection counts. Left: counts of executed cases, with the first target |
+| TST-15 | runner | partial | When a run succeeds; identity, kind and outcome of each case. Left: executable cases, which are listed and not run |
 
 ## Program execution
 
