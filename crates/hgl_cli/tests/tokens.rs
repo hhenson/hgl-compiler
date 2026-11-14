@@ -120,6 +120,36 @@ fn rejected_source_reports_each_error_and_exits_one() {
 }
 
 #[test]
+fn a_malformed_temporal_literal_is_reported_once() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("literals");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("malformed-date.hgl");
+    // LEX-18 rejects the first token as malformed. LEX-11 still checks the
+    // calendar fields of the second token, whose shape is valid.
+    fs::write(
+        &path,
+        "let malformed = @2026-02-29x\nlet invalid = @2026-02-29\n",
+    )
+    .unwrap();
+
+    let output = hgl(&["tokens", &path.display().to_string()]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    let headers: Vec<&str> = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("error["))
+        .map(|header| header.split_once(']').unwrap().0)
+        .collect();
+    assert_eq!(
+        headers,
+        ["parse/date_time.malformed", "parse/date_time.invalid_field"],
+        "{stderr}"
+    );
+    assert!(stderr.contains("malformed-date.hgl:1:17"), "{stderr}");
+    assert!(stderr.contains("malformed-date.hgl:2:15"), "{stderr}");
+}
+
+#[test]
 fn source_that_is_not_utf8_is_rejected_not_unreadable() {
     // LEX-16: the bytes are source the language rejects, so the exit
     // status is 1, with one diagnostic at the first offending byte.
