@@ -279,15 +279,22 @@ impl Resolver<'_> {
     }
 
     fn generic_params(&mut self, generics: &SyntaxNode) {
-        for parameter in generics.children() {
-            if parameter.kind() != SyntaxKind::GenericParam {
-                continue;
-            }
-            // The type of `const N: i64`.
-            self.children(&parameter);
-            if let Some(name) = declared_name(&parameter) {
+        let parameters: Vec<SyntaxNode> = generics
+            .children()
+            .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
+            .collect();
+        // GEN-1: "Generic scope covers the whole declaration", the
+        // generic parameters themselves included. Every name is bound
+        // before any type is read, so that in `<const N: T, T>` the
+        // type of `N` finds the `T` written after it.
+        for parameter in &parameters {
+            if let Some(name) = declared_name(parameter) {
                 self.bind(&name, LocalKind::GenericParameter);
             }
+        }
+        // The type of `const N: i64`.
+        for parameter in &parameters {
+            self.children(parameter);
         }
     }
 
@@ -349,9 +356,7 @@ impl Resolver<'_> {
     /// Walks one node: binds what it declares, looks up what it uses.
     fn walk(&mut self, node: &SyntaxNode) {
         match node.kind() {
-            SyntaxKind::Block | SyntaxKind::SwitchCase | SyntaxKind::SwitchDefault => {
-                self.block(node);
-            }
+            SyntaxKind::Block => self.block(node),
             SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                 // The initialiser first: `let x = x` does not read
                 // itself (UNIT-6: a local is visible after it is
@@ -407,16 +412,35 @@ impl Resolver<'_> {
         }
     }
 
-    /// A block, or the statements of a `switch` case: a scope of its
-    /// own (UNIT-12).
+    /// A block: "A block's scope is the scope around it plus its own
+    /// bindings" (UNIT-12).
+    ///
+    /// The rule gives a scope to a block and to an anonymous function.
+    /// The statements under a `switch` case are neither: the grammar
+    /// gives a case no block. So what a case declares is declared in
+    /// the block the `switch` stands in.
     fn block(&mut self, node: &SyntaxNode) {
         let mut frame = Frame::default();
+        self.declared_later(node, &mut frame);
+        self.frames.push(frame);
+        self.children(node);
+        self.frames.pop();
+    }
+
+    /// Notes the names the statements of `node` declare in its block:
+    /// those of its `let`, `var`, `state`, `cache` and `inject`
+    /// statements, and of the same under the cases of a `switch`.
+    fn declared_later(&self, node: &SyntaxNode, frame: &mut Frame) {
         for statement in node.children() {
             let names: Vec<SyntaxToken> = match statement.kind() {
                 SyntaxKind::LocalDecl | SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                     identifiers(&statement).take(1).collect()
                 }
                 SyntaxKind::InjectDecl => identifiers(&statement).collect(),
+                SyntaxKind::SwitchStmt | SyntaxKind::SwitchCase | SyntaxKind::SwitchDefault => {
+                    self.declared_later(&statement, frame);
+                    Vec::new()
+                }
                 _ => Vec::new(),
             };
             for name in names {
@@ -424,9 +448,6 @@ impl Resolver<'_> {
                 frame.later.entry(name.text().to_string()).or_insert(at);
             }
         }
-        self.frames.push(frame);
-        self.children(node);
-        self.frames.pop();
     }
 
     /// `for a, b in items { ... }`: the pattern's names are bound for the
@@ -875,7 +896,13 @@ impl Resolver<'_> {
         if left.kind() != SyntaxKind::NameExpr {
             return;
         }
-        let Some(name) = identifiers(&left).next() else {
+        // The name the operand resolved by: of `alias::name`, the one
+        // after the `::`.
+        let name = match child(&left, SyntaxKind::QualifiedName) {
+            Some(qualified) => identifiers(&qualified).nth(1),
+            None => identifiers(&left).next(),
+        };
+        let Some(name) = name else {
             return;
         };
         // The name was resolved when the operand was walked.

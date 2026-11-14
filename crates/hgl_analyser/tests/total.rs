@@ -127,3 +127,43 @@ fn declarations_with_missing_parts_are_analysed() {
     assert_eq!(checked.program.modules.len(), 1);
     assert_eq!(checked.program.modules[0].files.len(), 3);
 }
+
+/// The analyser walks the tree by calling itself for each level, so its
+/// use of the call stack grows with the tree's depth. The parser bounds
+/// that depth (`hgl_parser::Limits`). At the default limits the analyser
+/// fits in the stack the parser's own defaults are sized for: half of
+/// the smallest stack the compiler meets, the 1 MiB of a Windows main
+/// thread.
+#[test]
+fn the_default_limits_fit_a_small_stack() {
+    let limits = hgl_parser::Limits::default();
+    // An `if` and its block are two levels of nesting, and four of the
+    // tree. Blocks nest nearly as deep as nesting may, and inside them a
+    // chain takes the tree nearly as deep as it may be.
+    let blocks = limits.nesting / 2 - 5;
+    let chain = vec!["value"; limits.tree_depth - 4 * blocks - 20].join(" + ");
+    let mut text = String::from("module m\nconst fn deep(value: i64) -> i64 {\n");
+    for _ in 0..blocks {
+        text.push_str("if value == 1 {\n");
+    }
+    text.push_str(&format!("let total = {chain}\n"));
+    for _ in 0..blocks {
+        text.push_str("}\n");
+    }
+    text.push_str("return value\n}\n");
+
+    let worker = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            let checked = check_broken(&[("m.hgl", text.as_str())]);
+            (
+                checked.front_end_errors,
+                checked.report.clone(),
+                checked.summary(),
+            )
+        })
+        .expect("a thread starts");
+    let (front_end_errors, report, findings) = worker.join().expect("the analyser fits the stack");
+    assert_eq!(front_end_errors, 0, "{report}");
+    assert_eq!(findings, [] as [&str; 0]);
+}
