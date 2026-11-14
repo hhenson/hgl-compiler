@@ -191,14 +191,27 @@ impl Parser<'_> {
         self.start(kind);
         self.bump();
         if !self.at(LBrace) && self.goes_on("a condition or `{`") {
-            let context = Context {
-                no_brace: true,
-                ..self.context
-            };
-            self.nested(context, |parser| parser.expression());
+            self.subject();
         }
         self.body_block();
         self.finish();
+    }
+
+    /// The expression between `if`, `for ... in`, `switch`, `when` or
+    /// `while` and the `{` of its body.
+    ///
+    /// CTRL-9: "the first `{` outside parentheses, brackets, and operator
+    /// configuration (EXPR-10) opens the body ... An expression there
+    /// that contains any other brace is parenthesized." So a `{` that
+    /// would begin a block is not read as one here: it is left for the
+    /// body. `if ({ ready }) { step() }` has a block for its condition;
+    /// `if { ready } { step() }` has no condition.
+    pub(crate) fn subject(&mut self) {
+        let context = Context {
+            no_brace: true,
+            ..self.context
+        };
+        self.nested(context, |parser| parser.expression());
     }
 
     /// ```text
@@ -214,7 +227,8 @@ impl Parser<'_> {
         }
         // LEX-10: `in` is a name with a meaning only here.
         if self.expect_word("in") && self.goes_on("an expression") {
-            self.expression();
+            // CTRL-9: the first `{` opens the body.
+            self.subject();
         }
         self.body_block();
         self.finish();
@@ -358,7 +372,8 @@ impl Parser<'_> {
     fn switch_stmt(&mut self) {
         self.start(SwitchStmt);
         self.bump();
-        self.expression();
+        // CTRL-9: the first `{` opens the cases.
+        self.subject();
         // A switch body holds statements, switches among them, without
         // going through `block`; `enter` bounds that nesting here.
         if !self.at(LBrace) || !self.enter() {

@@ -1636,10 +1636,10 @@ fn a_constraint_follows_the_line_rules_of_an_expression() {
 
 #[test]
 fn the_first_brace_after_when_or_while_opens_the_body() {
-    // CTRL-9: "After `when` or `while`, the first `{` outside
-    // parentheses, brackets, and operator configuration (EXPR-10) opens
-    // the body. The expression before it, if any, is the condition."
-    // The specification's three illustrations:
+    // CTRL-9: "After `if`, `for`, `switch`, `when`, or `while`, the first
+    // `{` outside parentheses, brackets, and operator configuration
+    // (EXPR-10) opens the body ... `when` and `while` may have none."
+    // The specification's illustrations for `when`:
     let step = "Block[\"{\" ExprStmt[CallExpr[NameExpr[\"step\"] ArgList[\"(\" \")\"]]] \"}\"]";
     assert_eq!(
         statements("when { step() }"),
@@ -1689,8 +1689,9 @@ fn a_brace_in_a_condition_is_parenthesized() {
         rejected(Entry::Statements, "when { ready } { step() }"),
         ["LEX-6 1:16: expected a line break, found `{`"]
     );
-    // "A condition that contains any other brace is parenthesized."
-    let message = "a condition that contains a brace is parenthesized";
+    // "An expression there that contains any other brace is
+    // parenthesized."
+    let message = "an expression with a brace in it is parenthesized before the `{` of a body";
     assert_eq!(
         rejected(Entry::Statements, "when if a { b } else { c } { step() }"),
         [format!("CTRL-9 1:6: {message}")]
@@ -1711,6 +1712,102 @@ fn a_brace_in_a_condition_is_parenthesized() {
     ] {
         statements(text);
     }
+}
+
+#[test]
+fn the_first_brace_after_if_for_or_switch_opens_the_body() {
+    // CTRL-9: "The expression before it is the condition of an `if`,
+    // `when`, or `while`, the sequence of a `for`, or the selector of a
+    // `switch`". The specification's illustrations:
+    let step = "Block[\"{\" ExprStmt[CallExpr[NameExpr[\"step\"] ArgList[\"(\" \")\"]]] \"}\"]";
+    let ready = "ParenExpr[\"(\" Block[\"{\" ExprStmt[NameExpr[\"ready\"]] \"}\"] \")\"]";
+    assert_eq!(
+        statements("if ready { step() }"),
+        format!("ExprStmt[IfExpr[\"if\" NameExpr[\"ready\"] {step}]]")
+    );
+    assert_eq!(
+        statements("if ({ ready }) { step() }"),
+        format!("ExprStmt[IfExpr[\"if\" {ready} {step}]]")
+    );
+    assert_eq!(
+        statements("for item in items { step() }"),
+        format!("ForStmt[\"for\" \"item\" \"in\" NameExpr[\"items\"] {step}]")
+    );
+    // A block may be the sequence of a `for` or the selector of a
+    // `switch` in parentheses, as it may be a condition.
+    assert_eq!(
+        statements("for item in ({ ready }) { step() }"),
+        format!("ForStmt[\"for\" \"item\" \"in\" {ready} {step}]")
+    );
+    assert!(
+        statements("switch ({ ready }) {\n    default:\n        step()\n}").starts_with(&format!(
+            "SwitchStmt[\"switch\" {ready} \"{{\" SwitchDefault["
+        ))
+    );
+    // Brackets and operator configuration hold braces of their own, and
+    // an `else if` is a condition like the first.
+    for text in [
+        "if [{ a }][0] { step() }",
+        "if a /{zero: error} b > 1 { step() }",
+        "if a { b } else if ({ c }) { d } else { e }",
+        "for item in [{ a }] { step() }",
+        "switch items[{ a }] {\n    default:\n        step()\n}",
+    ] {
+        statements(text);
+    }
+}
+
+#[test]
+fn a_brace_before_the_body_of_if_for_or_switch_is_parenthesized() {
+    // CTRL-9's rejection: `if { ready } { step() }` "has no condition
+    // before its first `{`".
+    let missing = "CTRL-9 1:4: expected an expression, found `{`";
+    assert_eq!(
+        rejected(Entry::Statements, "if { ready } { step() }"),
+        [missing]
+    );
+    // "An expression there that contains any other brace is
+    // parenthesized": a block, an `if`, a function with a block body.
+    let message = "an expression with a brace in it is parenthesized before the `{` of a body";
+    assert_eq!(
+        rejected(Entry::Statements, "if a == { b } { c }"),
+        ["CTRL-9 1:9: expected an expression, found `{`"]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "if if a { b } else { c } { d }"),
+        [format!("CTRL-9 1:4: {message}")]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "if fn() { return 1 } { d }"),
+        [format!("CTRL-9 1:9: {message}")]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "if a { b } else if { c } { d }"),
+        ["CTRL-9 1:20: expected an expression, found `{`"]
+    );
+    assert_eq!(
+        rejected(Entry::Statements, "for item in { items } { step() }"),
+        ["CTRL-9 1:13: expected an expression, found `{`"]
+    );
+    assert_eq!(
+        rejected(
+            Entry::Statements,
+            "for item in if a { b } else { c } { step() }"
+        ),
+        [format!("CTRL-9 1:13: {message}")]
+    );
+    // After `switch` the first `{` opens the cases, so what the block
+    // holds is read as cases.
+    assert_eq!(
+        rejected(
+            Entry::Statements,
+            "switch { kind } {\n    default:\n        step()\n}"
+        )[0],
+        "CTRL-9 1:8: expected an expression, found `{`"
+    );
+    // The note says what to write.
+    let outcome = run(Entry::Statements, "if { ready } { step() }");
+    assert!(outcome.report.contains(message), "{}", outcome.report);
 }
 
 // ---- NATIVE-3 ----

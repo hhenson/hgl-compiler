@@ -179,7 +179,6 @@ specification to decide:
 | --- | --- |
 | EXPR-10: "immediately after its token" | Position, not adjacency. `{}` is an empty configuration only when an operand follows it on the line |
 | FN-10: "Parenthesize an anonymous function" | Rejected bare where it is called, indexed, reached into, or the operand of an operator; accepted bare as a whole value, such as an argument |
-| CTRL-9 | `when` and `while` only; the subjects of `if`, `for` and `switch` are ordinary expressions |
 | LEX-9: `time` as an argument label | Accepted at a call; a parameter is an identifier, so none is named `time` |
 | TST-1: `operator` and `instantiate` in a test context | Rejected, as `test_item` has neither |
 | Built-in type names | `list<...>`, `signal`, `error` and the like are the built-in types in a type position, though `named_type` matches them too |
