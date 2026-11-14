@@ -38,11 +38,14 @@ Rules for every stage:
 | `hgl_cli` | The `hgl` command | `hgl tokens` only |
 | parser | Tokens to a lossless syntax tree | planned |
 | formatter | Syntax tree to source text | planned |
-| analyser | Names, types, phases, const evaluation; `# expect-error` matching | planned |
+| analyser | Names, types, phases, const evaluation | planned |
 | optimiser | Analysed program to analysed program | planned |
 | transpilers | Analysed program to one target each | planned |
+| test runner | `hgl test`: `# expect-error` matching, eval cases | planned |
 
 A crate is created when its stage is built, not before.
+[rules.md](rules.md) lists each rule of the specification against the stage
+that implements it.
 
 ## Lexer
 
