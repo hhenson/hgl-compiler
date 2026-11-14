@@ -153,6 +153,42 @@ fn an_annotation_with_no_owner_stops_the_run() {
     assert_eq!(ran.cases, NONE);
 }
 
+/// TST-12: "reliable source boundaries are required. Unnamed
+/// context/module headers cannot own a case." An item on a line with
+/// the `test {` or the `}` of its context shares that line with the
+/// context, so an error there is not surely its own and it owns no case.
+#[test]
+fn an_item_on_a_line_with_its_contexts_braces_owns_no_case() {
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "test { const fn one() -> str => \"a\\q\" }\n",
+            "test {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    const fn two() -> str => \"a\\q\" }\n",
+            "test {\n",
+            // On lines of its own, the helper owns its case.
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    const fn three() -> str => \"a\\q\"\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        ran.stopped,
+        [
+            "cases.hgl:2:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:5:5 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:3:35 parse/string.unknown_escape",
+            "cases.hgl:6:32 parse/string.unknown_escape",
+        ]
+    );
+    assert_eq!(ran.cases, NONE);
+}
+
 // ---- TST-13: owners left out, and matching ----
 
 /// TST-13: "Exclude all rejection owners from executable source. Check

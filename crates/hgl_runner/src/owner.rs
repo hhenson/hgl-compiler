@@ -6,12 +6,14 @@
 //!
 //! So what can own one is an item of a file, or of an unnamed test
 //! context: an import, a declaration, a named test. The `module` line and
-//! the `test {` and `}` of a context cannot.
+//! the `test {` and `}` of a context cannot, and an item of a context
+//! that shares a line with either has no boundary of its own to own a
+//! case by.
 
 use std::ops::RangeInclusive;
 
 use hgl_parser::ast::{AstNode, Item, SourceFile};
-use hgl_parser::{HasSpan, SyntaxNode};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::{FileId, Span};
 
 /// An item that can own a rejection case.
@@ -58,9 +60,21 @@ pub(crate) fn owners(
     // Items are taken from the front; a context's items go back on the
     // front, so the result stays in source order.
     pending.reverse();
+    // The lines that hold the `test {` or the `}` of an unnamed context.
+    // Such a line is the context's (TST-12), so an item that shares one
+    // has no lines of its own to own a case by.
+    let mut context_lines: Vec<usize> = Vec::new();
     while let Some(item) = pending.pop() {
         if let Item::TestContext(context) = &item {
             // The context cannot own a case; what it holds can.
+            let braces = context
+                .syntax()
+                .children_with_tokens()
+                .filter_map(|element| element.into_token())
+                .filter(|token| matches!(token.kind(), SyntaxKind::LBrace | SyntaxKind::RBrace));
+            for brace in braces {
+                context_lines.push(source.line_index(brace.span().start));
+            }
             let mut inner: Vec<Item> = context.items().collect();
             inner.reverse();
             pending.extend(inner);
@@ -71,6 +85,10 @@ pub(crate) fn owners(
         // The node's last byte is the one before its end.
         let last = span.end.saturating_sub(1).max(span.start);
         let first_line = source.line_index(span.start);
+        let lines = first_line..=source.line_index(last);
+        if context_lines.iter().any(|line| lines.contains(line)) {
+            continue;
+        }
         // A documentation comment is the node's first token (SDOC-1);
         // the declaration starts at the first token that is not one.
         let start = node
@@ -81,7 +99,7 @@ pub(crate) fn owners(
         found.push(Owner {
             file,
             span,
-            lines: first_line..=source.line_index(last),
+            lines,
             start_line: source.line_index(start),
             label: label(&item),
             // A helper or test inside a context is not the file's last
