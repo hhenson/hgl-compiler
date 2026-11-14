@@ -190,6 +190,9 @@ fn a_line_break_in_an_incomplete_statement_is_ignored() {
         (Statements, "let a =\n    [b]", "let a = [b]"),
         (Statements, "let a =\n    !b", "let a = !b"),
         (Statements, "let a = b +\n    (c)", "let a = b + (c)"),
+        // A `-` there is the prefix operator: no operand stands before it.
+        (Statements, "let a =\n    -b", "let a = -b"),
+        (Statements, "let a = b *\n    -c", "let a = b * -c"),
         // `eval` and a conversion are nothing without their `(`.
         (Statements, "let a = eval\n    (b)", "let a = eval(b)"),
         (Statements, "let a = str\n    (b)", "let a = str(b)"),
