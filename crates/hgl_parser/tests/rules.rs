@@ -2254,6 +2254,16 @@ fn error_is_reserved_and_still_constructs_and_names_a_member() {
         statements("outcome.error"),
         "ExprStmt[MemberExpr[NameExpr[\"outcome\"] \".\" \"error\"]]"
     );
+    // And an enum may declare a member of that name, or of any type's
+    // name, which `.error` then names (TYPE-7).
+    assert_eq!(
+        declarations("enum ZeroPolicy { ieee, nan, error = 3 }"),
+        "EnumDecl[\"enum\" \"ZeroPolicy\" \"{\" EnumMember[\"ieee\"] \",\" EnumMember[\"nan\"] \",\" \
+         EnumMember[\"error\" \"=\" Literal[\"3\"]] \"}\"]"
+    );
+    declarations("enum Kind { list, date, str }");
+    // An enum's own name is not a member name.
+    assert!(!rejected(Entry::Declarations, "enum error { a }").is_empty());
 }
 
 // ---- TST-13 ----

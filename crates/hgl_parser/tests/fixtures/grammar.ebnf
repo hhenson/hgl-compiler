@@ -125,7 +125,7 @@ delta_type = "delta", "<", type, ">" ;
 struct_decl = [ "export" ], [ "abstract" ], "struct", IDENTIFIER, [ generic_parameters ], [ ":", named_type, { ",", named_type } ], [ requires_clause ], "{", [ NL ], [ struct_member, { NL, struct_member }, [ NL ] ], "}" ;
 struct_member = member_name, ":", type, [ "=", const_expression ] | member_name, "=", const_expression ;
 enum_decl = [ "export" ], "enum", IDENTIFIER, "{", [ NL ], [ enum_member, { ",", [ NL ], enum_member }, [ "," ] ], [ NL ], "}" ;
-enum_member = IDENTIFIER, [ "=", const_expression ] ;
+enum_member = member_name, [ "=", const_expression ] ;
 # units-and-names.md
 source_file = [ NL ], module_decl, { NL, top_level_item }, [ NL ], EOF ;
 module_decl = "module", module_path, [ "part", IDENTIFIER ] ;

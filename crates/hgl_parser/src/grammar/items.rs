@@ -577,7 +577,7 @@ impl Parser<'_> {
     /// ```text
     /// enum_decl = [ "export" ], "enum", IDENTIFIER,
     ///     "{", [ NL ], [ enum_member, { ",", [ NL ], enum_member }, [ "," ] ], [ NL ], "}" ;
-    /// enum_member = IDENTIFIER, [ "=", const_expression ] ;
+    /// enum_member = member_name, [ "=", const_expression ] ;
     /// ```
     fn enum_decl(&mut self) {
         self.start(EnumDecl);
@@ -592,7 +592,9 @@ impl Parser<'_> {
             // them in just those places.
             self.nested(Context::BLOCK, |parser| {
                 parser.list(RBrace, "an enum member", true, |parser| {
-                    if !parser.at(Ident) {
+                    // LEX-9: a member may take a type's reserved name,
+                    // as the `error` of `/{zero: .error}` does.
+                    if !parser.at_member_name() {
                         return;
                     }
                     parser.start(EnumMember);
