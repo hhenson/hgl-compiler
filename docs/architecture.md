@@ -1,7 +1,8 @@
 # Architecture
 
-Status: stages 1 (lexing) and 2 (parsing) are implemented. Everything marked
-*planned* is a plan, not a contract; it changes as stages are built.
+Status: stages 1 (lexing) and 2 (parsing) are implemented, and the first
+pass of stage 3 (analysis): modules, declarations and imports. Everything
+marked *planned* is a plan, not a contract; it changes as stages are built.
 
 ## Pipeline
 
@@ -11,7 +12,7 @@ source text
 tokens
     |  hgl_parser
 syntax tree ---------> formatter (planned) ---------> source text
-    |  analyser (planned)
+    |  hgl_analyser (first pass)
 analysed program ----> error reporting (`check`)
     |  optimiser (planned)
 analysed program
@@ -36,9 +37,9 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree` |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports; names, types, phases and constants planned |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check` |
 | formatter | Syntax tree to source text | planned |
-| analyser | Names, types, phases, const evaluation | planned |
 | optimiser | Analysed program to analysed program | planned |
 | transpilers | Analysed program to one target each | planned |
 | test runner | `hgl test`: `# expect-error` matching, eval cases | planned |
@@ -202,16 +203,87 @@ with a stack of that size, so raising a limit needs nothing else. The
 defaults fit in half of the smallest stack the compiler meets, the 1 MiB of
 a Windows main thread.
 
+## Analyser
+
+The first stage that reads a program whole: every file of every module at
+once, because its answers cross files. It reads the tree through typed
+views (`hgl_parser::ast`): a function's name, a file's imports. It gives
+the *analysed program*: the modules, what each declares, and what each
+import names.
+
+It is built in passes:
+
+| Pass | What it settles | Rules | State |
+| --- | --- | --- | --- |
+| Modules | Files grouped into modules and parts by their `module` lines | UNIT-1 | done |
+| Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
+| Imports | The module and the declarations each `use` names; cycles; the operator of each `impl fn` | UNIT-2, UNIT-3, GEN-4 | done |
+| Resolution | Every name in a signature, body, type and constraint; locals and parameters; undecided generic applications | UNIT-6, UNIT-10, UNIT-12, FN-8, FN-14, GEN-14 | planned |
+| Types, phases, constants | The rest of the rules | | planned |
+
+`hgl check` says which passes ran: what is inside a function body is not
+analysed yet.
+
+### Order
+
+Nothing depends on the order the files are given in (UNIT-1). Where the
+analyser picks one of several places to report, it uses an order of its
+own: a module's unnamed file, then its parts by part name; within a file,
+source order.
+
+| Problem | Where it is reported |
+| --- | --- |
+| Two declarations with one name | The later. The first keeps the name |
+| A test helper with the name of a declaration | The helper, wherever it stands (TST-2) |
+| A declaration with a name its module imports | The declaration, in whichever file the import is (UNIT-12) |
+| Modules that import one another | Once: at the first import into the group, in its first module by path |
+
+The other place is shown with the diagnostic, as "first declared here".
+
+### Prelude
+
+Every module sees the public declarations of core's mandatory module
+without importing them (UNIT-11). Core declares none yet. Until it does, a
+name that nothing in the program binds is not reported: the analysed
+program lists it as left for the prelude, and `hgl check` prints the list.
+So far that is the operator of an `impl fn`.
+
+### Leaving declarations out
+
+A file may be given with a list of declarations to leave out, and the
+program is analysed as if they were not written. A test runner checks a
+rejection case that way (TST-13).
+
+### Readings
+
+Where the chapters leave a choice the analyser takes one reading, listed in
+[hgl_spec issue 17](https://github.com/hhenson/hgl_spec/issues/17) for the
+specification to decide:
+
+| Subject | Reading |
+| --- | --- |
+| A test's name | In no scope. Unique among its module's tests; may match a declaration's |
+| An import alias | A name of its file: no declaration of the module takes it |
+| One name imported twice in a file | A duplicate, from the same module or another |
+| An operator and a function with one name | A duplicate: only a temporal and a value function share a name (FN-4) |
+| "Imports precede ordinary declarations" | Any declaration ends a file's imports, a test and a test context included |
+| A module that imports itself | An import cycle |
+| A native implementation with no declaration in its module | Rejected |
+| Two native implementations of one declaration, in different parts | Accepted: which part is selected is a target's choice (NATIVE-4). Two in one part are rejected |
+
 ## Diagnostics
 
 A diagnostic has a category from the specification's list, a code, a primary
-location, and the rule it enforces. A code is *catalogued* (it appears in the
+location, and the rule it enforces. It may point at related places as
+well, such as the first of two declarations. A code is *catalogued* (it appears in the
 specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
 `# expect-error` (TST-12). Every lexical code is catalogued. The parser
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
-`syntax.nesting_limit`.
+`syntax.nesting_limit`. The catalogue has no code yet for a module or name
+rejection, so every code the analyser reports is local
+(`hgl_analyser::codes`); issue 17 proposes rows for them.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
@@ -237,7 +309,7 @@ First target (owner decision, 2026-11-13): Python wiring for
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
 
-## Finding source files (planned)
+## Finding source files
 
 The compiler is given one or more source roots. It reads every `.hgl` file
 under them and groups the files by the `module` line each declares. File and
@@ -245,11 +317,17 @@ directory names carry no meaning to the compiler; keeping one module's files
 together is a convention for readers. The language does not define a file
 layout, so this is a compiler rule (owner decision, 2026-11-13).
 
+`hgl check` does this. A root is a directory, searched with its
+subdirectories, or a single file. Linked directories are followed. A file
+reached twice is read once. A module that an import names must be under
+one of the roots given: nothing is searched for elsewhere.
+
 ## Planned order
 
 1. Lexer (done).
 2. Parser for every grammar in the specification (done); formatter.
-3. Analyser for the scalar slice; `hgl check`; `# expect-error` matching.
+3. Analyser: modules, declarations, imports and `hgl check` (done); name
+   resolution; `# expect-error` matching; types for the scalar slice.
 4. Transpiler for hgraph; `hgl test` running the core conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
 
@@ -268,7 +346,9 @@ the job the way the design needs is dropped.
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
+| `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
+| `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 
 Hand-written where no tool fits:
 

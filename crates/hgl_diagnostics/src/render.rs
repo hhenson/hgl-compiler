@@ -131,10 +131,18 @@ fn translate(diagnostic: &Diagnostic) -> cs::Diagnostic<usize> {
         Severity::Error => cs::Severity::Error,
         Severity::Warning => cs::Severity::Warning,
     };
-    let label = cs::Label::primary(
+    let mut labels = vec![cs::Label::primary(
         diagnostic.primary.file.index(),
         diagnostic.primary.span.range(),
-    );
+    )];
+    // A related place is a second underline with its own words, in the
+    // same file or another.
+    for related in &diagnostic.related {
+        labels.push(
+            cs::Label::secondary(related.location.file.index(), related.location.span.range())
+                .with_message(&related.message),
+        );
+    }
     let mut notes = Vec::new();
     if let Some(rule) = diagnostic.rule {
         notes.push(format!("rule {rule}"));
@@ -153,7 +161,7 @@ fn translate(diagnostic: &Diagnostic) -> cs::Diagnostic<usize> {
             diagnostic.code.as_str()
         ))
         .with_message(&diagnostic.message)
-        .with_label(label)
+        .with_labels(labels)
         .with_notes(notes)
 }
 
@@ -241,6 +249,27 @@ mod tests {
         ));
         // An offset beyond the text counts as its end.
         assert_eq!(files.line_index(0, usize::MAX).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_related_place_is_shown_with_its_words() {
+        let mut sources = SourceMap::new();
+        let first = sources.add("first.hgl", "fn scale() {}\n").unwrap();
+        let second = sources.add("second.hgl", "fn scale() {}\n").unwrap();
+        let mut diagnostics = Diagnostics::new();
+        diagnostics.emit(
+            Diagnostic::error(
+                Category::Name,
+                Code::Local("example.local_code"),
+                Location::new(second, Span::new(3, 8)),
+                "`scale` is declared twice",
+            )
+            .with_related(Location::new(first, Span::new(3, 8)), "first declared here"),
+        );
+        let text = to_string(&sources, &diagnostics);
+        assert!(text.contains("second.hgl:1:4"), "{text}");
+        assert!(text.contains("first.hgl:1:4"), "{text}");
+        assert!(text.contains("first declared here"), "{text}");
     }
 
     #[test]

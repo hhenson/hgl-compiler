@@ -7,11 +7,13 @@
 //! * every rule the pinned documents define has a row, and no row names a
 //!   rule they do not define, so raising the pin shows which rows to add;
 //! * every row names a known stage and state, and no row is repeated;
-//! * a row marked `done` names a rule that its stage's code cites;
+//! * a row marked `done` or `partial` names a rule that its stage's code
+//!   cites;
 //! * the rows of one rule are together and a family's rules are in order.
 //!
-//! They do not check that a `done` row is true. The stage's own tests do
-//! that; this file only stops the table claiming a rule nothing mentions.
+//! They do not check that a `done` or `partial` row is true. The stage's
+//! own tests do that; this file only stops the table claiming a rule
+//! nothing mentions.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -20,12 +22,12 @@ use std::path::{Path, PathBuf};
 /// The stages a row may name, each with the crates that implement it.
 ///
 /// A stage with no crate yet has an empty list. Marking one of its rows
-/// `done` fails until its crates are added here.
+/// `done` or `partial` fails until its crates are added here.
 const STAGES: [(&str, &[&str]); 10] = [
     ("lexer", &["hgl_source", "hgl_lexer"]),
     ("parser", &["hgl_parser"]),
     ("formatter", &[]),
-    ("analyser", &[]),
+    ("analyser", &["hgl_analyser"]),
     ("optimiser", &[]),
     ("transpiler", &[]),
     ("runner", &[]),
@@ -35,7 +37,7 @@ const STAGES: [(&str, &[&str]); 10] = [
 ];
 
 /// The states a row may have.
-const STATES: [&str; 3] = ["done", "planned", "unscheduled"];
+const STATES: [&str; 4] = ["done", "partial", "planned", "unscheduled"];
 
 /// One row of a rule table in `docs/rules.md`.
 struct Row {
@@ -43,7 +45,7 @@ struct Row {
     rule: String,
     /// The stage that implements it.
     stage: String,
-    /// `done`, `planned` or `unscheduled`.
+    /// `done`, `partial`, `planned` or `unscheduled`.
     state: String,
     /// The row's line in the file, counted from 1, for failure messages.
     line: usize,
@@ -210,7 +212,7 @@ fn every_row_names_a_known_stage_and_state_once() {
 }
 
 #[test]
-fn a_done_row_names_a_rule_its_stage_cites() {
+fn a_done_or_partial_row_names_a_rule_its_stage_cites() {
     let root = root();
     for (stage, crates) in STAGES {
         // Every rule ID mentioned in the stage's source and tests.
@@ -221,13 +223,14 @@ fn a_done_row_names_a_rule_its_stage_cites() {
             }
         }
         for row in rows() {
-            if row.stage == stage && row.state == "done" {
+            if row.stage == stage && (row.state == "done" || row.state == "partial") {
                 assert!(
                     cited.contains(&row.rule),
-                    "docs/rules.md line {}: {} is `done` in stage `{stage}`, \
+                    "docs/rules.md line {}: {} is `{}` in stage `{stage}`, \
                      but no file under {crates:?} cites it",
                     row.line,
-                    row.rule
+                    row.rule,
+                    row.state
                 );
             }
         }
