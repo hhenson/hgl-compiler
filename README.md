@@ -28,7 +28,7 @@ the front end. The first target is the
 | Parser | implemented: every production of the pinned grammar to a lossless syntax tree; the parser's part of 31 rules |
 | Formatter | planned |
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
-| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics (`hgl test`); running a test needs a target |
+| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); running a test needs a target |
 | Optimiser | planned |
 | Transpiler | planned |
 

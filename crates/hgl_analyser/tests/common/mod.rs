@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hgl_analyser::{ParsedFile, Program, analyse};
-use hgl_diagnostics::{Diagnostics, render};
+use hgl_diagnostics::{Diagnostics, catalogue, render};
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
 use hgl_source::{SourceMap, Span};
@@ -128,9 +128,14 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
                 span.start <= span.end && span.end as usize <= source.text().len(),
                 "a diagnostic points inside its file"
             );
+            // "A diagnostic uses the catalogued category and code when
+            // the specification has one."
             assert!(
-                !diagnostic.code.is_catalogued(),
-                "the catalogue has no module or name code yet"
+                diagnostic.code.is_catalogued()
+                    && catalogue::contains(diagnostic.category, diagnostic.code.as_str()),
+                "{}/{} is a row of the diagnostic catalogue",
+                diagnostic.category.as_str(),
+                diagnostic.code.as_str()
             );
             Finding {
                 at: format!("{}:{}", source.name(), source.line_col(span.start)),

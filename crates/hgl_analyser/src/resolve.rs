@@ -415,10 +415,9 @@ impl Resolver<'_> {
     /// A block: "A block's scope is the scope around it plus its own
     /// bindings" (UNIT-12).
     ///
-    /// The rule gives a scope to a block and to an anonymous function.
-    /// The statements under a `switch` case are neither: the grammar
-    /// gives a case no block. So what a case declares is declared in
-    /// the block the `switch` stands in.
+    /// "A `switch` case has no scope of its own: its statements bind in
+    /// the block around the `switch`." So what a case declares is noted
+    /// here, with the block's own statements.
     fn block(&mut self, node: &SyntaxNode) {
         let mut frame = Frame::default();
         self.declared_later(node, &mut frame);

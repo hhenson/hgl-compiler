@@ -140,10 +140,17 @@ fn a_failed_case_says_what_did_not_match_and_exits_one() {
             "fn scale() {}\n",
             "# expect-error(parse, \"string.unclosed\")\n",
             "const fn wrong_code() -> str => \"a\\q\"\n",
-            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "# expect-error(name, \"name.duplicate\")\n",
             "fn scale() {}\n",
             "# expect-error(parse, \"string.unknown_escape\")\n",
             "const fn right() -> str => \"a\\q\"\n",
+            // TST-12: only a row of the catalogue can be expected. The
+            // code for a stray documentation comment is this compiler's
+            // own, so no annotation meets it.
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "fn documented() {\n",
+            "    /** Documents nothing. */\n",
+            "}\n",
         ),
     );
     let output = hgl(&["test", &argument(&root)]);
@@ -156,13 +163,14 @@ fn a_failed_case_says_what_did_not_match_and_exits_one() {
                 "    expected parse/string.unclosed on line 4 of {file}: not reported\n",
                 "    reported parse/string.unknown_escape at {file}:4:35, not expected: ",
                 "unknown escape `\\q`\n",
-                "FAILED   rejection   {file}:6 fn scale\n",
-                "    expected parse/syntax.expected_token on line 6 of {file}: not reported\n",
-                "    reported name/name.duplicate at {file}:6:4, not expected ",
-                "(a compiler-local code, which no annotation can expect): ",
-                "module `m` has two temporal functions named `scale`\n",
+                "passed   rejection   {file}:6 fn scale\n",
                 "passed   rejection   {file}:8 const fn right\n",
-                "rejection cases: 1 passed, 2 failed\n",
+                "FAILED   rejection   {file}:10 fn documented\n",
+                "    expected parse/syntax.expected_token on line 10 of {file}: not reported\n",
+                "    reported parse/doc.unattached at {file}:11:5, not expected ",
+                "(a compiler-local code, which no annotation can expect): ",
+                "documentation comment documents no declaration\n",
+                "rejection cases: 2 passed, 2 failed\n",
                 "executable cases: none selected\n",
             ),
             file = file
