@@ -147,6 +147,9 @@ fn tokens(arguments: &TokensArgs) -> ExitCode {
 /// The value of a literal token as text, or `None` for other tokens and for
 /// literals that have no value (those are reported as diagnostics instead).
 fn literal_value(token: &Token, text: &str) -> Option<String> {
+    if token.malformed {
+        return None;
+    }
     match token.kind {
         // `.ok()?` gives the value on success and returns `None` from this
         // function on failure.

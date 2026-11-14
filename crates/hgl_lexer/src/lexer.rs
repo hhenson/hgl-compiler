@@ -105,11 +105,13 @@ fn scan(file: FileId, text: &str, diagnostics: &mut Diagnostics) -> Vec<Token> {
     let mut tokens = Vec::new();
     while lexer.pos < lexer.bytes.len() {
         let start = lexer.pos;
+        let reports_before = lexer.diagnostics.len();
         let kind = lexer.next_kind();
         debug_assert!(lexer.pos > start, "every token consumes at least one byte");
         tokens.push(Token {
             kind,
             span: span(start, lexer.pos),
+            malformed: lexer.diagnostics.len() > reports_before,
         });
     }
     tokens
