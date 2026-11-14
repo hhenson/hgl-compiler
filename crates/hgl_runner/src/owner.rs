@@ -29,6 +29,10 @@ pub(crate) struct Owner {
     pub start_line: usize,
     /// A few words for it: `fn invalid`, `use pricing.curves`.
     pub label: String,
+    /// True when it is the last thing in its file: no import,
+    /// declaration, test context or unplaced text follows it. Only such
+    /// an item can be what the end of the file cut short.
+    pub ends_file: bool,
     /// For a named test: its module's path and its name.
     pub test: Option<(String, String)>,
 }
@@ -48,6 +52,8 @@ pub(crate) fn owners(
         .and_then(|header| header.path())
         .map(|path| path.dotted())
         .unwrap_or_default();
+    // The file's last node, whatever it is.
+    let last_node = root.last_child();
     let mut pending: Vec<Item> = tree.items().collect();
     // Items are taken from the front; a context's items go back on the
     // front, so the result stays in source order.
@@ -78,6 +84,10 @@ pub(crate) fn owners(
             lines: first_line..=source.line_index(last),
             start_line: source.line_index(start),
             label: label(&item),
+            // A helper or test inside a context is not the file's last
+            // node: the context is, and it stands between them and the
+            // end of the file.
+            ends_file: last_node.as_ref() == Some(node),
             test: match &item {
                 Item::Test(test) => test
                     .name()
@@ -134,8 +144,11 @@ fn label(item: &Item) -> String {
 ///
 /// That is the item whose lines include it. The last line of a file is
 /// where an error at the end of the file is reported (TST-13), and an
-/// item cut short by the end of the file does not reach that line, so
-/// the file's last item owns it.
+/// item cut short by the end of the file need not reach that line. So
+/// the item that ends the file owns it: the one nothing follows. When
+/// what ends the file is an unnamed test context, or text the parser
+/// could place nowhere, nothing owns the line, and an error there is
+/// one of the surviving source's.
 pub(crate) fn owner_of(
     owners: &[Owner],
     file: FileId,
@@ -152,12 +165,8 @@ pub(crate) fn owner_of(
         return Some(index);
     }
     if line == last_line {
-        // The last of the file's owners, which are in source order
-        // (`next_back` takes from the end); it owns the line only when
-        // nothing else stands after it.
         return in_file()
-            .next_back()
-            .filter(|(_, owner)| *owner.lines.end() < line)
+            .find(|(_, owner)| owner.ends_file)
             .map(|(index, _)| index);
     }
     None

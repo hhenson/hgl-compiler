@@ -348,6 +348,86 @@ fn an_error_at_the_end_of_the_file_is_on_its_last_line() {
     assert_eq!(ran.cases, ["passed rejection cases.hgl:4 fn open"]);
 }
 
+/// TST-12: "Unnamed context/module headers cannot own a case", and
+/// TST-14: "ambiguous boundaries, or surviving-source errors prevent
+/// execution." An unnamed context that the end of the file cuts short
+/// is what reaches the last line. The item before it does not own that
+/// line, nor does a helper inside it.
+#[test]
+fn the_end_of_the_file_belongs_to_the_item_that_ends_the_file() {
+    // The context is left open after an annotated function. Its missing
+    // `}` is an error of the surviving source, not one of the function's.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn f() -> str => \"a\\q\"\n",
+            "test {\n",
+            "    fn helper() {}\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, ["cases.hgl:6:1 parse/syntax.expected_token"]);
+    assert_eq!(ran.cases, NONE);
+
+    // An annotation cannot give that line to the function either.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "# expect-error(parse, \"string.unknown_escape\")\n",
+            "const fn f() -> str => \"a\\q\"\n",
+            "test {\n",
+            "    fn helper() {}\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+        ),
+    )]);
+    assert_eq!(
+        ran.stopped,
+        [
+            "cases.hgl:6:1 this `expect-error` annotation applies to a line of no import, \
+             declaration or named test (TST-12)",
+            "cases.hgl:7:1 parse/syntax.expected_token",
+        ]
+    );
+    assert_eq!(ran.cases, NONE);
+
+    // Nor does a helper left open inside the context own it: the
+    // context is open as well, and which of the two the end of the
+    // file cut short is not for the runner to guess.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "test {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    const fn helper() -> str => \"a\\q\"\n",
+            "    fn open() {\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, ["cases.hgl:6:1 parse/syntax.expected_token"]);
+    assert_eq!(ran.cases, NONE);
+
+    // A complete item that ends the file owns the last line, so an
+    // annotation there is read, and fails: nothing is wrong with it.
+    let ran = run_all(&[(
+        "cases.hgl",
+        concat!(
+            "module m\n",
+            "fn whole() {}\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "failed rejection cases.hgl:2 fn whole",
+            "  missing parse/syntax.expected_token cases.hgl:4",
+        ]
+    );
+}
+
 // ---- TST-14 and TST-15: selection and what is reported ----
 
 /// A program with two tests to run, a test that is a rejection case, and
