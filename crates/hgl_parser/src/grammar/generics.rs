@@ -272,7 +272,8 @@ impl Parser<'_> {
     /// constraint_set = "{", constraint_operand, { ",", constraint_operand }, [ "," ], "}" ;
     /// ```
     ///
-    /// Parses nothing when no operand can start at the cursor.
+    /// Parses nothing, with a report, when no operand starts at the
+    /// cursor: every place an operand goes requires one.
     fn constraint_operand(&mut self) {
         // A set may hold sets; `enter` bounds that nesting.
         if self.at(LBrace) && self.enter() {
@@ -293,6 +294,7 @@ impl Parser<'_> {
         }
         let kind = self.current();
         if !(can_start_type(kind) || can_start_expression(kind)) {
+            self.expected("a type or a value");
             return;
         }
         // A name is a type and an expression both. It is read as a type

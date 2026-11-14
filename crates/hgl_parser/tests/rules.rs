@@ -1041,6 +1041,37 @@ fn a_constraint_call_has_one_form_with_an_optional_result() {
     );
 }
 
+#[test]
+fn a_constraint_relation_has_an_operand_on_each_side() {
+    // The grammar: `constraint_relation = constraint_operand,
+    // ( "==" | "in" | "is" ), constraint_operand ;`. A missing operand is
+    // not made up for by what follows: here the function's own body.
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f<T>() requires T == => 1"),
+        ["- 1:25: expected a type or a value, found `=>`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f<T>() requires T in => 1"),
+        ["- 1:25: expected a type or a value, found `=>`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f<T>() requires T is => 1"),
+        ["- 1:25: expected a type or a value, found `=>`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f() requires == 3 {}"),
+        ["- 1:17: expected a constraint, found `==`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f<...Ts>() requires each T in => 1"),
+        ["- 1:34: expected a type or a value, found `=>`"]
+    );
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f() requires p(T,) {}"),
+        ["- 1:21: expected a type or a value, found `)`"]
+    );
+}
+
 // ---- CTRL-9 ----
 
 #[test]
