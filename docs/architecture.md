@@ -225,6 +225,7 @@ It is built in passes:
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each `impl fn` | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
+| Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Types, phases, constants | The rest of the rules | | planned |
 
 `hgl check` says which passes ran: names are resolved, and types, phases
@@ -395,7 +396,7 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and three local ones: `doc.unattached` and `doc.repeated` (SDOC-1), and
 `syntax.nesting_limit`. The catalogue has no code yet for a module or name
 rejection, so every code the analyser reports is local
-(`hgl_analyser::codes`, 20 of them); issue 17 proposes rows for them.
+(`hgl_analyser::codes`, 27 of them); issue 17 proposes rows for them.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
@@ -440,8 +441,8 @@ one of the roots given: nothing is searched for elsewhere.
 2. Parser for every grammar in the specification (done); formatter.
 3. Analyser: modules, declarations, imports and `hgl check` (done);
    `# expect-error` matching and `hgl test` for rejection cases (done);
-   name resolution (done); the checks the parser left (FN-8, NATIVE-3);
-   types for the scalar slice.
+   name resolution (done); the checks the parser left (FN-8, NATIVE-3;
+   done); types for the scalar slice.
 4. Transpiler for hgraph; `hgl test` running the core conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
 

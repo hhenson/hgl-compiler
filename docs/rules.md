@@ -187,7 +187,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-7 | analyser | planned | Return by phase; an anonymous function takes its context from the accepting form |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
-| FN-8 | analyser | planned | Packs follow fixed parameters, have no defaults and are not const |
+| FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
 | FN-9 | analyser | planned | Capabilities propagate through value helpers |
 | FN-10 | parser | done | Where an arrow body ends |
 | FN-11 | analyser | planned | Which lifted arguments need a valid input |
@@ -281,7 +281,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | NATIVE-1 | analyser | planned | A native declaration is checked as an HGL callable; roles kept |
 | NATIVE-2 | analyser | partial | An implementation completes one declaration of its name and role; duplicates rejected. Left: the exact match of signatures; selection |
 | NATIVE-3 | parser | done | Contract body forms: none, `{}`, hook markers |
-| NATIVE-3 | analyser | planned | Graph or node by body; hooks need `when` and are unique |
+| NATIVE-3 | analyser | partial | `start` and `stop` need `when` and are unique; a const implementation has no hook. Left: graph or node by body, where a later pass reads it |
 | NATIVE-4 | driver | planned | Target selection is explicit |
 | NATIVE-4 | transpiler | planned | The provider meets the declared contract |
 | NATIVE-5 | analyser | planned | Capability requirements propagate; a scalar parameter gains no endpoint privilege |
