@@ -239,14 +239,27 @@ fn a_field_is_compared_by_what_its_type_means() {
         "abstract struct Base {\n    window: rolling<i64, 5>\n    sized: list<f64, 6>\n}\n",
         "struct Same : Base {\n    window: rolling<i64, 5, 5>\n    sized: list<f64, 2 * 3>\n}\n",
         "struct Other : Base { window: rolling<i64, 5, 2> }\n",
+        // And so is a minimum that a parent's argument makes its
+        // maximum.
+        "abstract struct Bounded<const N: i64> { window: rolling<i64, 5, N> }\n",
+        "struct Equal : Bounded<5> { window: rolling<i64, 5> }\n",
+        "struct Unequal : Bounded<2> { window: rolling<i64, 5> }\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:23 local:type/field.conflict TYPE-4"]
+        [
+            "m.hgl:10:23 local:type/field.conflict TYPE-4",
+            "m.hgl:13:31 local:type/field.conflict TYPE-4",
+        ]
     );
     assert_eq!(
-        checked.findings[0].message,
-        "`window` is required `rolling<i64, 5, 2>` here and required `rolling<i64, 5>` in `Base`"
+        messages(&checked),
+        [
+            "`window` is required `rolling<i64, 5, 2>` here and required `rolling<i64, 5>` in \
+             `Base`",
+            "`window` is required `rolling<i64, 5>` here and required `rolling<i64, 5, 2>` in \
+             `Bounded`",
+        ]
     );
 }
 
@@ -342,6 +355,80 @@ fn a_ladder_of_diamonds_is_read_in_step() {
     assert_eq!(
         checked.findings[0].message,
         "`id` is required `str` here and required `i64` in `Root`"
+    );
+}
+
+/// TYPE-6: a struct holds what the fields it has from a parent hold,
+/// with the arguments it gives the parent in place of the parent's
+/// parameters. The fault is then in those arguments, and is reported
+/// where the struct names the parent.
+#[test]
+fn a_struct_holds_itself_through_what_it_gives_a_parent() {
+    let checked = module(concat!(
+        "abstract struct Base<T> { next: T }\n",
+        "abstract struct Link<T> { next: atomic<T> = null }\n",
+        "abstract struct Items<T> { all: list<T> }\n",
+        "struct Child : Base<Child> { }\n",
+        "struct Good : Link<Good> { }\n",
+        "struct Bag : Items<Bag> { }\n",
+        "struct Other : Base<i64> { }\n",
+        "struct Apart : Base<Good> { }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:16 local:type/field.recursive TYPE-6",
+            "m.hgl:7:14 local:type/field.recursive TYPE-6",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`Child` holds itself through `next`, a field of `Base`: a recursive field is an \
+             `atomic<...>` with a default of null",
+            "`Bag` holds itself through `all`, a field of `Items` through the elements of a \
+             collection",
+        ]
+    );
+}
+
+/// TYPE-6: a generic struct holds what its fields hold once its
+/// arguments stand for its parameters, so a collection among those
+/// fields is a collection on the path: "Cycles through ... collection
+/// elements are rejected."
+#[test]
+fn a_generic_structs_fields_are_followed_with_its_arguments() {
+    let checked = module(concat!(
+        "struct Boxed<T> { value: T }\n",
+        "struct Listed<T> { values: list<T> }\n",
+        "struct Outer<T> { inner: Boxed<T> }\n",
+        "struct Keyed<K, V> { entries: dict<K, V> }\n",
+        // No collection on the way back.
+        "struct Plain { next: atomic<Boxed<Plain>> = null }\n",
+        "struct Nested { next: atomic<Outer<Boxed<Nested>>> = null }\n",
+        // A list in the struct named, and in one it names in turn.
+        "struct Chain { next: atomic<Listed<Chain>> = null }\n",
+        "struct Deep { next: atomic<Outer<Listed<Deep>>> = null }\n",
+        "struct Mapped { next: atomic<Keyed<str, Mapped>> = null }\n",
+        // A struct that names itself with ever larger arguments is
+        // followed once.
+        "struct Grow<T> {\n    next: atomic<Grow<list<T>>> = null\n    value: T\n}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:16 local:type/field.recursive TYPE-6",
+            "m.hgl:9:15 local:type/field.recursive TYPE-6",
+            "m.hgl:10:17 local:type/field.recursive TYPE-6",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`next` makes `Chain` hold itself through the elements of a collection",
+            "`next` makes `Deep` hold itself through the elements of a collection",
+            "`next` makes `Mapped` hold itself through the elements of a collection",
+        ]
     );
 }
 
