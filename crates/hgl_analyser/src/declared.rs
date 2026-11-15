@@ -1180,8 +1180,13 @@ impl Structs<'_> {
             for field in &read.fields {
                 let overrides_recursive = field.ty.is_none()
                     && !field.null_default
+                    // Only a field that has the null default has one to
+                    // keep: a nullable recursive field ends the
+                    // recursion by its type.
                     && inherited.iter().any(|parent| {
-                        parent.name == field.name && recursive.contains(&parent.origin)
+                        parent.name == field.name
+                            && parent.optional
+                            && recursive.contains(&parent.origin)
                     });
                 if overrides_recursive {
                     reports.push((

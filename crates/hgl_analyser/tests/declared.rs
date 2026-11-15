@@ -735,6 +735,9 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         // Through a parent and not atomic.
         "abstract struct Held { inner: Holder }\n",
         "struct Holder : Held { value: i64 }\n",
+        // A nullable recursive field has no null default to keep.
+        "abstract struct Chain { next: Chain? }\n",
+        "struct Ended : Chain { next = make() }\n",
     ));
     assert_eq!(
         checked.summary(),
