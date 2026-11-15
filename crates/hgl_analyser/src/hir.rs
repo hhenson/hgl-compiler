@@ -1,0 +1,223 @@
+//! The typed form of a body: what a function does, said without its
+//! syntax.
+//!
+//! The syntax tree says how a body is written. The stages after the
+//! analyser need what it means: which local each name is, the type of
+//! each expression, where a number is widened. This module is that
+//! description. It names no target: a transpiler reads it and writes
+//! its own target's code.
+//!
+//! The analyser fills it in pass by pass. What a pass does not read yet
+//! is [`ExprKind::Unread`] or [`Stmt::Unread`]: it is there, its type is
+//! not known, and nothing is reported of it (ERR-9).
+
+use hgl_diagnostics::Location;
+
+use crate::program::LocalKind;
+use crate::types::Type;
+
+/// The body of one function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Body {
+    /// Its parameters and locals, parameters first, each in the order
+    /// it is declared. A [`LocalId`] is a position in this list.
+    pub locals: Vec<Local>,
+    /// Its statements, in order. An arrow body, `=> value`, is one
+    /// [`Stmt::Return`].
+    pub statements: Vec<Stmt>,
+}
+
+/// The position of a local in [`Body::locals`].
+pub type LocalId = usize;
+
+/// A parameter or a local of a body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Local {
+    /// Its name.
+    pub name: String,
+    /// Where the name is declared.
+    pub at: Location,
+    /// What declares it.
+    pub kind: LocalKind,
+    /// Its type; [`Type::Unknown`] when nothing says.
+    pub ty: Type,
+}
+
+/// One statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    /// `let name = value`, `var name: T = value`, `var name: T`: the
+    /// local begins, with its first value when one is written.
+    Declare {
+        /// The local.
+        local: LocalId,
+        /// Its first value.
+        value: Option<Expr>,
+    },
+    /// `name = value` or `name += value`.
+    Assign {
+        /// The local assigned.
+        local: LocalId,
+        /// The operator of a compound assignment: `+` for `+=`. The
+        /// local's value is its left operand.
+        operator: Option<BinaryOperator>,
+        /// The value, or the right operand.
+        value: Expr,
+        /// Where the statement is written.
+        at: Location,
+    },
+    /// `return`, `return value`, or the value of an arrow body.
+    Return {
+        /// The value returned.
+        value: Option<Expr>,
+        /// Where the statement is written.
+        at: Location,
+    },
+    /// An expression evaluated for what it does.
+    Expr(Expr),
+    /// A statement no pass reads yet.
+    Unread {
+        /// Where it is written.
+        at: Location,
+    },
+}
+
+/// One expression, with its type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    /// What it is.
+    pub kind: ExprKind,
+    /// Its type; [`Type::Unknown`] when it is not known.
+    pub ty: Type,
+    /// Where it is written.
+    pub at: Location,
+}
+
+/// What an expression is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
+    /// A literal.
+    Literal(Value),
+    /// A parameter or a local.
+    Local(LocalId),
+    /// A generic value parameter of the declaration: the `N` of
+    /// `const fn width<const N: i64>() -> i64 => N`.
+    GenericValue {
+        /// Its name.
+        name: String,
+        /// Where it is declared.
+        at: Location,
+    },
+    /// `-value` or `!value`.
+    Unary {
+        /// The operator.
+        operator: UnaryOperator,
+        /// The operand.
+        operand: Box<Expr>,
+    },
+    /// `left + right`, and each other form with two operands.
+    Binary {
+        /// The operator.
+        operator: BinaryOperator,
+        /// The left operand.
+        left: Box<Expr>,
+        /// The right operand.
+        right: Box<Expr>,
+    },
+    /// An `i64` taken as the `f64` of the same number, where an `f64`
+    /// is wanted (EXPR-5, NUM-1). The source writes nothing for it.
+    Widen(Box<Expr>),
+    /// `(a, b)`.
+    Tuple(Vec<Expr>),
+    /// `[a, b]`: a sequence of values. Its type says what it makes.
+    Sequence(Vec<Expr>),
+    /// An expression no pass reads yet, or one that has been reported.
+    Unread,
+}
+
+/// The value of a literal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    /// An integer.
+    Int(i64),
+    /// A float.
+    Float(f64),
+    /// `true` or `false`.
+    Bool(bool),
+    /// A string: its contents, the escapes read.
+    Str(String),
+    /// `null`.
+    Null,
+    /// A duration, in microseconds.
+    Duration(i64),
+    /// A date, a time or another temporal literal, as it is written. Its
+    /// type says which.
+    Temporal(String),
+}
+
+/// An operator with one operand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOperator {
+    /// `-`.
+    Negate,
+    /// `!`.
+    Not,
+}
+
+/// An operator with two operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    /// `+`.
+    Add,
+    /// `-`.
+    Subtract,
+    /// `*`.
+    Multiply,
+    /// `/`: true division.
+    Divide,
+    /// `//`: floor division.
+    FloorDivide,
+    /// `%`.
+    Modulo,
+    /// `==`.
+    Equal,
+    /// `!=`.
+    NotEqual,
+    /// `<`.
+    Less,
+    /// `<=`.
+    LessEqual,
+    /// `>`.
+    Greater,
+    /// `>=`.
+    GreaterEqual,
+    /// `<=>`: full comparison.
+    Compare,
+    /// `&&`.
+    And,
+    /// `||`.
+    Or,
+}
+
+impl BinaryOperator {
+    /// The operator as HGL writes it.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            BinaryOperator::Add => "+",
+            BinaryOperator::Subtract => "-",
+            BinaryOperator::Multiply => "*",
+            BinaryOperator::Divide => "/",
+            BinaryOperator::FloorDivide => "//",
+            BinaryOperator::Modulo => "%",
+            BinaryOperator::Equal => "==",
+            BinaryOperator::NotEqual => "!=",
+            BinaryOperator::Less => "<",
+            BinaryOperator::LessEqual => "<=",
+            BinaryOperator::Greater => ">",
+            BinaryOperator::GreaterEqual => ">=",
+            BinaryOperator::Compare => "<=>",
+            BinaryOperator::And => "&&",
+            BinaryOperator::Or => "||",
+        }
+    }
+}

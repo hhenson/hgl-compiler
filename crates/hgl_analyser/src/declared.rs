@@ -323,7 +323,7 @@ const DEPTH: usize = 64;
 const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
-fn names_parameter(ty: &Type) -> bool {
+pub(crate) fn names_parameter(ty: &Type) -> bool {
     match ty {
         Type::Parameter { .. } => true,
         Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
@@ -433,7 +433,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
 
 /// True when `ty` names one of the generic parameters declared at
 /// `declared`, itself or inside it.
-fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
+pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
     if declared.is_empty() {
         return false;
     }
@@ -493,7 +493,7 @@ fn weight(ty: &Type) -> usize {
 /// parents that each give the next `tuple<T, T>` doubles a field's type
 /// at every link. The weight is bounded before anything is built: no
 /// more than the type's own, times the heaviest argument's.
-fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+pub(crate) fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
@@ -1846,7 +1846,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
 }
 
 /// True when two types are the same as far as each is known.
-fn agree(left: &Type, right: &Type) -> bool {
+pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
     let all = |left: &[Type], right: &[Type]| {
