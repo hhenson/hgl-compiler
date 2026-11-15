@@ -47,7 +47,7 @@ use crate::types::{
     Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar,
     Signature, Type,
 };
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -827,7 +827,7 @@ impl<'a> Typer<'a> {
                     ty => {
                         self.diagnostics.emit(error(
                             Category::Operator,
-                            codes::OPERATOR_OPERAND,
+                            codes::OPERATOR_NO_CANDIDATE,
                             Location::new(self.file, token.span()),
                             format!("`-` takes no `{ty}`"),
                             "OPS-1",
@@ -961,7 +961,7 @@ impl<'a> Typer<'a> {
             None => {
                 self.diagnostics.emit(error(
                     Category::Operator,
-                    codes::OPERATOR_OPERAND,
+                    codes::OPERATOR_NO_CANDIDATE,
                     at,
                     format!(
                         "`{}` takes no `{}` and `{}`",
@@ -1297,17 +1297,17 @@ impl<'a> Typer<'a> {
                         }
                     )
                 };
-                local_error(
+                error(
                     Category::Operator,
-                    codes::local::OPERATOR_NO_CANDIDATE,
+                    codes::OPERATOR_NO_CANDIDATE,
                     at,
                     message,
                     "GEN-5",
                 )
             } else {
-                let mut diagnostic = local_error(
+                let mut diagnostic = error(
                     Category::Operator,
-                    codes::local::OPERATOR_AMBIGUOUS,
+                    codes::OPERATOR_AMBIGUOUS,
                     at,
                     format!(
                         "{} value candidates of operator `{}` take {takes} equally",

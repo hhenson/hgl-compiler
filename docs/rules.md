@@ -207,7 +207,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares or its file imports, and a value candidate's body is read as a value function's. Left: the prelude; operator identity in selection |
-| GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected, with local codes. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition and runtime bodies |
+| GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition and runtime bodies |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
@@ -397,7 +397,7 @@ the same numeric rules the transpiler rows give.
 | NUM-10 | transpiler | planned | A checked-division `Err` is data; `?` propagation |
 | NUM-11 | analyser | planned | `abs` and `rel` are scalar f64 configuration |
 | NUM-11 | transpiler | planned | Tolerances bound at graph construction in composition |
-| OPS-1 | analyser | partial | In a value function, the operand types the symbol operators admit beyond numbers, in either order where the operation commutes; any other pairing rejected (`operator.operand`). Left: temporal bodies; configured operators |
+| OPS-1 | analyser | partial | In a value function, the operand types the symbol operators admit beyond numbers, in either order where the operation commutes; any other pairing rejected (`operator.no_candidate`). Left: temporal bodies; configured operators |
 | OPS-1 | transpiler | planned | The operators on strings, durations and instants |
 | OPS-2 | analyser | partial | In a value function, ordering between two of one ordered type and equality between two values of one type. Left: temporal bodies |
 | OPS-3 | analyser | planned | `<=>` returns a `CmpResult`; the enum is declared in no HGL source yet |
