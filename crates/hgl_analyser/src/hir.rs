@@ -75,11 +75,53 @@ pub enum Stmt {
     },
     /// An expression evaluated for what it does.
     Expr(Expr),
+    /// `for item in items { ... }`, or `for key, value in entries { ... }`
+    /// (CTRL-12).
+    For {
+        /// The names the pattern binds: one, or a key and a value.
+        names: Vec<LocalId>,
+        /// What is looped over.
+        sequence: Expr,
+        /// The body.
+        body: Vec<Stmt>,
+        /// Where the statement is written.
+        at: Location,
+    },
+    /// `while condition { ... }` (CTRL-12).
+    While {
+        /// The condition; `None` for the form with none, which a value
+        /// function rejects.
+        condition: Option<Expr>,
+        /// The body.
+        body: Vec<Stmt>,
+        /// Where the statement is written.
+        at: Location,
+    },
+    /// `switch selector { case label: ... default: ... }` (CTRL-6).
+    Switch {
+        /// What is selected on.
+        selector: Expr,
+        /// The cases, in order.
+        cases: Vec<Case>,
+        /// The statements of `default:`, when there is one.
+        default: Option<Vec<Stmt>>,
+        /// Where the statement is written.
+        at: Location,
+    },
     /// A statement no pass reads yet.
     Unread {
         /// Where it is written.
         at: Location,
     },
+}
+
+/// One `case label: statements` of a `switch`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Case {
+    /// The label.
+    pub label: Expr,
+    /// Its statements. There is no fallthrough (CTRL-6).
+    pub body: Vec<Stmt>,
 }
 
 /// One expression, with its type.
@@ -100,6 +142,25 @@ pub enum ExprKind {
     Literal(Value),
     /// A parameter or a local.
     Local(LocalId),
+    /// `{ statements }`: a block. Its value is that of its last
+    /// statement, when that is an expression (CTRL-10).
+    Block {
+        /// The statements before the value, or all of them when the
+        /// block has no value.
+        statements: Vec<Stmt>,
+        /// The value.
+        value: Option<Box<Expr>>,
+    },
+    /// `if condition { ... } else { ... }` (CTRL-10). A branch is a
+    /// [`ExprKind::Block`], or the `If` of an `else if`.
+    If {
+        /// The condition, a `bool`.
+        condition: Box<Expr>,
+        /// What is done when it holds.
+        then: Box<Expr>,
+        /// What is done when it does not.
+        otherwise: Option<Box<Expr>>,
+    },
     /// A generic value parameter of the declaration: the `N` of
     /// `const fn width<const N: i64>() -> i64 => N`.
     GenericValue {

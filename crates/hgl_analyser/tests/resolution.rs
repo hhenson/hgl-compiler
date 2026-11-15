@@ -70,7 +70,7 @@ fn a_name_resolves_to_the_one_binding_in_scope() {
                 "module m\n",
                 "use lib::{shared}\n",
                 "use lib as l\n",
-                "const fn pick<T>(first: T, items: list<T>) -> T {\n",
+                "const fn pick<T>(first: T, items: dict<i64, T>) -> T {\n",
                 "    let local = first\n",
                 "    var count = shared()\n",
                 "    for index, item in items {\n",
@@ -89,8 +89,8 @@ fn a_name_resolves_to_the_one_binding_in_scope() {
         uses(&checked, "m"),
         [
             "T 4:25 -> GenericParameter",
-            "T 4:40 -> GenericParameter",
-            "T 4:47 -> GenericParameter",
+            "T 4:45 -> GenericParameter",
+            "T 4:52 -> GenericParameter",
             "first 5:17 -> Parameter",
             "shared 6:17 -> lib value function",
             "items 7:24 -> Parameter",
@@ -188,7 +188,7 @@ fn a_binding_takes_no_name_already_in_scope() {
                 "    if base == 1 {\n",
                 // A local of an inner block named for one around it.
                 "        let outer = 5\n",
-                "        for outer, fine in [1, 2] { }\n",
+                "        for outer, fine in [1: 2] { }\n",
                 "    }\n",
                 // Twice in one block.
                 "    let outer = 6\n",
@@ -297,6 +297,10 @@ fn a_switch_case_declares_in_the_block_around_its_switch() {
         [
             "m.hgl:3:18 name/name.used_before_declaration UNIT-6",
             "m.hgl:9:17 name/name.duplicate UNIT-5",
+            // The names resolve, being in scope. A case's local has no
+            // value on a path that did not declare it (CTRL-11).
+            "m.hgl:11:25 name/binding.unassigned EXPR-3",
+            "m.hgl:13:12 name/binding.unassigned EXPR-3",
         ]
     );
     assert_eq!(checked.prelude_names("m"), NONE);

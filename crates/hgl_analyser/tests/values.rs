@@ -538,6 +538,11 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         // A `null` among values makes their type nullable.
         "    let holes = [1, null]\n",
         "    let maybe_holes: list<i64?> = [1, null]\n",
+        // A block whose value is `null` is a null entry too, and the
+        // entries are read in the order written (CTRL-10).
+        "    let in_block = [{ null }, 1]\n",
+        "    var late: i64\n",
+        "    let ordered = [{\n        late = 1\n        null\n    }, late]\n",
         "    let nothing = [null]\n",
         "}\n",
         "const fn member_set() -> set<i64>? => [1, 2]\n",
@@ -557,8 +562,8 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "m.hgl:15:41 type/type.mismatch EXPR-5",
             "m.hgl:16:36 type/type.mismatch EXPR-5",
             "m.hgl:18:31 type/type.mismatch TYPE-10",
-            "m.hgl:21:19 type/sequence.context_type EXPR-9",
-            "m.hgl:24:36 type/type.mismatch TYPE-10",
+            "m.hgl:27:19 type/sequence.context_type EXPR-9",
+            "m.hgl:30:36 type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
@@ -591,6 +596,9 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "short: list<i64, 2>",
             "holes: list<i64?>",
             "maybe_holes: list<i64?>",
+            "in_block: list<i64?>",
+            "late: i64",
+            "ordered: list<i64?>",
             "nothing: _",
         ]
     );
@@ -1159,6 +1167,13 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // TYPE-7: `.member` is of the enum the parameter expects.
         "    let bought = sign(.buy)\n",
         "    let held = sign(.hold)\n",
+        // A block, and an `if`, whose value is of the enum its place
+        // expects is tried as the parameter's too.
+        // LEX-5: "`.member` (TYPE-7) begins no statement", so one that
+        // is a block's value is written in parentheses.
+        "    let in_block = sign({ (.buy) })\n",
+        "    let either = sign(if a > 0 { (.buy) } else { (.sell) })\n",
+        "    let no_member = sign({ (.hold) })\n",
         // An entry that takes its type from its place is read as the
         // candidate's too: a `null` in a tuple, a `[]` in a list.
         "    let partly = first((null, 1))\n",
@@ -1167,6 +1182,12 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // An integer literal among the entries selects as the `i64` it
         // is, and is widened only where no candidate takes one.
         "    let whole_list = each([1])\n",
+        // The same inside a block.
+        "    let in_a_block = each({ [1] })\n",
+        // An integer literal that is a block's value is widened where
+        // the candidate that is wanted takes an `f64`.
+        "    let widened_block: f64 = doubled({ 1 })\n",
+        "    let whole_block = doubled({ 1 })\n",
         "    let real_list = each([1.5])\n",
         "    let whole_pair = each((1, [1]))\n",
         "    let real_pair = each((1.5, [1]))\n",
@@ -1215,8 +1236,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:27:19 operator/operator.no_candidate GEN-5",
             "m.hgl:31:17 operator/operator.no_candidate GEN-5",
             "m.hgl:33:16 operator/operator.no_candidate GEN-5",
-            "m.hgl:36:19 operator/operator.no_candidate GEN-5",
-            "m.hgl:43:16 operator/operator.ambiguous GEN-5",
+            "m.hgl:36:21 operator/operator.no_candidate GEN-5",
+            "m.hgl:39:19 operator/operator.no_candidate GEN-5",
+            "m.hgl:49:16 operator/operator.ambiguous GEN-5",
         ]
     );
     assert_eq!(
@@ -1231,6 +1253,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `pick` takes `null`, `i64`",
             "no value candidate of operator `count` takes `[1.5]`",
             "no value candidate of operator `sign` takes `.hold`",
+            "no value candidate of operator `sign` takes `{ (.hold) }`",
             "no value candidate of operator `first` takes `(null, null)`",
             "2 value candidates of operator `make` take no argument equally",
         ]
@@ -1264,10 +1287,16 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "unfit: _",
             "bought: i64",
             "held: _",
+            "in_block: i64",
+            "either: i64",
+            "no_member: _",
             "partly: i64",
             "inner: i64",
             "neither: _",
             "whole_list: list<i64>",
+            "in_a_block: list<i64>",
+            "widened_block: f64",
+            "whole_block: i64",
             "real_list: list<f64>",
             "whole_pair: tuple<i64, list<i64>>",
             "real_pair: tuple<f64, list<f64>>",
@@ -1306,6 +1335,297 @@ fn a_parameter_that_may_be_omitted_follows_those_that_may_not() {
         [
             "parameter `b` may not be omitted, and follows `a`, which may",
             "parameter `b` may not be omitted, and follows `a`, which may",
+        ]
+    );
+}
+
+// ---- Control flow ----
+
+/// CTRL-10: "A block whose last statement is an expression has that
+/// expression's value and type; any other block has none ... the
+/// condition of an `if` or a `while` is a `bool` ... An `if` whose value
+/// is used has the one type its two branches' values have ... With no
+/// `else` it is as if its `else` were null ... A branch that returns from
+/// the function gives the `if` no value and takes no part in its type."
+/// FN-7: "A body that ends in an expression returns that expression ...
+/// one that can reach its end with no value rejects."
+#[test]
+fn a_block_and_an_if_have_the_value_of_their_last_expression() {
+    let checked = module(concat!(
+        "const fn larger(a: i64, b: i64) -> i64 {\n    if a > b { a } else { b }\n}\n",
+        "const fn positive(a: i64) -> i64? {\n    if a > 0 { a }\n}\n",
+        "const fn typed(a: i64, c: bool) {\n",
+        "    let whole = if c { 1 } else { 2 }\n",
+        // EXPR-5: an integer literal is an `f64` beside one.
+        "    let real = if c { 1 } else { 2.5 }\n",
+        // A null branch makes it `T?`, whichever branch it is.
+        "    let maybe = if c { a } else { null }\n",
+        "    let first = if c { null } else { a }\n",
+        // With no `else` it is a `T?`, which a `T` rejects.
+        "    let short = if c { a }\n",
+        "    let need: i64 = if c { a }\n",
+        "    let mixed = if c { 1 } else { \"x\" }\n",
+        "    let number = if a { 1 } else { 2 }\n",
+        // A block whose last statement is no expression has no value.
+        "    let empty = if c { let x = 1 } else { 2 }\n",
+        "    let block = {\n        let y = a\n        y + 1\n    }\n",
+        // Where the place says, each branch is checked against it.
+        "    let widened: f64 = if c { 1 } else { 2 }\n",
+        // A branch that returns takes no part.
+        "    let rest = if c { return } else { 2 }\n",
+        // With no `else`, a branch that returns leaves the `if` null,
+        // of the type its place gives.
+        "    let gone: i64? = if c { return }\n",
+        "    let untyped = if c { return }\n",
+        "    let chain = if c { 1 } else if a > 1 { 2 } else { 3 }\n",
+        // The first branch gives its type to the `if` of an `else if`
+        // too: to its members, and to a null in it.
+        "    let side = if c { Side.buy } else if a > 1 { (.sell) } else { (.buy) }\n",
+        "    let none = if c { a } else if a > 1 { null } else { 2 }\n",
+        "}\n",
+        "enum Side { buy, sell }\n",
+        "const fn missing(a: i64) -> i64 {\n    if a > 0 { return a }\n}\n",
+        // The same body returns null where the result is written `T?`.
+        "const fn or_null(a: i64) -> i64? {\n    if a > 0 { return a }\n}\n",
+        "const fn early(c: bool) -> i64 {\n    if c { return 1 } else { 2 }\n}\n",
+        "const fn both(c: bool) -> i64 {\n    if c { return 1 } else { return 2 }\n}\n",
+        // In a function that declares no result the expression is a
+        // statement.
+        "const fn dropped() => 1\n",
+        "const fn unit() { 1 + 1 }\n",
+        // CTRL-10 is of an `if` whose value is used: one whose value is
+        // dropped has branches of any types.
+        "const fn either(c: bool) { if c { 1 } else { \"x\" } }\n",
+        "const fn stated(c: bool) {\n    if c { 1 } else { \"x\" }\n    let after = 1\n}\n",
+        "const fn wrong(c: bool) -> i64 {\n    if c { 1 } else { \"x\" }\n}\n",
+        // CTRL-5: what follows a `return` in a branch is not its value.
+        "const fn past_return(c: bool) -> i64 {\n    if c {\n        return 1\n        \"unused\"\n    } else {\n        2\n    }\n}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:21 type/type.mismatch EXPR-5",
+            "m.hgl:15:33 type/type.mismatch CTRL-10",
+            "m.hgl:16:21 type/type.mismatch CTRL-10",
+            "m.hgl:17:17 type/type.mismatch CTRL-10",
+            "m.hgl:25:19 type/null.context_type TYPE-14",
+            "m.hgl:31:10 type/return.missing FN-7",
+            "m.hgl:51:23 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `i64?`, and the type written for it is `i64`",
+            "this branch is `str`, and the other is `i64`",
+            "this is `i64`, and a condition is a `bool`",
+            "this has no value: a block's value is its last statement, when that is an expression",
+            "this is null when its condition does not hold, and nothing here gives that a type: write the type",
+            "`missing` declares a result of `i64`, and can reach its end with no value",
+            "this is `str`, and the value of this block is `i64`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "typed"),
+        [
+            "a: i64",
+            "c: bool",
+            "whole: i64",
+            "real: f64",
+            "maybe: i64?",
+            "first: i64?",
+            "short: i64?",
+            "need: i64",
+            "mixed: i64",
+            "number: i64",
+            "x: i64",
+            "empty: _",
+            "y: i64",
+            "block: i64",
+            "widened: f64",
+            "rest: i64",
+            "gone: i64?",
+            "untyped: _",
+            "chain: i64",
+            "side: Side",
+            "none: i64?",
+        ]
+    );
+}
+
+/// CTRL-11: "a `var` declared with no value is assigned after an `if`
+/// when every branch that does not return assigns it, so not by an `if`
+/// with no `else`; after a `switch` when every case that does not return
+/// assigns it and the cases leave no value out, with a `default` or by
+/// covering an enum (CTRL-6); and never by a loop's body, which may run
+/// no times. A `var` whose type is written `T?` is null where it is
+/// declared with no value".
+#[test]
+fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "const fn paths(c: bool, side: Side, items: list<i64>) -> i64 {\n",
+        "    var a: i64\n",
+        "    if c { a = 1 } else { a = 2 }\n",
+        "    let ok = a\n",
+        "    var b: i64\n",
+        "    if c { b = 1 }\n",
+        "    let unset = b\n",
+        // CTRL-5: a branch that returns assigns nothing it needs to.
+        "    var d: i64\n",
+        "    if c { d = 1 } else { return 0 }\n",
+        "    let fine = d\n",
+        "    var e: i64\n",
+        "    for item in items { e = item }\n",
+        "    let never = e\n",
+        "    var f: i64\n",
+        "    switch side {\n        case .buy: f = 1\n        case .sell: f = 2\n    }\n",
+        "    let covered = f\n",
+        "    var g: i64\n",
+        "    switch side {\n        case .buy: g = 1\n    }\n",
+        "    let partial = g\n",
+        "    var h: i64\n",
+        "    switch side {\n        case .buy: h = 1\n        default: h = 2\n    }\n",
+        "    let defaulted = h\n",
+        "    var k: i64?\n",
+        "    while c { k = 1 }\n",
+        "    let or_null = k\n",
+        // EXPR-6: the right operand of `&&` is not evaluated when the
+        // left is false, so what it assigns is not assigned after.
+        "    var m: i64\n",
+        "    let both = c && {\n        m = 1\n        true\n    }\n",
+        "    let skipped = m\n",
+        // UNIT-12: a case's local is in scope after the `switch`, and is
+        // not assigned on a path that did not declare it.
+        "    switch side {\n        case .buy: var n: i64 = 1\n    }\n",
+        "    let outside = n\n",
+        "    return a\n",
+        "}\n",
+        // Arguments are read in the order written: a block in one may
+        // assign what a later one reads, and not what an earlier one
+        // does (CTRL-10).
+        "struct Two<T> {\n    first: i64\n    second: T\n}\n",
+        "const fn ordered() {\n",
+        "    var x: i64\n",
+        "    let early = Two(first: x, second: {\n        x = 1\n        2\n    })\n",
+        "    var y: i64\n",
+        "    let late = Two(second: {\n        y = 1\n        2\n    }, first: y)\n",
+        "}\n",
+        // A `return` in an operand that may be skipped ends no path.
+        "const fn skips(c: bool) -> i64 {\n",
+        "    let done = c || {\n        return 1\n    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:17 name/binding.unassigned EXPR-3",
+            "m.hgl:15:17 name/binding.unassigned EXPR-3",
+            "m.hgl:26:19 name/binding.unassigned EXPR-3",
+            "m.hgl:41:19 name/binding.unassigned EXPR-3",
+            "m.hgl:45:19 name/binding.unassigned EXPR-3",
+            "m.hgl:54:28 name/binding.unassigned EXPR-3",
+            "m.hgl:64:10 type/return.missing FN-7",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`b` is read before it is given a value",
+            "`e` is read before it is given a value",
+            "`g` is read before it is given a value",
+            "`m` is read before it is given a value",
+            "`n` is read before it is given a value",
+            "`x` is read before it is given a value",
+            "`skips` declares a result of `i64`, and can reach its end with no value",
+        ]
+    );
+}
+
+/// CTRL-12: "`for item in items` runs its body for each element of a
+/// list, in index order, or of a set, and `for key, value in entries`
+/// for each key and value of a dictionary. One name over a dictionary,
+/// two over a list or a set, and any other type after `in` reject.
+/// `while condition { ... }` repeats its body while the condition holds;
+/// the form with no condition is a source's (SOURCE-4) and rejects
+/// there. A `switch` there selects on a `bool`, `i64`, `str`, or enum
+/// value. Each label is a constant of the selector's type (CTRL-6)".
+/// CTRL-6: "Duplicate values reject, including differently spelled equal
+/// enum members."
+#[test]
+fn a_value_function_loops_and_switches() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "const fn loops(items: list<i64>, names: set<str>, entries: dict<str, f64>, pair: tuple<i64, i64>, n: i64, side: Side, text: str, real: f64) -> i64 {\n",
+        "    var total = 0\n",
+        "    for item in items { total += item }\n",
+        "    for name in names { total += 1 }\n",
+        "    for key, value in entries { total += 1 }\n",
+        "    for key2 in entries { }\n",
+        "    for a, b in items { }\n",
+        "    for x in pair { }\n",
+        "    for y in n { }\n",
+        "    while total > 10 { total = total // 2 }\n",
+        "    while n { }\n",
+        "    while { }\n",
+        "    switch n {\n        case 1: total += 1\n        case 2: total += 2\n        case 1: total += 3\n        case \"x\": total += 4\n        default: total = 0\n    }\n",
+        "    switch side {\n        case .buy: total += 1\n        case Side.buy: total += 2\n    }\n",
+        "    switch text {\n        case \"a\": total += 1\n    }\n",
+        "    switch real {\n        case 1.5: total += 1\n    }\n",
+        "    return total\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:17 type/type.mismatch CTRL-12",
+            "m.hgl:9:17 type/type.mismatch CTRL-12",
+            "m.hgl:10:14 type/type.mismatch CTRL-12",
+            "m.hgl:11:14 type/type.mismatch CTRL-12",
+            "m.hgl:13:11 type/type.mismatch CTRL-10",
+            "m.hgl:14:5 phase/while.condition CTRL-12",
+            "m.hgl:18:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:19:14 type/type.mismatch EXPR-5",
+            "m.hgl:24:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:29:12 type/type.mismatch CTRL-12",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `dict<str, f64>`, and `for` with one name loops over a list or a set",
+            "this is `list<i64>`, and `for` with two names loops over a dictionary",
+            "this is `tuple<i64, i64>`, and `for` with one name loops over a list or a set",
+            "this is `i64`, and `for` with one name loops over a list or a set",
+            "this is `i64`, and a condition is a `bool`",
+            "a `while` with no condition is for a source that yields: in a value function it has one",
+            "this label has the value of an earlier one",
+            "this is `str`, and the selector is `i64`",
+            "this label has the value of an earlier one",
+            "this is `f64`, and a `switch` selects on a `bool`, `i64`, `str` or enum value",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "loops"),
+        [
+            "items: list<i64>",
+            "names: set<str>",
+            "entries: dict<str, f64>",
+            "pair: tuple<i64, i64>",
+            "n: i64",
+            "side: Side",
+            "text: str",
+            "real: f64",
+            "total: i64",
+            "item: i64",
+            "name: str",
+            "key: str",
+            "value: f64",
+            "key2: _",
+            "a: _",
+            "b: _",
+            "x: _",
+            "y: _",
         ]
     );
 }
