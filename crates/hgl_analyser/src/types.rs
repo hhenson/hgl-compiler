@@ -198,7 +198,9 @@ pub enum Argument {
 /// generic argument.
 #[derive(Debug, Clone)]
 pub struct Constant {
-    /// The expression as written, with single spaces: `N + 1`.
+    /// The expression as written: each token as it stands, and one
+    /// space wherever the source has whitespace or a comment between
+    /// two. `N + 1`.
     pub text: String,
     /// What it comes to.
     pub value: ConstantValue,
@@ -206,16 +208,60 @@ pub struct Constant {
 
 // Two constants are the same when they come to the same value. One
 // whose value this pass does not hold, a literal of another kind or an
-// expression not evaluated yet, is compared as it is written: `true` is
-// not `false`, though both are "a bool".
+// expression not evaluated yet, is compared as it is written, token for
+// token: `true` is not `false`, though both are "a bool", and
+// `limit( 1 )` is `limit(1)`.
 impl PartialEq for Constant {
     fn eq(&self, other: &Constant) -> bool {
         match (&self.value, &other.value) {
             (ConstantValue::Unevaluated, ConstantValue::Unevaluated)
-            | (ConstantValue::Other(_), ConstantValue::Other(_)) => self.text == other.text,
+            | (ConstantValue::Other(_), ConstantValue::Other(_)) => {
+                unspaced(&self.text) == unspaced(&other.text)
+            }
             (left, right) => left == right,
         }
     }
+}
+
+/// A constant's text without the spaces between its tokens. The spaces
+/// inside a string literal are the literal's own, and are kept.
+fn unspaced(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    // `chars().next()` is the first character, or `None` at the end.
+    while let Some(first) = rest.chars().next() {
+        if first != '"' {
+            if first != ' ' {
+                out.push(first);
+            }
+            rest = &rest[first.len_utf8()..];
+            continue;
+        }
+        // A string literal: a text block between `"""` and `"""`
+        // (LEX-25), or a string up to the next `"` that no backslash
+        // precedes (LEX-2). It is copied whole.
+        let length = if let Some(block) = rest.strip_prefix("\"\"\"") {
+            block.find("\"\"\"").map_or(rest.len(), |end| end + 6)
+        } else {
+            let mut escaped = false;
+            let mut end = rest.len();
+            for (index, character) in rest.char_indices().skip(1) {
+                match character {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => {
+                        end = index + 1;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            end
+        };
+        out.push_str(&rest[..length]);
+        rest = &rest[length..];
+    }
+    out
 }
 
 impl Eq for Constant {}
@@ -491,5 +537,27 @@ impl fmt::Display for GenericParameter {
             }
             GenericKind::Value(ty) => write!(f, "const {}: {ty}", self.name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unspaced;
+
+    /// The spaces between tokens are dropped; a string literal is kept
+    /// whole, escapes and all (LEX-2), and so is a text block (LEX-25).
+    #[test]
+    fn unspaced_keeps_string_literals_whole() {
+        assert_eq!(unspaced("limit( 1 ) + N"), "limit(1)+N");
+        assert_eq!(unspaced("\"bid  ask\""), "\"bid  ask\"");
+        assert_eq!(unspaced("f( \"a \\\" b\" , 2 )"), "f(\"a \\\" b\",2)");
+        assert_eq!(
+            unspaced("f( \"\"\"a \" b\"\"\" , 2 )"),
+            "f(\"\"\"a \" b\"\"\",2)"
+        );
+        // A string the lexer left unclosed has been reported; what is
+        // there is kept.
+        assert_eq!(unspaced("f( \"a b"), "f(\"a b");
+        assert_eq!(unspaced("π + \"é é\""), "π+\"é é\"");
     }
 }

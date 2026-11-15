@@ -267,12 +267,29 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
-/// The text of `node` with each run of whitespace made one space.
+/// The text of `node` with one space wherever whitespace or a comment
+/// stands between two of its tokens. Each token is kept as written, so
+/// the spaces inside a string literal are the literal's own.
 fn text_of(node: &SyntaxNode) -> String {
-    let text = node.text().to_string();
-    // `split_whitespace` gives the words; `join` puts one space between
-    // each two.
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut text = String::new();
+    // True when whitespace or a comment has been passed since the last
+    // token written.
+    let mut gap = false;
+    let tokens = node
+        .descendants_with_tokens()
+        .filter_map(|element| element.into_token());
+    for token in tokens {
+        if token.kind().is_trivia() {
+            gap = true;
+            continue;
+        }
+        if gap && !text.is_empty() {
+            text.push(' ');
+        }
+        gap = false;
+        text.push_str(token.text());
+    }
+    text
 }
 
 /// True when a parameter is marked `const`. In `const: i64` the word is

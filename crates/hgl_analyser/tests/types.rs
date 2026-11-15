@@ -482,6 +482,10 @@ fn a_generic_application_is_known_by_its_arguments() {
         "struct Sized<const N: i64> { width: i64 }\n",
         "fn flags(a: Flag<true>, b: Flag<false>, c: Flag<true>) {}\n",
         "fn labels(a: Label<\"bid\">, b: Label<\"ask\">, c: Label<\"bid\">) {}\n",
+        // The spaces inside a string are part of it; those between
+        // tokens are not.
+        "fn spaced(a: Label<\"bid ask\">, b: Label<\"bid  ask\">, c: Label< \"bid ask\" >,\n",
+        "    d: Sized<2*3>, e: Sized<2  *  3>, f: Sized<limit( 1 )>, g: Sized<limit(1)>) {}\n",
         "fn sizes(a: Sized<6>, b: Sized<2 * 3>, c: Sized<7>, d: Sized<limit()>, e: Sized<limit()>,\n",
         "    f: Sized<other()>) {}\n",
     ));
@@ -500,6 +504,16 @@ fn a_generic_application_is_known_by_its_arguments() {
     let labels = types("labels");
     assert_ne!(labels[0], labels[1]);
     assert_eq!(labels[0], labels[2]);
+    let spaced = types("spaced");
+    assert_ne!(spaced[0], spaced[1]);
+    assert_eq!(spaced[0], spaced[2]);
+    assert_eq!(spaced[1].to_string(), "Label<\"bid  ask\">");
+    assert_eq!(spaced[3], spaced[4]);
+    assert_eq!(spaced[4].to_string(), "Sized<2 * 3>");
+    // A call is compared as written until constants are evaluated,
+    // token for token: the spacing between its tokens is no part of it.
+    assert_eq!(spaced[5].to_string(), "Sized<limit( 1 )>");
+    assert_eq!(spaced[5], spaced[6]);
     let sizes = types("sizes");
     // By value where it is folded; as written where it is not.
     assert_eq!(sizes[0], sizes[1]);
