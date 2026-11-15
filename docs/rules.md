@@ -123,10 +123,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-2 | analyser | partial | Each temporal scalar a type of its own. Left: the domains of computed values |
 | TYPE-2 | transpiler | planned | Temporal scalar representations; zone names kept distinct |
 | TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments; a parent is an abstract struct, listed once. Left: an abstract struct is not constructed |
-| TYPE-4 | analyser | partial | A field's type and optionality agree between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name. Left: a default's value against its field's type |
+| TYPE-4 | analyser | partial | A field's type, and so its optionality, agrees between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name; a default of null only on an optional field. Left: a default's value against its field's type |
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
-| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an `atomic<...>` field defaulted to null, which a descendant keeps, or a nullable one; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
+| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an optional field, `Node?` or `atomic<Node?>`, whose null default the structs below keep; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
 | TYPE-7 | analyser | partial | Numbering from zero or the number written; numbers are integers no two members share; overflow rejected. Left: members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
@@ -211,7 +211,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
-| GEN-8 | analyser | planned | `instantiate` requests candidates; no explicit type arguments on ordinary calls |
+| GEN-8 | analyser | planned | `instantiate` requests candidates; a call's generic arguments, and the rejection of a call that leaves a parameter unresolved |
 | GEN-9 | analyser | partial | A property domain is an ordinary value type. Left: clauses applied to explicit concrete domains |
 | GEN-9 | optimiser | planned | A recorded law licenses no reassociation across overflow or float effects |
 | GEN-10 | parser | done | A cardinality after a pack parameter or a generic pack parameter |
@@ -221,7 +221,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-12 | analyser | planned | Structural specificity |
 | GEN-13 | analyser | partial | A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type. Left: the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle |
 | GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
-| GEN-14 | analyser | done | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected; each argument against its parameter's kind |
+| GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected; each argument against its parameter's kind. Left: `<` after the name of a generic function or operator |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
 | GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
 | GEN-16 | analyser | planned | Predicate or operator requirement by the referenced declaration; arrow rejected on a predicate |

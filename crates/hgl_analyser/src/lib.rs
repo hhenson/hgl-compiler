@@ -188,18 +188,19 @@ pub mod codes {
     pub const STRUCT_DUPLICATE_PARENT: &str = "struct.duplicate_parent";
     /// Structs inherit from one another (TYPE-6).
     pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
-    /// A field's type or optionality differs between two parents, or
-    /// between a struct and a parent (TYPE-4).
+    /// A field's type, and so its optionality, differs between two
+    /// parents, or between a struct and a parent (TYPE-4).
     pub const FIELD_CONFLICT: &str = "field.conflict";
     /// `name = value` names no field a parent declares (TYPE-4).
     pub const FIELD_NOT_INHERITED: &str = "field.not_inherited";
     /// Two members of a struct have one name (TYPE-4).
     pub const FIELD_DUPLICATE: &str = "field.duplicate";
-    /// A field makes its struct hold itself and is not an optional
-    /// `atomic<...>` defaulted to null, a descendant removes that
-    /// null, or the field gives a struct of its cycle a type built
-    /// from a generic parameter (TYPE-6).
+    /// A field makes its struct hold itself and is not optional, a
+    /// descendant removes its null default, or the field gives a struct
+    /// of its cycle a type built from a generic parameter (TYPE-6).
     pub const FIELD_RECURSIVE: &str = "field.recursive";
+    /// A field that is not optional has a default of null (TYPE-4).
+    pub const FIELD_NULL_DEFAULT: &str = "field.null_default";
     /// An enum member's number is not an integer (TYPE-7).
     pub const ENUM_VALUE: &str = "enum.value";
     /// Two members of an enum have one number (TYPE-7).

@@ -729,8 +729,9 @@ impl Reader<'_> {
             } else {
                 None
             };
-            if let Some(default) = default_of(&member) {
-                self.note_values_in(&default);
+            let default = default_of(&member);
+            if let Some(default) = &default {
+                self.note_values_in(default);
             }
             // The default is the member's child that is no type.
             let null_default = member
@@ -743,6 +744,7 @@ impl Reader<'_> {
                 ty,
                 has_default: has_token(&member, SyntaxKind::Eq),
                 null_default,
+                default_at: default.map(|default| self.at(default.span())),
             });
         }
         StructType {
@@ -1747,14 +1749,21 @@ impl Reader<'_> {
         arguments
     }
 
-    /// True when `ty` is a generic parameter of the declaration being
-    /// read that is known to stand for types: one settled as a type, or
-    /// a type pack.
+    /// True when `ty` is a generic parameter known to stand for types:
+    /// one of the declaration being read that is settled as a type, a
+    /// type pack, or a name bound by `each T in ...`.
     fn is_type_parameter(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Parameter { at, .. } if self.generics.iter().any(|generic| {
-            generic.at == *at
-                && matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
-        }))
+        let Type::Parameter { at, .. } = ty else {
+            return false;
+        };
+        match self.generics.iter().find(|generic| generic.at == *at) {
+            Some(generic) => {
+                matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+            }
+            // One bound by `each T in ...` is not among the
+            // declaration's own; it is a type (GEN-10).
+            None => true,
+        }
     }
 
     fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {

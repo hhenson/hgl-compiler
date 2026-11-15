@@ -119,8 +119,8 @@ fn kinds_are_settled_across_structs() {
                 "module m\n",
                 "use lib::{Outer}\n",
                 // Each names the other; one field settles both.
-                "struct Ping<N> { pong: atomic<Pong<N>> = null }\n",
-                "struct Pong<N> {\n    ping: atomic<Ping<N>> = null\n    items: list<f64, N>\n}\n",
+                "struct Ping<N> { pong: atomic<Pong<N>?> = null }\n",
+                "struct Pong<N> {\n    ping: atomic<Ping<N>?> = null\n    items: list<f64, N>\n}\n",
                 "struct Chain<A> { next: Middle<A> }\n",
                 "struct Middle<B> { last: Ping<B> }\n",
                 "fn uses<K>(outer: Outer<K>, chain: Chain<3>) {}\n",
@@ -190,11 +190,11 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
 #[test]
 fn a_parameter_that_is_only_handed_on_is_unresolved() {
     let checked = module(concat!(
-        "struct Node<T> { next: atomic<Node<T>> = null }\n",
-        "struct Ping<T> { pong: atomic<Pong<T>> = null }\n",
-        "struct Pong<T> { ping: atomic<Ping<T>> = null }\n",
+        "struct Node<T> { next: atomic<Node<T>?> = null }\n",
+        "struct Ping<T> { pong: atomic<Pong<T>?> = null }\n",
+        "struct Pong<T> { ping: atomic<Ping<T>?> = null }\n",
         // One use elsewhere settles the whole ring.
-        "struct Tree<T> {\n    next: atomic<Tree<T>> = null\n    value: T\n}\n",
+        "struct Tree<T> {\n    next: atomic<Tree<T>?> = null\n    value: T\n}\n",
         // A function given such a struct is not where the fault is.
         "fn uses<K>(node: Node<K>) {}\n",
         // A type nothing declares may yet say what its argument is.
@@ -247,6 +247,8 @@ fn an_argument_is_of_its_parameters_kind() {
         "    c: Sized<None, 3>, d: Sized<Maybe>) {}\n",
         // A parameter settled as a type is a type in a body too.
         "const fn body<T>(value: T) -> i64 {\n    let sized: Sized<T> = make()\n    return 0\n}\n",
+        // And so is a name `each ... in` binds (GEN-10).
+        "fn every<...Ts>(values: ...Ts) requires each U in types(Ts) { Sized<U> is Sized<1> } {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -264,6 +266,7 @@ fn an_argument_is_of_its_parameters_kind() {
             "m.hgl:16:70 local:type/generic.argument_kind GEN-14",
             "m.hgl:16:84 local:type/generic.argument_kind GEN-14",
             "m.hgl:19:22 local:type/generic.argument_kind GEN-14",
+            "m.hgl:22:69 local:type/generic.argument_kind GEN-14",
         ]
     );
     assert_eq!(
@@ -282,11 +285,12 @@ fn an_argument_is_of_its_parameters_kind() {
             "`Pair` takes a value for `N`, and `Two` passes on types",
             "`Pair` takes a value for `N`, and `Some` passes on types",
             "`Sized` takes a value for `N`, and `T` is a type",
+            "`Sized` takes a value for `N`, and `U` is a type",
         ]
     );
     assert_eq!(
         kinds(&checked, "good"),
         ["T:type", "N:value i64", "M:value _"]
     );
-    assert_eq!(checked.prelude_names("m"), ["Missing", "make"]);
+    assert_eq!(checked.prelude_names("m"), ["Missing", "make", "types"]);
 }

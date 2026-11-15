@@ -489,9 +489,12 @@ pub struct Field {
     pub ty: Option<Type>,
     /// True when it has a default.
     pub has_default: bool,
-    /// True when that default is the literal `null`. On a member with a
-    /// type it marks the field optional (TYPE-4).
+    /// True when that default is the literal `null`. Only an optional
+    /// field may have it: one whose type is nullable, or an
+    /// `atomic<...>` of a nullable type (TYPE-4).
     pub null_default: bool,
+    /// Where the default is written.
+    pub default_at: Option<Location>,
 }
 
 /// The members of an enum (TYPE-7).

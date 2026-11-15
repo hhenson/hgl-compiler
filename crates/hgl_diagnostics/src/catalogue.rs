@@ -78,6 +78,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "field.not_inherited"),
     (Category::Type, "field.duplicate"),
     (Category::Type, "field.recursive"),
+    (Category::Type, "field.null_default"),
     (Category::Type, "enum.value"),
     (Category::Type, "enum.duplicate_value"),
     (Category::Type, "enum.overflow"),

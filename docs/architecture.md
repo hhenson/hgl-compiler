@@ -313,11 +313,12 @@ The declarations are then read against one another:
 | --- | --- | --- |
 | A parent | TYPE-3 | An abstract struct, listed once. A concrete struct, an enum, a native type or a generic parameter is rejected |
 | Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
-| A field of a struct and of a parent | TYPE-4 | The same type and optionality, the parent's generic arguments standing for its parameters. A null default makes a field optional |
-| A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
+| A field of a struct and of a parent | TYPE-4 | The same type, and so the same optionality, the parent's generic arguments standing for its parameters |
+| A field two parents give | TYPE-4 | The same type. One field reached by two paths is one field |
+| A default of null | TYPE-4 | Only on an optional field: one whose type is nullable, `T?`, or an `atomic<...>` of a nullable type, `atomic<T?>`. For `name = null` the type is the one the parent gives the field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
-| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, or through a nullable field. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
+| A struct that holds itself | TYPE-6 | Through an optional field, `Node?` or `atomic<Node?>`. A null default the field is declared with is kept by the structs below. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
 A struct holds the structs its fields hold: its own fields and those it
@@ -326,6 +327,10 @@ of the parent's parameters. A field whose type is an abstract struct
 holds every struct that inherits from it, since its value is one of
 them: each that may be the application written, so `struct Child :
 Base<i64>` is held by a `Base<i64>` and not by a `Base<str>`. A
+parameter of the child stands for one thing wherever the child writes
+it, and is matched inside a type: `struct Child<U> : Base<U, U>` is not
+held by a `Base<i64, str>`, nor `struct Child<U> : Base<list<U>>` by a
+`Base<str>`. A
 recursive field stays within its module: a struct of another module is
 reached back only through an abstract struct declared there, and that
 is rejected. A field holds every struct its type names,
@@ -357,8 +362,8 @@ else, under the catalogue's `number.integer_range`.
 Each has a row of the catalogue: `struct.parent`,
 `struct.duplicate_parent`, `struct.inheritance_cycle`, `field.conflict`,
 `field.not_inherited`, `field.duplicate`, `field.recursive`,
-`enum.value`, `enum.duplicate_value`, `enum.overflow` and
-`enum.duplicate_member`.
+`field.null_default`, `enum.value`, `enum.duplicate_value`,
+`enum.overflow` and `enum.duplicate_member`.
 
 ### Generic kinds
 
@@ -381,7 +386,7 @@ supplies no type for it is rejected, which is for the pass that reads
 calls. A use in a body does not settle a kind: the rule infers it "from
 signature positions and constraints".
 Neither does being handed on to a parameter that nothing settles: in
-`struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
+`struct Node<T> { next: atomic<Node<T>?> = null }` nothing says what `T`
 is. That is reported at the struct, and not again at each function
 that is given one.
 
@@ -397,7 +402,7 @@ With the kinds known, each generic argument is read for the parameter
 it is given to (GEN-14): a value where a type goes, or a type where a
 value goes, is rejected. A lone name is read as a type by the parser;
 here it is a constant when it names a value parameter, or a plain one
-given where a value goes.
+given where a value goes. A name `each T in ...` binds is a type.
 
 These three have no catalogue row yet and carry codes local to this
 compiler (`hgl_analyser::codes::local`), proposed in
