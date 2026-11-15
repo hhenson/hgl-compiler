@@ -30,7 +30,7 @@ use hgl_lexer::literal::{
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, names_one_of, substitute_within};
 use crate::hir::{
     BinaryOperator, Body, Expr, ExprKind, Local, LocalId, Stmt, UnaryOperator, Value,
 };
@@ -828,9 +828,15 @@ impl<'a> Typer<'a> {
     /// applications are invariant", so a `Child : Base<i64>` is no
     /// `Base<f64>`.
     fn inherits(&self, ty: &Type, expected: &Type) -> bool {
-        // The parents still to look at. Structs that inherit from one
-        // another have been reported; the count ends the walk for them.
+        // The parents still to look at.
         let mut to_do = vec![ty.clone()];
+        // The applications of each struct whose parents have been
+        // looked at. A struct reached by two lines of parents is looked
+        // at once for each application, so that a ladder of diamonds
+        // is walked in step with its length.
+        let mut followed: HashMap<(usize, usize), Vec<Vec<Argument>>> = HashMap::new();
+        // Structs that inherit from one another have been reported;
+        // the count ends the walk for them.
         let mut budget = 100_000;
         while let Some(current) = to_do.pop() {
             let Type::Named {
@@ -847,6 +853,11 @@ impl<'a> Typer<'a> {
             else {
                 continue;
             };
+            let applications = followed.entry((*module, *declaration)).or_default();
+            if applications.contains(arguments) {
+                continue;
+            }
+            applications.push(arguments.clone());
             // Each generic parameter before a type pack, with the
             // argument it is given.
             let map: Vec<(Location, &Argument)> = read
@@ -856,13 +867,17 @@ impl<'a> Typer<'a> {
                 .map(|generic| generic.at)
                 .zip(arguments)
                 .collect();
+            // The struct's own parameters: one a parent still names
+            // once the arguments are in place has been given none here.
+            let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
             for parent in &read.parents {
                 let parent = substitute_within(parent, &map);
                 // Where the struct passes a type pack on to its parent,
-                // the parent's arguments are not known here: it may be
+                // the pack is not put in place here: the parent may be
                 // the application expected, and nothing is reported of
-                // it (ERR-9).
-                let may_be = names_parameter(&parent) && same_declaration(expected, &parent);
+                // it (ERR-9). A parameter of the function being read
+                // is a type like any other, and is compared.
+                let may_be = names_one_of(&parent, &own) && same_declaration(expected, &parent);
                 if may_be || agree(expected, &parent) {
                     return true;
                 }
