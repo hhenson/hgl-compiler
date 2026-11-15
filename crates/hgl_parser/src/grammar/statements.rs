@@ -28,11 +28,22 @@ impl Parser<'_> {
         // LEX-4: braces delimit a block; indentation means nothing.
         // LEX-6: one statement to a line.
         self.nested(Context::BLOCK, |parser| {
+            // LEX-5: "`.member` (TYPE-7) begins no statement after
+            // another. Where no statement precedes it in its block it is
+            // an expression, and may be the block's value".
+            let mut first = true;
             parser.lines(
                 "a statement",
                 "LEX-6",
                 |_| false,
-                |parser| parser.statement(),
+                |parser| {
+                    if first && parser.at(Dot) {
+                        parser.expr_stmt();
+                    } else {
+                        parser.statement();
+                    }
+                    first = false;
+                },
             );
             parser.close_brace();
         });
@@ -114,7 +125,8 @@ impl Parser<'_> {
             }
             KwAssert => self.assert_stmt(),
             Ident => self.name_statement(),
-            // `.member` begins an expression and no statement.
+            // `.member` begins an expression and no statement after
+            // another: `block` reads one that is first in its block.
             kind if can_start_expression(kind) && kind != Dot => self.expr_stmt(),
             _ => {}
         }
