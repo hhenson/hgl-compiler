@@ -188,18 +188,19 @@ pub mod codes {
     pub const STRUCT_DUPLICATE_PARENT: &str = "struct.duplicate_parent";
     /// Structs inherit from one another (TYPE-6).
     pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
-    /// A field's type or optionality differs between two parents, or
-    /// between a struct and a parent (TYPE-4).
+    /// A field's type, and so its optionality, differs between two
+    /// parents, or between a struct and a parent (TYPE-4).
     pub const FIELD_CONFLICT: &str = "field.conflict";
     /// `name = value` names no field a parent declares (TYPE-4).
     pub const FIELD_NOT_INHERITED: &str = "field.not_inherited";
     /// Two members of a struct have one name (TYPE-4).
     pub const FIELD_DUPLICATE: &str = "field.duplicate";
-    /// A field makes its struct hold itself and is not an optional
-    /// `atomic<...>` defaulted to null, a descendant removes that
-    /// null, or the field gives a struct of its cycle a type built
-    /// from a generic parameter (TYPE-6).
+    /// A field makes its struct hold itself and is not optional, a
+    /// descendant removes its null default, or the field gives a struct
+    /// of its cycle a type built from a generic parameter (TYPE-6).
     pub const FIELD_RECURSIVE: &str = "field.recursive";
+    /// A field that is not optional has a default of null (TYPE-4).
+    pub const FIELD_NULL_DEFAULT: &str = "field.null_default";
     /// An enum member's number is not an integer (TYPE-7).
     pub const ENUM_VALUE: &str = "enum.value";
     /// Two members of an enum have one number (TYPE-7).
@@ -209,27 +210,22 @@ pub mod codes {
     /// Two members of an enum have one name (TYPE-7).
     pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
+    /// A generic parameter is used as a type and as a value (GEN-13).
+    pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
+    /// Nothing in a struct's fields or a constraint says whether a
+    /// generic parameter is a type or a value (GEN-13).
+    pub const GENERIC_KIND_UNRESOLVED: &str = "generic.kind_unresolved";
+    /// A generic argument is a type where the parameter is a value, or
+    /// a value where it is a type (GEN-14).
+    pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
+
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed.
+    /// code when one is agreed. There is none at present.
     pub mod local {
-        /// A generic parameter is used as a type and as a value
-        /// (GEN-13).
-        pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
-        /// Nothing in a signature says whether a generic parameter is a
-        /// type or a value (GEN-13).
-        pub const GENERIC_KIND_UNRESOLVED: &str = "generic.kind_unresolved";
-        /// A generic argument is a type where the parameter is a value,
-        /// or a value where it is a type (GEN-14).
-        pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
-
         /// Every local code of this stage.
-        pub const ALL: [&str; 3] = [
-            GENERIC_KIND_CONFLICT,
-            GENERIC_KIND_UNRESOLVED,
-            GENERIC_ARGUMENT_KIND,
-        ];
+        pub const ALL: [&str; 0] = [];
     }
 }
 
@@ -291,19 +287,6 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
-}
-
-/// An error with one of this compiler's own codes ([`codes::local`]):
-/// the rule cited rejects the source, and the catalogue has no row for
-/// it.
-fn local_error(
-    category: Category,
-    code: &'static str,
-    at: Location,
-    message: String,
-    rule: &'static str,
-) -> Diagnostic {
-    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

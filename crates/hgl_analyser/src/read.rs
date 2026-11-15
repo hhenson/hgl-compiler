@@ -35,7 +35,7 @@ use crate::types::{
     Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
     Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// Reads the types of every module, filling in [`Module::details`] and
 /// [`Module::written`].
@@ -202,6 +202,10 @@ struct Position {
     value: Option<(&'static str, &'static str)>,
     /// True where `signal` may stand.
     signal: bool,
+    /// True where `?` may follow a type that is no ordinary value type:
+    /// the whole type of an input, whose argument may then be omitted,
+    /// or of a struct field, which is then optional (TYPE-14).
+    omissible: bool,
     /// True where the name of a type pack may stand.
     pack: bool,
     /// True where the name of a generic value parameter may stand.
@@ -215,14 +219,24 @@ impl Position {
     const PLAIN: Position = Position {
         value: None,
         signal: false,
+        omissible: false,
         pack: false,
         constant: false,
         bare: false,
     };
 
-    /// The whole type of an input: `signal` may stand (TYPE-12).
+    /// The whole type of an input: `signal` may stand (TYPE-12), and so
+    /// may `?` after a type that is no ordinary value type (TYPE-14).
     const INPUT: Position = Position {
         signal: true,
+        omissible: true,
+        ..Position::PLAIN
+    };
+
+    /// The whole type of a struct field: `?` may follow a type that is
+    /// no ordinary value type, and the field is then optional (TYPE-14).
+    const FIELD: Position = Position {
+        omissible: true,
         ..Position::PLAIN
     };
 
@@ -247,6 +261,7 @@ impl Position {
     const OPEN: Position = Position {
         value: None,
         signal: true,
+        omissible: true,
         pack: true,
         constant: true,
         bare: true,
@@ -729,8 +744,9 @@ impl Reader<'_> {
             } else {
                 None
             };
-            if let Some(default) = default_of(&member) {
-                self.note_values_in(&default);
+            let default = default_of(&member);
+            if let Some(default) = &default {
+                self.note_values_in(default);
             }
             // The default is the member's child that is no type.
             let null_default = member
@@ -743,6 +759,7 @@ impl Reader<'_> {
                 ty,
                 has_default: has_token(&member, SyntaxKind::Eq),
                 null_default,
+                default_at: default.map(|default| self.at(default.span())),
             });
         }
         StructType {
@@ -863,7 +880,8 @@ impl Reader<'_> {
                     Position::PLAIN
                 }
             }
-            SyntaxKind::StructMember | SyntaxKind::StructBases => Position::PLAIN,
+            SyntaxKind::StructMember => Position::FIELD,
+            SyntaxKind::StructBases => Position::PLAIN,
             // GEN-13: "An explicit `const N: V` declares a value
             // parameter of ordinary type V."
             SyntaxKind::GenericParam => Position::value("a generic value parameter", "GEN-13"),
@@ -1012,20 +1030,29 @@ impl Reader<'_> {
     /// `T?` (TYPE-14, TYPE-15).
     ///
     /// TYPE-14: "`T?` denotes an ordinary value that is either a T or
-    /// null, where T is an admitted ordinary value type." TYPE-15:
-    /// "The suffix admits only ordinary value types; applying it to
-    /// `ref<T>` or `signal` rejects under TYPE-12/14 rather than
-    /// creating nullable endpoint handles."
+    /// null, where T is an admitted ordinary value type ... Where T is
+    /// no ordinary value type ... `T?` is admitted only as the whole
+    /// type of a function's temporal parameter, whose argument may be
+    /// omitted (UNIT-8), or of a struct field, which is then optional
+    /// (TYPE-4). It is no result type, local's annotation, or part of
+    /// another type."
     fn nullable(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let Some(base) = type_child(node) else {
             return Type::Unknown;
         };
-        // The whole of what `?` is applied to is an ordinary value
-        // type: `list<ref<f64>>?` is no more one than `ref<f64>?`.
-        // Where the place around it asks for one already, that place is
-        // the one named.
         let base_position = match position.value {
+            // Where the place around it asks for an ordinary value
+            // type already, that place is the one named.
             Some(_) => position,
+            // The whole type of an input or a field: any type it may
+            // have.
+            None if position.omissible => Position {
+                omissible: false,
+                ..position
+            },
+            // Anywhere else the whole of what `?` is applied to is an
+            // ordinary value type: `list<ref<f64>>?` is no more one
+            // than `ref<f64>?`.
             None => Position::value("what `?` is applied to", "TYPE-14"),
         };
         Type::Nullable(Box::new(self.type_(&base, base_position)))
@@ -1747,21 +1774,28 @@ impl Reader<'_> {
         arguments
     }
 
-    /// True when `ty` is a generic parameter of the declaration being
-    /// read that is known to stand for types: one settled as a type, or
-    /// a type pack.
+    /// True when `ty` is a generic parameter known to stand for types:
+    /// one of the declaration being read that is settled as a type, a
+    /// type pack, or a name bound by `each T in ...`.
     fn is_type_parameter(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Parameter { at, .. } if self.generics.iter().any(|generic| {
-            generic.at == *at
-                && matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
-        }))
+        let Type::Parameter { at, .. } = ty else {
+            return false;
+        };
+        match self.generics.iter().find(|generic| generic.at == *at) {
+            Some(generic) => {
+                matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+            }
+            // One bound by `each T in ...` is not among the
+            // declaration's own; it is a type (GEN-10).
+            None => true,
+        }
     }
 
     fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {
         if let Some(message) = message {
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Type,
-                codes::local::GENERIC_ARGUMENT_KIND,
+                codes::GENERIC_ARGUMENT_KIND,
                 self.at(argument.span()),
                 message,
                 "GEN-14",
@@ -1993,9 +2027,9 @@ impl Reader<'_> {
                         (as_value, as_type, "used as a type here")
                     };
                     self.diagnostics.emit(
-                        local_error(
+                        error(
                             Category::Type,
-                            codes::local::GENERIC_KIND_CONFLICT,
+                            codes::GENERIC_KIND_CONFLICT,
                             at,
                             format!("`{name}` is used as a type and as a value"),
                             "GEN-13",
@@ -2016,9 +2050,9 @@ impl Reader<'_> {
                 (None, None) if !self.reading_struct => {}
                 (None, None) => {
                     self.diagnostics.emit(
-                        local_error(
+                        error(
                             Category::Type,
-                            codes::local::GENERIC_KIND_UNRESOLVED,
+                            codes::GENERIC_KIND_UNRESOLVED,
                             self.generics[index].at,
                             format!(
                                 "nothing in the signature of `{}` says whether `{name}` is a \

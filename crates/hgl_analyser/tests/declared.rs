@@ -158,19 +158,20 @@ fn no_struct_inherits_from_itself() {
 // ---- Fields ----
 
 /// TYPE-4: "A typed field introduction fixes its type and optionality.
-/// A null default marks it optional. An untyped inherited override
-/// changes only its construction default. Required fields may have
-/// defaults; optional fields may have non-null defaults."
+/// A field is optional when its type is nullable ... An untyped
+/// inherited override changes only the construction default of a field
+/// a parent has. Required fields may have defaults; optional fields may
+/// have non-null defaults."
 #[test]
 fn a_struct_and_its_parent_agree_on_a_field() {
     let checked = module(concat!(
-        "abstract struct Base {\n    id: i64\n    name: str = null\n    size: i64 = 1\n}\n",
+        "abstract struct Base {\n    id: i64\n    name: str? = null\n    size: i64 = 1\n}\n",
         // Overrides of a parent's defaults, and a field of its own.
         "struct Good : Base {\n    id = 7\n    name = \"x\"\n    extra: f64\n}\n",
         // The same field again is the same field.
         "struct Again : Base { id: i64 }\n",
         "struct Retyped : Base { id: str }\n",
-        "struct MadeOptional : Base { id: i64 = null }\n",
+        "struct MadeOptional : Base { id: i64? = null }\n",
         "struct MadeRequired : Base { name: str }\n",
         // An override needs a field to override.
         "struct NoParent { id = 7 }\n",
@@ -194,9 +195,9 @@ fn a_struct_and_its_parent_agree_on_a_field() {
     assert_eq!(
         messages(&checked),
         [
-            "`id` is required `str` here and required `i64` in `Base`",
-            "`id` is optional `i64` here and required `i64` in `Base`",
-            "`name` is required `str` here and optional `str` in `Base`",
+            "`id` is `str` here and `i64` in `Base`",
+            "`id` is `i64?` here and `i64` in `Base`",
+            "`name` is `str` here and `str?` in `Base`",
             "`id = ...` overrides the default of a parent's field, and `NoParent` has no field \
              `id` from a parent",
             "`missing = ...` overrides the default of a parent's field, and `NoSuchField` has no \
@@ -207,7 +208,8 @@ fn a_struct_and_its_parent_agree_on_a_field() {
     );
 }
 
-/// TYPE-4: "Parent conflicts in type/optionality are errors." A parent's
+/// TYPE-4: "A field a struct has from two parents ... has one type and
+/// optionality ... a conflict is an error." A parent's
 /// generic arguments stand in its fields' types (TYPE-3: "invariant by
 /// origin and complete canonical arguments").
 #[test]
@@ -216,7 +218,7 @@ fn parents_agree_on_a_field() {
         "abstract struct Left { id: i64 }\n",
         "abstract struct Right { id: str }\n",
         "abstract struct Same { id: i64 }\n",
-        "abstract struct Optional { id: i64 = null }\n",
+        "abstract struct Optional { id: i64? = null }\n",
         "struct Both : Left, Right { }\n",
         "struct Mixed : Left, Optional { }\n",
         "struct Agree : Left, Same { }\n",
@@ -249,12 +251,59 @@ fn parents_agree_on_a_field() {
     assert_eq!(
         messages(&checked),
         [
-            "`Both` has `id` from two parents: required `i64` and required `str`",
-            "`Mixed` has `id` from two parents: required `i64` and optional `i64`",
-            "`Split` has `id` from two parents: required `i64` and required `str`",
-            "`id` is required `str` here and required `i64` in `Generic`",
+            "`Both` has `id` from two parents: `i64` and `str`",
+            "`Mixed` has `id` from two parents: `i64` and `i64?`",
+            "`Split` has `id` from two parents: `i64` and `str`",
+            "`id` is `str` here and `i64` in `Generic`",
         ]
     );
+}
+
+/// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
+/// `atomic<...>` of a nullable type, `atomic<T?>`, and only an optional
+/// field's default may be null."
+#[test]
+fn only_an_optional_fields_default_is_null() {
+    let checked = module(concat!(
+        "abstract struct Base {\n    id: i64\n    name: str?\n    last: atomic<str?>\n}\n",
+        "struct Good {\n    name: str? = null\n    last: atomic<str?> = null\n    other: str? = \"x\"\n}\n",
+        // The chapter's deliberate rejection: "`size: i64 = null`, a
+        // null default on a field that is not optional".
+        "struct Sized { size: i64 = null }\n",
+        "struct Whole { last: atomic<str> = null }\n",
+        // Nullable inside the type is not the field's type.
+        "struct Inside { items: list<i64?> = null }\n",
+        // `(null)` is `null` (EXPR-1).
+        "struct Grouped { size: i64 = (null) }\n",
+        // `name = null` gives a parent's field its default.
+        "struct Kept : Base {\n    name = null\n    last = null\n}\n",
+        "struct Emptied : Base { id = null }\n",
+        // A parent's argument stands for its parameter.
+        "abstract struct Generic<T> { value: T }\n",
+        "struct Nullable : Generic<i64?> { value = null }\n",
+        "struct Required : Generic<i64> { value = null }\n",
+        "struct Open<T> { value: T = null }\n",
+        // UNIT-11: left for the prelude, and not known.
+        "struct Later { value: Missing = null }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:28 type/field.null_default TYPE-4",
+            "m.hgl:13:36 type/field.null_default TYPE-4",
+            "m.hgl:14:37 type/field.null_default TYPE-4",
+            "m.hgl:15:30 type/field.null_default TYPE-4",
+            "m.hgl:20:30 type/field.null_default TYPE-4",
+            "m.hgl:23:42 type/field.null_default TYPE-4",
+            "m.hgl:24:29 type/field.null_default TYPE-4",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[0],
+        "`size` is `i64`, which is not optional, and its default is null: an optional field's \
+         type is nullable, `T?`, or an `atomic<T?>`"
+    );
+    assert_eq!(checked.prelude_names("m"), ["Missing"]);
 }
 
 /// TYPE-4 compares a field's type as TYPE-11 gives it: "Omitted minimum
@@ -286,9 +335,9 @@ fn a_field_is_compared_by_what_its_type_means() {
     assert_eq!(
         messages(&checked),
         [
-            "`window` is required `rolling<i64, 5, 2>` here and required `rolling<i64, 5>` in \
+            "`window` is `rolling<i64, 5, 2>` here and `rolling<i64, 5>` in \
              `Base`",
-            "`window` is required `rolling<i64, 5>` here and required `rolling<i64, 5, 2>` in \
+            "`window` is `rolling<i64, 5>` here and `rolling<i64, 5, 2>` in \
              `Bounded`",
         ]
     );
@@ -326,7 +375,7 @@ fn a_long_chain_of_parents_is_read_on_a_small_stack() {
     );
     assert_eq!(
         found.1,
-        format!("`id` is required `str` here and required `i64` in `A{LINKS}`")
+        format!("`id` is `str` here and `i64` in `A{LINKS}`")
     );
 }
 
@@ -353,7 +402,7 @@ fn a_type_that_grows_at_every_parent_is_not_built() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`value` is required `tuple<i64, str>` here and required `tuple<i64, i64>` in `A0`"
+        "`value` is `tuple<i64, str>` here and `tuple<i64, i64>` in `A0`"
     );
 }
 
@@ -408,7 +457,7 @@ fn a_field_is_compared_with_every_parents() {
     assert_eq!(checked.summary(), ["m.hgl:4:30 type/field.conflict TYPE-4"]);
     assert_eq!(
         checked.findings[0].message,
-        "`value` is required `str` here and required `i64` in `Known`"
+        "`value` is `str` here and `i64` in `Known`"
     );
 }
 
@@ -433,43 +482,44 @@ fn an_unknown_part_of_a_type_is_no_conflict() {
     );
     assert_eq!(
         checked.findings[2].message,
-        "`pair` is required `tuple<str, str>` here and required `tuple<_, i64>` in `Base`"
+        "`pair` is `tuple<str, str>` here and `tuple<_, i64>` in `Base`"
     );
 }
 
 // ---- Structs that hold themselves ----
 
-/// TYPE-6: "Recursive struct edges stay within their defining module,
-/// use an optional `atomic<...>` field defaulted to null ... Descendants
-/// cannot remove that null default. Cycles through inheritance or
-/// collection elements are rejected. Cross-module references to
+/// TYPE-6: "So that the recursion can end, a recursive field is
+/// optional (TYPE-4), `Node?` or `atomic<Node?>` ... Cycles through
+/// inheritance are rejected, and so are cycles through collection
+/// elements outside an `atomic<...>`. Cross-module references to
 /// non-recursive public structs remain admitted."
 #[test]
 fn a_struct_holds_itself_through_an_optional_atomic_field() {
     let checked = module(concat!(
-        "struct Node {\n    value: i64\n    next: atomic<Node> = null\n}\n",
-        "struct Ping { pong: atomic<Pong> = null }\n",
-        "struct Pong { ping: atomic<Ping> = null }\n",
+        "struct Node {\n    value: i64\n    next: atomic<Node?> = null\n}\n",
+        "struct Ping { pong: atomic<Pong?> = null }\n",
+        "struct Pong { ping: atomic<Ping?> = null }\n",
         "struct Boxed<T> { value: T }\n",
-        "struct Wrapped { inner: atomic<tuple<Boxed<Wrapped>, i64>> = null }\n",
+        "struct Wrapped { inner: atomic<tuple<Boxed<Wrapped>, i64>?> = null }\n",
         // Structs that hold others and not themselves.
         "struct Uses {\n    node: Node\n    nodes: list<Node>\n    boxed: Boxed<Node>\n}\n",
         // Directly, through a collection, through another struct.
         "struct Direct { inner: Direct }\n",
         "struct Tree { children: list<Tree> }\n",
-        "struct Keyed { children: dict<str, atomic<Keyed>> = null }\n",
+        "struct Keyed { children: dict<str, Keyed>? = null }\n",
         "struct InBox { inner: Boxed<InBox> }\n",
         // A collection inside the `atomic<...>` is part of one
         // snapshot.
-        "struct Forest { trees: atomic<list<Forest>> = null }\n",
-        "struct Index { entries: atomic<dict<str, Boxed<Index>>> = null }\n",
-        "struct Recent { last: atomic<set<Recent>> = null }\n",
-        // An atomic field with no null default, or another default.
+        "struct Forest { trees: atomic<list<Forest>?> = null }\n",
+        "struct Index { entries: atomic<dict<str, Boxed<Index>>?> = null }\n",
+        "struct Recent { last: atomic<set<Recent>?> = null }\n",
+        // An atomic field that is not optional: what it holds is not
+        // nullable.
         "struct Required { next: atomic<Required> }\n",
         "struct Filled { next: atomic<Filled> = make() }\n",
         // One edge of a pair that is not atomic.
         "struct Left { right: Right }\n",
-        "struct Right { left: atomic<Left> = null }\n",
+        "struct Right { left: atomic<Left?> = null }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -483,7 +533,8 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:24:15 type/field.recursive TYPE-6",
         ]
     );
-    let recursive = "a recursive field is an `atomic<...>` with a default of null, or nullable";
+    let recursive =
+        "a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type";
     let collection = "through the elements of a collection outside an `atomic<...>`";
     assert_eq!(
         messages(&checked),
@@ -524,7 +575,7 @@ fn a_ladder_of_diamonds_is_read_in_step() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`id` is required `str` here and required `i64` in `Root`"
+        "`id` is `str` here and `i64` in `Root`"
     );
 }
 
@@ -536,7 +587,7 @@ fn a_ladder_of_diamonds_is_read_in_step() {
 fn a_struct_holds_itself_through_what_it_gives_a_parent() {
     let checked = module(concat!(
         "abstract struct Base<T> { next: T }\n",
-        "abstract struct Link<T> { next: atomic<T> = null }\n",
+        "abstract struct Link<T> { next: atomic<T?> = null }\n",
         "abstract struct Items<T> { all: list<T> }\n",
         "struct Child : Base<Child> { }\n",
         "struct Good : Link<Good> { }\n",
@@ -554,8 +605,7 @@ fn a_struct_holds_itself_through_what_it_gives_a_parent() {
     assert_eq!(
         messages(&checked),
         [
-            "`Child` holds itself through `next`, a field of `Base`: a recursive field is an \
-             `atomic<...>` with a default of null, or nullable",
+            "`Child` holds itself through `next`, a field of `Base`: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
             "`Bag` holds itself through `all`, a field of `Items` through the elements of a \
              collection outside an `atomic<...>`",
         ]
@@ -573,9 +623,9 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
         "struct Boxed<T> { value: T }\n",
         "struct Listed<T> { values: list<T> }\n",
         "struct Outer<T> { inner: Boxed<T> }\n",
-        "struct Plain { next: atomic<Boxed<Plain>> = null }\n",
-        "struct Chain { next: atomic<Listed<Chain>> = null }\n",
-        "struct Deep { next: atomic<Outer<Listed<Deep>>> = null }\n",
+        "struct Plain { next: atomic<Boxed<Plain>?> = null }\n",
+        "struct Chain { next: atomic<Listed<Chain>?> = null }\n",
+        "struct Deep { next: atomic<Outer<Listed<Deep>>?> = null }\n",
         // No `atomic<...>` round the path: a list two structs down.
         "struct Loose { items: Outer<Listed<Loose>> }\n",
         "struct Direct { inner: Boxed<Direct> }\n",
@@ -592,8 +642,7 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
         [
             "`items` makes `Loose` hold itself through the elements of a collection outside an \
              `atomic<...>`",
-            "`inner` makes `Direct` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null, or nullable",
+            "`inner` makes `Direct` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
         ]
     );
 }
@@ -604,14 +653,14 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
 #[test]
 fn a_recursive_field_passes_each_parameter_on_whole() {
     let checked = module(concat!(
-        "struct Node<T> {\n    next: atomic<Node<T>> = null\n    value: T\n}\n",
-        "struct Fixed<T> {\n    next: atomic<Fixed<i64>> = null\n    value: T\n}\n",
-        "struct Swap<A, B> {\n    other: atomic<Swap<B, A>> = null\n    first: A\n    second: B\n}\n",
+        "struct Node<T> {\n    next: atomic<Node<T>?> = null\n    value: T\n}\n",
+        "struct Fixed<T> {\n    next: atomic<Fixed<i64>?> = null\n    value: T\n}\n",
+        "struct Swap<A, B> {\n    other: atomic<Swap<B, A>?> = null\n    first: A\n    second: B\n}\n",
         // A new type at every step.
-        "struct Grow<T> {\n    next: atomic<Grow<list<T>>> = null\n    value: T\n}\n",
+        "struct Grow<T> {\n    next: atomic<Grow<list<T>>?> = null\n    value: T\n}\n",
         // Through another struct of the cycle.
-        "struct Ping<T> {\n    pong: atomic<Pong<tuple<T, T>>> = null\n    value: T\n}\n",
-        "struct Pong<U> {\n    ping: atomic<Ping<U>> = null\n    value: U\n}\n",
+        "struct Ping<T> {\n    pong: atomic<Pong<tuple<T, T>>?> = null\n    value: T\n}\n",
+        "struct Pong<U> {\n    ping: atomic<Ping<U>?> = null\n    value: U\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -642,7 +691,7 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
         "struct Ring : Shape { inner: Circle }\n",
         // A `Shape` may be a `Group`.
         "struct Group : Shape { first: Shape }\n",
-        "struct Bunch : Shape { members: atomic<list<Shape>> = null }\n",
+        "struct Bunch : Shape { members: atomic<list<Shape>?> = null }\n",
         // Through a struct outside the family.
         "struct Frame { shape: Shape }\n",
         "struct Framed : Shape { frame: Frame }\n",
@@ -657,14 +706,15 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`first` makes `Group` hold itself: a recursive field is an `atomic<...>` with a default \
-         of null, or nullable"
+        "`first` makes `Group` hold itself: a recursive field is optional, its type nullable or \
+         an `atomic<...>` of a nullable type"
     );
 }
 
 /// TYPE-6: a struct that inherits from `Base<i64>` is a `Base<i64>` and
 /// no `Base<str>`, so a field of type `Base<str>` does not hold it. One
-/// that gives its parent a parameter of its own may be any application.
+/// that gives its parent a parameter of its own may be any application
+/// that parameter can stand for.
 #[test]
 fn a_descendant_is_held_by_the_application_it_inherits_from() {
     let checked = module(concat!(
@@ -680,6 +730,52 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "abstract struct Mid<U> : Base<U> { }\n",
         "struct Far : Mid<i64> { far: Base<str> }\n",
         "struct Near : Mid<i64> { near: Base<i64> }\n",
+        // A parameter inside a type is matched there.
+        "struct Listed<U> : Base<list<U>> { other: Base<str> }\n",
+        "struct Inner<U> : Base<list<U>> { inner: Base<list<str>> }\n",
+        // A parameter written twice stands for one thing.
+        "abstract struct Pair<A, B> { both: tuple<A, B> }\n",
+        "struct Twin<U> : Pair<U, U> { other: Pair<i64, str> }\n",
+        "struct Both<U> : Pair<U, U> { same: Pair<i64, i64> }\n",
+        // What a parent between is given is worked out from it.
+        "abstract struct Rows<U> : Base<list<U>> { }\n",
+        "struct Apart : Rows<i64> { apart: Base<list<str>> }\n",
+        "struct Close : Rows<i64> { close: Base<list<i64>> }\n",
+        // TYPE-11: "Omitted minimum equals maximum."
+        "struct Windowed : Base<rolling<i64, 5, 2>> { next: Base<rolling<i64, 5>> }\n",
+        "struct Whole : Base<rolling<i64, 5>> { whole: Base<rolling<i64, 5, 5>> }\n",
+        // LEX-20: a float is the number it denotes, however written.
+        "struct Mark<const N: f64> { width: i64 }\n",
+        "struct Marked : Base<Mark<1.0>> { marked: Base<Mark<1.00>> }\n",
+        "struct Unmarked : Base<Mark<1.0>> { other: Base<Mark<2.0>> }\n",
+        // LEX-2: and a string is its contents.
+        "struct Named<const S: str> { width: i64 }\n",
+        "struct Spelt : Base<Named<\"A\">> { spelt: Base<Named<\"\\u{41}\">> }\n",
+        "struct Unspelt : Base<Named<\"A\">> { other: Base<Named<\"B\">> }\n",
+        // GEN-10: a pack passed on stands for the arguments between
+        // those before it and those after, as many as it admits.
+        "struct Row<...Ts> { width: i64 }\n",
+        "struct Packed<...Us> : Base<Row<Us, i64>> { packed: Base<Row<str, f64, i64>> }\n",
+        "struct Ended<...Us> : Base<Row<Us, i64>> { other: Base<Row<str, f64>> }\n",
+        "struct Counted<...Us{2}> : Base<Row<Us>> { other: Base<Row<str>> }\n",
+        "abstract struct Wide<...Ts> { width: i64 }\n",
+        "struct Two<...Us{2}> : Wide<Us> { two: Wide<i64, str> }\n",
+        "struct Triple<...Us{2}> : Wide<Us> { other: Wide<i64, str, f64> }\n",
+        // EXPR-1: parentheses select grouping, and a literal is the
+        // same inside them.
+        "struct Flag<const B: bool> { width: i64 }\n",
+        "struct Grouped : Base<Flag<true>> { grouped: Base<Flag<(true)>> }\n",
+        "struct Ungrouped : Base<Flag<true>> { other: Base<Flag<(false)>> }\n",
+        "struct Signed : Base<Mark<-1.0>> { signed: Base<Mark<-(1.00)>> }\n",
+        "struct Unsigned : Base<Mark<-1.0>> { other: Base<Mark<1.0>> }\n",
+        // What a parameter given twice stands for is compared in the
+        // same way: by what the types come to (TYPE-11), a parameter
+        // of the struct that has the field being anything.
+        "struct Twice<U> : Pair<U, U> { twice: Pair<rolling<i64, 5>, rolling<i64, 5, 5>> }\n",
+        "struct Apiece<U> : Pair<U, U> { other: Pair<rolling<i64, 5>, rolling<i64, 5, 2>> }\n",
+        "abstract struct Duo<A, B> { both: tuple<A, B> }\n",
+        "struct Loose<U, V> : Duo<U, U> { loose: Duo<list<V>, list<i64>> }\n",
+        "struct Shut<U, V> : Duo<U, U> { other: Duo<list<V>, set<i64>> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -688,6 +784,18 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:5:28 type/field.recursive TYPE-6",
             "m.hgl:8:27 type/field.recursive TYPE-6",
             "m.hgl:11:26 type/field.recursive TYPE-6",
+            "m.hgl:13:35 type/field.recursive TYPE-6",
+            "m.hgl:16:31 type/field.recursive TYPE-6",
+            "m.hgl:19:28 type/field.recursive TYPE-6",
+            "m.hgl:21:40 type/field.recursive TYPE-6",
+            "m.hgl:23:35 type/field.recursive TYPE-6",
+            "m.hgl:26:35 type/field.recursive TYPE-6",
+            "m.hgl:29:45 type/field.recursive TYPE-6",
+            "m.hgl:33:35 type/field.recursive TYPE-6",
+            "m.hgl:36:37 type/field.recursive TYPE-6",
+            "m.hgl:38:36 type/field.recursive TYPE-6",
+            "m.hgl:40:32 type/field.recursive TYPE-6",
+            "m.hgl:43:34 type/field.recursive TYPE-6",
         ]
     );
 }
@@ -704,11 +812,11 @@ fn a_recursive_field_stays_within_its_module() {
             concat!(
                 "module m\n",
                 "use lib::{Shape}\n",
-                "struct Node : Shape { next: atomic<Shape> = null }\n",
+                "struct Node : Shape { next: atomic<Shape?> = null }\n",
                 "struct Leaf : Shape { size: i64 }\n",
                 // An abstract struct of its own module is no way out.
                 "abstract struct Local { }\n",
-                "struct Chain : Local { next: atomic<Local> = null }\n",
+                "struct Chain : Local { next: atomic<Local?> = null }\n",
             ),
         ),
     ]);
@@ -723,29 +831,70 @@ fn a_recursive_field_stays_within_its_module() {
     );
 }
 
-/// TYPE-6, by the owner's statement of 2026-11-15 on hgl_spec issue 21:
-/// "a recursive field must either be atomic or nullable to ensure the
-/// recursion can be broken". A nullable field ends the recursion as an
-/// `atomic<...>` defaulted to null does.
+/// GEN-10: a pack a struct passes on to a parent between is placed
+/// there too, where only some of that parent's arguments are known.
+#[test]
+fn a_pack_is_placed_among_arguments_partly_known() {
+    let checked = module(concat!(
+        "abstract struct Base<T> { value: T }\n",
+        "abstract struct Middle<A, B, C, D> : Base<list<C>> { rest: tuple<A, B, D> }\n",
+        // The two types of `Us` are `A` and `B`, so `C` is `str`.
+        "struct Child<...Us{2}> : Middle<Us, str, i64> { next: Base<list<str>> }\n",
+        "struct Other<...Us{2}> : Middle<Us, i64, str> { next: Base<list<str>> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:49 type/field.recursive TYPE-6"]
+    );
+}
+
+/// TYPE-6: a struct that reaches an abstract struct by two lines of
+/// parents is a descendant of it by either, each with the arguments
+/// that line gives.
+#[test]
+fn a_descendant_is_found_by_each_line_of_parents() {
+    let checked = module(concat!(
+        "abstract struct Base<...Ts> { width: i64 }\n",
+        "abstract struct Left<X> : Base<list<X>> { }\n",
+        "abstract struct Right<Y> : Base<list<Y>> { }\n",
+        "abstract struct Middle<X, Y> : Left<X>, Right<Y> { }\n",
+        "struct ByLeft : Middle<i64, str> { next: Base<list<i64>> }\n",
+        "struct ByRight : Middle<str, i64> { next: Base<list<i64>> }\n",
+        "struct ByNeither : Middle<str, str> { next: Base<list<i64>> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:36 type/field.recursive TYPE-6",
+            "m.hgl:7:37 type/field.recursive TYPE-6",
+        ]
+    );
+}
+
+/// TYPE-6: "So that the recursion can end, a recursive field is
+/// optional (TYPE-4), `Node?` or `atomic<Node?>`." It needs no default.
 #[test]
 fn a_recursive_field_may_be_nullable() {
     let checked = module(concat!(
         "struct Link { next: Link? }\n",
         "struct Paired { other: tuple<Paired, i64>? }\n",
         "struct Left { right: Right? }\n",
-        "struct Right { left: atomic<Left> = null }\n",
+        "struct Right { left: atomic<Left?> = null }\n",
         // A collection outside an `atomic<...>` is on the path still.
         "struct Listed { items: list<Listed>? }\n",
         // Nullable inside the field's type is not the field's type.
         "struct Inner { items: tuple<Inner?, i64> }\n",
+        // An `atomic<...>` of a nullable type is optional, and so is
+        // one that is itself followed by `?` (TYPE-14).
         "struct Snapshot { next: atomic<Snapshot?> }\n",
+        "struct Chain { next: atomic<Chain>? }\n",
+        "struct Forest { trees: atomic<list<Forest>>? = null }\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:6:17 type/field.recursive TYPE-6",
             "m.hgl:7:16 type/field.recursive TYPE-6",
-            "m.hgl:8:19 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -753,20 +902,17 @@ fn a_recursive_field_may_be_nullable() {
         [
             "`items` makes `Listed` hold itself through the elements of a collection outside an \
              `atomic<...>`",
-            "`items` makes `Inner` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null, or nullable",
-            "`next` makes `Snapshot` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null, or nullable",
+            "`items` makes `Inner` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
         ]
     );
 }
 
-/// TYPE-6: "Descendants cannot remove that null default." A struct holds
+/// TYPE-6: "Descendants cannot remove a null default it has." A struct holds
 /// itself through a parent's field as through its own.
 #[test]
 fn a_descendant_keeps_a_recursive_fields_null() {
     let checked = module(concat!(
-        "abstract struct Linked { next: atomic<Linked> = null }\n",
+        "abstract struct Linked { next: atomic<Linked?> = null }\n",
         "struct Item : Linked { value: i64 }\n",
         "struct Kept : Linked { next = null }\n",
         "struct Removed : Linked { next = make() }\n",
@@ -778,15 +924,17 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         "struct Ended : Chain { next = make() }\n",
         // A generic parent's field is recursive in the struct that
         // gives it itself, and in no other.
-        "abstract struct Base<T> { next: atomic<T> = null }\n",
+        "abstract struct Base<T> { next: atomic<T?> = null }\n",
         "struct Node : Base<Node> { }\n",
         "struct Value : Base<i64> { next = 0 }\n",
         "struct Loop : Base<Loop> { next = make() }\n",
         // The default in force is the last override on the way down.
         "abstract struct Middle<T> : Base<T> { next = make() }\n",
         "struct Below : Middle<Below> { }\n",
-        // `(null)` is `null`.
-        "struct Grouped { next: atomic<Grouped> = (null) }\n",
+        // Declaring the field again with a null default restores it,
+        // and with another removes it.
+        "struct Restored : Middle<Restored> { next: atomic<Restored?> = null }\n",
+        "struct Redeclared : Linked { next: atomic<Linked?> = make() }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -795,17 +943,18 @@ fn a_descendant_keeps_a_recursive_fields_null() {
             "m.hgl:6:24 type/field.recursive TYPE-6",
             "m.hgl:13:28 type/field.recursive TYPE-6",
             "m.hgl:15:16 type/field.recursive TYPE-6",
+            "m.hgl:17:30 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
         messages(&checked),
         [
             "`next` is a recursive field, and its default stays null",
-            "`inner` makes `Holder` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null, or nullable",
+            "`inner` makes `Holder` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
             "`next` is a recursive field, and its default stays null",
-            "`Below` holds itself through `next`, a field of `Base`: a recursive field is an \
-             `atomic<...>` with a default of null, or nullable",
+            "`Below` holds itself through `next`, a field of `Base`: a struct between has \
+             removed its null default",
+            "`next` is a recursive field, and its default stays null",
         ]
     );
 }

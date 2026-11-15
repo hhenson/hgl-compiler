@@ -286,7 +286,7 @@ What the pass checks as it reads:
 | A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
 | An ordinary value type | TYPE-12, FN-1, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a value function's parameters and result, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
 | `signal` | TYPE-12 | The whole type of a temporal function's input, or of each input of a positional pack. Not a local's annotation or an anonymous function's parameter |
-| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout: `ref<f64>?`, `rolling<f64, 5>?` and `list<ref<f64>>?` are rejected. A set's element and a dictionary's key take no `?` |
+| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal function's input, where `ref<f64>?`, `rolling<f64, 5>?`, `atomic<Quote>?` and `signal?` are inputs that may be omitted, and of a struct field, which is then optional. In a result, a local's annotation or a part of another type they are rejected. A set's element and a dictionary's key take no `?` |
 | A list's size | TYPE-10 | A count that is not negative, or `unbounded` |
 | A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds. A minimum equal to the maximum is the window with none written |
 | A default | UNIT-8 | Any parameter but a pack may have one. A temporal input with one keeps its temporal type; whether the default can be wired as a constant of that type is for the pass that evaluates constants |
@@ -313,11 +313,12 @@ The declarations are then read against one another:
 | --- | --- | --- |
 | A parent | TYPE-3 | An abstract struct, listed once. A concrete struct, an enum, a native type or a generic parameter is rejected |
 | Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
-| A field of a struct and of a parent | TYPE-4 | The same type and optionality, the parent's generic arguments standing for its parameters. A null default makes a field optional |
-| A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
+| A field of a struct and of a parent | TYPE-4 | The same type, and so the same optionality, the parent's generic arguments standing for its parameters |
+| A field two parents give | TYPE-4 | The same type. One field reached by two paths is one field |
+| A default of null | TYPE-4 | Only on an optional field: one whose type is written `T?`, `atomic<Node>?` included, or an `atomic<...>` of a nullable type, `atomic<T?>`. For `name = null` the type is the one the parent gives the field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
-| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, or through a nullable field. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
+| A struct that holds itself | TYPE-6 | Through an optional field: `Node?`, `atomic<Node?>` or `atomic<Node>?`. A null default the field is declared with is kept by the structs below. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
 A struct holds the structs its fields hold: its own fields and those it
@@ -326,6 +327,15 @@ of the parent's parameters. A field whose type is an abstract struct
 holds every struct that inherits from it, since its value is one of
 them: each that may be the application written, so `struct Child :
 Base<i64>` is held by a `Base<i64>` and not by a `Base<str>`. A
+parameter of the child stands for one thing wherever the child writes
+it, and is matched inside a type: `struct Child<U> : Base<U, U>` is not
+held by a `Base<i64, str>`, nor `struct Child<U> : Base<list<U>>` by a
+`Base<str>`. Constant arguments are compared by what they come to: a
+window with no minimum written has its maximum for one (TYPE-11), and
+`1.0` is `1.00` (LEX-20). One type pack a child passes on stands for
+the arguments between those before it and those after, as many as its
+cardinality admits (GEN-10); where two are passed on, or the field's
+type passes one on, the child may be held. A
 recursive field stays within its module: a struct of another module is
 reached back only through an abstract struct declared there, and that
 is rejected. A field holds every struct its type names,
@@ -357,8 +367,8 @@ else, under the catalogue's `number.integer_range`.
 Each has a row of the catalogue: `struct.parent`,
 `struct.duplicate_parent`, `struct.inheritance_cycle`, `field.conflict`,
 `field.not_inherited`, `field.duplicate`, `field.recursive`,
-`enum.value`, `enum.duplicate_value`, `enum.overflow` and
-`enum.duplicate_member`.
+`field.null_default`, `enum.value`, `enum.duplicate_value`,
+`enum.overflow` and `enum.duplicate_member`.
 
 ### Generic kinds
 
@@ -381,7 +391,7 @@ supplies no type for it is rejected, which is for the pass that reads
 calls. A use in a body does not settle a kind: the rule infers it "from
 signature positions and constraints".
 Neither does being handed on to a parameter that nothing settles: in
-`struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
+`struct Node<T> { next: atomic<Node<T>?> = null }` nothing says what `T`
 is. That is reported at the struct, and not again at each function
 that is given one.
 
@@ -397,16 +407,14 @@ With the kinds known, each generic argument is read for the parameter
 it is given to (GEN-14): a value where a type goes, or a type where a
 value goes, is rejected. A lone name is read as a type by the parser;
 here it is a constant when it names a value parameter, or a plain one
-given where a value goes.
+given where a value goes. A name `each T in ...` binds is a type.
 
-These three have no catalogue row yet and carry codes local to this
-compiler (`hgl_analyser::codes::local`), proposed in
-[hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
+Each has a row of the catalogue:
 
-| Local code | Rejection |
+| Code | Rejection |
 | --- | --- |
 | `generic.kind_conflict` | A generic parameter used as a type and as a value |
-| `generic.kind_unresolved` | A generic parameter nothing in the signature or a constraint names |
+| `generic.kind_unresolved` | A struct's generic parameter that no field or constraint names |
 | `generic.argument_kind` | A generic argument of the other kind than its parameter |
 
 ### Order
@@ -513,18 +521,17 @@ condition but names no code). Only a catalogued code may satisfy
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
-the limit is the compiler's, not the language's. The analyser reports 28
+the limit is the compiler's, not the language's. The analyser reports 53
 codes, all catalogued (`hgl_analyser::codes`), and its tests check each
 diagnostic's category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
 
-Where two catalogue rows cover one condition the lexer takes one reading,
-listed in [hgl_spec issue 11](https://github.com/hhenson/hgl_spec/issues/11)
-for the specification to decide:
+Where two catalogue rows could cover one condition, the specification
+names one (LEX-12, LEX-25):
 
-| Condition | Code used |
+| Condition | Code |
 | --- | --- |
 | Text block that reaches the end of the file | `string.unclosed` |
 | Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |

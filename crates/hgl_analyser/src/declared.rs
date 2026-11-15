@@ -5,11 +5,11 @@
 //!
 //! * a struct's parents are abstract structs (TYPE-3), and no struct
 //!   inherits from itself (TYPE-6);
-//! * the fields a struct has from its parents and its own agree in type
-//!   and optionality, and `name = value` overrides a field a parent
-//!   declares (TYPE-4);
+//! * the fields a struct has from its parents and its own agree in
+//!   type, `name = value` overrides a field a parent declares, and only
+//!   an optional field's default is null (TYPE-4);
 //! * a struct that refers back to itself does so through an optional
-//!   `atomic<...>` field defaulted to null (TYPE-6);
+//!   field, `T?` or `atomic<T?>` (TYPE-6);
 //! * an enum's members are numbered, each number an `i64` no other
 //!   member has (TYPE-7).
 //!
@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_lexer::literal::{decode_float, decode_string};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 use petgraph::algo::kosaraju_scc;
@@ -55,8 +56,21 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         parents: HashMap::new(),
         fields: HashMap::new(),
         children: HashMap::new(),
+        packs: HashMap::new(),
     };
     let ids = structs.ids();
+    for &id in &ids {
+        let packs: Vec<(Location, Cardinality)> = structs
+            .struct_type(id)
+            .into_iter()
+            .flat_map(|read| &read.generics)
+            .filter_map(|generic| match generic.kind {
+                GenericKind::Pack { minimum, maximum } => Some((generic.at, (minimum, maximum))),
+                _ => None,
+            })
+            .collect();
+        structs.packs.extend(packs);
+    }
     for &id in &ids {
         let parents = structs.parents_of(id);
         for parent in &parents {
@@ -214,10 +228,11 @@ struct Introduced {
     /// Its type, with the generic arguments of the path it came by put
     /// in place of the parameters.
     ty: Type,
-    /// True when its default is null (TYPE-4).
-    optional: bool,
-    /// True when the default a construction takes is null: the field's
-    /// own, or the last override of it on the way down (TYPE-4).
+    /// True when the default it is declared with is null.
+    declared_null: bool,
+    /// True when the default a construction takes is null: the one it
+    /// is declared with, or the last a struct on the way down gives it
+    /// (TYPE-4).
     null_default: bool,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
@@ -247,9 +262,12 @@ struct FieldEdge {
     /// The field's type, with the arguments of the path it came by in
     /// place.
     ty: Type,
-    /// True when the field has the form TYPE-6 gives a recursive one:
-    /// an `atomic<...>` with a default of null.
+    /// True when the field is optional (TYPE-4), as TYPE-6 has a
+    /// recursive one.
     in_form: bool,
+    /// False when the field is declared with a null default and a
+    /// struct on the way down has given it another.
+    kept: bool,
     /// The structs a value of the field's type holds, each with whether
     /// it is reached through the elements of a collection.
     named: Vec<Held>,
@@ -274,6 +292,8 @@ struct Structs<'a> {
     /// The structs that inherit from each abstract struct, each with
     /// the arguments it gives that parent.
     children: HashMap<Id, Vec<(Id, Vec<Argument>)>>,
+    /// The type packs the structs declare.
+    packs: Packs,
 }
 
 /// A struct a value of some type holds.
@@ -297,6 +317,10 @@ const EXPANSIONS: u32 = 10_000;
 /// How many generic structs, one inside another, are followed for one
 /// field's type.
 const DEPTH: usize = 64;
+
+/// How many applications of one struct have their children looked at
+/// when the descendants of an abstract struct are found.
+const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
 fn names_parameter(ty: &Type) -> bool {
@@ -484,9 +508,20 @@ fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     substitute(ty, map)
 }
 
-/// `required` or `optional`.
-fn optionality(optional: bool) -> &'static str {
-    if optional { "optional" } else { "required" }
+/// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
+/// `atomic<...>` of a nullable type, `atomic<T?>`."
+///
+/// `None` when the type, or what an `atomic<...>` holds, is not known.
+fn is_optional(ty: &Type) -> Option<bool> {
+    match ty {
+        Type::Unknown => None,
+        Type::Nullable(_) => Some(true),
+        Type::Atomic(inner) => match inner.as_ref() {
+            Type::Unknown => None,
+            inner => Some(matches!(inner, Type::Nullable(_))),
+        },
+        _ => Some(false),
+    }
 }
 
 impl Structs<'_> {
@@ -747,21 +782,20 @@ impl Structs<'_> {
                     ..field.clone()
                 };
                 // The same field by another path is one field.
-                let listed = inherited.iter().any(|other| {
-                    other.origin == field.origin
-                        && other.optional == field.optional
-                        && other.ty == field.ty
-                });
+                let listed = inherited
+                    .iter()
+                    .any(|other| other.origin == field.origin && other.ty == field.ty);
                 if !listed {
                     inherited.push(field);
                 }
             }
         }
         let mut all = inherited.clone();
-        // `name = value` changes the default a construction takes for a
-        // field a parent has, for this struct and those below it.
+        // A default this struct gives a field a parent has, by
+        // `name = value` or by declaring the field again, is the one a
+        // construction takes, for this struct and those below it.
         if let Some(read) = self.struct_type(id) {
-            for field in read.fields.iter().filter(|field| field.ty.is_none()) {
+            for field in read.fields.iter().filter(|field| field.has_default) {
                 for inherited in all.iter_mut().filter(|parent| parent.name == field.name) {
                     inherited.null_default = field.null_default;
                 }
@@ -774,7 +808,7 @@ impl Structs<'_> {
                     all.push(Introduced {
                         name: field.name.clone(),
                         ty: ty.clone(),
-                        optional: field.null_default,
+                        declared_null: field.null_default,
                         null_default: field.null_default,
                         origin: (id, index),
                         at: field.at,
@@ -838,9 +872,13 @@ impl Structs<'_> {
     }
 
     /// TYPE-4: "A typed field introduction fixes its type and
-    /// optionality. A null default marks it optional. An untyped
-    /// inherited override changes only its construction default ...
-    /// Parent conflicts in type/optionality are errors."
+    /// optionality. A field is optional when its type is nullable ...
+    /// and only an optional field's default may be null. An untyped
+    /// inherited override changes only the construction default of a
+    /// field a parent has ... a conflict is an error."
+    ///
+    /// Optionality follows from the type, so two fields that agree in
+    /// type agree in it.
     fn fields(&mut self, id: Id) {
         let Some(read) = self.struct_type(id) else {
             return;
@@ -855,19 +893,15 @@ impl Structs<'_> {
             let conflict = inherited[..index].iter().find(|earlier| {
                 earlier.name == later.name
                     && earlier.via != later.via
-                    && differs(earlier, &later.ty, later.optional)
+                    && differs(earlier, &later.ty)
             });
             if let Some(earlier) = conflict {
                 problems.push((
                     codes::FIELD_CONFLICT,
                     self.parents[&id][later.via].at,
                     format!(
-                        "`{name}` has `{}` from two parents: {} `{}` and {} `{}`",
-                        later.name,
-                        optionality(earlier.optional),
-                        earlier.ty,
-                        optionality(later.optional),
-                        later.ty
+                        "`{name}` has `{}` from two parents: `{}` and `{}`",
+                        later.name, earlier.ty, later.ty
                     ),
                     earlier.at,
                 ));
@@ -894,23 +928,46 @@ impl Structs<'_> {
                 .filter(|parent| parent.name == field.name)
                 .peekable();
             let inherits = from_parents.peek().is_some();
+            // "Only an optional field's default may be null." The type
+            // is the member's own, or for `name = null` the one each
+            // parent gives the field, this struct's arguments in place.
+            if field.null_default {
+                let required = match &field.ty {
+                    Some(ty) => (is_optional(ty) == Some(false)).then(|| (ty.clone(), field.at)),
+                    None => inherited
+                        .iter()
+                        .filter(|parent| parent.name == field.name)
+                        .find(|parent| is_optional(&parent.ty) == Some(false))
+                        .map(|parent| (parent.ty.clone(), parent.at)),
+                };
+                if let Some((ty, declared)) = required {
+                    problems.push((
+                        codes::FIELD_NULL_DEFAULT,
+                        field.default_at.unwrap_or(field.at),
+                        format!(
+                            "`{}` is `{ty}`, which is not optional, and its default is \
+                             null: an optional field's type is nullable, `T?`, or an \
+                             `atomic<T?>`",
+                            field.name
+                        ),
+                        declared,
+                    ));
+                }
+            }
             match (&field.ty, inherits) {
                 // A field of its own.
                 (Some(_), false) => {}
                 (Some(ty), true) => {
                     // The first of them this one is not. One whose type
                     // is not known is passed over: another may be.
-                    let conflict =
-                        from_parents.find(|parent| differs(parent, ty, field.null_default));
+                    let conflict = from_parents.find(|parent| differs(parent, ty));
                     if let Some(parent) = conflict {
                         problems.push((
                             codes::FIELD_CONFLICT,
                             field.at,
                             format!(
-                                "`{}` is {} `{ty}` here and {} `{}` in `{}`",
+                                "`{}` is `{ty}` here and `{}` in `{}`",
                                 field.name,
-                                optionality(field.null_default),
-                                optionality(parent.optional),
                                 parent.ty,
                                 self.declaration(parent.origin.0).name
                             ),
@@ -936,6 +993,7 @@ impl Structs<'_> {
             let note = match code {
                 codes::FIELD_NOT_INHERITED => "the struct",
                 codes::FIELD_DUPLICATE => "first declared here",
+                codes::FIELD_NULL_DEFAULT => "the field",
                 _ => "the other declaration",
             };
             self.diagnostics.emit(
@@ -977,7 +1035,13 @@ impl Structs<'_> {
         in_collection: bool,
         found: &mut Vec<Held>,
     ) {
-        let mut seen: HashSet<Id> = HashSet::new();
+        // The structs found, each added once.
+        let mut held: HashSet<Id> = HashSet::new();
+        // What each struct was applied to when its children were looked
+        // at. A struct reached by two lines of parents is a descendant
+        // by either, each with what that line gives it: its children
+        // are looked at again for an application not yet followed.
+        let mut followed: HashMap<Id, Vec<Vec<Option<Argument>>>> = HashMap::new();
         // The structs whose children are still to look at, each with
         // what is known of the arguments it is applied to: one for each
         // of its generic parameters, or `None` where it is not known.
@@ -989,47 +1053,91 @@ impl Structs<'_> {
             };
             for (child, applied) in children {
                 // The child is this application of its parent when each
-                // argument it gives the parent may be the one known. A
-                // wrong count has been reported; what is there is
+                // argument it gives the parent may be the one known,
+                // its own parameters standing for one thing throughout.
+                // A wrong count has been reported; what is there is
                 // compared.
-                let fits = given.iter().zip(applied).all(|(given, applied)| {
-                    given.as_ref().is_none_or(|given| may_be(given, applied))
-                });
-                // `insert` is false for a struct already seen.
-                if !fits || !seen.insert(*child) {
+                let mut matching = Matching {
+                    bound: Vec::new(),
+                    packs: &self.packs,
+                    open: false,
+                };
+                // What is known of the parent's arguments is in the
+                // places of what the child writes, but where the parent
+                // has a type pack of its own: one entry then stands
+                // for a run of arguments.
+                let unplaced = given.iter().any(Option::is_none)
+                    && self.struct_type(parent).is_some_and(|read| {
+                        read.generics
+                            .iter()
+                            .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+                    });
+                let packs = &self.packs;
+                let pack_of = |argument: &Argument| match argument {
+                    Argument::Type(ty) => pack_of(ty, packs),
+                    Argument::Constant(_) => None,
+                };
+                // An argument not known may be anything.
+                let mut each = |given: &Option<Argument>, applied: &Argument| {
+                    given
+                        .as_ref()
+                        .is_none_or(|given| may_be(given, applied, &mut matching))
+                };
+                let fits = if !unplaced {
+                    in_sequence(
+                        &given,
+                        applied,
+                        &|given| given.as_ref().is_some_and(|given| pack_of(given).is_some()),
+                        &pack_of,
+                        &mut each,
+                    )
+                } else if applied.iter().any(|applied| pack_of(applied).is_some()) {
+                    // A pack passed on to a parent that has one: the
+                    // places are not known.
+                    true
+                } else {
+                    given
+                        .iter()
+                        .zip(applied)
+                        .all(|(given, applied)| each(given, applied))
+                };
+                let bound = matching.bound;
+                if !fits {
                     continue;
                 }
-                found.push(Held {
-                    id: *child,
-                    in_collection,
-                    written: id,
-                });
+                // `insert` is false for a struct already there.
+                if held.insert(*child) {
+                    found.push(Held {
+                        id: *child,
+                        in_collection,
+                        written: id,
+                    });
+                }
                 // What the child is applied to, for its own children:
-                // a parameter it passes straight on to the parent is
-                // what the parent is given there.
+                // what was found for each of its parameters.
                 let passed_on: Vec<Option<Argument>> = self
                     .struct_type(*child)
                     .map(|read| {
                         read.generics
                             .iter()
                             .map(|generic| {
-                                applied.iter().zip(&given).find_map(|(applied, given)| {
-                                    let names_it = match applied {
-                                        Argument::Type(Type::Parameter { at, .. }) => {
-                                            *at == generic.at
-                                        }
-                                        Argument::Constant(constant) => matches!(
-                                            &constant.value,
-                                            ConstantValue::Parameter { at, .. } if *at == generic.at
-                                        ),
-                                        _ => false,
-                                    };
-                                    if names_it { given.clone() } else { None }
-                                })
+                                bound
+                                    .iter()
+                                    .find(|(at, _)| *at == generic.at)
+                                    .map(|(_, argument)| argument.clone())
                             })
                             .collect()
                     })
                     .unwrap_or_default();
+                // An application already followed finds nothing new,
+                // and a struct is followed a bounded number of times,
+                // so that structs that inherit from one another, which
+                // have been reported, end.
+                let applications = followed.entry(*child).or_default();
+                if applications.contains(&passed_on) || applications.len() >= APPLICATIONS {
+                    continue;
+                }
+                applications.push(passed_on.clone());
                 to_do.push((*child, passed_on));
             }
         }
@@ -1133,10 +1241,11 @@ impl Structs<'_> {
         }
     }
 
-    /// TYPE-6: "Recursive struct edges stay within their defining
-    /// module, use an optional `atomic<...>` field defaulted to null ...
-    /// Descendants cannot remove that null default. Cycles through ...
-    /// collection elements are rejected."
+    /// TYPE-6: "Recursive fields stay within their defining module. So
+    /// that the recursion can end, a recursive field is optional
+    /// (TYPE-4) ... Descendants cannot remove a null default it has.
+    /// Cycles through ... collection elements outside an `atomic<...>`"
+    /// are rejected.
     fn recursion(&mut self, ids: &[Id]) {
         // A graph with a node for each struct, and an edge from each to
         // every struct it holds: the structs its fields hold, those it
@@ -1168,12 +1277,11 @@ impl Structs<'_> {
                         at: field.at,
                         via: field.via,
                         ty: field.ty.clone(),
-                        // TYPE-6: an `atomic<...>` defaulted to null,
-                        // or a nullable type, so that the recursion can
-                        // end. The default is the one in force, which
-                        // an override on the way down may have changed.
-                        in_form: (matches!(field.ty, Type::Atomic(_)) && field.null_default)
-                            || matches!(field.ty, Type::Nullable(_)),
+                        // TYPE-6: optional, so that the recursion can
+                        // end. The type is the one this struct has the
+                        // field with, its parents' arguments in place.
+                        in_form: is_optional(&field.ty) != Some(false),
+                        kept: !field.declared_null || field.null_default,
                         named,
                     });
                 }
@@ -1215,6 +1323,13 @@ impl Structs<'_> {
             // `atomic<...>`" are rejected; inside it a collection is
             // part of one snapshot.
             let through_collection = back.iter().any(|held| held.in_collection);
+            // A struct that itself gives the field a default other than
+            // null is reported for that, below, where it writes it.
+            let removed_here = self.struct_type(edge.owner).is_some_and(|read| {
+                read.fields.iter().any(|field| {
+                    field.has_default && !field.null_default && field.name == edge.name
+                })
+            });
             if let Some(held) = abroad {
                 faulty.push((
                     edge,
@@ -1233,8 +1348,15 @@ impl Structs<'_> {
             } else if !edge.in_form {
                 faulty.push((
                     edge,
-                    ": a recursive field is an `atomic<...>` with a default of null, or nullable"
+                    ": a recursive field is optional, its type nullable or an `atomic<...>` \
+                     of a nullable type"
                         .to_string(),
+                ));
+            } else if !edge.kept && !removed_here {
+                // "Descendants cannot remove a null default it has."
+                faulty.push((
+                    edge,
+                    ": a struct between has removed its null default".to_string(),
                 ));
             } else if let Some(grown) = grown(&edge.ty, &|id| group_of.get(&id) == Some(&group)) {
                 // "Such a field gives a struct of its cycle each
@@ -1253,16 +1375,6 @@ impl Structs<'_> {
         let mut reports = Vec::new();
         for (edge, fault) in &faulty {
             let owner = &self.declaration(edge.owner).name;
-            // A struct that itself changes the field's default is
-            // reported for that, below, where it writes the default.
-            let overridden_here = self.struct_type(edge.owner).is_some_and(|read| {
-                read.fields.iter().any(|field| {
-                    field.ty.is_none() && !field.null_default && field.name == edge.name
-                })
-            });
-            if overridden_here {
-                continue;
-            }
             // A field from a parent is at fault where it is declared
             // when its type there holds this struct whatever the
             // arguments; otherwise the fault is in what this struct
@@ -1297,17 +1409,17 @@ impl Structs<'_> {
             ));
         }
 
-        // "Descendants cannot remove that null default."
+        // "Descendants cannot remove a null default it has."
         for &id in ids {
             let Some(read) = self.struct_type(id) else {
                 continue;
             };
-            // Only a struct that overrides a default with something
-            // other than null has anything to check.
+            // Only a struct that gives a field a default other than
+            // null has anything to check.
             if !read
                 .fields
                 .iter()
-                .any(|field| field.ty.is_none() && !field.null_default)
+                .any(|field| field.has_default && !field.null_default)
             {
                 continue;
             }
@@ -1316,14 +1428,13 @@ impl Structs<'_> {
             // one to keep null when it is recursive in any of them.
             let line = self.line(id);
             for field in &read.fields {
-                let overrides_recursive = field.ty.is_none()
+                let overrides_recursive = field.has_default
                     && !field.null_default
-                    // Only a field that has the null default has one to
-                    // keep: a nullable recursive field ends the
-                    // recursion by its type.
+                    // Only a field declared with a null default has one
+                    // to keep.
                     && inherited.iter().any(|parent| {
                         parent.name == field.name
-                            && parent.optional
+                            && parent.declared_null
                             && recursive.iter().any(|(owner, origin)| {
                                 *origin == parent.origin && line.contains(owner)
                             })
@@ -1355,27 +1466,330 @@ impl Structs<'_> {
     }
 }
 
+/// What a struct's generic parameters stand for when it is taken to be
+/// one application of its parent: each parameter, by where it is
+/// declared, with the argument found for it.
+type Bindings = Vec<(Location, Argument)>;
+
+/// The fewest and the most types a type pack holds (GEN-10); `None`
+/// for no most.
+type Cardinality = (u64, Option<u64>);
+
+/// Every type pack the program's structs declare, by where it is
+/// declared, with its cardinality.
+type Packs = HashMap<Location, Cardinality>;
+
+/// What matching a struct against one application of its parent has
+/// found, and what it reads.
+struct Matching<'a> {
+    /// What has been found for the struct's parameters.
+    bound: Bindings,
+    /// The type packs of the program's structs.
+    packs: &'a Packs,
+    /// True when both sides are written by the struct that has the
+    /// field: a parameter on either side may then be anything, and
+    /// nothing is bound.
+    open: bool,
+}
+
+/// True when a constant is one this pass cannot compare: it names a
+/// generic parameter, or is an expression not evaluated.
+fn is_open(constant: &Constant) -> bool {
+    matches!(
+        constant.value,
+        ConstantValue::Parameter { .. } | ConstantValue::Unevaluated
+    )
+}
+
 /// True when the argument a struct gives its parent, `applied`, may be
-/// the argument `given` that a type writes for that parent. One that
-/// names a generic parameter may be anything.
-fn may_be(given: &Argument, applied: &Argument) -> bool {
+/// the argument `given` that a type writes for that parent. `bound` is
+/// what has been found for the struct's parameters, and gains what
+/// this argument finds.
+///
+/// A parameter of the struct stands for whatever is given in its
+/// place, and for one thing wherever it is written: with
+/// `struct Child<U> : Base<U, U>`, a `Base<i64, str>` is no `Child`. One
+/// inside a type is matched there: with `Base<list<U>>`, a `Base<str>`
+/// is no `Child`. What is not known, and a parameter of the struct that
+/// writes `given`, may be anything.
+fn may_be(given: &Argument, applied: &Argument, found: &mut Matching<'_>) -> bool {
     match (given, applied) {
-        (Argument::Type(given), Argument::Type(applied)) => {
-            names_parameter(given) || names_parameter(applied) || agree(given, applied)
-        }
+        (Argument::Type(given), Argument::Type(applied)) => type_may_be(given, applied, found),
         (Argument::Constant(given), Argument::Constant(applied)) => {
-            let open = |constant: &Constant| {
-                matches!(
-                    constant.value,
-                    ConstantValue::Parameter { .. } | ConstantValue::Unevaluated
-                )
-            };
-            open(given) || open(applied) || given == applied
+            constant_may_be(given, applied, found)
         }
         // A type against a constant has been reported as the wrong
         // kind of argument.
         _ => true,
     }
+}
+
+/// The cardinality of the type pack `ty` names, when it names one.
+fn pack_of(ty: &Type, packs: &Packs) -> Option<Cardinality> {
+    match ty {
+        Type::Parameter { at, .. } => packs.get(at).copied(),
+        _ => None,
+    }
+}
+
+/// [`may_be`], for the arguments one generic type is given.
+fn arguments_may_be(given: &[Argument], applied: &[Argument], found: &mut Matching<'_>) -> bool {
+    let packs = found.packs;
+    let pack_of = |argument: &Argument| match argument {
+        Argument::Type(ty) => pack_of(ty, packs),
+        Argument::Constant(_) => None,
+    };
+    in_sequence(
+        given,
+        applied,
+        &|given| pack_of(given).is_some(),
+        &pack_of,
+        &mut |given, applied| may_be(given, applied, found),
+    )
+}
+
+/// True when the sequence a struct writes, `applied`, may be the
+/// sequence `given`: the arguments of a generic type, or the elements
+/// of a tuple. `passes_on` says whether an item of `given` passes on a
+/// type pack, `pack_of` gives the cardinality of one of `applied` that
+/// does, and `each` matches one item with another.
+///
+/// A type pack passed on stands for a run of items (GEN-10), as many
+/// as the items before and after it leave, which is a number the pack
+/// admits. With `struct Child<...Us> : Base<Row<Us, i64>>`, a
+/// `Base<Row<str, f64, i64>>` may be a `Child`, `Us` holding `str` and
+/// `f64`; a `Base<Row<str, f64>>` is none. Which types a pack holds is
+/// not recorded. Where `given` passes on a pack, or `applied` two, the
+/// places are not known and the sequences may be one.
+fn in_sequence<G, A>(
+    given: &[G],
+    applied: &[A],
+    passes_on: &dyn Fn(&G) -> bool,
+    pack_of: &dyn Fn(&A) -> Option<Cardinality>,
+    each: &mut dyn FnMut(&G, &A) -> bool,
+) -> bool {
+    if given.iter().any(passes_on) {
+        return true;
+    }
+    let mut passed_on = applied
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| pack_of(item).map(|cardinality| (index, cardinality)));
+    let Some((index, (minimum, maximum))) = passed_on.next() else {
+        // No pack: item for item.
+        return given.len() == applied.len()
+            && given
+                .iter()
+                .zip(applied)
+                .all(|(given, applied)| each(given, applied));
+    };
+    if passed_on.next().is_some() {
+        return true;
+    }
+    // The items after the pack are the last of `given`.
+    let after = applied.len() - index - 1;
+    let Some(held) = given.len().checked_sub(index + after) else {
+        return false;
+    };
+    let held = held as u64;
+    if held < minimum || maximum.is_some_and(|maximum| held > maximum) {
+        return false;
+    }
+    let before = given[..index].iter().zip(&applied[..index]);
+    let last = given[given.len() - after..]
+        .iter()
+        .zip(&applied[index + 1..]);
+    before
+        .chain(last)
+        .all(|(given, applied)| each(given, applied))
+}
+
+/// [`may_be`], for a type.
+fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
+    match (given, applied) {
+        // In what a struct gives its parent, a parameter is the
+        // struct's own.
+        (_, Type::Parameter { at, .. }) => {
+            found.open || bind(*at, Argument::Type(given.clone()), found)
+        }
+        (Type::Unknown | Type::Parameter { .. }, _) | (_, Type::Unknown) => true,
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: other_module,
+                declaration: other_declaration,
+                arguments: other_arguments,
+                ..
+            },
+        ) => {
+            module == other_module
+                && declaration == other_declaration
+                && arguments_may_be(arguments, other_arguments, found)
+        }
+        (Type::Tuple(given), Type::Tuple(applied)) => {
+            let packs = found.packs;
+            in_sequence(
+                given,
+                applied,
+                &|ty| pack_of(ty, packs).is_some(),
+                &|ty| pack_of(ty, packs),
+                &mut |given, applied| type_may_be(given, applied, found),
+            )
+        }
+        (
+            Type::List { element, size },
+            Type::List {
+                element: other_element,
+                size: other_size,
+            },
+        ) => {
+            let sizes = match (size, other_size) {
+                (Some(size), Some(other_size)) => constant_may_be(size, other_size, found),
+                (size, other_size) => size.is_none() == other_size.is_none(),
+            };
+            sizes && type_may_be(element, other_element, found)
+        }
+        (Type::Set(given), Type::Set(applied))
+        | (Type::Ref(given), Type::Ref(applied))
+        | (Type::Atomic(given), Type::Atomic(applied))
+        | (Type::Delta(given), Type::Delta(applied))
+        | (Type::Nullable(given), Type::Nullable(applied)) => type_may_be(given, applied, found),
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: other_key,
+                value: other_value,
+            },
+        ) => type_may_be(key, other_key, found) && type_may_be(value, other_value, found),
+        (
+            Type::Rolling {
+                value,
+                maximum,
+                minimum,
+            },
+            Type::Rolling {
+                value: other_value,
+                maximum: other_maximum,
+                minimum: other_minimum,
+            },
+        ) => {
+            // TYPE-11: "Omitted minimum equals maximum." A window with
+            // none written has its maximum for one.
+            let minimum = minimum.as_ref().unwrap_or(maximum);
+            let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
+            constant_may_be(maximum, other_maximum, found)
+                && constant_may_be(minimum, other_minimum, found)
+                && type_may_be(value, other_value, found)
+        }
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: other_value,
+                error: other_error,
+            },
+        ) => type_may_be(value, other_value, found) && type_may_be(error, other_error, found),
+        // Two scalars, or two types of different forms.
+        (given, applied) => given == applied,
+    }
+}
+
+/// [`may_be`], for a constant.
+fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_>) -> bool {
+    if let ConstantValue::Parameter { at, .. } = &applied.value {
+        return found.open || bind(*at, Argument::Constant(given.clone()), found);
+    }
+    may_be_one(given, applied)
+}
+
+/// True when two constants may be one value.
+///
+/// One that names a generic parameter, or is an expression not
+/// evaluated, may be anything. Two literals whose values this pass does
+/// not hold are read through the parentheses and the minus around them
+/// (EXPR-1): `(true)` is `true`. Two floats are compared as the numbers
+/// they denote (LEX-20) and two strings as their contents (LEX-2), so
+/// `1.0` is `1.00`; a bool or `null` is as it is written; and two dates
+/// or times written differently may be one.
+fn may_be_one(left: &Constant, right: &Constant) -> bool {
+    if is_open(left) || is_open(right) || left == right {
+        return true;
+    }
+    let (ConstantValue::Other(kind), ConstantValue::Other(other_kind)) =
+        (&left.value, &right.value)
+    else {
+        // Two values this pass holds, or one it holds and one it does
+        // not: they differ.
+        return false;
+    };
+    if kind != other_kind {
+        return false;
+    }
+    let (negative, text) = bare_literal(&left.text);
+    let (other_negative, other_text) = bare_literal(&right.text);
+    match *kind {
+        // A literal the lexer has reported is not read here: it may be
+        // the other.
+        "a float" => match (decode_float(text), decode_float(other_text)) {
+            (Ok(value), Ok(other)) => {
+                let signed = |value: f64, negative: bool| if negative { -value } else { value };
+                signed(value, negative) == signed(other, other_negative)
+            }
+            _ => true,
+        },
+        "a string" => match (decode_string(text), decode_string(other_text)) {
+            (Ok(value), Ok(other)) => value == other,
+            _ => true,
+        },
+        "a date or time" => true,
+        // `true`, `false` and `null` are as they are written.
+        _ => negative == other_negative && text == other_text,
+    }
+}
+
+/// The literal inside a constant that is one literal in parentheses or
+/// under a minus, with whether an odd number of minuses stand before
+/// it: `-(1.0)` gives `1.0`, negative.
+fn bare_literal(text: &str) -> (bool, &str) {
+    let mut negative = false;
+    let mut rest = text.trim();
+    loop {
+        // `strip_prefix` gives what follows the prefix, or `None` when
+        // the text does not start with it.
+        if let Some(inner) = rest.strip_prefix('-') {
+            negative = !negative;
+            rest = inner.trim();
+        } else if let Some(inner) = rest
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix(')'))
+        {
+            rest = inner.trim();
+        } else {
+            return (negative, rest);
+        }
+    }
+}
+
+/// Records that the parameter declared at `at` stands for `argument`.
+/// False when it already stands for something that cannot be the same.
+fn bind(at: Location, argument: Argument, found: &mut Matching<'_>) -> bool {
+    let Some((_, earlier)) = found.bound.iter().find(|(known, _)| *known == at) else {
+        found.bound.push((at, argument));
+        return true;
+    };
+    // Both are written by the struct that has the field. They are
+    // matched as an argument is, a parameter of that struct on either
+    // side being anything.
+    let mut both = Matching {
+        bound: Vec::new(),
+        packs: found.packs,
+        open: true,
+    };
+    may_be(earlier, &argument, &mut both)
 }
 
 /// The first type inside `ty` that gives a struct of the group an
@@ -1420,15 +1834,15 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
     }
 }
 
-/// True when a field of type `ty`, optional or not, is not the field
-/// `parent` introduces. A type that is not known, or a part of one that
-/// is not, differs from nothing: it has been reported, and what is known
-/// of the rest is still compared (ERR-9).
-fn differs(parent: &Introduced, ty: &Type, optional: bool) -> bool {
+/// True when a field of type `ty` is not the field `parent` introduces.
+/// A type that is not known, or a part of one that is not, differs from
+/// nothing: it has been reported, and what is known of the rest is
+/// still compared (ERR-9).
+fn differs(parent: &Introduced, ty: &Type) -> bool {
     if matches!(parent.ty, Type::Unknown) || matches!(ty, Type::Unknown) {
         return false;
     }
-    !agree(&parent.ty, ty) || parent.optional != optional
+    !agree(&parent.ty, ty)
 }
 
 /// True when two types are the same as far as each is known.
