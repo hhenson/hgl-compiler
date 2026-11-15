@@ -1321,6 +1321,9 @@ fn agree(left: &Type, right: &Type) -> bool {
                     .zip(other_arguments)
                     .all(|pair| match pair {
                         (Argument::Type(left), Argument::Type(right)) => agree(left, right),
+                        (Argument::Constant(left), Argument::Constant(right)) => {
+                            constants_agree(left, right)
+                        }
                         (left, right) => left == right,
                     })
         }
@@ -1331,7 +1334,13 @@ fn agree(left: &Type, right: &Type) -> bool {
                 element: other_element,
                 size: other_size,
             },
-        ) => size == other_size && agree(element, other_element),
+        ) => {
+            let sizes = match (size, other_size) {
+                (Some(size), Some(other_size)) => constants_agree(size, other_size),
+                (size, other_size) => size == other_size,
+            };
+            sizes && agree(element, other_element)
+        }
         (Type::Set(left), Type::Set(right))
         | (Type::Ref(left), Type::Ref(right))
         | (Type::Atomic(left), Type::Atomic(right))
@@ -1355,7 +1364,18 @@ fn agree(left: &Type, right: &Type) -> bool {
                 maximum: other_maximum,
                 minimum: other_minimum,
             },
-        ) => maximum == other_maximum && minimum == other_minimum && agree(value, other_value),
+        ) => {
+            let minimums = match (minimum, other_minimum) {
+                (Some(minimum), Some(other_minimum)) => constants_agree(minimum, other_minimum),
+                // One written and one not: the same when the one
+                // written may yet come to the maximum.
+                (Some(written), None) | (None, Some(written)) => {
+                    matches!(written.value, ConstantValue::Unevaluated)
+                }
+                (None, None) => true,
+            };
+            constants_agree(maximum, other_maximum) && minimums && agree(value, other_value)
+        }
         (
             Type::Result { value, error },
             Type::Result {
@@ -1365,4 +1385,13 @@ fn agree(left: &Type, right: &Type) -> bool {
         ) => agree(value, other_value) && agree(error, other_error),
         (left, right) => left == right,
     }
+}
+
+/// True when two constants are the same as far as each is known. One
+/// this pass has not evaluated, such as `N + 1` with an argument put in
+/// place of `N`, differs from nothing: the pass that evaluates constants
+/// compares it.
+fn constants_agree(left: &Constant, right: &Constant) -> bool {
+    let unevaluated = |constant: &Constant| matches!(constant.value, ConstantValue::Unevaluated);
+    unevaluated(left) || unevaluated(right) || left == right
 }
