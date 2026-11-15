@@ -1159,6 +1159,13 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // TYPE-7: `.member` is of the enum the parameter expects.
         "    let bought = sign(.buy)\n",
         "    let held = sign(.hold)\n",
+        // A block, and an `if`, whose value is of the enum its place
+        // expects is tried as the parameter's too.
+        // LEX-5: "`.member` (TYPE-7) begins no statement", so one that
+        // is a block's value is written in parentheses.
+        "    let in_block = sign({ (.buy) })\n",
+        "    let either = sign(if a > 0 { (.buy) } else { (.sell) })\n",
+        "    let no_member = sign({ (.hold) })\n",
         // An entry that takes its type from its place is read as the
         // candidate's too: a `null` in a tuple, a `[]` in a list.
         "    let partly = first((null, 1))\n",
@@ -1215,8 +1222,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:27:19 operator/operator.no_candidate GEN-5",
             "m.hgl:31:17 operator/operator.no_candidate GEN-5",
             "m.hgl:33:16 operator/operator.no_candidate GEN-5",
-            "m.hgl:36:19 operator/operator.no_candidate GEN-5",
-            "m.hgl:43:16 operator/operator.ambiguous GEN-5",
+            "m.hgl:36:21 operator/operator.no_candidate GEN-5",
+            "m.hgl:39:19 operator/operator.no_candidate GEN-5",
+            "m.hgl:46:16 operator/operator.ambiguous GEN-5",
         ]
     );
     assert_eq!(
@@ -1231,6 +1239,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `pick` takes `null`, `i64`",
             "no value candidate of operator `count` takes `[1.5]`",
             "no value candidate of operator `sign` takes `.hold`",
+            "no value candidate of operator `sign` takes `{ (.hold) }`",
             "no value candidate of operator `first` takes `(null, null)`",
             "2 value candidates of operator `make` take no argument equally",
         ]
@@ -1264,6 +1273,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "unfit: _",
             "bought: i64",
             "held: _",
+            "in_block: i64",
+            "either: i64",
+            "no_member: _",
             "partly: i64",
             "inner: i64",
             "neither: _",
@@ -1344,6 +1356,10 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
         "    let widened: f64 = if c { 1 } else { 2 }\n",
         // A branch that returns takes no part.
         "    let rest = if c { return } else { 2 }\n",
+        // With no `else`, a branch that returns leaves the `if` null,
+        // of the type its place gives.
+        "    let gone: i64? = if c { return }\n",
+        "    let untyped = if c { return }\n",
         "    let chain = if c { 1 } else if a > 1 { 2 } else { 3 }\n",
         "}\n",
         "const fn missing(a: i64) -> i64 {\n    if a > 0 { return a }\n}\n",
@@ -1366,8 +1382,9 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
             "m.hgl:15:33 type/type.mismatch CTRL-10",
             "m.hgl:16:21 type/type.mismatch CTRL-10",
             "m.hgl:17:17 type/type.mismatch CTRL-10",
-            "m.hgl:26:10 type/return.missing FN-7",
-            "m.hgl:43:23 type/type.mismatch EXPR-5",
+            "m.hgl:25:19 type/null.context_type TYPE-14",
+            "m.hgl:28:10 type/return.missing FN-7",
+            "m.hgl:45:23 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -1377,6 +1394,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
             "this branch is `str`, and the other is `i64`",
             "this is `i64`, and a condition is a `bool`",
             "this has no value: a block's value is its last statement, when that is an expression",
+            "this is null when its condition does not hold, and nothing here gives that a type: write the type",
             "`missing` declares a result of `i64`, and can reach its end with no value",
             "this is `str`, and the value of this block is `i64`",
         ]
@@ -1400,6 +1418,8 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
             "block: i64",
             "widened: f64",
             "rest: i64",
+            "gone: i64?",
+            "untyped: _",
             "chain: i64",
         ]
     );

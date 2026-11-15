@@ -266,8 +266,9 @@ impl<'a> Typer<'a> {
                 }
             }
             // Every path through it has returned, or it has no value
-            // and the function ends with none.
-            Outcome::Returns | Outcome::Nothing => Stmt::Expr(value),
+            // and the function ends with none: an `if` with no `else`
+            // whose branch returns is one that ends with none.
+            Outcome::Returns | Outcome::Nothing | Outcome::Null => Stmt::Expr(value),
         }
     }
 
@@ -513,6 +514,27 @@ impl<'a> Typer<'a> {
                             .to_string(),
                         "CTRL-10",
                     ));
+                }
+                // TYPE-14: what is null alone is of the type its place
+                // expects, and rejects where nothing gives it one.
+                if matches!(outcome, Outcome::Null) {
+                    let mut value = value;
+                    match expected {
+                        Some(expected) if !open(expected) => {
+                            value.ty = nullable(expected.clone());
+                        }
+                        Some(_) => {}
+                        None => self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::NULL_CONTEXT,
+                            at,
+                            "this is null when its condition does not hold, and nothing here \
+                             gives that a type: write the type"
+                                .to_string(),
+                            "TYPE-14",
+                        )),
+                    }
+                    return value;
                 }
                 return value;
             }
@@ -2585,7 +2607,8 @@ fn widens_an_entry(value: &Expr) -> bool {
 /// given to: `null` and `.member`, which have no type of their own
 /// (TYPE-14, TYPE-7), and a sequence or a tuple written out, whose
 /// entries are read as the parameter's (EXPR-5, EXPR-9), so that `[1]`
-/// is a `list<f64>` or a `set<i64>` where a candidate takes one.
+/// is a `list<f64>` or a `set<i64>` where a candidate takes one. A block
+/// is, when its value is; an `if`, when a branch is (CTRL-10).
 fn typed_by_place(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ParenExpr => node
@@ -2593,6 +2616,12 @@ fn typed_by_place(node: &SyntaxNode) -> bool {
             .next()
             .is_some_and(|inner| typed_by_place(&inner)),
         SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
+        SyntaxKind::Block => value_of_branch(node).is_some_and(|value| typed_by_place(&value)),
+        // The condition is first; the branches follow it.
+        SyntaxKind::IfExpr => node
+            .children()
+            .skip(1)
+            .any(|branch| typed_by_place(&branch)),
         _ => takes_its_type(node),
     }
 }
@@ -2609,6 +2638,9 @@ enum Outcome {
     Nothing,
     /// Every path through it returns from the function.
     Returns,
+    /// It is null and nothing else: an `if` with no `else` whose branch
+    /// returns (CTRL-10: "as if its `else` were null").
+    Null,
 }
 
 /// One branch of an `if`, as it was read.
@@ -2718,7 +2750,7 @@ impl<'a> Typer<'a> {
         };
         let ty = match &outcome {
             Outcome::Value(ty) => ty.clone(),
-            Outcome::Nothing | Outcome::Returns => Type::Unknown,
+            Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
         let kind = ExprKind::Block { statements, value };
         (Expr { kind, ty, at }, outcome)
@@ -2892,11 +2924,19 @@ impl<'a> Typer<'a> {
             // "With no `else` it is as if its `else` were null: its
             // value is a `T?`".
             (Outcome::Value(ty), None) => Outcome::Value(nullable(ty)),
+            // The same holds where the branch written returns: the `if`
+            // is then null and nothing else.
+            (Outcome::Returns | Outcome::Null, None) => Outcome::Null,
+            // A branch that is null alone is a null branch: it "makes
+            // it `T?`".
+            (Outcome::Null, Some(Outcome::Null)) => Outcome::Null,
+            (Outcome::Null, Some(Outcome::Value(ty)))
+            | (Outcome::Value(ty), Some(Outcome::Null)) => Outcome::Value(nullable(ty)),
             _ => Outcome::Nothing,
         };
         let ty = match &outcome {
             Outcome::Value(ty) => ty.clone(),
-            Outcome::Nothing | Outcome::Returns => Type::Unknown,
+            Outcome::Nothing | Outcome::Returns | Outcome::Null => Type::Unknown,
         };
         let kind = ExprKind::If {
             condition: Box::new(condition),
