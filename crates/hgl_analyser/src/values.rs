@@ -3618,57 +3618,136 @@ fn instance<'s>(
     Some((std::borrow::Cow::Owned(taken), resolved))
 }
 
-/// Keeps of the candidates a call admits the most specific: those no
-/// other outranks. One is left where the call selects; more are a tie.
+/// How specific one type of a candidate's signature is beside another's
+/// in the same place.
+#[derive(Clone, Copy, PartialEq)]
+enum Specific {
+    /// As specific: the same shape, variables where the other has them.
+    Same,
+    /// More: concrete, or structured, where the other has a variable.
+    More,
+    /// Less.
+    Less,
+    /// Neither: more specific in one part and less in another, or of
+    /// another shape altogether.
+    Neither,
+}
+
+impl Specific {
+    /// The two together: what holds of a whole whose parts are these.
+    fn and(self, other: Specific) -> Specific {
+        match (self, other) {
+            (Specific::Same, other) | (other, Specific::Same) => other,
+            (Specific::More, Specific::More) => Specific::More,
+            (Specific::Less, Specific::Less) => Specific::Less,
+            _ => Specific::Neither,
+        }
+    }
+}
+
+/// How specific `left` is beside `right`, each a type of a candidate's
+/// signature as it is declared, so that a `Type::Parameter` in it is
+/// one of that candidate's generic parameters.
 ///
 /// GEN-5: "Concrete types outrank variables; structurally constrained
 /// variables outrank unconstrained ones." GEN-12: "Compare structural
-/// specificity component by component". The components are the
-/// operator's own parameters, `own` of them; each is concrete, a
-/// variable inside a structure, as in `list<T>`, or a bare variable. A
-/// candidate outranks another when it is as specific in every component
-/// and more specific in one.
+/// specificity component by component". So `tuple<i64, T>` is more
+/// specific than `tuple<U, V>`, and `list<T>` than `T`.
+fn specificity(left: &Type, right: &Type) -> Specific {
+    let all = |pairs: &mut dyn Iterator<Item = Specific>| pairs.fold(Specific::Same, Specific::and);
+    match (left, right) {
+        (Type::Parameter { .. }, Type::Parameter { .. }) => Specific::Same,
+        (Type::Parameter { .. }, _) => Specific::Less,
+        (_, Type::Parameter { .. }) => Specific::More,
+        (Type::Nullable(left), Type::Nullable(right))
+        | (Type::Set(left), Type::Set(right))
+        | (Type::Ref(left), Type::Ref(right))
+        | (Type::Atomic(left), Type::Atomic(right))
+        | (Type::Delta(left), Type::Delta(right))
+        | (Type::List { element: left, .. }, Type::List { element: right, .. })
+        | (Type::Rolling { value: left, .. }, Type::Rolling { value: right, .. }) => {
+            specificity(left, right)
+        }
+        (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => all(&mut left
+            .iter()
+            .zip(right)
+            .map(|(left, right)| specificity(left, right))),
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: other_key,
+                value: other_value,
+            },
+        ) => specificity(key, other_key).and(specificity(value, other_value)),
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: other_value,
+                error: other_error,
+            },
+        ) => specificity(value, other_value).and(specificity(error, other_error)),
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: other_module,
+                declaration: other_declaration,
+                arguments: other_arguments,
+                ..
+            },
+        ) if (module, declaration) == (other_module, other_declaration)
+            && arguments.len() == other_arguments.len() =>
+        {
+            all(&mut arguments
+                .iter()
+                .zip(other_arguments)
+                .map(|pair| match pair {
+                    (Argument::Type(left), Argument::Type(right)) => specificity(left, right),
+                    // A constant is as specific as a constant.
+                    _ => Specific::Same,
+                }))
+        }
+        // Two types with no variable in them: one type, where both
+        // candidates admit the call.
+        (left, right) if left == right => Specific::Same,
+        _ => Specific::Neither,
+    }
+}
+
+/// Keeps of the candidates a call admits the most specific: those no
+/// other outranks. One is left where the call selects; more are a tie.
+///
+/// GEN-5: "Select exactly one most-specific admitted candidate." The
+/// operator's own parameters, `own` of them, are compared place for
+/// place ([`specificity`]). A candidate outranks another when it is as
+/// specific in every one and more specific in one.
 fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
     if selected.len() < 2 {
         return;
     }
-    let ranks: Vec<Vec<u8>> = selected
-        .iter()
-        .map(|chosen| {
-            let generics: Vec<Location> = chosen
-                .declared
-                .generics
-                .iter()
-                .map(|generic| generic.at)
-                .collect();
-            chosen
-                .declared
-                .parameters
-                .iter()
-                .take(own)
-                .map(|parameter| match &parameter.ty {
-                    ty if !mentions(ty, &generics) => 2,
-                    Type::Parameter { .. } => 0,
-                    _ => 1,
-                })
-                .collect()
-        })
-        .collect();
-    let outranks = |better: &[u8], worse: &[u8]| {
-        better
+    let outranks = |better: &Chosen, worse: &Chosen| {
+        let whole = better
+            .declared
+            .parameters
             .iter()
-            .zip(worse)
-            .all(|(better, worse)| better >= worse)
-            && better
-                .iter()
-                .zip(worse)
-                .any(|(better, worse)| better > worse)
+            .zip(&worse.declared.parameters)
+            .take(own)
+            .map(|(better, worse)| specificity(&better.ty, &worse.ty))
+            .fold(Specific::Same, Specific::and);
+        whole == Specific::More
     };
+    let outranked: Vec<bool> = selected
+        .iter()
+        .map(|chosen| selected.iter().any(|other| outranks(other, chosen)))
+        .collect();
     let mut position = 0;
     selected.retain(|_| {
-        let outranked = ranks.iter().any(|other| outranks(other, &ranks[position]));
         position += 1;
-        !outranked
+        !outranked[position - 1]
     });
 }
 

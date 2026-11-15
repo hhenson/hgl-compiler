@@ -604,13 +604,14 @@ from the arguments in declared parameter order (GEN-12). Its `requires`
 may say what a parameter is, `T in {i64, f64, str}` or `T == str`, which
 is checked against what the parameter stands for. Among the candidates
 a call admits the most specific is selected (GEN-5, GEN-12). Each of the
-operator's parameters is compared:
+operator's parameters is compared with the other candidate's, part for
+part:
 
-| A candidate's parameter | Rank |
-| --- | --- |
-| A concrete type, `list<bool>` | Highest |
-| A variable inside a structure, `list<T>` | Middle |
-| A bare variable, `T` | Lowest |
+| One candidate has | The other has | More specific |
+| --- | --- | --- |
+| A concrete type or a structure, `i64`, `list<T>` | A bare variable, `T` | The first |
+| A structure, `tuple<i64, T>` | The same structure, `tuple<U, V>` | Whichever is in its parts: here the first |
+| `tuple<i64, T>` | `tuple<T, str>` | Neither: each is more specific in one part |
 
 A candidate outranks another when it is as specific in every parameter
 and more specific in one. One that nothing outranks is selected; two
