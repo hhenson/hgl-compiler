@@ -747,6 +747,19 @@ impl Structs<'_> {
         substitute_within(ty, &map)
     }
 
+    /// The struct `id` and every struct it inherits from.
+    fn line(&self, id: Id) -> HashSet<Id> {
+        let mut line: HashSet<Id> = HashSet::new();
+        let mut to_do = vec![id];
+        // Each struct is added once, so a cycle of inheritance ends.
+        while let Some(current) = to_do.pop() {
+            if line.insert(current) {
+                to_do.extend(self.parents[&current].iter().map(|parent| parent.id));
+            }
+        }
+        line
+    }
+
     /// The fields the struct `id` has from its parents.
     fn inherited(&self, id: Id) -> Vec<Introduced> {
         self.fields
@@ -1015,7 +1028,7 @@ impl Structs<'_> {
         // the group their own struct is in. `recursive` has where each
         // is declared; `faulty` those that are not as TYPE-6 has them,
         // with whether the fault is a collection.
-        let mut recursive: Vec<(Id, usize)> = Vec::new();
+        let mut recursive: Vec<(Id, (Id, usize))> = Vec::new();
         let mut faulty: Vec<(&FieldEdge, bool)> = Vec::new();
         for edge in &edges {
             let mut back = edge
@@ -1027,7 +1040,10 @@ impl Structs<'_> {
             if back.peek().is_none() {
                 continue;
             }
-            recursive.push(edge.origin);
+            // Recursive for the struct that has it: a parent's field of
+            // type `atomic<T>` is one in `Node : Base<Node>` and not in
+            // `Value : Base<i64>`.
+            recursive.push((edge.owner, edge.origin));
             // "Cycles through ... collection elements are rejected",
             // inside an `atomic<...>` as outside one.
             let through_collection = back.any(|(_, in_collection)| *in_collection);
@@ -1082,12 +1098,27 @@ impl Structs<'_> {
             let Some(read) = self.struct_type(id) else {
                 continue;
             };
+            // Only a struct that overrides a default with something
+            // other than null has anything to check.
+            if !read
+                .fields
+                .iter()
+                .any(|field| field.ty.is_none() && !field.null_default)
+            {
+                continue;
+            }
             let inherited = self.inherited(id);
+            // The struct and every struct it inherits from: the field is
+            // one to keep null when it is recursive in any of them.
+            let line = self.line(id);
             for field in &read.fields {
                 let overrides_recursive = field.ty.is_none()
                     && !field.null_default
                     && inherited.iter().any(|parent| {
-                        parent.name == field.name && recursive.contains(&parent.origin)
+                        parent.name == field.name
+                            && recursive.iter().any(|(owner, origin)| {
+                                *origin == parent.origin && line.contains(owner)
+                            })
                     });
                 if overrides_recursive {
                     reports.push((
