@@ -1851,6 +1851,39 @@ fn a_call_that_leaves_a_generic_parameter_unresolved_is_rejected() {
     );
 }
 
+/// GEN-8: "A call rejects when it leaves a generic parameter
+/// unresolved." A call that is itself an argument is read before its
+/// place is known. A parameter its result names may yet be resolved by
+/// that place; one its result does not name cannot be, and is reported
+/// where the call is first read.
+#[test]
+fn an_unresolved_parameter_of_a_call_that_is_an_argument_is_rejected() {
+    let checked = module(concat!(
+        "const fn same<T>(a: T, b: T) -> T => a\n",
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn tag<const N: i64>(x: i64) -> i64 => x\n",
+        "const fn uses() {\n",
+        // `N` is in no argument and not in the result.
+        "    let a = same(tag(1), 2)\n",
+        "    let b = same(2, tag(1))\n",
+        // The place says what the `T` of `repeat` is.
+        "    let c = same(repeat(1), [\"x\"])\n",
+        "    let d = same(tag<3>(1), 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:18 local:type/generic.unresolved GEN-8",
+            "m.hgl:7:21 local:type/generic.unresolved GEN-8",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses"),
+        ["a: i64", "b: i64", "c: list<str>", "d: i64"]
+    );
+}
+
 /// GEN-8: a call supplies "the first of them", so no more than the
 /// callee has. GEN-14: "Check each argument against the corresponding
 /// parameter kind." What is written then says nothing of the

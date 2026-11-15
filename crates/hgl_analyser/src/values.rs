@@ -1488,17 +1488,31 @@ impl<'a> Typer<'a> {
 
         // GEN-8: "A call rejects when it leaves a generic parameter
         // unresolved." Not where something else was reported, or an
-        // argument or the place is not known: what would have said what
-        // the parameter is may be what is missing (ERR-9).
+        // argument is not known: what would have said what the
+        // parameter is may be what is missing (ERR-9).
+        //
+        // Where the call's place is not known, the type it expects may
+        // yet say what a parameter of the result is: the call then has
+        // no whole type and is read again once the place is known. A
+        // parameter the result does not name is never resolved that
+        // way, so it is reported here: the `N` of
+        // `tag<const N: i64>(x: i64) -> i64` in `same(tag(1), 2)`.
+        let place_unknown = expected.is_some_and(open);
         let unresolved: Vec<&str> = generics
             .iter()
             .zip(&found)
             .filter(|(_, found)| found.is_none())
+            .filter(|(generic, _)| {
+                !place_unknown
+                    || !signature
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| mentions(result, &[generic.at]))
+            })
             .map(|(generic, _)| generic.name.as_str())
             .collect();
         let judged = !faulty
             && self.diagnostics.len() == reported
-            && !expected.is_some_and(open)
             && arguments.iter().all(|argument| whole(&argument.value.ty));
         if judged && !unresolved.is_empty() {
             let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
