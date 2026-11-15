@@ -957,6 +957,13 @@ fn an_element_is_read_by_its_index_or_its_key() {
         "    let tail = pair[1]\n",
         "    let beyond = pair[2]\n",
         "    let moving = pair[a]\n",
+        // A constant need not be a literal: `1 - 1` is 0 and `-1 + 2` is
+        // 1. One this pass does not evaluate gives no type and no report.
+        "    let folded = pair[1 - 1]\n",
+        "    let signed = pair[(-1 + 2) * 1]\n",
+        "    let outside = pair[1 + 1]\n",
+        "    let divided = pair[2 // 2]\n",
+        "    let mixed = pair[a + 1]\n",
         "    return first\n",
         "}\n",
     ));
@@ -967,6 +974,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "m.hgl:7:25 type/type.mismatch EXPR-5",
             "m.hgl:10:23 type/tuple.index EXPR-7",
             "m.hgl:11:23 type/tuple.index EXPR-7",
+            "m.hgl:14:24 type/tuple.index EXPR-7",
+            "m.hgl:16:22 type/tuple.index EXPR-7",
         ]
     );
     assert_eq!(
@@ -974,6 +983,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
         [
             "this is `str`, and the index of a list is `i64`",
             "this is `i64`, and the key of the dictionary is `str`",
+            "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
+            "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
         ]
@@ -994,6 +1005,11 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "tail: str",
             "beyond: _",
             "moving: _",
+            "folded: i64",
+            "signed: str",
+            "outside: _",
+            "divided: _",
+            "mixed: _",
         ]
     );
 }

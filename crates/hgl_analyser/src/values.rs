@@ -1916,11 +1916,17 @@ impl<'a> Typer<'a> {
             Type::Tuple(elements) => {
                 let integer = Type::Scalar(Scalar::I64);
                 let index = self.expression(&index, Some(&integer));
-                let position = match &index.kind {
-                    ExprKind::Literal(Value::Int(value)) => usize::try_from(*value).ok(),
-                    _ => None,
+                let element = match constant_index(&index) {
+                    Index::Known(value) => usize::try_from(value)
+                        .ok()
+                        .and_then(|position| elements.get(position)),
+                    // A constant this pass does not evaluate: the
+                    // element's type is then not known, and nothing is
+                    // reported of it.
+                    Index::Unevaluated => Some(&Type::Unknown),
+                    Index::NotConstant => None,
                 };
-                let ty = match position.and_then(|position| elements.get(position)) {
+                let ty = match element {
                     Some(element) => element.clone(),
                     None => {
                         self.diagnostics.emit(error(
@@ -2178,6 +2184,56 @@ fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Opt
         }
         // Equality and the connectives are not read from this table.
         Op::Equal | Op::NotEqual | Op::And | Op::Or => Some(BOOL),
+    }
+}
+
+/// What the index of a tuple is, as far as this pass can say.
+enum Index {
+    /// A constant with this value.
+    Known(i64),
+    /// A constant whose value another pass finds: one that names a
+    /// generic value parameter, divides, or leaves the range of an
+    /// `i64`.
+    Unevaluated,
+    /// No constant: it reads a local, a parameter or a call.
+    NotConstant,
+}
+
+/// The value of a tuple's index (EXPR-7: "A tuple's index is a constant
+/// within its length"): an integer literal, or literals under a minus
+/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`.
+fn constant_index(index: &Expr) -> Index {
+    match &index.kind {
+        ExprKind::Literal(Value::Int(value)) => Index::Known(*value),
+        ExprKind::GenericValue { .. } => Index::Unevaluated,
+        ExprKind::Unary {
+            operator: UnaryOperator::Negate,
+            operand,
+        } => match constant_index(operand) {
+            // `checked_neg` gives `None` where the result does not fit.
+            Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
+            other => other,
+        },
+        ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } => match (constant_index(left), constant_index(right)) {
+            (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
+            (Index::Known(left), Index::Known(right)) => {
+                let value = match operator {
+                    BinaryOperator::Add => left.checked_add(right),
+                    BinaryOperator::Subtract => left.checked_sub(right),
+                    BinaryOperator::Multiply => left.checked_mul(right),
+                    // Division and remainder follow core's numeric
+                    // contract, which this pass does not evaluate.
+                    _ => None,
+                };
+                value.map_or(Index::Unevaluated, Index::Known)
+            }
+            _ => Index::Unevaluated,
+        },
+        _ => Index::NotConstant,
     }
 }
 
