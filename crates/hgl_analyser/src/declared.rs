@@ -323,7 +323,7 @@ const DEPTH: usize = 64;
 const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
-fn names_parameter(ty: &Type) -> bool {
+pub(crate) fn names_parameter(ty: &Type) -> bool {
     match ty {
         Type::Parameter { .. } => true,
         Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
