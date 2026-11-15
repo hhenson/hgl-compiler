@@ -129,3 +129,62 @@ fn a_conversion_is_the_type_asked_for_or_a_result_of_it() {
         ]
     );
 }
+
+/// OPS-2: "`<`, `<=`, `>`, `>=`, and `<=>` compare two values of one
+/// type among `str`, `bool`, `date`, `time`, `datetime`,
+/// `civil_datetime`, and `duration`. `==` and `!=` compare two values
+/// of one type. The zoned types have no order ... Numbers compare as
+/// the numeric contract says, an `i64` with an `f64` included." OPS-3:
+/// `<=>` returns a `CmpResult`. NUM-4: the tolerances are for numbers.
+/// NUM-11: "The built-in `abs` and `rel` tolerance options are scalar
+/// f64 configuration."
+///
+/// Core declares one generic candidate for each comparison, with the
+/// types it is for in its `requires`, beside the candidates for
+/// numbers.
+#[test]
+fn a_comparison_is_of_two_values_of_one_type() {
+    let checked = with_core(concat!(
+        "struct Quote { bid: f64 }\n",
+        "const fn uses(a: f64, n: i64, text: str, day: date, q: Quote, zone: zoned_datetime) {\n",
+        "    let e1 = eq_(n, n)\n",
+        "    let e2 = eq_(text, text)\n",
+        "    let e3 = eq_(q, q)\n",
+        "    let e4 = eq_(n, a)\n",
+        "    let e5 = eq_(a, a, abs: 0.01)\n",
+        "    let l1 = lt_(text, text)\n",
+        "    let l2 = lt_(day, day)\n",
+        "    let l3 = lt_(n, a)\n",
+        "    let c1 = compare_(text, text)\n",
+        // No order for a struct or a zoned type; no comparison of a
+        // `str` with an `i64`; no tolerance for a `str`.
+        "    let bad1 = lt_(q, q)\n",
+        "    let bad2 = lt_(zone, zone)\n",
+        "    let bad3 = eq_(text, n)\n",
+        "    let bad4 = eq_(text, text, abs: 0.01)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:15:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:16:16 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[6..15],
+        [
+            "e1: bool",
+            "e2: bool",
+            "e3: bool",
+            "e4: bool",
+            "e5: bool",
+            "l1: bool",
+            "l2: bool",
+            "l3: bool",
+            "c1: CmpResult",
+        ]
+    );
+}
