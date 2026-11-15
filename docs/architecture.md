@@ -449,7 +449,8 @@ operands that are not numbers, and the type of a `<=>` outcome, are for
 core to say and are not known here.
 
 Three rejections have no catalogue row yet and carry codes local to this
-compiler (`hgl_analyser::codes::local`), proposed to the specification:
+compiler (`hgl_analyser::codes::local`), proposed in
+[hgl_spec issue 28](https://github.com/hhenson/hgl_spec/issues/28):
 
 | Local code | Rejection |
 | --- | --- |
