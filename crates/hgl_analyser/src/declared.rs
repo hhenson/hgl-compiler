@@ -318,6 +318,10 @@ const EXPANSIONS: u32 = 10_000;
 /// field's type.
 const DEPTH: usize = 64;
 
+/// How many applications of one struct have their children looked at
+/// when the descendants of an abstract struct are found.
+const APPLICATIONS: usize = 16;
+
 /// True when `ty` names a generic parameter, itself or inside it.
 fn names_parameter(ty: &Type) -> bool {
     match ty {
@@ -1031,7 +1035,13 @@ impl Structs<'_> {
         in_collection: bool,
         found: &mut Vec<Held>,
     ) {
-        let mut seen: HashSet<Id> = HashSet::new();
+        // The structs found, each added once.
+        let mut held: HashSet<Id> = HashSet::new();
+        // What each struct was applied to when its children were looked
+        // at. A struct reached by two lines of parents is a descendant
+        // by either, each with what that line gives it: its children
+        // are looked at again for an application not yet followed.
+        let mut followed: HashMap<Id, Vec<Vec<Option<Argument>>>> = HashMap::new();
         // The structs whose children are still to look at, each with
         // what is known of the arguments it is applied to: one for each
         // of its generic parameters, or `None` where it is not known.
@@ -1064,15 +1074,17 @@ impl Structs<'_> {
                     }),
                 };
                 let bound = matching.bound;
-                // `insert` is false for a struct already seen.
-                if !fits || !seen.insert(*child) {
+                if !fits {
                     continue;
                 }
-                found.push(Held {
-                    id: *child,
-                    in_collection,
-                    written: id,
-                });
+                // `insert` is false for a struct already there.
+                if held.insert(*child) {
+                    found.push(Held {
+                        id: *child,
+                        in_collection,
+                        written: id,
+                    });
+                }
                 // What the child is applied to, for its own children:
                 // what was found for each of its parameters.
                 let passed_on: Vec<Option<Argument>> = self
@@ -1089,6 +1101,15 @@ impl Structs<'_> {
                             .collect()
                     })
                     .unwrap_or_default();
+                // An application already followed finds nothing new,
+                // and a struct is followed a bounded number of times,
+                // so that structs that inherit from one another, which
+                // have been reported, end.
+                let applications = followed.entry(*child).or_default();
+                if applications.contains(&passed_on) || applications.len() >= APPLICATIONS {
+                    continue;
+                }
+                applications.push(passed_on.clone());
                 to_do.push((*child, passed_on));
             }
         }

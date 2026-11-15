@@ -831,6 +831,29 @@ fn a_recursive_field_stays_within_its_module() {
     );
 }
 
+/// TYPE-6: a struct that reaches an abstract struct by two lines of
+/// parents is a descendant of it by either, each with the arguments
+/// that line gives.
+#[test]
+fn a_descendant_is_found_by_each_line_of_parents() {
+    let checked = module(concat!(
+        "abstract struct Base<...Ts> { width: i64 }\n",
+        "abstract struct Left<X> : Base<list<X>> { }\n",
+        "abstract struct Right<Y> : Base<list<Y>> { }\n",
+        "abstract struct Middle<X, Y> : Left<X>, Right<Y> { }\n",
+        "struct ByLeft : Middle<i64, str> { next: Base<list<i64>> }\n",
+        "struct ByRight : Middle<str, i64> { next: Base<list<i64>> }\n",
+        "struct ByNeither : Middle<str, str> { next: Base<list<i64>> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:36 type/field.recursive TYPE-6",
+            "m.hgl:7:37 type/field.recursive TYPE-6",
+        ]
+    );
+}
+
 /// TYPE-6: "So that the recursion can end, a recursive field is
 /// optional (TYPE-4), `Node?` or `atomic<Node?>`." It needs no default.
 #[test]
