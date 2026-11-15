@@ -333,6 +333,24 @@ fn a_type_that_grows_at_every_parent_is_not_built() {
     );
 }
 
+/// GEN-2: "A type pack is a sequence, not a singular source type." A
+/// parent's pack takes a sequence of arguments, which this pass does not
+/// put in place: a field whose type names the pack is not compared, and
+/// the parameters before the pack are.
+#[test]
+fn a_parents_pack_is_not_one_argument() {
+    let checked = module(concat!(
+        "struct Row<...Us> { width: i64 }\n",
+        "abstract struct Base<T, ...Ts> {\n    first: T\n    rest: Row<Ts>\n}\n",
+        "struct Child : Base<i64, str, f64> {\n    first: i64\n    rest: Row<str, f64>\n}\n",
+        "struct Wrong : Base<i64, str> { first: str }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:11:33 local:type/field.conflict TYPE-4"]
+    );
+}
+
 /// TYPE-4: a field is compared with each parent's field of its name. One
 /// whose type is not known hides no conflict with another.
 #[test]
