@@ -167,7 +167,7 @@ fn a_struct_and_its_parent_agree_on_a_field() {
     let checked = module(concat!(
         "abstract struct Base {\n    id: i64\n    name: str? = null\n    size: i64 = 1\n}\n",
         // Overrides of a parent's defaults, and a field of its own.
-        "struct Good : Base {\n    id = 7\n    name = \"x\"\n    extra: f64\n}\n",
+        "struct Good : Base {\n    id = 7\n    name = \"x\"\n    extra: f64 = 0.0\n}\n",
         // The same field again is the same field.
         "struct Again : Base { id: i64 }\n",
         "struct Retyped : Base { id: str }\n",
@@ -653,20 +653,20 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
 #[test]
 fn a_recursive_field_passes_each_parameter_on_whole() {
     let checked = module(concat!(
-        "struct Node<T> {\n    next: atomic<Node<T>?> = null\n    value: T\n}\n",
-        "struct Fixed<T> {\n    next: atomic<Fixed<i64>?> = null\n    value: T\n}\n",
-        "struct Swap<A, B> {\n    other: atomic<Swap<B, A>?> = null\n    first: A\n    second: B\n}\n",
+        "struct Node<T> {\n    value: T\n    next: atomic<Node<T>?> = null\n}\n",
+        "struct Fixed<T> {\n    value: T\n    next: atomic<Fixed<i64>?> = null\n}\n",
+        "struct Swap<A, B> {\n    first: A\n    second: B\n    other: atomic<Swap<B, A>?> = null\n}\n",
         // A new type at every step.
-        "struct Grow<T> {\n    next: atomic<Grow<list<T>>?> = null\n    value: T\n}\n",
+        "struct Grow<T> {\n    value: T\n    next: atomic<Grow<list<T>>?> = null\n}\n",
         // Through another struct of the cycle.
-        "struct Ping<T> {\n    pong: atomic<Pong<tuple<T, T>>?> = null\n    value: T\n}\n",
-        "struct Pong<U> {\n    ping: atomic<Ping<U>?> = null\n    value: U\n}\n",
+        "struct Ping<T> {\n    value: T\n    pong: atomic<Pong<tuple<T, T>>?> = null\n}\n",
+        "struct Pong<U> {\n    value: U\n    ping: atomic<Ping<U>?> = null\n}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:16:5 type/field.recursive TYPE-6",
-            "m.hgl:20:5 type/field.recursive TYPE-6",
+            "m.hgl:17:5 type/field.recursive TYPE-6",
+            "m.hgl:21:5 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -913,7 +913,7 @@ fn a_recursive_field_may_be_nullable() {
 fn a_descendant_keeps_a_recursive_fields_null() {
     let checked = module(concat!(
         "abstract struct Linked { next: atomic<Linked?> = null }\n",
-        "struct Item : Linked { value: i64 }\n",
+        "struct Item : Linked { value: i64 = 0 }\n",
         "struct Kept : Linked { next = null }\n",
         "struct Removed : Linked { next = make() }\n",
         // Through a parent and not atomic.

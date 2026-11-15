@@ -105,7 +105,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
 | UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
 | UNIT-7 | analyser | partial | A default reads no parameter of its declaration and no field of its struct. Left: the closure an imported default keeps |
-| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. Left: defaults as required constants of the expected type; a temporal default as a constant of its type; a value function's call may omit a parameter written `T?` |
+| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. Left: defaults as required constants of the expected type; a temporal default as a constant of its type; a value function's call may omit a parameter written `T?`; a parameter that may be omitted follows every one that may not |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
@@ -124,7 +124,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-2 | transpiler | planned | Temporal scalar representations; zone names kept distinct |
 | TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments; a parent is an abstract struct, listed once. an abstract struct is not constructed in a value function. Left: constructions elsewhere |
 | TYPE-4 | analyser | partial | A field's type, and so its optionality, agrees between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name; a default of null only on an optional field. Left: a default's value against its field's type |
-| TYPE-5 | analyser | partial | A construction in a value function gives every field that has no default and is not optional. Left: constructions elsewhere |
+| TYPE-5 | analyser | partial | A construction in a value function gives every field that has no default and is not optional; a field that may be left out follows every one that may not, a parent's counted first. Left: constructions elsewhere |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
 | TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an optional field, `Node?`, `atomic<Node?>` or `atomic<Node>?`, whose null default the structs below keep; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
@@ -158,7 +158,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-5 | analyser | partial | A value fits the type its place expects; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type. Left: const expression restrictions; temporal bodies |
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
-| EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place. Left: temporal projection; `ref` access; the payload of a nullable or a result |
+| EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length. Left: temporal projection; `ref` access; the payload of a nullable or a result |
 | EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
 | EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
 | EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected. Left: pairs; `_`; ordering and uniqueness |
@@ -379,7 +379,7 @@ the same numeric rules the transpiler rows give.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions. Left: configured operators; operands that are no numbers; temporal bodies |
+| NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions. Left: configured operators; temporal bodies |
 | NUM-1 | transpiler | planned | Floor division and modulo rounding |
 | NUM-2 | transpiler | planned | i64 overflow is an error; IEEE float arithmetic; exact mixed comparison |
 | NUM-3 | transpiler | planned | Division by zero under `ieee` and `nan` |
@@ -397,6 +397,13 @@ the same numeric rules the transpiler rows give.
 | NUM-10 | transpiler | planned | A checked-division `Err` is data; `?` propagation |
 | NUM-11 | analyser | planned | `abs` and `rel` are scalar f64 configuration |
 | NUM-11 | transpiler | planned | Tolerances bound at graph construction in composition |
+| OPS-1 | analyser | partial | In a value function, the operand types the symbol operators admit beyond numbers, in either order where the operation commutes; any other pairing rejected (`operator.operand`). Left: temporal bodies; configured operators |
+| OPS-1 | transpiler | planned | The operators on strings, durations and instants |
+| OPS-2 | analyser | partial | In a value function, ordering between two of one ordered type and equality between two values of one type. Left: temporal bodies |
+| OPS-3 | analyser | planned | `<=>` returns a `CmpResult`; the enum is declared in no HGL source yet |
+| OPS-4 | analyser | planned | `convert<T>(value)` and the conversions it admits |
+| OPS-4 | transpiler | planned | Each conversion |
+| OPS-5 | analyser | partial | The Boolean connectives and `!` take bools, in a value function. Left: temporal bodies |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | planned | `delta_value(x)` needs proof that `x` is valid and modified |

@@ -113,7 +113,7 @@ fn an_operator_has_the_type_cores_contract_gives() {
         "    let less = a < b\n",
         "    let same = a == 1\n",
         "    let both = a < 1 && !(b >= 2.0) || true\n",
-        // What these give is for core to say.
+        // OPS-3: a `CmpResult`, which no HGL source declares yet.
         "    let outcome = a <=> b\n",
         "    let joined = \"a\" + \"b\"\n",
         "    let grouped = (a + 1) * 2\n",
@@ -123,10 +123,7 @@ fn an_operator_has_the_type_cores_contract_gives() {
         "}\n",
         "const fn minimum() -> str => -9223372036854775808\n",
     ));
-    assert_eq!(
-        checked.summary(),
-        ["m.hgl:19:30 local:type/type.mismatch EXPR-5"]
-    );
+    assert_eq!(checked.summary(), ["m.hgl:19:30 type/type.mismatch EXPR-5"]);
     assert_eq!(
         locals(&checked, "operators"),
         [
@@ -144,9 +141,86 @@ fn an_operator_has_the_type_cores_contract_gives() {
             "same: bool",
             "both: bool",
             "outcome: _",
-            "joined: _",
+            "joined: str",
             "grouped: i64",
             "least: i64",
+        ]
+    );
+}
+
+/// OPS-1: "The symbol operators admit the operand types of the first
+/// table below ... Every other pairing is a source rejection ... An
+/// operation that commutes admits its operands in either order; one
+/// that does not admits the order shown." OPS-2: which types are
+/// ordered, and that equality is between two values of one type.
+#[test]
+fn an_operator_takes_the_operands_its_contract_admits() {
+    let checked = module(concat!(
+        "const fn scalars(text: str, span: duration, at: datetime, day: date, clock: time, n: i64, flag: bool) {\n",
+        "    let joined = text + text\n",
+        "    let longer = span + span\n",
+        "    let later = at + span\n",
+        "    let also_later = span + at\n",
+        "    let civil = day + clock\n",
+        "    let apart = at - at\n",
+        "    let days = day - day\n",
+        "    let twice = 2 * span\n",
+        "    let repeated = text * n\n",
+        "    let ratio = span / span\n",
+        "    let whole = span // span\n",
+        "    let half = span / 2\n",
+        "    let back = -span\n",
+        "    let before = day < day\n",
+        "    let same = text == text\n",
+        // Pairings the contracts do not admit.
+        "    let wrong = span - at\n",
+        "    let mixed = text + n\n",
+        "    let sum = day + day\n",
+        "    let ordered = flag < n\n",
+        "    let equal = n == text\n",
+        "    let negated = -text\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:22 operator/operator.operand OPS-1",
+            "m.hgl:19:22 operator/operator.operand OPS-1",
+            "m.hgl:20:19 operator/operator.operand OPS-1",
+            "m.hgl:21:24 operator/operator.operand OPS-2",
+            "m.hgl:22:19 operator/operator.operand OPS-2",
+            "m.hgl:23:19 operator/operator.operand OPS-1",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`-` takes no `duration` and `datetime`",
+            "`+` takes no `str` and `i64`",
+            "`+` takes no `date` and `date`",
+            "`<` takes no `bool` and `i64`",
+            "`==` takes no `i64` and `str`",
+            "`-` takes no `str`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "scalars")[7..22],
+        [
+            "joined: str",
+            "longer: duration",
+            "later: datetime",
+            "also_later: datetime",
+            "civil: civil_datetime",
+            "apart: duration",
+            "days: duration",
+            "twice: duration",
+            "repeated: str",
+            "ratio: f64",
+            "whole: i64",
+            "half: duration",
+            "back: duration",
+            "before: bool",
+            "same: bool",
         ]
     );
 }
@@ -165,9 +239,9 @@ fn a_boolean_connective_takes_bools() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:16 local:type/type.mismatch EXPR-5",
-            "m.hgl:4:26 local:type/type.mismatch EXPR-5",
-            "m.hgl:5:16 local:type/type.mismatch EXPR-5",
+            "m.hgl:3:16 type/type.mismatch EXPR-5",
+            "m.hgl:4:26 type/type.mismatch EXPR-5",
+            "m.hgl:5:16 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -208,11 +282,11 @@ fn a_value_is_of_the_type_its_place_expects() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:25 local:type/type.mismatch EXPR-5",
-            "m.hgl:5:21 local:type/type.mismatch EXPR-5",
-            "m.hgl:9:22 local:type/type.mismatch TYPE-14",
-            "m.hgl:11:19 local:type/null.context_type TYPE-14",
-            "m.hgl:12:22 local:type/type.mismatch EXPR-5",
+            "m.hgl:4:25 type/type.mismatch EXPR-5",
+            "m.hgl:5:21 type/type.mismatch EXPR-5",
+            "m.hgl:9:22 type/type.mismatch TYPE-14",
+            "m.hgl:11:19 type/null.context_type TYPE-14",
+            "m.hgl:12:22 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -262,12 +336,12 @@ fn a_return_is_of_the_result_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:33 local:type/type.mismatch EXPR-5",
-            "m.hgl:7:12 local:type/type.mismatch EXPR-5",
-            "m.hgl:10:42 local:type/type.mismatch EXPR-5",
-            "m.hgl:12:37 local:type/type.mismatch EXPR-5",
-            "m.hgl:14:5 local:type/type.mismatch FN-7",
-            "m.hgl:17:12 local:type/type.mismatch FN-7",
+            "m.hgl:5:33 type/type.mismatch EXPR-5",
+            "m.hgl:7:12 type/type.mismatch EXPR-5",
+            "m.hgl:10:42 type/type.mismatch EXPR-5",
+            "m.hgl:12:37 type/type.mismatch EXPR-5",
+            "m.hgl:14:5 type/type.mismatch FN-7",
+            "m.hgl:17:12 type/type.mismatch FN-7",
         ]
     );
     assert_eq!(
@@ -316,10 +390,10 @@ fn a_struct_is_a_value_of_the_abstract_structs_it_inherits_from() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:10:37 local:type/type.mismatch EXPR-5",
-            "m.hgl:11:36 local:type/type.mismatch EXPR-5",
-            "m.hgl:13:45 local:type/type.mismatch EXPR-5",
-            "m.hgl:19:47 local:type/type.mismatch EXPR-5",
+            "m.hgl:10:37 type/type.mismatch EXPR-5",
+            "m.hgl:11:36 type/type.mismatch EXPR-5",
+            "m.hgl:13:45 type/type.mismatch EXPR-5",
+            "m.hgl:19:47 type/type.mismatch EXPR-5",
         ]
     );
 }
@@ -380,8 +454,8 @@ fn a_var_is_assigned_before_it_is_read() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:12 local:name/binding.unassigned EXPR-3",
-            "m.hgl:18:5 local:name/binding.unassigned EXPR-3",
+            "m.hgl:9:12 name/binding.unassigned EXPR-3",
+            "m.hgl:18:5 name/binding.unassigned EXPR-3",
         ]
     );
     assert_eq!(
@@ -412,11 +486,11 @@ fn only_a_var_is_assigned_and_with_its_own_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:5 local:name/binding.immutable EXPR-3",
-            "m.hgl:7:5 local:name/binding.immutable EXPR-3",
-            "m.hgl:9:13 local:type/type.mismatch EXPR-5",
-            "m.hgl:10:14 local:type/type.mismatch EXPR-5",
-            "m.hgl:11:12 local:type/type.mismatch EXPR-5",
+            "m.hgl:6:5 name/binding.immutable EXPR-3",
+            "m.hgl:7:5 name/binding.immutable EXPR-3",
+            "m.hgl:9:13 type/type.mismatch EXPR-5",
+            "m.hgl:10:14 type/type.mismatch EXPR-5",
+            "m.hgl:11:12 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -472,19 +546,19 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:21 local:type/type.mismatch EXPR-5",
+            "m.hgl:5:21 type/type.mismatch EXPR-5",
             // EXPR-5: `a` has a type, and is not converted.
-            "m.hgl:6:33 local:type/type.mismatch EXPR-5",
-            "m.hgl:8:34 local:type/type.mismatch EXPR-5",
-            "m.hgl:9:17 local:type/sequence.context_type EXPR-9",
-            "m.hgl:11:41 local:type/type.mismatch EXPR-5",
-            "m.hgl:12:43 local:type/type.mismatch EXPR-5",
-            "m.hgl:14:38 local:type/type.mismatch EXPR-5",
-            "m.hgl:15:41 local:type/type.mismatch EXPR-5",
-            "m.hgl:16:36 local:type/type.mismatch EXPR-5",
-            "m.hgl:18:31 local:type/type.mismatch TYPE-10",
-            "m.hgl:21:19 local:type/sequence.context_type EXPR-9",
-            "m.hgl:24:36 local:type/type.mismatch TYPE-10",
+            "m.hgl:6:33 type/type.mismatch EXPR-5",
+            "m.hgl:8:34 type/type.mismatch EXPR-5",
+            "m.hgl:9:17 type/sequence.context_type EXPR-9",
+            "m.hgl:11:41 type/type.mismatch EXPR-5",
+            "m.hgl:12:43 type/type.mismatch EXPR-5",
+            "m.hgl:14:38 type/type.mismatch EXPR-5",
+            "m.hgl:15:41 type/type.mismatch EXPR-5",
+            "m.hgl:16:36 type/type.mismatch EXPR-5",
+            "m.hgl:18:31 type/type.mismatch TYPE-10",
+            "m.hgl:21:19 type/sequence.context_type EXPR-9",
+            "m.hgl:24:36 type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
@@ -586,14 +660,14 @@ fn an_argument_is_given_to_its_parameter() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:8:23 local:type/type.mismatch EXPR-5",
-            "m.hgl:9:19 local:type/argument.missing EXPR-2",
-            "m.hgl:10:30 local:name/argument.unknown EXPR-2",
-            "m.hgl:11:28 local:name/argument.duplicate EXPR-2",
-            "m.hgl:12:35 local:type/argument.order EXPR-2",
-            "m.hgl:13:42 local:type/argument.unexpected EXPR-2",
-            "m.hgl:14:16 local:function-kind/call.role FN-3",
-            "m.hgl:15:28 local:type/type.mismatch EXPR-5",
+            "m.hgl:8:23 type/type.mismatch EXPR-5",
+            "m.hgl:9:19 type/argument.missing EXPR-2",
+            "m.hgl:10:30 name/argument.unknown EXPR-2",
+            "m.hgl:11:28 name/argument.duplicate EXPR-2",
+            "m.hgl:12:35 type/argument.order EXPR-2",
+            "m.hgl:13:42 type/argument.unexpected EXPR-2",
+            "m.hgl:14:16 function-kind/call.role FN-3",
+            "m.hgl:15:28 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -671,16 +745,16 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
         checked.summary(),
         [
             // EXPR-5: `a` has a type, and is not converted.
-            "m.hgl:13:28 local:type/type.mismatch EXPR-5",
-            "m.hgl:14:17 local:type/argument.missing EXPR-2",
-            "m.hgl:15:33 local:name/argument.unknown EXPR-2",
-            "m.hgl:17:16 local:type/struct.abstract TYPE-3",
-            "m.hgl:19:33 local:type/type.mismatch EXPR-5",
-            "m.hgl:20:41 local:type/type.mismatch EXPR-5",
-            "m.hgl:24:25 local:name/member.unknown EXPR-7",
-            "m.hgl:26:21 local:name/member.unknown TYPE-7",
-            "m.hgl:29:16 local:type/enum.context_type TYPE-7",
-            "m.hgl:30:23 local:type/enum.context_type TYPE-7",
+            "m.hgl:13:28 type/type.mismatch EXPR-5",
+            "m.hgl:14:17 type/argument.missing EXPR-2",
+            "m.hgl:15:33 name/argument.unknown EXPR-2",
+            "m.hgl:17:16 type/struct.abstract TYPE-3",
+            "m.hgl:19:33 type/type.mismatch EXPR-5",
+            "m.hgl:20:41 type/type.mismatch EXPR-5",
+            "m.hgl:24:25 name/member.unknown EXPR-7",
+            "m.hgl:26:21 name/member.unknown TYPE-7",
+            "m.hgl:29:16 type/enum.context_type TYPE-7",
+            "m.hgl:30:23 type/enum.context_type TYPE-7",
         ]
     );
     assert_eq!(
@@ -774,12 +848,12 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:25 local:type/type.mismatch EXPR-5",
-            "m.hgl:14:28 local:type/argument.missing EXPR-2",
-            "m.hgl:15:26 local:type/type.mismatch TYPE-14",
-            "m.hgl:19:24 local:type/type.mismatch EXPR-5",
-            "m.hgl:24:40 local:type/type.mismatch EXPR-5",
-            "m.hgl:37:26 local:type/type.mismatch EXPR-5",
+            "m.hgl:9:25 type/type.mismatch EXPR-5",
+            "m.hgl:14:28 type/argument.missing EXPR-2",
+            "m.hgl:15:26 type/type.mismatch TYPE-14",
+            "m.hgl:19:24 type/type.mismatch EXPR-5",
+            "m.hgl:24:40 type/type.mismatch EXPR-5",
+            "m.hgl:37:26 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -853,33 +927,42 @@ fn a_struct_named_through_an_alias_is_constructed() {
     assert_eq!(
         checked.summary(),
         [
-            "app.hgl:4:36 local:type/type.mismatch EXPR-5",
-            "app.hgl:5:33 local:type/type.mismatch EXPR-5",
-            "app.hgl:6:20 local:type/argument.missing EXPR-2",
+            "app.hgl:4:36 type/type.mismatch EXPR-5",
+            "app.hgl:5:33 type/type.mismatch EXPR-5",
+            "app.hgl:6:20 type/argument.missing EXPR-2",
         ]
     );
 }
 
-/// ERR-6: "Ordinary/atomic dictionary brackets ... are strict
-/// point-in-time reads." A list is indexed by an `i64`, a dictionary by
-/// its key.
+/// EXPR-7: "Brackets read an element of a list or a tuple by an `i64`
+/// index, and the value a dictionary has for a key." ERR-6:
+/// "Ordinary/atomic dictionary brackets ... are strict point-in-time
+/// reads."
 #[test]
 fn an_element_is_read_by_its_index_or_its_key() {
     let checked = module(concat!(
-        "const fn elements(items: list<f64>, by_name: dict<str, i64>, a: i64) -> f64 {\n",
+        "const fn elements(items: list<f64>, by_name: dict<str, i64>, a: i64, pair: tuple<i64, str>) -> f64 {\n",
         "    let first = items[0]\n",
         "    let at = items[a]\n",
         "    let bad = items[\"x\"]\n",
         "    let count = by_name[\"x\"]\n",
         "    let wrong = by_name[a]\n",
+        // EXPR-7: "A tuple's index is a constant within its length: it
+        // selects the element's type."
+        "    let head = pair[0]\n",
+        "    let tail = pair[1]\n",
+        "    let beyond = pair[2]\n",
+        "    let moving = pair[a]\n",
         "    return first\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:21 local:type/type.mismatch EXPR-5",
-            "m.hgl:7:25 local:type/type.mismatch EXPR-5",
+            "m.hgl:5:21 type/type.mismatch EXPR-5",
+            "m.hgl:7:25 type/type.mismatch EXPR-5",
+            "m.hgl:10:23 type/tuple.index EXPR-7",
+            "m.hgl:11:23 type/tuple.index EXPR-7",
         ]
     );
     assert_eq!(
@@ -887,6 +970,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
         [
             "this is `str`, and the index of a list is `i64`",
             "this is `i64`, and the key of the dictionary is `str`",
+            "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
+            "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
         ]
     );
     assert_eq!(
@@ -895,11 +980,53 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "items: list<f64>",
             "by_name: dict<str, i64>",
             "a: i64",
+            "pair: tuple<i64, str>",
             "first: f64",
             "at: f64",
             "bad: f64",
             "count: i64",
             "wrong: i64",
+            "head: i64",
+            "tail: str",
+            "beyond: _",
+            "moving: _",
+        ]
+    );
+}
+
+// ---- What may be left out comes last ----
+
+/// UNIT-8: "A parameter that may be omitted follows every parameter that
+/// may not." TYPE-5: a field that may be left out "follows every field
+/// that may not be left out", a parent's fields counted first.
+#[test]
+fn what_may_be_left_out_follows_what_may_not() {
+    let checked = module(concat!(
+        "const fn fine(a: i64, b: i64 = 1, c: i64?) -> i64 => a\n",
+        "const fn late(a: i64 = 1, b: i64) -> i64 => b\n",
+        "fn nullable(a: i64?, b: i64) {}\n",
+        "fn packed(a: i64 = 1, rest: ...i64) {}\n",
+        "struct Fine {\n    id: i64\n    note: str?\n    size: i64 = 1\n}\n",
+        "struct Late {\n    size: i64 = 1\n    id: i64\n}\n",
+        "abstract struct Base { id: i64 = 0 }\n",
+        "struct Child : Base { extra: f64 }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:27 type/default.order UNIT-8",
+            "m.hgl:4:22 type/default.order UNIT-8",
+            "m.hgl:13:5 type/default.order TYPE-5",
+            "m.hgl:16:23 type/default.order TYPE-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "parameter `b` may not be omitted, and follows `a`, which may",
+            "parameter `b` may not be omitted, and follows `a`, which may",
+            "field `id` may not be left out, and follows `size`, which may",
+            "field `extra` may not be left out, and follows `id`, which may",
         ]
     );
 }

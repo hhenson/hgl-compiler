@@ -432,7 +432,7 @@ The pass is built form by form. So far it reads:
 | A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime` |
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
 | A name | UNIT-10, GEN-13 | A parameter, a local, or a generic value parameter, with its type |
-| An operator | NUM-1, NUM-6, EXPR-6 | `+ - * // %` of two `i64` are `i64`, with an `f64` they are `f64`; `/` is `f64`; a comparison is a `bool`; `&&`, `\|\|` and `!` take bools |
+| An operator | NUM-1, OPS-1, OPS-2, OPS-5 | By core's contracts. `+ - * // %` of two `i64` are `i64`, with an `f64` they are `f64`; `/` is `f64`. Strings, durations and instants take the operators of core's table, in either order where the operation commutes. Two of one ordered type are compared, and two values of one type are equal or not. Any other pairing is rejected. The Boolean connectives and `!` take bools |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
@@ -440,7 +440,7 @@ The pass is built form by form. So far it reads:
 | A construction | TYPE-5, TYPE-3, GEN-2 | Its arguments are given to the struct's fields, a parent's first, as a call's are. A generic struct takes its arguments from `Name<...>`, from the type expected, or from the fields given. An abstract struct is not constructed |
 | `Side.buy`, `.buy` | TYPE-7 | A member of the enum named, or of the enum the place expects: an annotation, a parameter, a field, a result, the other operand of a comparison |
 | `value.field` | EXPR-7 | A field the struct has, a parent's included, with the value's generic arguments in place |
-| `base[index]` | ERR-6 | An element of a list by an `i64`, or the value a dictionary has for a key |
+| `base[index]` | EXPR-7, ERR-6 | An element of a list by an `i64`, of a tuple by a constant within its length, or the value a dictionary has for a key |
 
 A value fits its place when its type is the one expected, when it is a
 `T` where a `T?` is expected, or when it is a struct where an abstract
@@ -455,33 +455,28 @@ it or of what uses it (ERR-9): an operator given configuration, `if`,
 or of an operator, a generic function's parameter and result types, the
 payload of a nullable or a result. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
-taken to be assigned. What an operator gives for operands that are not
-numbers, and the type of a `<=>` outcome, are for core to say and are
-not known here.
+taken to be assigned. An operand that is a generic parameter, or
+nullable, is not judged: its constraints, or its guard, say what it
+admits. The type of a `<=>` outcome is core's `CmpResult`, which no HGL
+source declares yet, and is not known here.
 
 A generic application that has been reported, `Box<7>(value: 1)`, makes
 a value whose type is not known: nothing more is reported of it.
 
-Fourteen rejections have no catalogue row yet and carry codes local to
-this compiler (`hgl_analyser::codes::local`), proposed in
-[hgl_spec issue 28](https://github.com/hhenson/hgl_spec/issues/28):
+Each rejection has a row of the catalogue: `type.mismatch`,
+`null.context_type`, `sequence.context_type`, `enum.context_type`,
+`binding.unassigned`, `binding.immutable`, the five `argument.` codes,
+`call.role`, `struct.abstract`, `member.unknown` and `operator.operand`.
 
-| Local code | Rejection |
-| --- | --- |
-| `type.mismatch` | A value's type is not the type its place expects; `null` where the type has no `?` |
-| `binding.unassigned` | A `var` read before it is given a value |
-| `binding.immutable` | A binding that is no `var` assigned |
-| `argument.order` | An argument with no name after a named one |
-| `argument.unexpected` | More positional arguments than parameters or fields |
-| `argument.unknown` | A named argument that names no parameter or field |
-| `argument.duplicate` | A parameter or field given twice |
-| `argument.missing` | A parameter or field with no default given nothing |
-| `call.role` | A temporal function called from a value function |
-| `struct.abstract` | An abstract struct constructed |
-| `member.unknown` | A field a struct has not, or a member an enum has not |
-| `enum.context_type` | `.member` where no enum type is expected |
-| `null.context_type` | `null` where nothing gives it a type |
-| `sequence.context_type` | A sequence whose entries give no type, where none is expected |
+What may be left out comes last (UNIT-8, TYPE-5): a parameter with a
+default or a type written `T?` follows every parameter that has
+neither, and a field with a default or an optional type follows every
+field that has neither, a parent's fields counted first. The `forms`
+pass checks parameters and the `declared` pass fields.
+
+Its rejection is `default.order`, and a tuple's index that is no
+constant or is outside the tuple is `tuple.index`. The analyser has no
+local code.
 
 ### Order
 
@@ -587,10 +582,9 @@ condition but names no code). Only a catalogued code may satisfy
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
-the limit is the compiler's, not the language's. The analyser reports 53
-catalogued codes (`hgl_analyser::codes`) and fourteen local ones
-(`hgl_analyser::codes::local`), and its tests check each diagnostic's
-category and code against the catalogue.
+the limit is the compiler's, not the language's. The analyser reports 70
+codes, all catalogued (`hgl_analyser::codes`), and its tests check each
+diagnostic's category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.

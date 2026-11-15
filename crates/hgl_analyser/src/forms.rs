@@ -153,6 +153,9 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         .filter(|child| child.kind() == SyntaxKind::Param);
     // The `...` of the first pack met, once one has been.
     let mut pack_seen: Option<SyntaxToken> = None;
+    // The name of the first parameter met that may be omitted, once one
+    // has been.
+    let mut omissible_seen: Option<SyntaxToken> = None;
     for parameter in parameters {
         let ellipsis = tokens(&parameter).find(|token| token.kind() == SyntaxKind::Ellipsis);
         // The identifiers before the `:`: the name, after `const` when
@@ -178,6 +181,33 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
                     .with_related(at(pack), "the pack is here")
                     .with_note("packs follow all fixed parameters"),
                 );
+            }
+            // UNIT-8: "A parameter that may be omitted follows every
+            // parameter that may not." One may be omitted when it has
+            // a default or its type is written `T?`.
+            let omissible = tokens(&parameter).any(|token| token.kind() == SyntaxKind::Eq)
+                || parameter
+                    .children()
+                    .next()
+                    .is_some_and(|ty| ty.kind() == SyntaxKind::NullableType);
+            match (&omissible_seen, omissible) {
+                (None, true) => omissible_seen = Some(name.clone()),
+                (Some(earlier), false) => diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::DEFAULT_ORDER,
+                        at(name),
+                        format!(
+                            "parameter `{}` may not be omitted, and follows `{}`, which may",
+                            name.text(),
+                            earlier.text()
+                        ),
+                        "UNIT-8",
+                    )
+                    .with_related(at(earlier), "this one may be omitted")
+                    .with_note("a parameter with a default or a type `T?` comes after the others"),
+                ),
+                _ => {}
             }
             continue;
         };

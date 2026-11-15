@@ -89,6 +89,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         structs.fields(id);
     }
     structs.recursion(&ids);
+    for &id in &ids {
+        structs.field_order(id);
+    }
     // What each struct has, for the passes that read constructors and
     // member accesses.
     let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
@@ -885,6 +888,49 @@ impl Structs<'_> {
             }
         }
         members
+    }
+
+    /// TYPE-5: a field that may be left out, one with a default or an
+    /// optional one, "follows every field that may not be left out", a
+    /// parent's fields counted first.
+    fn field_order(&mut self, id: Id) {
+        let members = self.members(id);
+        let Some(read) = self.struct_type(id) else {
+            return;
+        };
+        // Where the struct's own fields are declared.
+        let own: Vec<Location> = read.fields.iter().map(|field| field.at).collect();
+        let mut earlier: Option<&Member> = None;
+        let mut problem = None;
+        for member in &members {
+            let optional = is_optional(&member.ty);
+            if member.has_default || optional == Some(true) {
+                earlier.get_or_insert(member);
+            } else if let (Some(earlier), Some(false)) = (earlier, optional) {
+                problem = Some((member, earlier));
+                break;
+            }
+        }
+        let Some((member, earlier)) = problem else {
+            return;
+        };
+        // A field of the struct's own is reported where it is declared;
+        // one that two parents put in this order, at the struct.
+        let at = if own.contains(&member.at) {
+            member.at
+        } else {
+            self.declaration(id).at
+        };
+        let message = format!(
+            "field `{}` may not be left out, and follows `{}`, which may",
+            member.name, earlier.name
+        );
+        let earlier_at = earlier.at;
+        self.diagnostics.emit(
+            error(Category::Type, codes::DEFAULT_ORDER, at, message, "TYPE-5")
+                .with_related(earlier_at, "this one may be left out")
+                .with_note("a field with a default or an optional type comes after the others"),
+        );
     }
 
     /// The struct `id` and every struct it inherits from.

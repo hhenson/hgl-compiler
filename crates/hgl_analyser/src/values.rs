@@ -45,7 +45,7 @@ use crate::types::{
     Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar,
     Signature, Type,
 };
-use crate::{codes, local_error};
+use crate::{codes, error};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -209,9 +209,9 @@ impl<'a> Typer<'a> {
                 if let (None, Some(result)) = (&value, &self.signature.result)
                     && !open(result)
                 {
-                    self.diagnostics.emit(local_error(
+                    self.diagnostics.emit(error(
                         Category::Type,
-                        codes::local::TYPE_MISMATCH,
+                        codes::TYPE_MISMATCH,
                         at,
                         format!("this returns no value, and the function's result is `{result}`"),
                         "FN-7",
@@ -220,9 +220,9 @@ impl<'a> Typer<'a> {
                 // "`return value` [rejects] in a function that declares
                 // no result."
                 if let (Some(value), None) = (&value, &self.signature.result) {
-                    self.diagnostics.emit(local_error(
+                    self.diagnostics.emit(error(
                         Category::Type,
-                        codes::local::TYPE_MISMATCH,
+                        codes::TYPE_MISMATCH,
                         value.at,
                         "this returns a value, and the function declares no result".to_string(),
                         "FN-7",
@@ -313,6 +313,12 @@ impl<'a> Typer<'a> {
             return self.unread(node);
         };
         let operator = tokens(node).find_map(|token| compound(token.kind()));
+        // Where the assignment's operator is written: `+=`.
+        let operator_at = tokens(node)
+            .find(|token| compound(token.kind()).is_some())
+            .map_or(self.at(node), |token| {
+                Location::new(self.file, token.span())
+            });
         let at = self.at(node);
         let target = self.locals[local].ty.clone();
         if !matches!(
@@ -320,9 +326,9 @@ impl<'a> Typer<'a> {
             LocalKind::Var | LocalKind::State | LocalKind::Cache
         ) {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Name,
-                    codes::local::BINDING_IMMUTABLE,
+                    codes::BINDING_IMMUTABLE,
                     self.at(&place),
                     format!(
                         "`{}` is {} and cannot be assigned: only a `var` can",
@@ -351,7 +357,7 @@ impl<'a> Typer<'a> {
                 // The target is the left operand, and is read.
                 let left = self.read_local(local, &place);
                 let right = self.expression(&value, None);
-                let result = self.binary_type(operator, &left, &right);
+                let result = self.binary_type(operator, &left, &right, operator_at);
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
                 right
             }
@@ -456,9 +462,9 @@ impl<'a> Typer<'a> {
                     // "It does not make null an admitted value of
                     // unqualified T."
                     Some(expected) if !open(expected) => {
-                        self.diagnostics.emit(local_error(
+                        self.diagnostics.emit(error(
                             Category::Type,
-                            codes::local::TYPE_MISMATCH,
+                            codes::TYPE_MISMATCH,
                             self.at(node),
                             format!("`null` is no value of `{expected}`: write `{expected}?`"),
                             "TYPE-14",
@@ -470,9 +476,9 @@ impl<'a> Typer<'a> {
                     // "`null` has the nullable type its place expects,
                     // and rejects where nothing gives it one."
                     None => {
-                        self.diagnostics.emit(local_error(
+                        self.diagnostics.emit(error(
                             Category::Type,
-                            codes::local::NULL_CONTEXT,
+                            codes::NULL_CONTEXT,
                             self.at(node),
                             "`null` has the type its place expects, and nothing here gives \
                              one: write the type"
@@ -550,9 +556,9 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         if !self.assigned[local] {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Name,
-                    codes::local::BINDING_UNASSIGNED,
+                    codes::BINDING_UNASSIGNED,
                     at,
                     format!(
                         "`{}` is read before it is given a value",
@@ -642,9 +648,9 @@ impl<'a> Typer<'a> {
                 && let ConstantValue::Int(size) = size.value
                 && i64::try_from(elements.len()) != Ok(size)
             {
-                self.diagnostics.emit(local_error(
+                self.diagnostics.emit(error(
                     Category::Type,
-                    codes::local::TYPE_MISMATCH,
+                    codes::TYPE_MISMATCH,
                     self.at(node),
                     format!(
                         "this has {} {}, and a `{expected}` has {size}",
@@ -674,9 +680,9 @@ impl<'a> Typer<'a> {
         // reported.
         let Some(&first) = known.first() else {
             if unexpected {
-                self.diagnostics.emit(local_error(
+                self.diagnostics.emit(error(
                     Category::Type,
-                    codes::local::SEQUENCE_CONTEXT,
+                    codes::SEQUENCE_CONTEXT,
                     self.at(node),
                     "nothing here says what this sequence holds: write its type".to_string(),
                     "EXPR-9",
@@ -722,7 +728,8 @@ impl<'a> Typer<'a> {
     }
 
     /// `-value`, `!value`. NUM-1: "Unary negation preserves the numeric
-    /// type." `!` is of a bool (EXPR-6).
+    /// type." `!` is of a bool (EXPR-6; OPS-5: "`&&`, `||`, and `!` take
+    /// bools").
     fn unary(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         // An operator given configuration, `-{...} x`, is for the pass
         // that reads configuration.
@@ -752,11 +759,23 @@ impl<'a> Typer<'a> {
                     );
                 }
                 let operand = self.expression(&operand, None);
-                // What `-` gives for a value that is no number is for
-                // core to say.
+                // NUM-1: "Unary negation preserves the numeric type."
+                // OPS-1: `-x` of a `duration` is a `duration`.
                 let ty = match &operand.ty {
-                    Type::Scalar(Scalar::I64 | Scalar::F64) => operand.ty.clone(),
-                    _ => Type::Unknown,
+                    Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Duration) => {
+                        operand.ty.clone()
+                    }
+                    ty if unjudged_operand(ty) => Type::Unknown,
+                    ty => {
+                        self.diagnostics.emit(error(
+                            Category::Operator,
+                            codes::OPERATOR_OPERAND,
+                            Location::new(self.file, token.span()),
+                            format!("`-` takes no `{ty}`"),
+                            "OPS-1",
+                        ));
+                        Type::Unknown
+                    }
                 };
                 let kind = ExprKind::Unary {
                     operator: UnaryOperator::Negate,
@@ -777,6 +796,11 @@ impl<'a> Typer<'a> {
         }
         let mut operands = node.children();
         let operator = tokens(node).find_map(|token| binary_operator(token.kind()));
+        let operator_at = tokens(node)
+            .find(|token| binary_operator(token.kind()).is_some())
+            .map_or(self.at(node), |token| {
+                Location::new(self.file, token.span())
+            });
         let (Some(left), Some(right), Some(operator)) =
             (operands.next(), operands.next(), operator)
         else {
@@ -813,7 +837,7 @@ impl<'a> Typer<'a> {
             }
             _ => (self.expression(&left, None), self.expression(&right, None)),
         };
-        let ty = self.binary_type(operator, &left, &right);
+        let ty = self.binary_type(operator, &left, &right, operator_at);
         let kind = ExprKind::Binary {
             operator,
             left: Box::new(left),
@@ -822,44 +846,79 @@ impl<'a> Typer<'a> {
         (kind, ty)
     }
 
-    /// The type of `left operator right`, by core's numeric contract.
+    /// The type of `left operator right`, by core's contracts. `at` is
+    /// where the operator is written.
     ///
     /// NUM-1: "For i64 operands, `+`, `-`, `*`, `//`, and `%` return
     /// i64. Unconfigured mixed i64/f64 and f64 arithmetic returns f64;
-    /// `/` defaults to f64." A comparison is a bool (NUM-6's table).
-    /// What an operator gives for operands that are not numbers, and
-    /// the type of a `<=>` outcome, are for core to say: not known
-    /// here, and not reported.
-    fn binary_type(&mut self, operator: BinaryOperator, left: &Expr, right: &Expr) -> Type {
-        let integer = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64));
-        let number = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
-        match operator {
-            BinaryOperator::And
-            | BinaryOperator::Or
-            | BinaryOperator::Equal
-            | BinaryOperator::NotEqual
-            | BinaryOperator::Less
-            | BinaryOperator::LessEqual
-            | BinaryOperator::Greater
-            | BinaryOperator::GreaterEqual => BOOL,
-            BinaryOperator::Compare => Type::Unknown,
-            BinaryOperator::Divide if number(&left.ty) && number(&right.ty) => {
-                Type::Scalar(Scalar::F64)
+    /// `/` defaults to f64." OPS-1: "The symbol operators admit the
+    /// operand types of the first table below ... Every other pairing
+    /// is a source rejection." OPS-2: which types are ordered, and that
+    /// equality is between two values of one type.
+    ///
+    /// An operand whose type is not known, a generic parameter, whose
+    /// operators its constraints say, and a nullable one, whose payload
+    /// needs its guard, are not judged here.
+    fn binary_type(
+        &mut self,
+        operator: BinaryOperator,
+        left: &Expr,
+        right: &Expr,
+        at: Location,
+    ) -> Type {
+        use BinaryOperator as Op;
+        let comparison = matches!(
+            operator,
+            Op::Equal | Op::NotEqual | Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual
+        );
+        // What the operator gives when nothing can be said of its
+        // operands. The type of a `<=>` outcome, core's `CmpResult`, is
+        // not declared in HGL source yet, and is not known here.
+        let unjudged = if comparison || matches!(operator, Op::And | Op::Or) {
+            BOOL
+        } else {
+            Type::Unknown
+        };
+        if matches!(operator, Op::And | Op::Or)
+            || unjudged_operand(&left.ty)
+            || unjudged_operand(&right.ty)
+        {
+            return unjudged;
+        }
+        let found = match operator {
+            Op::Equal | Op::NotEqual => {
+                // "Two values of one type", a number with a number
+                // included (NUM-2).
+                let one_type = self.admits(&left.ty, &right.ty) || self.admits(&right.ty, &left.ty);
+                (one_type || (is_number(&left.ty) && is_number(&right.ty))).then_some(BOOL)
             }
-            BinaryOperator::Add
-            | BinaryOperator::Subtract
-            | BinaryOperator::Multiply
-            | BinaryOperator::FloorDivide
-            | BinaryOperator::Modulo
-                if number(&left.ty) && number(&right.ty) =>
-            {
-                if integer(&left.ty) && integer(&right.ty) {
-                    Type::Scalar(Scalar::I64)
-                } else {
-                    Type::Scalar(Scalar::F64)
-                }
+            _ => match (scalar_of(&left.ty), scalar_of(&right.ty)) {
+                (Some(left), Some(right)) => operator_result(operator, left, right),
+                _ => None,
+            },
+        };
+        match found {
+            Some(_) if matches!(operator, Op::Compare) => Type::Unknown,
+            Some(ty) => ty,
+            None => {
+                self.diagnostics.emit(error(
+                    Category::Operator,
+                    codes::OPERATOR_OPERAND,
+                    at,
+                    format!(
+                        "`{}` takes no `{}` and `{}`",
+                        operator.symbol(),
+                        left.ty,
+                        right.ty
+                    ),
+                    if comparison || matches!(operator, Op::Compare) {
+                        "OPS-2"
+                    } else {
+                        "OPS-1"
+                    },
+                ));
+                unjudged
             }
-            _ => Type::Unknown,
         }
     }
 
@@ -940,9 +999,9 @@ impl<'a> Typer<'a> {
             // FN-3: "A runtime body calls only value functions, and so
             // does a value function." FN-4: "A bad selected signature
             // is an error, not fallback to the other role."
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::FunctionKind,
-                codes::local::CALL_ROLE,
+                codes::CALL_ROLE,
                 Location::new(self.file, name.span()),
                 format!(
                     "`{}` is a temporal function, and a value function calls value functions",
@@ -1069,9 +1128,9 @@ impl<'a> Typer<'a> {
         };
         if has_token(&declared.syntax, SyntaxKind::KwAbstract) {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::STRUCT_ABSTRACT,
+                    codes::STRUCT_ABSTRACT,
                     Location::new(self.file, name.span()),
                     format!(
                         "`{}` is an abstract struct and is not constructed",
@@ -1240,9 +1299,9 @@ impl<'a> Typer<'a> {
             let slot = match &name {
                 None => {
                     if named_seen {
-                        self.diagnostics.emit(local_error(
+                        self.diagnostics.emit(error(
                             Category::Type,
-                            codes::local::ARGUMENT_ORDER,
+                            codes::ARGUMENT_ORDER,
                             at,
                             "an argument with no name follows a named one: positional \
                              arguments come first"
@@ -1257,9 +1316,9 @@ impl<'a> Typer<'a> {
                         .find(|&index| !filled[index] && slots[index].pack.is_none());
                     if next.is_none() && !has_pack(Pack::Positional) {
                         let fixed = slots.iter().filter(|slot| slot.pack.is_none()).count();
-                        self.diagnostics.emit(local_error(
+                        self.diagnostics.emit(error(
                             Category::Type,
-                            codes::local::ARGUMENT_UNEXPECTED,
+                            codes::ARGUMENT_UNEXPECTED,
                             at,
                             format!(
                                 "`{}` has {fixed} {what}{}, and this is one more",
@@ -1279,9 +1338,9 @@ impl<'a> Typer<'a> {
                         .position(|slot| slot.pack.is_none() && slot.name == name.text());
                     match found {
                         Some(index) if filled[index] => {
-                            self.diagnostics.emit(local_error(
+                            self.diagnostics.emit(error(
                                 Category::Name,
-                                codes::local::ARGUMENT_DUPLICATE,
+                                codes::ARGUMENT_DUPLICATE,
                                 name_at,
                                 format!("`{}` is given twice", name.text()),
                                 "EXPR-2",
@@ -1293,9 +1352,9 @@ impl<'a> Typer<'a> {
                         // leave (FN-8).
                         None if has_pack(Pack::Named) => None,
                         None => {
-                            self.diagnostics.emit(local_error(
+                            self.diagnostics.emit(error(
                                 Category::Name,
-                                codes::local::ARGUMENT_UNKNOWN,
+                                codes::ARGUMENT_UNKNOWN,
                                 name_at,
                                 format!("`{}` has no {what} `{}`", callee.text(), name.text()),
                                 "EXPR-2",
@@ -1312,9 +1371,9 @@ impl<'a> Typer<'a> {
         }
         for (index, slot) in slots.iter().enumerate() {
             if slot.required && slot.pack.is_none() && !filled[index] {
-                self.diagnostics.emit(local_error(
+                self.diagnostics.emit(error(
                     Category::Type,
-                    codes::local::ARGUMENT_MISSING,
+                    codes::ARGUMENT_MISSING,
                     callee_at,
                     format!(
                         "`{}` is given no `{}`, a {what} with no default",
@@ -1405,9 +1464,9 @@ impl<'a> Typer<'a> {
             .iter()
             .position(|member| member.name == name.text())
         else {
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Name,
-                codes::local::MEMBER_UNKNOWN,
+                codes::MEMBER_UNKNOWN,
                 Location::new(self.file, name.span()),
                 format!("`{}` has no field `{}`", base.ty, name.text()),
                 "EXPR-7",
@@ -1461,9 +1520,9 @@ impl<'a> Typer<'a> {
             }
             None => {
                 self.diagnostics.emit(
-                    local_error(
+                    error(
                         Category::Name,
-                        codes::local::MEMBER_UNKNOWN,
+                        codes::MEMBER_UNKNOWN,
                         Location::new(self.file, name.span()),
                         format!("`{}` has no member `{}`", declared.name, name.text()),
                         "TYPE-7",
@@ -1499,9 +1558,9 @@ impl<'a> Typer<'a> {
                     Some(expected) => format!("a `{expected}` is expected here"),
                     None => "nothing here says which".to_string(),
                 };
-                self.diagnostics.emit(local_error(
+                self.diagnostics.emit(error(
                     Category::Type,
-                    codes::local::ENUM_CONTEXT,
+                    codes::ENUM_CONTEXT,
                     self.at(node),
                     format!(
                         "`.{}` is a member of the enum its place expects, and {place}",
@@ -1514,10 +1573,10 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// `base[index]`: an element of a list, or the value a dictionary
-    /// has for a key (ERR-6: "Ordinary/atomic dictionary brackets ...
-    /// are strict point-in-time reads"). Any other base is for a later
-    /// part.
+    /// `base[index]`: an element of a list or a tuple, or the value a
+    /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
+    /// dictionary brackets ... are strict point-in-time reads"). Any
+    /// other base is for a later part.
     fn index(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let mut parts = node.children();
         let (Some(base), Some(index)) = (parts.next(), parts.next()) else {
@@ -1532,6 +1591,34 @@ impl<'a> Typer<'a> {
                     self.fit(index, &integer, "the index of a list"),
                     (**element).clone(),
                 )
+            }
+            // EXPR-7: "A tuple's index is a constant within its length:
+            // it selects the element's type."
+            Type::Tuple(elements) => {
+                let integer = Type::Scalar(Scalar::I64);
+                let index = self.expression(&index, Some(&integer));
+                let position = match &index.kind {
+                    ExprKind::Literal(Value::Int(value)) => usize::try_from(*value).ok(),
+                    _ => None,
+                };
+                let ty = match position.and_then(|position| elements.get(position)) {
+                    Some(element) => element.clone(),
+                    None => {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::TUPLE_INDEX,
+                            index.at,
+                            format!(
+                                "a tuple's index is a constant, here one of 0 to {}: it \
+                                 selects the element's type",
+                                elements.len().saturating_sub(1)
+                            ),
+                            "EXPR-7",
+                        ));
+                        Type::Unknown
+                    }
+                };
+                (index, ty)
             }
             Type::Dict { key, value } => {
                 let index = self.expression(&index, Some(key));
@@ -1575,9 +1662,9 @@ impl<'a> Typer<'a> {
         if self.admits(expected, ty) {
             return;
         }
-        self.diagnostics.emit(local_error(
+        self.diagnostics.emit(error(
             Category::Type,
-            codes::local::TYPE_MISMATCH,
+            codes::TYPE_MISMATCH,
             at,
             format!("this is `{ty}`, and {what} is `{expected}`"),
             "EXPR-5",
@@ -1675,6 +1762,100 @@ impl<'a> Typer<'a> {
 
 /// `bool`.
 const BOOL: Type = Type::Scalar(Scalar::Bool);
+
+/// True when an operator's contract is not applied to an operand of
+/// this type here: it is not known, it is a generic parameter, whose
+/// operators its constraints say, or it is nullable, and its payload
+/// needs its guard first.
+fn unjudged_operand(ty: &Type) -> bool {
+    open(ty) || matches!(ty, Type::Parameter { .. } | Type::Nullable(_))
+}
+
+/// True for `i64` and `f64`.
+fn is_number(ty: &Type) -> bool {
+    matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64))
+}
+
+/// The scalar a type is, when it is one.
+fn scalar_of(ty: &Type) -> Option<Scalar> {
+    match ty {
+        Type::Scalar(scalar) => Some(*scalar),
+        _ => None,
+    }
+}
+
+/// What an arithmetic or ordering operator gives for two scalars, by
+/// core's contracts; `None` for a pairing they do not admit.
+///
+/// NUM-1 for numbers. OPS-1's table for the others: "An operation that
+/// commutes admits its operands in either order; one that does not
+/// admits the order shown." OPS-2: the ordered types are `str`, `bool`,
+/// `date`, `time`, `datetime`, `civil_datetime` and `duration`, and the
+/// numbers.
+fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Option<Type> {
+    use BinaryOperator as Op;
+    use Scalar::{
+        Bool, CivilDatetime, Date, Datetime, Duration, F64, I64, Str, Time, ZonedDatetime,
+    };
+    let number = |scalar: Scalar| matches!(scalar, I64 | F64);
+    let instant =
+        |scalar: Scalar| matches!(scalar, Datetime | Date | CivilDatetime | ZonedDatetime);
+    let scalar = |scalar: Scalar| Some(Type::Scalar(scalar));
+    // The result of arithmetic on two numbers.
+    let numeric = || {
+        if left == I64 && right == I64 {
+            scalar(I64)
+        } else {
+            scalar(F64)
+        }
+    };
+    match operator {
+        Op::Add => match (left, right) {
+            _ if number(left) && number(right) => numeric(),
+            (Str, Str) => scalar(Str),
+            (Duration, Duration) => scalar(Duration),
+            (at, Duration) | (Duration, at) if instant(at) => scalar(at),
+            (Date, Time) | (Time, Date) => scalar(CivilDatetime),
+            _ => None,
+        },
+        Op::Subtract => match (left, right) {
+            _ if number(left) && number(right) => numeric(),
+            (Duration, Duration) => scalar(Duration),
+            (at, Duration) if instant(at) => scalar(at),
+            (Datetime, Datetime) | (Date, Date) | (CivilDatetime, CivilDatetime) => {
+                scalar(Duration)
+            }
+            _ => None,
+        },
+        Op::Multiply => match (left, right) {
+            _ if number(left) && number(right) => numeric(),
+            (Duration, other) | (other, Duration) if number(other) => scalar(Duration),
+            (Str, I64) | (I64, Str) => scalar(Str),
+            _ => None,
+        },
+        Op::Divide => match (left, right) {
+            _ if number(left) && number(right) => scalar(F64),
+            (Duration, other) if number(other) => scalar(Duration),
+            (Duration, Duration) => scalar(F64),
+            _ => None,
+        },
+        Op::FloorDivide => match (left, right) {
+            _ if number(left) && number(right) => numeric(),
+            (Duration, Duration) => scalar(I64),
+            _ => None,
+        },
+        Op::Modulo => (number(left) && number(right)).then(numeric).flatten(),
+        Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual | Op::Compare => {
+            let ordered = matches!(
+                left,
+                Str | Bool | Date | Time | Datetime | CivilDatetime | Duration
+            );
+            ((number(left) && number(right)) || (left == right && ordered)).then_some(BOOL)
+        }
+        // Equality and the connectives are not read from this table.
+        Op::Equal | Op::NotEqual | Op::And | Op::Or => Some(BOOL),
+    }
+}
 
 /// What an argument may be given to: a parameter of a function, or a
 /// field of a struct.
