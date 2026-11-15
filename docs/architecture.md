@@ -523,11 +523,10 @@ diagnostic's category and code against the catalogue.
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
 
-Where two catalogue rows cover one condition the lexer takes one reading,
-listed in [hgl_spec issue 11](https://github.com/hhenson/hgl_spec/issues/11)
-for the specification to decide:
+Where two catalogue rows could cover one condition, the specification
+names one (LEX-12, LEX-25):
 
-| Condition | Code used |
+| Condition | Code |
 | --- | --- |
 | Text block that reaches the end of the file | `string.unclosed` |
 | Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
