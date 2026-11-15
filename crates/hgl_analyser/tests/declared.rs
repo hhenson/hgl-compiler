@@ -242,7 +242,7 @@ fn a_field_is_compared_by_what_its_type_means() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:22 local:type/field.conflict TYPE-4"]
+        ["m.hgl:10:23 local:type/field.conflict TYPE-4"]
     );
     assert_eq!(
         checked.findings[0].message,
