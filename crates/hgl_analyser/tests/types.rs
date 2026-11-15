@@ -706,8 +706,9 @@ fn signal_is_the_whole_type_of_an_input() {
 /// TYPE-14: "`T?` denotes an ordinary value that is either a T or null,
 /// where T is an admitted ordinary value type ... Where T is no ordinary
 /// value type ... `T?` is admitted only as the whole type of a
-/// function's temporal parameter: its argument may be omitted ... It is
-/// no result type."
+/// function's temporal parameter, whose argument may be omitted
+/// (UNIT-8), or of a struct field, which is then optional (TYPE-4). It
+/// is no result type, local's annotation, or part of another type."
 #[test]
 fn a_nullable_type_is_an_ordinary_value_or_null() {
     let checked = module(concat!(
@@ -715,28 +716,32 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         // On the whole type of an input `?` follows any type: the
         // argument may be omitted.
         "fn inputs(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
-        // Not in a result, a field, a part of another type, a value
-        // function's parameter or a `const` one.
+        // Not in a result, a local's annotation, a part of another
+        // type, a value function's parameter or a `const` one.
         "fn output() -> ref<f64>? {}\n",
-        "struct Field { next: atomic<i64>? }\n",
+        "fn body() {\n    let window: rolling<f64, 5>? = make()\n}\n",
         "fn parts(a: list<ref<f64>?>, b: dict<str, rolling<f64, 5>?>) {}\n",
         "const fn values(a: rolling<f64, 5>?) -> i64 => 1\n",
         "fn configured(const a: ref<f64>?) {}\n",
         // As what a set's element must be, and as a key that takes no
         // `?`.
         "fn once(a: set<ref<f64>?>) {}\n",
+        // On the whole type of a field it makes the field optional; a
+        // `signal` is no field with it or without.
+        "struct Fields {\n    last: atomic<i64>?\n    window: rolling<f64, 5>?\n    tick: signal?\n}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:4:16 type/type.not_ordinary TYPE-14",
-            "m.hgl:5:22 type/type.not_ordinary TYPE-14",
-            "m.hgl:6:18 type/type.not_ordinary TYPE-14",
-            "m.hgl:6:43 type/type.not_ordinary TYPE-14",
-            "m.hgl:7:20 type/type.not_ordinary FN-1",
-            "m.hgl:8:24 type/type.not_ordinary TYPE-12",
-            "m.hgl:9:16 type/nullable.key TYPE-14",
-            "m.hgl:9:16 type/type.not_ordinary TYPE-12",
+            "m.hgl:6:17 type/type.not_ordinary TYPE-14",
+            "m.hgl:8:18 type/type.not_ordinary TYPE-14",
+            "m.hgl:8:43 type/type.not_ordinary TYPE-14",
+            "m.hgl:9:20 type/type.not_ordinary FN-1",
+            "m.hgl:10:24 type/type.not_ordinary TYPE-12",
+            "m.hgl:11:16 type/nullable.key TYPE-14",
+            "m.hgl:11:16 type/type.not_ordinary TYPE-12",
+            "m.hgl:15:11 type/signal.position TYPE-12",
         ]
     );
     assert_eq!(

@@ -203,8 +203,8 @@ struct Position {
     /// True where `signal` may stand.
     signal: bool,
     /// True where `?` may follow a type that is no ordinary value type:
-    /// the whole type of an input, whose argument may then be omitted
-    /// (TYPE-14).
+    /// the whole type of an input, whose argument may then be omitted,
+    /// or of a struct field, which is then optional (TYPE-14).
     omissible: bool,
     /// True where the name of a type pack may stand.
     pack: bool,
@@ -229,6 +229,13 @@ impl Position {
     /// may `?` after a type that is no ordinary value type (TYPE-14).
     const INPUT: Position = Position {
         signal: true,
+        omissible: true,
+        ..Position::PLAIN
+    };
+
+    /// The whole type of a struct field: `?` may follow a type that is
+    /// no ordinary value type, and the field is then optional (TYPE-14).
+    const FIELD: Position = Position {
         omissible: true,
         ..Position::PLAIN
     };
@@ -873,7 +880,8 @@ impl Reader<'_> {
                     Position::PLAIN
                 }
             }
-            SyntaxKind::StructMember | SyntaxKind::StructBases => Position::PLAIN,
+            SyntaxKind::StructMember => Position::FIELD,
+            SyntaxKind::StructBases => Position::PLAIN,
             // GEN-13: "An explicit `const N: V` declares a value
             // parameter of ordinary type V."
             SyntaxKind::GenericParam => Position::value("a generic value parameter", "GEN-13"),
@@ -1024,8 +1032,10 @@ impl Reader<'_> {
     /// TYPE-14: "`T?` denotes an ordinary value that is either a T or
     /// null, where T is an admitted ordinary value type ... Where T is
     /// no ordinary value type ... `T?` is admitted only as the whole
-    /// type of a function's temporal parameter: its argument may be
-    /// omitted ... It is no result type."
+    /// type of a function's temporal parameter, whose argument may be
+    /// omitted (UNIT-8), or of a struct field, which is then optional
+    /// (TYPE-4). It is no result type, local's annotation, or part of
+    /// another type."
     fn nullable(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let Some(base) = type_child(node) else {
             return Type::Unknown;
@@ -1034,7 +1044,8 @@ impl Reader<'_> {
             // Where the place around it asks for an ordinary value
             // type already, that place is the one named.
             Some(_) => position,
-            // The whole type of an input: any type the input may have.
+            // The whole type of an input or a field: any type it may
+            // have.
             None if position.omissible => Position {
                 omissible: false,
                 ..position

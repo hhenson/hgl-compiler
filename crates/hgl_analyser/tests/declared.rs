@@ -800,8 +800,11 @@ fn a_recursive_field_may_be_nullable() {
         "struct Listed { items: list<Listed>? }\n",
         // Nullable inside the field's type is not the field's type.
         "struct Inner { items: tuple<Inner?, i64> }\n",
-        // An `atomic<...>` of a nullable type is optional.
+        // An `atomic<...>` of a nullable type is optional, and so is
+        // one that is itself followed by `?` (TYPE-14).
         "struct Snapshot { next: atomic<Snapshot?> }\n",
+        "struct Chain { next: atomic<Chain>? }\n",
+        "struct Forest { trees: atomic<list<Forest>>? = null }\n",
     ));
     assert_eq!(
         checked.summary(),

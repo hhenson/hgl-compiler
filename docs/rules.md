@@ -105,7 +105,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
 | UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
 | UNIT-7 | analyser | partial | A default reads no parameter of its declaration and no field of its struct. Left: the closure an imported default keeps |
-| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. Left: defaults as required constants of the expected type; a temporal default as a constant of its type |
+| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. Left: defaults as required constants of the expected type; a temporal default as a constant of its type; a call that omits a parameter written `T?` |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
@@ -126,7 +126,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-4 | analyser | partial | A field's type, and so its optionality, agrees between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name; a default of null only on an optional field. Left: a default's value against its field's type |
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
-| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an optional field, `Node?` or `atomic<Node?>`, whose null default the structs below keep; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
+| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an optional field, `Node?`, `atomic<Node?>` or `atomic<Node>?`, whose null default the structs below keep; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
 | TYPE-7 | analyser | partial | Numbering from zero or the number written; numbers are integers no two members share; overflow rejected. Left: members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
@@ -136,10 +136,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-10 | analyser | partial | A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists. Left: sizes computed from other constants; an unsized pattern accepting a fixed size |
 | TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`); an omitted minimum is the maximum in identity. Left: sizes computed from other constants |
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
-| TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits |
+| TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits; a `signal` input's default other than `null` |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input; a set's element and a dictionary's key take none. Left: null is no value of plain T; an input with `?` may be omitted by a call |
+| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. Left: null is no value of plain T |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 
