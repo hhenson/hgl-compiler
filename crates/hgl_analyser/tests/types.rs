@@ -590,6 +590,9 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
         "fn results(a: result<ref<f64>, error>, b: result<f64, rolling<f64, 5>>) {}\n",
         // A value is made of values, however deep.
         "fn deep(a: set<list<tuple<i64, ref<f64>>>>, b: atomic<dict<str, signal>>) {}\n",
+        // And so through the arguments of a generic type.
+        "struct Box<T> { value: T }\n",
+        "fn boxed(a: atomic<Box<ref<i64>>>, b: set<Box<list<rolling<f64, 5>>>>, c: Box<ref<i64>>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -607,6 +610,8 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
             "m.hgl:10:55 local:type/type.not_ordinary TYPE-13",
             "m.hgl:11:32 local:type/type.not_ordinary TYPE-12",
             "m.hgl:11:65 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:13:24 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:13:52 local:type/type.not_ordinary TYPE-9",
         ]
     );
     assert_eq!(
