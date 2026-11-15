@@ -134,6 +134,8 @@ fn a_function_gives_its_name_and_modifiers() {
         "const fn value() -> i64 => 1\n",
         "export const fn both() -> i64 => 1\n",
         "impl fn add(left: i64, right: i64) -> i64 => left\n",
+        // GEN-4: a value candidate.
+        "impl const fn sub(left: i64, right: i64) -> i64 => left\n",
         // FN-5: the first `const` is the modifier, the second the name.
         "const fn const(value: i64) -> i64 => value\n",
         // And a temporal function may be named `const`.
@@ -157,6 +159,7 @@ fn a_function_gives_its_name_and_modifiers() {
         ("value", false, true, false),
         ("both", true, true, false),
         ("add", false, false, true),
+        ("sub", false, true, true),
         ("const", false, true, false),
         ("const", false, false, false),
     ]

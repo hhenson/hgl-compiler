@@ -30,7 +30,9 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             ) {
                 packs(node, file, diagnostics);
             }
-            if let DeclarationKind::NativeImplementation(role) = declaration.kind {
+            if let DeclarationKind::NativeImplementation(role)
+            | DeclarationKind::NativeCandidateImplementation(role) = declaration.kind
+            {
                 hooks(node, file, role, diagnostics);
             }
             integer_range(node, file, diagnostics);

@@ -174,9 +174,16 @@ pub enum DeclarationKind {
     NativeImplementation(Role),
     /// `operator`.
     Operator,
-    /// `impl fn`: a candidate of the operator it names (GEN-4). It binds
-    /// no name of its own (UNIT-12).
-    Implementation(Option<OperatorRef>),
+    /// `impl fn` or `impl const fn`: a temporal or a value candidate of
+    /// the operator it names (GEN-4). It binds no name of its own
+    /// (UNIT-12). The operator is filled in once it is found.
+    Implementation(Role, Option<OperatorRef>),
+    /// `native impl fn` or `native impl const fn` with no body: a
+    /// candidate whose body a provider supplies (NATIVE-1).
+    NativeCandidate(Role, Option<OperatorRef>),
+    /// The same with a contract body: an implementation part. It
+    /// completes a native candidate of its name and role (NATIVE-2).
+    NativeCandidateImplementation(Role),
     /// `struct`.
     Struct,
     /// `enum`.
@@ -196,13 +203,40 @@ impl DeclarationKind {
     }
 
     /// True when the declaration binds its name in the module's scope.
-    /// An operator implementation and a native implementation attach to
+    /// An operator's candidate and a native implementation attach to
     /// another declaration instead.
     pub fn binds_name(self) -> bool {
         !matches!(
             self,
-            DeclarationKind::Implementation(_) | DeclarationKind::NativeImplementation(_)
+            DeclarationKind::Implementation(..)
+                | DeclarationKind::NativeImplementation(_)
+                | DeclarationKind::NativeCandidate(..)
+                | DeclarationKind::NativeCandidateImplementation(_)
         )
+    }
+
+    /// The role of a function, whatever its form: `None` for an
+    /// operator, which has none (FN-1), and for what is no function.
+    pub fn role(self) -> Option<Role> {
+        match self {
+            DeclarationKind::Function(role)
+            | DeclarationKind::NativeFunction(role)
+            | DeclarationKind::NativeImplementation(role)
+            | DeclarationKind::Implementation(role, _)
+            | DeclarationKind::NativeCandidate(role, _)
+            | DeclarationKind::NativeCandidateImplementation(role) => Some(role),
+            _ => None,
+        }
+    }
+
+    /// For a candidate of an operator, HGL or native: its role and the
+    /// operator it was found to name (GEN-4).
+    pub fn candidate(self) -> Option<(Role, Option<OperatorRef>)> {
+        match self {
+            DeclarationKind::Implementation(role, operator)
+            | DeclarationKind::NativeCandidate(role, operator) => Some((role, operator)),
+            _ => None,
+        }
     }
 
     /// A few words for messages and listings: `temporal function`,
@@ -217,7 +251,15 @@ impl DeclarationKind {
                 format!("native {} implementation", role.as_str())
             }
             DeclarationKind::Operator => "operator".to_string(),
-            DeclarationKind::Implementation(_) => "operator implementation".to_string(),
+            DeclarationKind::Implementation(role, _) => {
+                format!("{} operator implementation", role.as_str())
+            }
+            DeclarationKind::NativeCandidate(role, _) => {
+                format!("native {} operator implementation", role.as_str())
+            }
+            DeclarationKind::NativeCandidateImplementation(role) => {
+                format!("native {} operator implementation part", role.as_str())
+            }
             DeclarationKind::Struct => "struct".to_string(),
             DeclarationKind::Enum => "enum".to_string(),
             DeclarationKind::NativeType => "native type".to_string(),

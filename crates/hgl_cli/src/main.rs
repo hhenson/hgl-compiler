@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use hgl_analyser::{DeclarationKind, Detail, ImportKind, ParsedFile, Program};
+use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::{Entry, Limits};
@@ -682,7 +682,7 @@ fn list_modules(sources: &SourceMap, program: &Program) -> String {
                 out.push_str(&signature.to_string());
             }
             // An implementation says which module's operator it found.
-            if let DeclarationKind::Implementation(Some(operator)) = declaration.kind {
+            if let Some((_, Some(operator))) = declaration.kind.candidate() {
                 out.push_str(&format!(" of {}", program.modules[operator.module].path));
             }
             out.push('\n');

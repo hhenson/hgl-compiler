@@ -49,7 +49,7 @@ delta_constructor = "delta", "<", type, ">", "(", [ delta_arguments ], ")" ;
 delta_arguments = delta_argument, { ",", delta_argument }, [ "," ] ;
 delta_argument = member_name, ":", expression ;
 # functions-and-phases.md
-function_decl = { warning_annotation, NL }, ( [ "export" | "impl" ], "fn" | [ "export" ], "const", "fn" ), callable_name, [ generic_parameters ], function_signature, [ requires_clause ], function_body ;
+function_decl = { warning_annotation, NL }, [ "export" | "impl" ], [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], function_body ;
 function_signature = "(", [ parameters ], ")", [ "->", type ] ;
 parameters = parameter, { ",", parameter }, [ "," ] ;
 parameter = IDENTIFIER, ":", type, [ "=", const_expression ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
@@ -81,7 +81,7 @@ instantiation = callable_name, "<", materialization_argument, { ",", materializa
 materialization_argument = type | const_expression | "_" ;
 # native-boundaries.md
 native_type_decl = [ "export" ], "native", "type", IDENTIFIER ;
-native_function_decl = "native", [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], [ native_contract_body ] ;
+native_function_decl = "native", [ "impl" ], [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], [ native_contract_body ] ;
 native_contract_body = "{", [ NL ], { ( inject_decl, [ ";" ] | native_hook ), [ NL ] }, "}" ;
 native_hook = ( "start" | "when" | "stop" ), ";" ;
 # source-text.md

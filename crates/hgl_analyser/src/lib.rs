@@ -116,7 +116,8 @@ pub mod codes {
     pub const TEST_EXPORT: &str = "test.export";
     /// An `impl fn` stands in an unnamed test context (TST-1).
     pub const TEST_IMPLEMENTATION: &str = "test.implementation";
-    /// An `impl fn` names no operator (GEN-4).
+    /// A candidate, `impl fn` or `impl const fn`, native or not, names
+    /// no operator (GEN-4).
     pub const IMPL_UNKNOWN_OPERATOR: &str = "impl.unknown_operator";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";

@@ -64,6 +64,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     module.instantiations = walk.instantiations;
     bind_declarations(module, diagnostics);
     bind_native_implementations(module, diagnostics);
+    bind_native_candidates(module, diagnostics);
     check_tests(module, diagnostics);
 }
 
@@ -162,8 +163,11 @@ impl Walk<'_> {
                 } else {
                     Role::Temporal
                 };
+                // GEN-4: "An `impl fn` is a temporal candidate of the
+                // operator it names and an `impl const fn` a value
+                // candidate."
                 let kind = if function.is_impl() {
-                    DeclarationKind::Implementation(None)
+                    DeclarationKind::Implementation(role, None)
                 } else {
                     DeclarationKind::Function(role)
                 };
@@ -176,11 +180,13 @@ impl Walk<'_> {
                     Role::Temporal
                 };
                 // NATIVE-3: a body makes an implementation; none, a
-                // declaration.
-                let kind = if function.body().is_some() {
-                    DeclarationKind::NativeImplementation(role)
-                } else {
-                    DeclarationKind::NativeFunction(role)
+                // declaration. NATIVE-1: with `impl`, the declaration
+                // is a candidate of an operator.
+                let kind = match (function.is_impl(), function.body().is_some()) {
+                    (false, false) => DeclarationKind::NativeFunction(role),
+                    (false, true) => DeclarationKind::NativeImplementation(role),
+                    (true, false) => DeclarationKind::NativeCandidate(role, None),
+                    (true, true) => DeclarationKind::NativeCandidateImplementation(role),
                 };
                 (function.name(), kind, None)
             }
@@ -209,7 +215,7 @@ impl Walk<'_> {
                     "TST-1",
                 ));
             }
-            if matches!(kind, DeclarationKind::Implementation(_)) {
+            if matches!(kind, DeclarationKind::Implementation(..)) {
                 self.diagnostics.emit(error(
                     Category::Operator,
                     codes::TEST_IMPLEMENTATION,
@@ -415,6 +421,49 @@ fn bind_native_implementations(module: &mut Module, diagnostics: &mut Diagnostic
             )),
         };
         diagnostics.emit(diagnostic);
+    }
+}
+
+/// NATIVE-2: "Native candidates of one operator that differ in role or
+/// parameter types are distinct declarations, and an implementation
+/// completes the candidate whose signature it matches."
+///
+/// A candidate binds no name, so its implementation is looked for among
+/// the module's declarations and not in its scope. Signatures are read
+/// by a later pass: here an implementation needs a native candidate of
+/// its name and role, and which of them it completes is not decided.
+fn bind_native_candidates(module: &Module, diagnostics: &mut Diagnostics) {
+    for implementation in &module.declarations {
+        let DeclarationKind::NativeCandidateImplementation(role) = implementation.kind else {
+            continue;
+        };
+        let name = &implementation.name;
+        let declared = module.declarations.iter().any(|other| {
+            other.name == *name
+                && matches!(other.kind, DeclarationKind::NativeCandidate(of, _) if of == role)
+        });
+        if declared {
+            continue;
+        }
+        diagnostics.emit(
+            error(
+                Category::Name,
+                codes::NATIVE_MISSING_DECLARATION,
+                implementation.at,
+                format!(
+                    "native implementation `{name}` completes no candidate of module `{}`",
+                    module.path
+                ),
+                "NATIVE-2",
+            )
+            .with_note(format!(
+                "declare it without a body: `native impl {}fn {name}(...)`",
+                match role {
+                    Role::Temporal => "",
+                    Role::Value => "const ",
+                }
+            )),
+        );
     }
 }
 

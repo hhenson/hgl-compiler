@@ -206,7 +206,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
-| GEN-4 | analyser | partial | An `impl fn` binds an operator its module declares or its file imports. Left: the prelude; operator identity in selection |
+| GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares or its file imports, and a value candidate's body is read as a value function's. Left: the prelude; operator identity in selection |
 | GEN-5 | analyser | planned | Candidate selection: output first, exactly one most specific |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
@@ -279,8 +279,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| NATIVE-1 | analyser | planned | A native declaration is checked as an HGL callable; roles kept |
-| NATIVE-2 | analyser | partial | An implementation completes one declaration of its name and role; duplicates rejected. Left: the exact match of signatures; selection |
+| NATIVE-1 | analyser | partial | A `native impl fn` or `native impl const fn` is a candidate of the operator it names, with its role. Left: a native declaration checked as an HGL callable |
+| NATIVE-2 | analyser | partial | An implementation completes one declaration of its name and role; duplicates rejected. A native candidate's implementation needs a candidate of its name and role. Left: the exact match of signatures, which says which candidate an implementation completes; selection |
 | NATIVE-3 | parser | done | Contract body forms: none, `{}`, hook markers |
 | NATIVE-3 | analyser | partial | `start` and `stop` need `when` and are unique; a const implementation has no hook. Left: graph or node by body, where a later pass reads it |
 | NATIVE-4 | driver | planned | Target selection is explicit |

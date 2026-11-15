@@ -67,18 +67,22 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         let mut bodies = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
             let body = match (&declaration.kind, module.details.get(position)) {
-                (DeclarationKind::Function(Role::Value), Some(Detail::Callable(signature))) => {
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        &bindings,
-                        &written,
-                        diagnostics,
-                    )
-                    .body()
-                }
+                // FN-1: a `const fn`. GEN-4: "an `impl const fn` a value
+                // candidate", whose body is a value function's.
+                (
+                    DeclarationKind::Function(Role::Value)
+                    | DeclarationKind::Implementation(Role::Value, _),
+                    Some(Detail::Callable(signature)),
+                ) => Typer::new(
+                    program,
+                    module,
+                    declaration,
+                    signature,
+                    &bindings,
+                    &written,
+                    diagnostics,
+                )
+                .body(),
                 _ => None,
             };
             bodies.push(body);

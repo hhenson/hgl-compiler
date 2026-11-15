@@ -308,7 +308,8 @@ impl FnDecl {
         tokens(&self.syntax).find(|token| token.kind() == SyntaxKind::KwExport)
     }
 
-    /// True for `impl fn`: an implementation of an operator (GEN-4).
+    /// True for `impl fn` and `impl const fn`: a candidate of an
+    /// operator (GEN-4).
     pub fn is_impl(&self) -> bool {
         has_token(&self.syntax, SyntaxKind::KwImpl)
     }
@@ -375,6 +376,12 @@ impl NativeFnDecl {
     /// True for `native const fn`: a value function (NATIVE-1).
     pub fn is_const(&self) -> bool {
         has_word_before(&self.syntax, "const", SyntaxKind::KwFn)
+    }
+
+    /// True for `native impl fn` and `native impl const fn`: a candidate
+    /// of an operator whose body a provider supplies (NATIVE-1).
+    pub fn is_impl(&self) -> bool {
+        has_token(&self.syntax, SyntaxKind::KwImpl)
     }
 
     /// The contract body, `{ ... }`. With one the declaration is an
