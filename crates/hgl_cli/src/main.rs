@@ -39,6 +39,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
+use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
 use hgl_runner::{Case, CaseKind, Outcome, Report, Selection};
 use hgl_source::{FileId, SourceMap};
@@ -120,6 +121,9 @@ struct CheckArgs {
     modules: bool,
 
     #[command(flatten)]
+    core: CoreArgs,
+
+    #[command(flatten)]
     limits: LimitArgs,
 }
 
@@ -141,8 +145,45 @@ struct TestArgs {
     rejections_only: bool,
 
     #[command(flatten)]
+    core: CoreArgs,
+
+    #[command(flatten)]
     limits: LimitArgs,
 }
+
+/// Whether the compiler supplies core's module.
+#[derive(Args)]
+struct CoreArgs {
+    /// Do not supply core's module. A program whose source roots hold no
+    /// `module core` is then checked without one: the names core
+    /// declares are left unbound.
+    #[arg(long)]
+    no_core: bool,
+}
+
+/// Core's module as the pinned `hgl_core` declares it, built into the
+/// compiler: each file's name for diagnostics, and its text.
+///
+/// UNIT-11: every module binds core's public declarations with no
+/// `use`. A program is therefore checked with core's module whether or
+/// not its source roots hold it. `include_str!` puts the file's text in
+/// the compiler when the compiler is built, so the module supplied is
+/// the one at the `spec/hgl_core` pin. The test
+/// `the_core_supplied_is_every_file_of_the_pinned_core` fails when the
+/// pin adds a file this list does not have.
+const CORE: [(&str, &str); 2] = [
+    (
+        "<core>/core/core.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
+    ),
+    (
+        "<core>/native/scalar_operators.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/scalar_operators.hgl"),
+    ),
+];
+
+/// The path of core's module (UNIT-11).
+const CORE_MODULE: &str = "core";
 
 /// The compiler's limits, for every command that parses. They are the
 /// compiler's and not the language's: source past one is reported, and the
@@ -411,33 +452,71 @@ fn tree(arguments: &TreeArgs) -> ExitCode {
     report(&sources, diagnostics)
 }
 
-/// Finds, reads, lexes and parses every source file under `roots`.
-///
-/// Gives the sources, the parsed files in the order found, and what the
-/// lexer and parser reported.
-fn parse_program(
-    roots: &[PathBuf],
-    limits: Limits,
-) -> Result<(SourceMap, Vec<ParsedFile>, Diagnostics), ExitCode> {
+/// A program read for checking.
+struct Parsed {
+    sources: SourceMap,
+    /// The parsed files: those found under the roots, in the order
+    /// found, and then core's when the compiler supplied them.
+    files: Vec<ParsedFile>,
+    /// What the lexer and parser reported.
+    diagnostics: Diagnostics,
+    /// How many of `files` are core's, supplied by the compiler.
+    supplied: usize,
+}
+
+/// Finds, reads, lexes and parses every source file under `roots`, and
+/// core's module when `supply_core` asks for it and no file under the
+/// roots belongs to `module core`.
+fn parse_program(roots: &[PathBuf], limits: Limits, supply_core: bool) -> Result<Parsed, ExitCode> {
     let paths = find_sources(roots)?;
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
-    let mut parsed = Vec::new();
-    for path in &paths {
-        let file = load_into(&mut sources, path)?;
-        let tokens = lex(&sources, file, &mut diagnostics);
-        literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
+    let mut files = Vec::new();
+    let parse_file = |sources: &SourceMap, file: FileId, diagnostics: &mut Diagnostics| {
+        let tokens = lex(sources, file, diagnostics);
+        literal::validate_literals(sources, file, &tokens, diagnostics);
         let parse = hgl_parser::parse(
-            &sources,
+            sources,
             file,
             &tokens,
             Entry::SourceFile,
             limits,
-            &mut diagnostics,
+            diagnostics,
         );
-        parsed.push(ParsedFile::new(file, parse.syntax()));
+        ParsedFile::new(file, parse.syntax())
+    };
+    for path in &paths {
+        let file = load_into(&mut sources, path)?;
+        files.push(parse_file(&sources, file, &mut diagnostics));
     }
-    Ok((sources, parsed, diagnostics))
+    // A program that brings its own `module core` is checked with that
+    // one: this is how core itself is checked.
+    let has_core = files.iter().any(|file| {
+        ast::SourceFile::cast(file.root.clone())
+            .and_then(|source| source.module_decl())
+            .and_then(|module| module.path())
+            .is_some_and(|path| path.dotted() == CORE_MODULE)
+    });
+    let mut supplied = 0;
+    if supply_core && !has_core {
+        for (name, text) in CORE {
+            let file = match sources.add(name, text) {
+                Ok(file) => file,
+                Err(error) => {
+                    eprintln!("hgl: {error}");
+                    return Err(ExitCode::from(EXIT_FAILED));
+                }
+            };
+            files.push(parse_file(&sources, file, &mut diagnostics));
+            supplied += 1;
+        }
+    }
+    Ok(Parsed {
+        sources,
+        files,
+        diagnostics,
+        supplied,
+    })
 }
 
 /// `hgl check`: lexes and parses every source file of a program, analyses
@@ -453,15 +532,26 @@ fn parse_program(
 /// and reads the types written so far. What an expression is, phases and
 /// constants are not checked yet, and the output says so.
 fn check(arguments: &CheckArgs) -> ExitCode {
-    let (sources, parsed, mut diagnostics) =
-        match parse_program(&arguments.roots, arguments.limits.limits()) {
-            Ok(program) => program,
-            Err(status) => return status,
-        };
+    let Parsed {
+        sources,
+        files: parsed,
+        mut diagnostics,
+        supplied,
+    } = match parse_program(
+        &arguments.roots,
+        arguments.limits.limits(),
+        !arguments.core.no_core,
+    ) {
+        Ok(program) => program,
+        Err(status) => return status,
+    };
     let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    // The module the compiler supplied is not counted or listed: the
+    // counts and the listing are of what the source roots hold.
+    let supplied_modules = usize::from(supplied > 0);
 
     if arguments.modules {
-        print!("{}", list_modules(&sources, &program));
+        print!("{}", list_modules(&sources, &program, supplied > 0));
     }
     let errors = diagnostics
         .as_slice()
@@ -470,8 +560,8 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         .count();
     println!(
         "checked {} in {}: {}",
-        count(parsed.len(), "file"),
-        count(program.modules.len(), "module"),
+        count(parsed.len() - supplied, "file"),
+        count(program.modules.len() - supplied_modules, "module"),
         match errors {
             0 => "no errors".to_string(),
             errors => count(errors, "error"),
@@ -500,11 +590,19 @@ fn check(arguments: &CheckArgs) -> ExitCode {
 /// `# expect-error` annotations (TST-12). An executable case is a named
 /// test; none can be run until the compiler has a target.
 fn test(arguments: &TestArgs) -> ExitCode {
-    let (sources, parsed, front_end) =
-        match parse_program(&arguments.roots, arguments.limits.limits()) {
-            Ok(program) => program,
-            Err(status) => return status,
-        };
+    let Parsed {
+        sources,
+        files: parsed,
+        diagnostics: front_end,
+        ..
+    } = match parse_program(
+        &arguments.roots,
+        arguments.limits.limits(),
+        !arguments.core.no_core,
+    ) {
+        Ok(program) => program,
+        Err(status) => return status,
+    };
     let selection = Selection {
         tests: arguments.tests.clone(),
         rejections_only: arguments.rejections_only,
@@ -652,9 +750,14 @@ fn count(number: usize, noun: &str) -> String {
 /// context. A function, operator or native function has its signature
 /// after its name, with each type as the analyser read it: `_` is a type
 /// that is not known. A named test is listed as `test` and its name.
-fn list_modules(sources: &SourceMap, program: &Program) -> String {
+fn list_modules(sources: &SourceMap, program: &Program, core_supplied: bool) -> String {
     let mut out = String::new();
     for module in &program.modules {
+        // Core's module is listed when the program brings it, and not
+        // when the compiler supplied it.
+        if core_supplied && module.path == CORE_MODULE {
+            continue;
+        }
         out.push_str(&format!("module {}\n", module.path));
         for file in &module.files {
             let name = sources.file(file.file).name();
@@ -772,4 +875,51 @@ fn temporal_value(value: &literal::TemporalLiteral<'_>) -> String {
         fields.push(format!("zone {zone}"));
     }
     fields.join(", ")
+}
+
+// `#[cfg(test)]` builds what follows only when the tests are built.
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::Path;
+
+    use walkdir::WalkDir;
+
+    use super::CORE;
+
+    /// The module the compiler supplies is the pinned core's, whole:
+    /// every `.hgl` file under `spec/hgl_core/hgl`, with its text as it
+    /// stands there. A pin that adds a file fails this until `CORE`
+    /// lists it.
+    #[test]
+    fn the_core_supplied_is_every_file_of_the_pinned_core() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
+        let mut pinned = BTreeMap::new();
+        for entry in WalkDir::new(&root) {
+            let entry = entry.expect("the pinned core is read");
+            let path = entry.path();
+            if path.extension().is_some_and(|extension| extension == "hgl") {
+                // Named as `CORE` names it, with `/` on every system.
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("the file is under the root");
+                let parts: Vec<String> = relative
+                    .iter()
+                    .map(|part| part.to_string_lossy().into_owned())
+                    .collect();
+                let text = fs::read_to_string(path).expect("the file is text");
+                pinned.insert(format!("<core>/{}", parts.join("/")), text);
+            }
+        }
+        let supplied: BTreeMap<String, String> = CORE
+            .iter()
+            .map(|(name, text)| (name.to_string(), text.to_string()))
+            .collect();
+        assert_eq!(
+            supplied.keys().collect::<Vec<_>>(),
+            pinned.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(supplied, pinned);
+    }
 }
