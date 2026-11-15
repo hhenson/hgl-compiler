@@ -328,13 +328,18 @@ The declarations are then read against one another:
 | A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
-| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps. Holding itself through a parent's field counts |
+| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, and never through the elements of a list, set, dictionary or window, inside an `atomic<...>` or not. Holding itself through a parent's field counts |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
 A struct holds another when a field's type names it anywhere, or it
 inherits from it. Structs that hold one another are found as the
 strongly connected groups of that graph, as modules that import one
 another are.
+
+The fields of each struct are worked out once, from those of its
+parents, and a field that reaches a struct by two paths is listed once.
+A ladder of structs that each inherit from the two before it would
+otherwise double the list at every step.
 
 An enum's number is folded as a size is. One this pass cannot fold is
 not known, and neither are those numbered from it; the pass that

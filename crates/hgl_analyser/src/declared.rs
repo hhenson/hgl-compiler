@@ -16,7 +16,7 @@
 //! A type that is not known, or a parent already reported, is left out
 //! of what follows from it (ERR-9).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -53,6 +53,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         program,
         diagnostics,
         parents: HashMap::new(),
+        fields: HashMap::new(),
     };
     let ids = structs.ids();
     for &id in &ids {
@@ -60,6 +61,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         structs.parents.insert(id, parents);
     }
     structs.inheritance_cycles(&ids);
+    let mut fields = HashMap::new();
+    for &id in &ids {
+        structs.collect_fields(id, &mut fields, &mut Vec::new());
+    }
+    structs.fields = fields;
     for &id in &ids {
         structs.fields(id);
     }
@@ -211,15 +217,28 @@ struct Introduced {
     via: usize,
 }
 
+/// The fields one struct has.
+#[derive(Debug, Clone, Default)]
+struct Fields {
+    /// Those it has from its parents.
+    inherited: Vec<Introduced>,
+    /// Those, then its own.
+    all: Vec<Introduced>,
+}
+
 struct Structs<'a> {
     program: &'a Program,
     diagnostics: &'a mut Diagnostics,
     /// The abstract-struct parents of each struct.
     parents: HashMap<Id, Vec<Parent>>,
+    /// The fields of each struct, worked out once for each.
+    fields: HashMap<Id, Fields>,
 }
 
-/// The types `ty` names, itself and inside it.
-fn mentions(ty: &Type, found: &mut Vec<Id>) {
+/// The types `ty` names, itself and inside it, each with whether it is
+/// reached through the elements of a collection: a list, a set, a
+/// dictionary or a window.
+fn mentions(ty: &Type, in_collection: bool, found: &mut Vec<(Id, bool)>) {
     match ty {
         Type::Named {
             module,
@@ -227,32 +246,31 @@ fn mentions(ty: &Type, found: &mut Vec<Id>) {
             arguments,
             ..
         } => {
-            found.push((*module, *declaration));
+            found.push(((*module, *declaration), in_collection));
             for argument in arguments {
                 if let Argument::Type(argument) = argument {
-                    mentions(argument, found);
+                    mentions(argument, in_collection, found);
                 }
             }
         }
         Type::Tuple(elements) => {
             for element in elements {
-                mentions(element, found);
+                mentions(element, in_collection, found);
             }
         }
-        Type::List { element, .. } => mentions(element, found),
-        Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Nullable(inner) => mentions(inner, found),
+        Type::List { element, .. } => mentions(element, true, found),
+        Type::Set(element) => mentions(element, true, found),
         Type::Dict { key, value } => {
-            mentions(key, found);
-            mentions(value, found);
+            mentions(key, true, found);
+            mentions(value, true, found);
         }
-        Type::Rolling { value, .. } => mentions(value, found),
+        Type::Rolling { value, .. } => mentions(value, true, found),
+        Type::Ref(inner) | Type::Atomic(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
+            mentions(inner, in_collection, found);
+        }
         Type::Result { value, error } => {
-            mentions(value, found);
-            mentions(error, found);
+            mentions(value, in_collection, found);
+            mentions(error, in_collection, found);
         }
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {}
     }
@@ -505,15 +523,63 @@ impl Structs<'_> {
 
     // ---- Fields (TYPE-4) ----
 
-    /// Every field the struct `id` has: those of its parents, then its
-    /// own. `visiting` holds the structs being read above this one, so
-    /// that a cycle of inheritance ends.
-    fn all_fields(&self, id: Id, visiting: &mut Vec<Id>) -> Vec<Introduced> {
-        if visiting.contains(&id) {
-            return Vec::new();
+    /// Works out the fields of the struct `id`, and of each ancestor of
+    /// it that `known` does not have yet: those of its parents, each
+    /// with the parent's generic arguments in place of its parameters,
+    /// then its own.
+    ///
+    /// Each struct's fields are worked out once and kept, and a field
+    /// that reaches a struct by two paths is listed once. Otherwise a
+    /// ladder of structs that each inherit from the two before would
+    /// list the first one's field twice as often at every step.
+    ///
+    /// `visiting` holds the structs being read above this one, so that
+    /// a cycle of inheritance ends.
+    fn collect_fields(&self, id: Id, known: &mut HashMap<Id, Fields>, visiting: &mut Vec<Id>) {
+        if known.contains_key(&id) || visiting.contains(&id) {
+            return;
         }
         visiting.push(id);
-        let mut all = self.inherited(id, visiting);
+        let mut inherited: Vec<Introduced> = Vec::new();
+        for (via, parent) in self.parents[&id].iter().enumerate() {
+            self.collect_fields(parent.id, known, visiting);
+            // A parent with no fields yet is being read above this
+            // struct: a cycle of inheritance, which has been reported.
+            let Some(fields) = known.get(&parent.id) else {
+                continue;
+            };
+            // The parent's generic parameters, each with the argument
+            // this struct gives it. `zip` stops at the shorter, so a
+            // wrong count, which has been reported, leaves the rest as
+            // they are.
+            let map: Vec<(Location, &Argument)> = self
+                .struct_type(parent.id)
+                .map(|read| {
+                    read.generics
+                        .iter()
+                        .map(|generic| generic.at)
+                        .zip(&parent.arguments)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for field in &fields.all {
+                let field = Introduced {
+                    ty: substitute(&field.ty, &map),
+                    via,
+                    ..field.clone()
+                };
+                // The same field by another path is one field.
+                let listed = inherited.iter().any(|other| {
+                    other.origin == field.origin
+                        && other.optional == field.optional
+                        && other.ty == field.ty
+                });
+                if !listed {
+                    inherited.push(field);
+                }
+            }
+        }
+        let mut all = inherited.clone();
         if let Some(read) = self.struct_type(id) {
             for (index, field) in read.fields.iter().enumerate() {
                 // `name = value` introduces no field.
@@ -530,37 +596,15 @@ impl Structs<'_> {
             }
         }
         visiting.pop();
-        all
+        known.insert(id, Fields { inherited, all });
     }
 
-    /// The fields the struct `id` has from its parents, each with the
-    /// parent's generic arguments in place of its parameters.
-    fn inherited(&self, id: Id, visiting: &mut Vec<Id>) -> Vec<Introduced> {
-        let mut all = Vec::new();
-        for (via, parent) in self.parents[&id].iter().enumerate() {
-            // The parent's generic parameters, each with the argument
-            // this struct gives it. `zip` stops at the shorter, so a
-            // wrong count, which has been reported, leaves the rest as
-            // they are.
-            let map: Vec<(Location, &Argument)> = self
-                .struct_type(parent.id)
-                .map(|read| {
-                    read.generics
-                        .iter()
-                        .map(|generic| generic.at)
-                        .zip(&parent.arguments)
-                        .collect()
-                })
-                .unwrap_or_default();
-            for field in self.all_fields(parent.id, visiting) {
-                all.push(Introduced {
-                    ty: substitute(&field.ty, &map),
-                    via,
-                    ..field
-                });
-            }
-        }
-        all
+    /// The fields the struct `id` has from its parents.
+    fn inherited(&self, id: Id) -> Vec<Introduced> {
+        self.fields
+            .get(&id)
+            .map(|fields| fields.inherited.clone())
+            .unwrap_or_default()
     }
 
     /// TYPE-4: "A typed field introduction fixes its type and
@@ -572,7 +616,7 @@ impl Structs<'_> {
             return;
         };
         let name = &self.declaration(id).name;
-        let inherited = self.inherited(id, &mut vec![id]);
+        let inherited = self.inherited(id);
         let mut problems: Vec<(&'static str, Location, String, Location)> = Vec::new();
 
         // Two parents that give one name two meanings. The same field
@@ -675,8 +719,9 @@ impl Structs<'_> {
         let mut graph: DiGraph<Id, ()> = DiGraph::new();
         let nodes: HashMap<Id, NodeIndex> =
             ids.iter().map(|&id| (id, graph.add_node(id))).collect();
-        // Each field that names a struct, with the structs it names.
-        let mut edges: Vec<(Id, usize, Vec<Id>)> = Vec::new();
+        // Each field that names a struct, with the structs it names
+        // and whether each is reached through a collection's elements.
+        let mut edges: Vec<(Id, usize, Vec<(Id, bool)>)> = Vec::new();
         for &id in ids {
             for parent in &self.parents[&id] {
                 graph.add_edge(nodes[&id], nodes[&parent.id], ());
@@ -687,10 +732,10 @@ impl Structs<'_> {
             for (index, field) in read.fields.iter().enumerate() {
                 let mut named = Vec::new();
                 if let Some(ty) = &field.ty {
-                    mentions(ty, &mut named);
+                    mentions(ty, false, &mut named);
                 }
-                named.retain(|target| nodes.contains_key(target));
-                for target in &named {
+                named.retain(|(target, _)| nodes.contains_key(target));
+                for (target, _) in &named {
                     graph.add_edge(nodes[&id], nodes[target], ());
                 }
                 if !named.is_empty() {
@@ -707,27 +752,46 @@ impl Structs<'_> {
         }
 
         // The fields that are recursive edges: they name a struct of
-        // the group their own struct is in.
-        let mut recursive: HashSet<(Id, usize)> = HashSet::new();
+        // the group their own struct is in. With each, whether it
+        // reaches such a struct through a collection's elements.
+        let mut recursive: HashMap<(Id, usize), bool> = HashMap::new();
         for (id, index, named) in &edges {
-            if named.iter().any(|target| group_of[target] == group_of[id]) {
-                recursive.insert((*id, *index));
+            let mut back = named
+                .iter()
+                .filter(|(target, _)| group_of[target] == group_of[id])
+                .peekable();
+            // `peek` looks at the next one without taking it.
+            if back.peek().is_some() {
+                let through_collection = back.any(|(_, in_collection)| *in_collection);
+                recursive.insert((*id, *index), through_collection);
             }
         }
         let mut reports = Vec::new();
-        for &(id, index) in &recursive {
+        for (&(id, index), &through_collection) in &recursive {
             let Some(field) = self.struct_type(id).map(|read| &read.fields[index]) else {
                 continue;
             };
+            let name = &self.declaration(id).name;
+            // "Cycles through ... collection elements are rejected",
+            // inside an `atomic<...>` as outside one.
+            if through_collection {
+                reports.push((
+                    field.at,
+                    format!(
+                        "`{}` makes `{name}` hold itself through the elements of a collection",
+                        field.name
+                    ),
+                ));
+                continue;
+            }
             let atomic = matches!(field.ty, Some(Type::Atomic(_)));
             if !atomic || !field.null_default {
                 reports.push((
                     field.at,
                     format!(
-                        "`{}` makes `{}` hold itself: a recursive field is an `atomic<...>` \
-                         with a default of null",
-                        field.name,
-                        self.declaration(id).name
+                        "`{}` makes `{name}` hold itself: a recursive field is an \
+                         `atomic<...>` with a default of null",
+                        field.name
                     ),
                 ));
             }
@@ -738,12 +802,12 @@ impl Structs<'_> {
             let Some(read) = self.struct_type(id) else {
                 continue;
             };
-            let inherited = self.inherited(id, &mut vec![id]);
+            let inherited = self.inherited(id);
             for field in &read.fields {
                 let overrides_recursive = field.ty.is_none()
                     && !field.null_default
                     && inherited.iter().any(|parent| {
-                        parent.name == field.name && recursive.contains(&parent.origin)
+                        parent.name == field.name && recursive.contains_key(&parent.origin)
                     });
                 if overrides_recursive {
                     reports.push((

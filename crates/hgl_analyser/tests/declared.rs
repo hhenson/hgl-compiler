@@ -244,7 +244,7 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
         "struct Ping { pong: atomic<Pong> = null }\n",
         "struct Pong { ping: atomic<Ping> = null }\n",
         "struct Boxed<T> { value: T }\n",
-        "struct Wrapped { inner: atomic<Boxed<Wrapped>> = null }\n",
+        "struct Wrapped { inner: atomic<tuple<Boxed<Wrapped>, i64>> = null }\n",
         // Structs that hold others and not themselves.
         "struct Uses {\n    node: Node\n    nodes: list<Node>\n    boxed: Boxed<Node>\n}\n",
         // Directly, through a collection, through another struct.
@@ -252,6 +252,10 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
         "struct Tree { children: list<Tree> }\n",
         "struct Keyed { children: dict<str, atomic<Keyed>> = null }\n",
         "struct InBox { inner: Boxed<InBox> }\n",
+        // A collection inside an `atomic<...>` is a collection still.
+        "struct Forest { trees: atomic<list<Forest>> = null }\n",
+        "struct Index { entries: atomic<dict<str, Boxed<Index>>> = null }\n",
+        "struct Recent { last: atomic<set<Recent>> = null }\n",
         // An atomic field with no null default, or another default.
         "struct Required { next: atomic<Required> }\n",
         "struct Filled { next: atomic<Filled> = make() }\n",
@@ -266,15 +270,58 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:16:15 local:type/field.recursive TYPE-6",
             "m.hgl:17:16 local:type/field.recursive TYPE-6",
             "m.hgl:18:16 local:type/field.recursive TYPE-6",
-            "m.hgl:19:19 local:type/field.recursive TYPE-6",
-            "m.hgl:20:17 local:type/field.recursive TYPE-6",
-            "m.hgl:21:15 local:type/field.recursive TYPE-6",
+            "m.hgl:19:17 local:type/field.recursive TYPE-6",
+            "m.hgl:20:16 local:type/field.recursive TYPE-6",
+            "m.hgl:21:17 local:type/field.recursive TYPE-6",
+            "m.hgl:22:19 local:type/field.recursive TYPE-6",
+            "m.hgl:23:17 local:type/field.recursive TYPE-6",
+            "m.hgl:24:15 local:type/field.recursive TYPE-6",
         ]
+    );
+    let recursive = "a recursive field is an `atomic<...>` with a default of null";
+    assert_eq!(
+        messages(&checked),
+        [
+            format!("`inner` makes `Direct` hold itself: {recursive}"),
+            "`children` makes `Tree` hold itself through the elements of a collection".to_string(),
+            "`children` makes `Keyed` hold itself through the elements of a collection".to_string(),
+            format!("`inner` makes `InBox` hold itself: {recursive}"),
+            "`trees` makes `Forest` hold itself through the elements of a collection".to_string(),
+            "`entries` makes `Index` hold itself through the elements of a collection".to_string(),
+            "`last` makes `Recent` hold itself through the elements of a collection".to_string(),
+            format!("`next` makes `Required` hold itself: {recursive}"),
+            format!("`next` makes `Filled` hold itself: {recursive}"),
+            format!("`right` makes `Left` hold itself: {recursive}"),
+        ]
+    );
+}
+
+/// TYPE-4: a field that reaches a struct by two paths is one field,
+/// however many paths there are. Each of these structs inherits from
+/// the two before it, so the first one's field reaches the last by 2^60
+/// paths; the fields of each are worked out once.
+#[test]
+fn a_ladder_of_diamonds_is_read_in_step() {
+    let mut text = String::from("abstract struct Root { id: i64 }\n");
+    text.push_str("abstract struct A0 : Root { }\nabstract struct B0 : Root { }\n");
+    for level in 1..=60 {
+        let before = level - 1;
+        text.push_str(&format!(
+            "abstract struct A{level} : A{before}, B{before} {{ }}\n\
+             abstract struct B{level} : A{before}, B{before} {{ }}\n"
+        ));
+    }
+    // The field is there at the end of the ladder: this is its type.
+    text.push_str("struct Good : A60, B60 { id: i64 }\n");
+    text.push_str("struct Bad : A60, B60 { id: str }\n");
+    let checked = module(&text);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:126:25 local:type/field.conflict TYPE-4"]
     );
     assert_eq!(
         checked.findings[0].message,
-        "`inner` makes `Direct` hold itself: a recursive field is an `atomic<...>` with a default \
-         of null"
+        "`id` is required `str` here and required `i64` in `Root`"
     );
 }
 
