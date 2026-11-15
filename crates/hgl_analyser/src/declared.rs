@@ -16,7 +16,7 @@
 //! A type that is not known, or a parent already reported, is left out
 //! of what follows from it (ERR-9).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
@@ -61,11 +61,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         structs.parents.insert(id, parents);
     }
     structs.inheritance_cycles(&ids);
-    let mut fields = HashMap::new();
-    for &id in &ids {
-        structs.collect_fields(id, &mut fields, &mut Vec::new());
-    }
-    structs.fields = fields;
+    structs.fields = structs.collect_fields(&ids);
     for &id in &ids {
         structs.fields(id);
     }
@@ -262,6 +258,10 @@ struct Structs<'a> {
 /// type. A type that needs more is not followed further, so that the
 /// check ends whatever it is given.
 const EXPANSIONS: u32 = 10_000;
+
+/// How many generic structs, one inside another, are followed for one
+/// field's type.
+const DEPTH: usize = 64;
 
 /// True when `ty` names a generic parameter, itself or inside it.
 fn names_parameter(ty: &Type) -> bool {
@@ -542,8 +542,7 @@ impl Structs<'_> {
 
     // ---- Fields (TYPE-4) ----
 
-    /// Works out the fields of the struct `id`, and of each ancestor of
-    /// it that `known` does not have yet: those of its parents, each
+    /// Works out the fields of every struct: those of its parents, each
     /// with the parent's generic arguments in place of its parameters,
     /// then its own.
     ///
@@ -552,18 +551,52 @@ impl Structs<'_> {
     /// ladder of structs that each inherit from the two before would
     /// list the first one's field twice as often at every step.
     ///
-    /// `visiting` holds the structs being read above this one, so that
-    /// a cycle of inheritance ends.
-    fn collect_fields(&self, id: Id, known: &mut HashMap<Id, Fields>, visiting: &mut Vec<Id>) {
-        if known.contains_key(&id) || visiting.contains(&id) {
-            return;
+    /// A struct's fields need its parents' first. The parents are
+    /// reached with a list of structs still to do, kept here, and not
+    /// by this function calling itself: a chain of parents is as long
+    /// as the source makes it, and the call stack is not.
+    fn collect_fields(&self, ids: &[Id]) -> HashMap<Id, Fields> {
+        let mut known: HashMap<Id, Fields> = HashMap::new();
+        // The structs whose parents are being worked out, so that a
+        // cycle of inheritance ends.
+        let mut waiting: HashSet<Id> = HashSet::new();
+        for &start in ids {
+            let mut to_do = vec![start];
+            // `last` looks at the struct on top of the list without
+            // taking it off.
+            while let Some(&id) = to_do.last() {
+                if known.contains_key(&id) {
+                    to_do.pop();
+                    continue;
+                }
+                waiting.insert(id);
+                // A parent that is waiting is above this struct: a cycle
+                // of inheritance, which has been reported.
+                let parent = self.parents[&id]
+                    .iter()
+                    .map(|parent| parent.id)
+                    .find(|parent| !known.contains_key(parent) && !waiting.contains(parent));
+                match parent {
+                    Some(parent) => to_do.push(parent),
+                    None => {
+                        let fields = self.fields_of(id, &known);
+                        known.insert(id, fields);
+                        waiting.remove(&id);
+                        to_do.pop();
+                    }
+                }
+            }
         }
-        visiting.push(id);
+        known
+    }
+
+    /// The fields of the struct `id`, from those of its parents in
+    /// `known`.
+    fn fields_of(&self, id: Id, known: &HashMap<Id, Fields>) -> Fields {
         let mut inherited: Vec<Introduced> = Vec::new();
         for (via, parent) in self.parents[&id].iter().enumerate() {
-            self.collect_fields(parent.id, known, visiting);
-            // A parent with no fields yet is being read above this
-            // struct: a cycle of inheritance, which has been reported.
+            // A parent with no fields is part of a cycle of
+            // inheritance, which has been reported.
             let Some(fields) = known.get(&parent.id) else {
                 continue;
             };
@@ -614,8 +647,7 @@ impl Structs<'_> {
                 }
             }
         }
-        visiting.pop();
-        known.insert(id, Fields { inherited, all });
+        Fields { inherited, all }
     }
 
     /// The fields the struct `id` has from its parents.
@@ -772,7 +804,10 @@ impl Structs<'_> {
                 let (Some(fields), false) = (self.fields.get(&id), arguments.is_empty()) else {
                     return;
                 };
-                if path.contains(&id) {
+                // One generic struct inside another is followed as deep
+                // as `DEPTH`, so that this function, which calls itself
+                // for each, keeps little on the call stack.
+                if path.contains(&id) || path.len() >= DEPTH {
                     return;
                 }
                 let map: Vec<(Location, &Argument)> = self
@@ -985,10 +1020,93 @@ impl Structs<'_> {
 }
 
 /// True when a field of type `ty`, optional or not, is not the field
-/// `parent` introduces. A type that is not known differs from nothing.
+/// `parent` introduces. A type that is not known, or a part of one that
+/// is not, differs from nothing: it has been reported, and what is known
+/// of the rest is still compared (ERR-9).
 fn differs(parent: &Introduced, ty: &Type, optional: bool) -> bool {
     if matches!(parent.ty, Type::Unknown) || matches!(ty, Type::Unknown) {
         return false;
     }
-    parent.ty != *ty || parent.optional != optional
+    !agree(&parent.ty, ty) || parent.optional != optional
+}
+
+/// True when two types are the same as far as each is known.
+fn agree(left: &Type, right: &Type) -> bool {
+    // Two lists of types agree when they are as long as each other and
+    // agree place by place.
+    let all = |left: &[Type], right: &[Type]| {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right)
+                .all(|(left, right)| agree(left, right))
+    };
+    match (left, right) {
+        (Type::Unknown, _) | (_, Type::Unknown) => true,
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: other_module,
+                declaration: other_declaration,
+                arguments: other_arguments,
+                ..
+            },
+        ) => {
+            module == other_module
+                && declaration == other_declaration
+                && arguments.len() == other_arguments.len()
+                && arguments
+                    .iter()
+                    .zip(other_arguments)
+                    .all(|pair| match pair {
+                        (Argument::Type(left), Argument::Type(right)) => agree(left, right),
+                        (left, right) => left == right,
+                    })
+        }
+        (Type::Tuple(left), Type::Tuple(right)) => all(left, right),
+        (
+            Type::List { element, size },
+            Type::List {
+                element: other_element,
+                size: other_size,
+            },
+        ) => size == other_size && agree(element, other_element),
+        (Type::Set(left), Type::Set(right))
+        | (Type::Ref(left), Type::Ref(right))
+        | (Type::Atomic(left), Type::Atomic(right))
+        | (Type::Delta(left), Type::Delta(right))
+        | (Type::Nullable(left), Type::Nullable(right)) => agree(left, right),
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: other_key,
+                value: other_value,
+            },
+        ) => agree(key, other_key) && agree(value, other_value),
+        (
+            Type::Rolling {
+                value,
+                maximum,
+                minimum,
+            },
+            Type::Rolling {
+                value: other_value,
+                maximum: other_maximum,
+                minimum: other_minimum,
+            },
+        ) => maximum == other_maximum && minimum == other_minimum && agree(value, other_value),
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: other_value,
+                error: other_error,
+            },
+        ) => agree(value, other_value) && agree(error, other_error),
+        (left, right) => left == right,
+    }
 }
