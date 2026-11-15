@@ -74,6 +74,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "generic.kind_conflict"),
     (Category::Type, "generic.kind_unresolved"),
     (Category::Type, "generic.argument_kind"),
+    (Category::Type, "generic.unresolved"),
     (Category::Type, "struct.parent"),
     (Category::Type, "struct.duplicate_parent"),
     (Category::Type, "struct.inheritance_cycle"),

@@ -526,42 +526,36 @@ written. Not read yet: whether a `switch` label is a constant, and the
 warning for a statement with no effect (ERR-10).
 
 A call of a generic value function resolves each of its generic
-parameters (GEN-1, GEN-2, GEN-8). What the call writes after the name
-decides first, and may be the first of the parameters only. What is left
-is found from the type the call's place expects of the result and from
-the arguments:
+parameters (GEN-1, GEN-2, GEN-8), from these in order:
 
 | Source | Example, for `const fn same<T>(left: T, right: T) -> T` |
 | --- | --- |
-| What the call writes after the name | `same<f64>(1, 2)` |
-| The type the call's place expects of the result | `let names: list<str> = repeat(3)` |
+| What the call writes after the name, which may be the first of the parameters only | `same<f64>(1, 2)` |
+| The type the call's place expects of the result | `let real: f64 = same(1, 2)` |
 | The arguments, in declared parameter order (GEN-12) | `same(1, 2)`; in `same(right: 1, left: 2.0)` it is `left` that decides |
 
-The first argument that says what a parameter is decides it, and every
-argument is then checked against its parameter's type with that in
-place: in `same("a", 1)` the `1` is a `type.mismatch`. The call has the
-result's type with what was found in place, and the typed body records
-what each parameter was resolved to. More generic arguments than the
-callee has parameters is `generic.argument_count`; a type for a value
-parameter, or a value for a type, is `generic.argument_kind`.
+The first that says what a parameter is decides it, and every argument
+is then checked against its parameter's type with that in place: in
+`same("a", 1)` the `1` is a `type.mismatch`, and in
+`let real: f64 = same(count, 2)` so is `count`, which is no literal to
+widen. The call has the result's type with what was found in place, and
+the typed body records what each parameter was resolved to. More generic
+arguments than the callee has parameters is `generic.argument_count`; a
+type for a value parameter, or a value for a type, is
+`generic.argument_kind`. A struct's fields have no order of their own,
+so a construction's say what a parameter is in the order written.
 
-GEN-2 gives the expected type and the arguments no order. Where both say
-what one parameter is and they differ, as in `let real: f64 = same(1,
-2)`, the compiler takes no reading: the call is not judged, has no type,
-and nothing is reported of it. Which decides is put to the owner in
-hhenson/hgl_spec#44.
-
-A parameter nothing resolves rejects the call (GEN-8) as
-`generic.unresolved`, the analyser's one local code: the catalogue has
-no row for it (proposed in hhenson/hgl_spec#44). A call read
-before its place is known, as an argument is, puts the report off for a
-parameter its result names, which that place may yet resolve. Once the
-enclosing call is settled and the place stays unknown, the argument is
-read as one of which nothing is expected and the report is made: in
-`same(repeat(1), repeat(2))` with nothing expected, each `repeat`. It is
-not reported where something else was reported for the call. Not read yet: a function with a type pack or a pack parameter,
-whose generic types are then not known; whether a value argument is a
-constant; the type of a value argument against its parameter's.
+A parameter nothing resolves rejects the call as `generic.unresolved`
+(GEN-8). A call read before its place is known, as an argument is, puts
+the report off for a parameter its result names, which that place may
+yet resolve. Once the enclosing call is settled and the place stays
+unknown, the argument is read as one of which nothing is expected and
+the report is made: in `same(repeat(1), repeat(2))` with nothing
+expected, each `repeat`. It is not reported where something else was
+reported for the call. Not read yet: a function with a type pack or a
+pack parameter, whose generic types are then not known; whether a value
+argument is a constant; the type of a value argument against its
+parameter's.
 
 A call of an operator may write the operator's generic arguments
 (GEN-8). Where they settle the operator's result, that is the output
@@ -582,7 +576,8 @@ that needs it. An argument tried may hold a call that tries its own, so
 the readings are counted for the whole function: past a thousand a call
 that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
-candidate is `operator.no_candidate`, and a tie `operator.ambiguous`.
+candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
+analyser has no local code.
 A symbol such as `+` is not yet a call of core's operator: see the
 operator table above.
 
