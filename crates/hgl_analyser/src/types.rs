@@ -446,9 +446,11 @@ pub struct GenericParameter {
 /// What a generic parameter is declared as (GEN-13).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenericKind {
-    /// `T`: a type, or a value whose kind its uses decide. This pass
-    /// does not infer which.
+    /// `T`, where its kind is not settled: nothing in the signature
+    /// uses it, its uses disagree, or only a constraint names it.
     Plain,
+    /// `T`, used as a type in the signature.
+    Type,
     /// `...Ts`: a type pack, with the cardinality written after it
     /// (GEN-10).
     Pack {
@@ -457,7 +459,9 @@ pub enum GenericKind {
         /// The most; `None` for no limit.
         maximum: Option<u64>,
     },
-    /// `const N: i64`: a value, of the type given.
+    /// `const N: i64`: a value, of the type given. A parameter written
+    /// plain and used as a value, such as a size, is a value too; its
+    /// type is not known here.
     Value(Type),
 }
 
@@ -551,7 +555,7 @@ impl fmt::Display for Parameter {
 impl fmt::Display for GenericParameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            GenericKind::Plain => f.write_str(&self.name),
+            GenericKind::Plain | GenericKind::Type => f.write_str(&self.name),
             GenericKind::Pack { minimum, maximum } => {
                 write!(f, "...{}", self.name)?;
                 match (minimum, maximum) {
@@ -561,6 +565,7 @@ impl fmt::Display for GenericParameter {
                     (minimum, Some(maximum)) => write!(f, "{{{minimum}:{maximum}}}"),
                 }
             }
+            GenericKind::Value(Type::Unknown) => write!(f, "const {}", self.name),
             GenericKind::Value(ty) => write!(f, "const {}: {ty}", self.name),
         }
     }
