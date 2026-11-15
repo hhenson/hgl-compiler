@@ -329,6 +329,53 @@ fn a_long_chain_of_parents_is_read_on_a_small_stack() {
     );
 }
 
+/// A chain of generic parents that each give the next `tuple<T, T>`
+/// doubles the inherited field's type at every link: forty links would
+/// make a type of 2^40 parts. A type that would weigh too much with its
+/// arguments in place is not known, and nothing is built for it.
+#[test]
+fn a_type_that_grows_at_every_parent_is_not_built() {
+    let mut text = String::from("abstract struct A0<T> { value: T }\n");
+    for link in 1..=40 {
+        text.push_str(&format!(
+            "abstract struct A{link}<T> : A{}<tuple<T, T>> {{ }}\n",
+            link - 1
+        ));
+    }
+    // Near the top the field's type is still small, and still checked.
+    text.push_str("struct Near : A1<i64> { value: tuple<i64, str> }\n");
+    text.push_str("struct Far : A40<i64> { value: str }\n");
+    let checked = module(&text);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:43:25 local:type/field.conflict TYPE-4"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`value` is required `tuple<i64, str>` here and required `tuple<i64, i64>` in `A0`"
+    );
+}
+
+/// TYPE-4: a field is compared with each parent's field of its name. One
+/// whose type is not known hides no conflict with another.
+#[test]
+fn a_field_is_compared_with_every_parents() {
+    let checked = module(concat!(
+        "abstract struct Open { value: Missing }\n",
+        "abstract struct Known { value: i64 }\n",
+        "struct Child : Open, Known { value: str }\n",
+        "struct Fine : Open, Known { value: i64 }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:30 local:type/field.conflict TYPE-4"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`value` is required `str` here and required `i64` in `Known`"
+    );
+}
+
 /// ERR-9: "Do not demand cascaded diagnostics after an earlier error
 /// prevents checking." A part of a field's type that is not known is no
 /// difference from a parent's; what is known beside it still is.

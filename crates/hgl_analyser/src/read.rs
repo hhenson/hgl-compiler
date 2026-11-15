@@ -1620,6 +1620,25 @@ impl Reader<'_> {
                 Some((minimum, Some(maximum))) if minimum == maximum => Some(minimum),
                 Some(_) => None,
             };
+            // A pack of several types fills as many places as it holds.
+            // Each after the first is a type given to that parameter
+            // too, and a value parameter among them takes none
+            // (GEN-14).
+            let covered = usize::try_from(stands_for.unwrap_or(1)).unwrap_or(usize::MAX);
+            let value_slot = parameters
+                .iter()
+                .skip(next.saturating_add(1))
+                .take(covered.saturating_sub(1))
+                .take_while(|(_, kind)| *kind != Kind::Pack)
+                .find(|(_, kind)| *kind == Kind::Value)
+                .filter(|_| placed);
+            if let Some((name, _)) = value_slot {
+                let message = format!(
+                    "`{target_name}` takes a value for `{name}`, and `{}` passes on types",
+                    text_of(&argument)
+                );
+                self.argument_kind(&argument, Some(message));
+            }
             match stands_for {
                 // A pack parameter takes them all and stays the place.
                 Some(_) if want == Kind::Pack => {}
