@@ -2406,29 +2406,42 @@ fn specificity_is_compared_inside_a_structure() {
         "operator deep<V>(value: V) -> i64\n",
         "impl const fn deep<T>(value: list<tuple<T, bool>>) -> i64 => 1\n",
         "impl const fn deep<T>(value: list<T>) -> i64 => 2\n",
+        // TYPE-14: a `T` is given where a `T?` is expected, so both of
+        // these take an `i64`. The concrete one outranks.
+        "operator maybe<V>(value: V) -> i64\n",
+        "impl const fn maybe(value: i64) -> i64 => 1\n",
+        "impl const fn maybe<T>(value: T?) -> i64 => 2\n",
         "const fn uses(a: tuple<i64, str>, b: tuple<bool, str>, c: list<tuple<i64, bool>>) {\n",
         // The first candidate's first part is concrete.
         "    let first = pair(a)\n",
         "    let second = pair(b)\n",
         "    let nested = deep(c)\n",
+        "    let whole = maybe(1)\n",
+        "    let text = maybe(\"x\")\n",
         // Each is more specific in one part: a tie.
         "    let tie = cross(a)\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:15:15 operator/operator.ambiguous GEN-5"]
+        ["m.hgl:20:15 operator/operator.ambiguous GEN-5"]
     );
     assert_eq!(
-        locals(&checked, "uses")[3..6],
-        ["first: i64", "second: i64", "nested: i64"]
+        locals(&checked, "uses")[3..8],
+        [
+            "first: i64",
+            "second: i64",
+            "nested: i64",
+            "whole: i64",
+            "text: i64",
+        ]
     );
     // Which candidate each call selected: the first declared of `pair`
     // for `a`, the second for `b`, and the first of `deep`.
     let selected: Vec<usize> = body(&checked, "uses")
         .statements
         .iter()
-        .take(3)
+        .take(5)
         .map(|statement| match statement {
             Stmt::Declare {
                 value: Some(value), ..
@@ -2443,8 +2456,9 @@ fn specificity_is_compared_inside_a_structure() {
         })
         .collect();
     // Declarations of module `m`, in order: `pair` is 0, its
-    // candidates 1 and 2; `cross` 3, 4, 5; `deep` 6, 7, 8.
-    assert_eq!(selected, [1, 2, 7]);
+    // candidates 1 and 2; `cross` 3, 4, 5; `deep` 6, 7, 8; `maybe` 9,
+    // 10, 11.
+    assert_eq!(selected, [1, 2, 7, 10, 11]);
 }
 
 /// GEN-3: "`requires` may use type/category membership, equalities".

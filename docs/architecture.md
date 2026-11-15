@@ -612,6 +612,7 @@ part:
 | A concrete type or a structure, `i64`, `list<T>` | A bare variable, `T` | The first |
 | A structure, `tuple<i64, T>` | The same structure, `tuple<U, V>` | Whichever is in its parts: here the first |
 | `tuple<i64, T>` | `tuple<T, str>` | Neither: each is more specific in one part |
+| A concrete type, `i64` | A nullable variable, `T?`, which also takes an `i64` (TYPE-14) | The first: they are compared as the types under the `?` |
 
 A candidate outranks another when it is as specific in every parameter
 and more specific in one. One that nothing outranks is selected; two

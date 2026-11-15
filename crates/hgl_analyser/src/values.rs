@@ -3659,6 +3659,15 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         (Type::Parameter { .. }, Type::Parameter { .. }) => Specific::Same,
         (Type::Parameter { .. }, _) => Specific::Less,
         (_, Type::Parameter { .. }) => Specific::More,
+        // TYPE-14: a `T` is given where a `T?` is expected, so one
+        // candidate may take `i64` where another takes `T?`. They are
+        // compared as the types under the `?`.
+        (Type::Nullable(left), right) if !matches!(right, Type::Nullable(_)) => {
+            specificity(left, right)
+        }
+        (left, Type::Nullable(right)) if !matches!(left, Type::Nullable(_)) => {
+            specificity(left, right)
+        }
         (Type::Nullable(left), Type::Nullable(right))
         | (Type::Set(left), Type::Set(right))
         | (Type::Ref(left), Type::Ref(right))
@@ -3714,7 +3723,12 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         // Two types with no variable in them: one type, where both
         // candidates admit the call.
         (left, right) if left == right => Specific::Same,
-        _ => Specific::Neither,
+        // Of another shape. GEN-5: "Concrete types outrank variables".
+        (left, right) => match (names_parameter(left), names_parameter(right)) {
+            (false, true) => Specific::More,
+            (true, false) => Specific::Less,
+            _ => Specific::Neither,
+        },
     }
 }
 
