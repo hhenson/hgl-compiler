@@ -1992,9 +1992,13 @@ impl Reader<'_> {
                 (None, Some(_)) => self.generics[index].kind = GenericKind::Value(Type::Unknown),
                 // Something may yet say what it is.
                 (None, None) if evidence.open => {}
-                // A function given a struct whose parameter nothing
-                // settles: the struct is where that is reported.
-                (None, None) if evidence.dependent && !self.reading_struct => {}
+                // A callable's parameter that its signature does not
+                // settle is not rejected where it is declared: a call
+                // that supplies no argument for it is (the owner's
+                // decision of 2026-11-15 on hgl_spec issue 21, reading
+                // 33). A struct is always given its arguments, so
+                // nothing later says what its parameter is.
+                (None, None) if !self.reading_struct => {}
                 (None, None) => {
                     self.diagnostics.emit(
                         local_error(

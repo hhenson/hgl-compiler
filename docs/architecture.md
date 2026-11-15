@@ -404,9 +404,13 @@ signature uses it as:
 | An argument of a generic type | What that type's parameter is, once that is settled |
 | In a `requires` clause | Nothing yet: the pass that reads constraints says |
 
-Uses that disagree are rejected, and so is a parameter that nothing in
-the signature or a constraint names. A use in a body does not count:
-the rule infers a kind "from signature positions and constraints".
+Uses that disagree are rejected. A struct's parameter that nothing in
+its fields or a constraint names is rejected too: a struct is always
+given its arguments, so nothing later says what it is. A function's is
+left unsettled where it is declared, for a call to supply; a call that
+supplies no type for it is rejected, which is for the pass that reads
+calls. A use in a body does not settle a kind: the rule infers it "from
+signature positions and constraints".
 Neither does being handed on to a parameter that nothing settles: in
 `struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
 is. That is reported at the struct, and not again at each function
