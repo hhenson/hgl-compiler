@@ -22,6 +22,18 @@ pub struct Program {
 }
 
 impl Program {
+    /// The path of core's mandatory module (UNIT-11).
+    pub const CORE: &'static str = "core";
+
+    /// The position of core's mandatory module in [`Program::modules`],
+    /// when the program has it. Its public declarations are the prelude
+    /// (UNIT-11).
+    pub fn core(&self) -> Option<usize> {
+        self.modules
+            .iter()
+            .position(|module| module.path == Program::CORE)
+    }
+
     /// The module with this path, written with dots: `pricing.curves`.
     pub fn module(&self, path: &str) -> Option<&Module> {
         self.module_index(path).map(|index| &self.modules[index])

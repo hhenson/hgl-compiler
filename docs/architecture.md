@@ -541,13 +541,20 @@ The other place is shown with the diagnostic, as "first declared here".
 
 ### Prelude
 
-Every module sees the public declarations of core's mandatory module
-without importing them (UNIT-11). Core declares none yet. Until it does, a
-name that nothing in the program binds is not reported: the analysed
-program lists it as left for the prelude, once for each module, and
-`hgl check` prints the list. Over core's conformance cases and the
-specification's complete examples the list is `delta_value`, `get`,
-`info`, `invalidate`, `modified` and `valid`.
+Every module sees the public declarations of core's mandatory module,
+`core`, without importing them (UNIT-11). The module is source like any
+other: core's `hgl` directory is given among the source roots, and a
+program given without it has no prelude. When the program has it, a name
+nothing nearer binds is its public declaration of that name, an operator
+candidate finds its operator there (GEN-4), and outside it no
+declaration, import alias or local takes such a name (UNIT-12).
+
+Core declares part of its module so far: the comparison outcome and the
+symbol operators. A name that nothing binds is therefore not reported:
+the analysed program lists it as left for the prelude, once for each
+module, and `hgl check` prints the list. Over core's conformance cases
+and the specification's complete examples the list is `delta_value`,
+`get`, `info`, `invalidate`, `modified` and `valid`.
 
 ### Leaving declarations out
 

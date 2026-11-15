@@ -700,9 +700,10 @@ fn list_modules(sources: &SourceMap, program: &Program) -> String {
 
 /// The names left for the prelude, as text; empty when there are none.
 ///
-/// Every module sees the public declarations of core's mandatory module
-/// without importing them (UNIT-11), and core has not declared it yet. A
-/// name nothing else binds is therefore listed here, not reported.
+/// Every module sees the public declarations of core's mandatory module,
+/// `core`, without importing them (UNIT-11). Core declares part of that
+/// module so far, and a program may be given without it. A name nothing
+/// binds is therefore listed here, not reported.
 fn list_prelude_names(sources: &SourceMap, program: &Program) -> String {
     let mut out = String::new();
     for name in program
@@ -711,7 +712,7 @@ fn list_prelude_names(sources: &SourceMap, program: &Program) -> String {
         .flat_map(|module| &module.prelude_names)
     {
         if out.is_empty() {
-            out.push_str("left for the prelude (UNIT-11), which core has not declared yet:\n");
+            out.push_str("left for the prelude (UNIT-11), which does not bind them yet:\n");
         }
         let source = sources.file(name.at.file);
         out.push_str(&format!(

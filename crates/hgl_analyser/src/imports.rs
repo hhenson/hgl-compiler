@@ -20,6 +20,7 @@ pub(crate) fn resolve(program: &mut Program, diagnostics: &mut Diagnostics) {
         check_imported_names(program, index, diagnostics);
         check_names_in_files(&program.modules[index], diagnostics);
         check_declarations_against_imports(&program.modules[index], diagnostics);
+        check_names_against_prelude(program, index, diagnostics);
         bind_implementations(program, index, diagnostics);
     }
     check_cycles(program, diagnostics);
@@ -174,6 +175,60 @@ fn check_declarations_against_imports(module: &Module, diagnostics: &mut Diagnos
     }
 }
 
+/// UNIT-12: "outside core's mandatory module neither a declaration nor
+/// an import alias takes a prelude name."
+fn check_names_against_prelude(program: &Program, index: usize, diagnostics: &mut Diagnostics) {
+    let Some(core) = program.core().filter(|core| *core != index) else {
+        return;
+    };
+    let core = &program.modules[core];
+    // The public declaration of core that has `name`, when one has.
+    let prelude = |name: &str| {
+        core.lookup(name)
+            .find(|declaration| declaration.is_public())
+    };
+    let module = &program.modules[index];
+    for declaration in &module.declarations {
+        if !declaration.kind.binds_name() {
+            continue;
+        }
+        if let Some(bound) = prelude(&declaration.name) {
+            diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::NAME_DUPLICATE,
+                    declaration.at,
+                    format!(
+                        "`{}` is declared in module `{}`, and the prelude binds that name",
+                        declaration.name, module.path
+                    ),
+                    "UNIT-12",
+                )
+                .with_related(bound.at, "declared here, in core's module"),
+            );
+        }
+    }
+    for file in &module.files {
+        for import in &file.imports {
+            if import.kind != ImportKind::Alias {
+                continue;
+            }
+            if let Some(bound) = prelude(&import.name) {
+                diagnostics.emit(
+                    error(
+                        Category::Name,
+                        codes::NAME_DUPLICATE,
+                        import.at,
+                        format!("the alias `{}` takes a name the prelude binds", import.name),
+                        "UNIT-12",
+                    )
+                    .with_related(bound.at, "declared here, in core's module"),
+                );
+            }
+        }
+    }
+}
+
 /// GEN-4: a candidate "binds that operator through local declaration,
 /// selective import, or the prelude. No matching operator is a
 /// declaration error." A native candidate (NATIVE-1) binds its operator
@@ -268,7 +323,23 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             continue;
         }
 
-        // The prelude, or nothing. See `Module::prelude_names`.
+        // The prelude: an operator of core's mandatory module (UNIT-11).
+        if let Some(core) = program.core()
+            && core != index
+            && let Some(declaration) = operator(&program.modules[core])
+        {
+            found.push((
+                position,
+                OperatorRef {
+                    module: core,
+                    declaration,
+                },
+            ));
+            continue;
+        }
+
+        // Nothing binds it, or the program has no module `core`. See
+        // `Module::prelude_names`.
         prelude.push(PreludeName {
             name: name.to_string(),
             at: implementation.at,

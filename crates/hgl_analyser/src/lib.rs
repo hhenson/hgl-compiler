@@ -43,11 +43,13 @@
 //!
 //! # The prelude
 //!
-//! Every module sees the public declarations of core's mandatory module
-//! without importing them (UNIT-11). Core has not declared that module
-//! yet. Until it does, a name that nothing in the program binds is not
-//! reported: it is listed in [`Module::prelude_names`], as a name the
-//! prelude is expected to bind.
+//! Every module sees the public declarations of core's mandatory module,
+//! `core`, without importing them (UNIT-11). When the program has that
+//! module, a name nothing nearer binds is bound to its public
+//! declaration of the name. Core declares only part of its module so
+//! far, so a name it does not have, and any name in a program given
+//! without it, is not reported: it is listed in
+//! [`Module::prelude_names`], as a name the prelude is expected to bind.
 //!
 //! # Like every stage
 //!
