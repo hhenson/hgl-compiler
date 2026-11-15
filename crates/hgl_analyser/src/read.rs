@@ -1257,8 +1257,18 @@ impl Reader<'_> {
         };
         // The arguments are read whatever the name is, so that what is
         // wrong inside them is reported.
+        // Where an ordinary value type is required, the arguments of a
+        // generic type are held to it too: a `Box<ref<f64>>` is no more
+        // an ordinary value than a `list<ref<f64>>` is.
         let arguments = list.as_ref().map_or(Vec::new(), |list| {
-            self.arguments(list, Position::ARGUMENT, target)
+            self.arguments(
+                list,
+                Position {
+                    value: position.value,
+                    ..Position::ARGUMENT
+                },
+                target,
+            )
         });
         // No binding: the name is left for the prelude, or the resolver
         // has reported it.
@@ -1663,7 +1673,12 @@ impl Reader<'_> {
             } else {
                 let position = match want {
                     // Where a type goes, a type pack may be passed on.
-                    Kind::Type | Kind::Pack => Position::PACK,
+                    // What the place around the type asks of an
+                    // ordinary value is asked of its arguments too.
+                    Kind::Type | Kind::Pack => Position {
+                        value: position.value,
+                        ..Position::PACK
+                    },
                     Kind::Value | Kind::Unknown => position,
                 };
                 // A lone name given to a parameter of the target whose
