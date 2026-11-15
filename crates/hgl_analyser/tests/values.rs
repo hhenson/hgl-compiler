@@ -268,6 +268,36 @@ fn a_return_is_of_the_result_type() {
     );
 }
 
+/// TYPE-6: "A field whose type is an abstract struct holds every struct
+/// that inherits from it": a value of a struct is a value of the
+/// abstract structs it inherits from. TYPE-3: "Generic applications are
+/// invariant."
+#[test]
+fn a_struct_is_a_value_of_the_abstract_structs_it_inherits_from() {
+    let checked = module(concat!(
+        "abstract struct Base { id: i64 }\n",
+        "abstract struct Middle : Base { }\n",
+        "struct Child : Middle { }\n",
+        "struct Other { id: i64 }\n",
+        "abstract struct Boxed<T> { value: T }\n",
+        "struct Whole : Boxed<i64> { }\n",
+        "const fn up(x: Child) -> Base => x\n",
+        "const fn near(x: Child) -> Middle? => x\n",
+        "const fn other(x: Other) -> Base => x\n",
+        "const fn down(x: Base) -> Child => x\n",
+        "const fn boxed(x: Whole) -> Boxed<i64> => x\n",
+        "const fn unboxed(x: Whole) -> Boxed<str> => x\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:37 local:type/type.mismatch EXPR-5",
+            "m.hgl:11:36 local:type/type.mismatch EXPR-5",
+            "m.hgl:13:45 local:type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
 // ---- Bindings ----
 
 /// EXPR-3: "`let` is immutable; `var` may be assigned within the same
