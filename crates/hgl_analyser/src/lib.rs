@@ -256,9 +256,13 @@ pub mod codes {
     /// A sequence's entries give no type, and nothing is expected
     /// of it (EXPR-9).
     pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
-    /// A value function's operands are not ones the operator's contract
-    /// admits (OPS-1, OPS-2).
-    pub const OPERATOR_OPERAND: &str = "operator.operand";
+    /// A call of an operator, by symbol or by name, that no candidate
+    /// admits (GEN-5: "No match rejects"; OPS-1, OPS-2 for a symbol's
+    /// operands).
+    pub const OPERATOR_NO_CANDIDATE: &str = "operator.no_candidate";
+    /// A call of an operator that two candidates admit equally (GEN-5:
+    /// "tied most-specific candidates are ambiguous").
+    pub const OPERATOR_AMBIGUOUS: &str = "operator.ambiguous";
 
     /// A parameter that may not be omitted follows one that may
     /// (UNIT-8).
@@ -269,18 +273,11 @@ pub mod codes {
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
-    /// proposed to the specification (hgl_spec issue 30), and is
-    /// replaced by the catalogued code when one is agreed.
+    /// proposed to the specification, and is replaced by the catalogued
+    /// code when one is agreed. There is none at present.
     pub mod local {
-        /// A call of an operator that no candidate admits (GEN-5: "No
-        /// match rejects").
-        pub const OPERATOR_NO_CANDIDATE: &str = "operator.no_candidate";
-        /// A call of an operator that two candidates admit equally
-        /// (GEN-5: "tied most-specific candidates are ambiguous").
-        pub const OPERATOR_AMBIGUOUS: &str = "operator.ambiguous";
-
         /// Every local code of this stage.
-        pub const ALL: [&str; 2] = [OPERATOR_NO_CANDIDATE, OPERATOR_AMBIGUOUS];
+        pub const ALL: [&str; 0] = [];
     }
 }
 
@@ -343,18 +340,6 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
-}
-
-/// An error with a code of this compiler's own (`codes::local`): the
-/// specification rejects what it reports and has no row for it yet.
-fn local_error(
-    category: Category,
-    code: &'static str,
-    at: Location,
-    message: String,
-    rule: &'static str,
-) -> Diagnostic {
-    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

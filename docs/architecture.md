@@ -467,7 +467,7 @@ a value whose type is not known: nothing more is reported of it.
 Each rejection has a row of the catalogue: `type.mismatch`,
 `null.context_type`, `sequence.context_type`, `enum.context_type`,
 `binding.unassigned`, `binding.immutable`, the five `argument.` codes,
-`call.role`, `struct.abstract`, `member.unknown` and `operator.operand`.
+`call.role`, `struct.abstract`, `member.unknown` and `operator.no_candidate`.
 
 The operator table is built into the pass for now. It stands in for
 core's operator declarations, which are in no HGL source yet. The owner's
@@ -497,10 +497,10 @@ candidate's parameter, and what the trial reports is taken back. A
 candidate that fits with no integer literal widened is taken before one
 that needs it. An argument tried may hold a call that tries its own, so
 the readings are counted for the whole function: past a thousand a call
-that needs a trial is not judged, and the pass ends whatever it is given. The typed body records the operator and the
-candidate selected. No candidate, and a tie, are reported with the
-analyser's two local codes, `operator.no_candidate` and
-`operator.ambiguous`, proposed to the specification in hgl_spec issue 30.
+that needs a trial is not judged, and the pass ends whatever it is given.
+The typed body records the operator and the candidate selected. No
+candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
+analyser has no local code.
 A symbol such as `+` is not yet a call of core's operator: see the
 operator table above.
 

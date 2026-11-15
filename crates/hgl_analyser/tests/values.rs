@@ -184,12 +184,12 @@ fn an_operator_takes_the_operands_its_contract_admits() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:18:22 operator/operator.operand OPS-1",
-            "m.hgl:19:22 operator/operator.operand OPS-1",
-            "m.hgl:20:19 operator/operator.operand OPS-1",
-            "m.hgl:21:24 operator/operator.operand OPS-2",
-            "m.hgl:22:19 operator/operator.operand OPS-2",
-            "m.hgl:23:19 operator/operator.operand OPS-1",
+            "m.hgl:18:22 operator/operator.no_candidate OPS-1",
+            "m.hgl:19:22 operator/operator.no_candidate OPS-1",
+            "m.hgl:20:19 operator/operator.no_candidate OPS-1",
+            "m.hgl:21:24 operator/operator.no_candidate OPS-2",
+            "m.hgl:22:19 operator/operator.no_candidate OPS-2",
+            "m.hgl:23:19 operator/operator.no_candidate OPS-1",
         ]
     );
     assert_eq!(
@@ -1207,16 +1207,16 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         checked.summary(),
         [
             "m.hgl:18:25 name/argument.unknown EXPR-2",
-            "m.hgl:19:16 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:20:22 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:21:15 local:operator/operator.ambiguous GEN-5",
-            "m.hgl:24:19 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:25:20 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:27:19 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:31:17 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:33:16 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:36:19 local:operator/operator.no_candidate GEN-5",
-            "m.hgl:43:16 local:operator/operator.ambiguous GEN-5",
+            "m.hgl:19:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:20:22 operator/operator.no_candidate GEN-5",
+            "m.hgl:21:15 operator/operator.ambiguous GEN-5",
+            "m.hgl:24:19 operator/operator.no_candidate GEN-5",
+            "m.hgl:25:20 operator/operator.no_candidate GEN-5",
+            "m.hgl:27:19 operator/operator.no_candidate GEN-5",
+            "m.hgl:31:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:33:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:36:19 operator/operator.no_candidate GEN-5",
+            "m.hgl:43:16 operator/operator.ambiguous GEN-5",
         ]
     );
     assert_eq!(
