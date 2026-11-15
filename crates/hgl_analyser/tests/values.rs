@@ -1082,6 +1082,11 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // TYPE-7: `.member` is of the enum the parameter expects.
         "    let bought = sign(.buy)\n",
         "    let held = sign(.hold)\n",
+        // An entry that takes its type from its place is read as the
+        // candidate's too: a `null` in a tuple, a `[]` in a list.
+        "    let partly = first((null, 1))\n",
+        "    let inner = first([[]])\n",
+        "    let neither = first((null, null))\n",
         "}\n",
         "operator total<T>(values: T) -> f64\n",
         "impl const fn total(values: list<f64>) -> f64 => 0.0\n",
@@ -1091,6 +1096,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "enum Side { buy, sell }\n",
         "operator sign<T>(side: T) -> i64\n",
         "impl const fn sign(side: Side) -> i64 => 1\n",
+        "operator first<T>(values: T) -> i64\n",
+        "impl const fn first(values: tuple<i64?, i64>) -> i64 => 0\n",
+        "impl const fn first(values: list<list<i64>>) -> i64 => 0\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1104,6 +1112,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:27:19 local:operator/operator.no_candidate GEN-5",
             "m.hgl:31:17 local:operator/operator.no_candidate GEN-5",
             "m.hgl:33:16 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:36:19 local:operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
@@ -1118,6 +1127,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `pick` takes `null`, `i64`",
             "no value candidate of operator `count` takes `[1.5]`",
             "no value candidate of operator `sign` takes `.hold`",
+            "no value candidate of operator `first` takes `(null, null)`",
         ]
     );
     assert_eq!(
@@ -1147,6 +1157,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "unfit: _",
             "bought: i64",
             "held: _",
+            "partly: i64",
+            "inner: i64",
+            "neither: _",
         ]
     );
 }
