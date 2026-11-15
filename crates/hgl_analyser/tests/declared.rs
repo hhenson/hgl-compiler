@@ -378,6 +378,26 @@ fn a_parents_pack_is_not_one_argument() {
     );
 }
 
+/// A constant this pass holds no value for is not compared: `1.0` and
+/// `1.00` are one float. And where a struct passes a type pack on to its
+/// parent, which parameter each argument is given is not worked out, so
+/// the parent's fields that name a parameter are not compared.
+#[test]
+fn what_is_not_worked_out_is_no_conflict() {
+    let checked = module(concat!(
+        "struct Box<const N: f64> { value: i64 }\n",
+        "abstract struct Floats { item: Box<1.0> }\n",
+        "struct Same : Floats { item: Box<1.00> }\n",
+        "abstract struct Pair<A, B> {\n    first: A\n    second: B\n}\n",
+        "struct Forwarded<...Ts{0}> : Pair<Ts, i64, str> {\n    first: i64\n    second: str\n}\n",
+        "struct Plain : Pair<i64, str> { first: str }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:13:33 local:type/field.conflict TYPE-4"]
+    );
+}
+
 /// TYPE-4: a field is compared with each parent's field of its name. One
 /// whose type is not known hides no conflict with another.
 #[test]
@@ -762,6 +782,11 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         "struct Node : Base<Node> { }\n",
         "struct Value : Base<i64> { next = 0 }\n",
         "struct Loop : Base<Loop> { next = make() }\n",
+        // The default in force is the last override on the way down.
+        "abstract struct Middle<T> : Base<T> { next = make() }\n",
+        "struct Below : Middle<Below> { }\n",
+        // `(null)` is `null`.
+        "struct Grouped { next: atomic<Grouped> = (null) }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -769,6 +794,7 @@ fn a_descendant_keeps_a_recursive_fields_null() {
             "m.hgl:5:27 local:type/field.recursive TYPE-6",
             "m.hgl:6:24 local:type/field.recursive TYPE-6",
             "m.hgl:13:28 local:type/field.recursive TYPE-6",
+            "m.hgl:15:16 local:type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -778,6 +804,8 @@ fn a_descendant_keeps_a_recursive_fields_null() {
             "`inner` makes `Holder` hold itself: a recursive field is an `atomic<...>` with a \
              default of null, or nullable",
             "`next` is a recursive field, and its default stays null",
+            "`Below` holds itself through `next`, a field of `Base`: a recursive field is an \
+             `atomic<...>` with a default of null, or nullable",
         ]
     );
 }

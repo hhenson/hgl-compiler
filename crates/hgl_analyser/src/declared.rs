@@ -197,6 +197,11 @@ struct Parent {
     id: Id,
     /// The generic arguments it is given.
     arguments: Vec<Argument>,
+    /// True when one of those arguments passes on a type pack of the
+    /// struct that names the parent. How many arguments it stands for,
+    /// and so which parameter each of the others is given to, is then
+    /// not worked out.
+    forwards_pack: bool,
     /// Where it is written, after the `:`.
     at: Location,
 }
@@ -211,6 +216,9 @@ struct Introduced {
     ty: Type,
     /// True when its default is null (TYPE-4).
     optional: bool,
+    /// True when the default a construction takes is null: the field's
+    /// own, or the last override of it on the way down (TYPE-4).
+    null_default: bool,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
     origin: (Id, usize),
@@ -564,9 +572,17 @@ impl Structs<'_> {
                                     Some((first.at, "first listed here")),
                                 ));
                             } else {
+                                let forwards_pack = arguments.iter().any(|argument| {
+                                    matches!(argument, Argument::Type(Type::Parameter { at, .. })
+                                    if read.generics.iter().any(|generic| {
+                                        generic.at == *at
+                                            && matches!(generic.kind, GenericKind::Pack { .. })
+                                    }))
+                                });
                                 parents.push(Parent {
                                     id: parent,
                                     arguments: arguments.clone(),
+                                    forwards_pack,
                                     at,
                                 });
                             }
@@ -717,8 +733,16 @@ impl Structs<'_> {
             // wrong count, which has been reported, leaves the rest as
             // they are.
             for field in &fields.all {
+                // With a pack passed on among the arguments, which one
+                // a parameter is given is not known: a field's type
+                // that names a parameter is not known either.
+                let ty = if parent.forwards_pack && names_parameter(&field.ty) {
+                    Type::Unknown
+                } else {
+                    self.in_place(&field.ty, parent.id, &parent.arguments)
+                };
                 let field = Introduced {
-                    ty: self.in_place(&field.ty, parent.id, &parent.arguments),
+                    ty,
                     via,
                     ..field.clone()
                 };
@@ -734,6 +758,15 @@ impl Structs<'_> {
             }
         }
         let mut all = inherited.clone();
+        // `name = value` changes the default a construction takes for a
+        // field a parent has, for this struct and those below it.
+        if let Some(read) = self.struct_type(id) {
+            for field in read.fields.iter().filter(|field| field.ty.is_none()) {
+                for inherited in all.iter_mut().filter(|parent| parent.name == field.name) {
+                    inherited.null_default = field.null_default;
+                }
+            }
+        }
         if let Some(read) = self.struct_type(id) {
             for (index, field) in read.fields.iter().enumerate() {
                 // `name = value` introduces no field.
@@ -742,6 +775,7 @@ impl Structs<'_> {
                         name: field.name.clone(),
                         ty: ty.clone(),
                         optional: field.null_default,
+                        null_default: field.null_default,
                         origin: (id, index),
                         at: field.at,
                         via: 0,
@@ -1108,8 +1142,9 @@ impl Structs<'_> {
                         ty: field.ty.clone(),
                         // TYPE-6: an `atomic<...>` defaulted to null,
                         // or a nullable type, so that the recursion can
-                        // end.
-                        in_form: (matches!(field.ty, Type::Atomic(_)) && field.optional)
+                        // end. The default is the one in force, which
+                        // an override on the way down may have changed.
+                        in_form: (matches!(field.ty, Type::Atomic(_)) && field.null_default)
                             || matches!(field.ty, Type::Nullable(_)),
                         named,
                     });
@@ -1190,6 +1225,16 @@ impl Structs<'_> {
         let mut reports = Vec::new();
         for (edge, fault) in &faulty {
             let owner = &self.declaration(edge.owner).name;
+            // A struct that itself changes the field's default is
+            // reported for that, below, where it writes the default.
+            let overridden_here = self.struct_type(edge.owner).is_some_and(|read| {
+                read.fields.iter().any(|field| {
+                    field.ty.is_none() && !field.null_default && field.name == edge.name
+                })
+            });
+            if overridden_here {
+                continue;
+            }
             // A field from a parent is at fault where it is declared
             // when its type there holds this struct whatever the
             // arguments; otherwise the fault is in what this struct
@@ -1464,6 +1509,13 @@ fn agree(left: &Type, right: &Type) -> bool {
 /// place of `N`, differs from nothing: the pass that evaluates constants
 /// compares it.
 fn constants_agree(left: &Constant, right: &Constant) -> bool {
-    let unevaluated = |constant: &Constant| matches!(constant.value, ConstantValue::Unevaluated);
-    unevaluated(left) || unevaluated(right) || left == right
+    // An expression not evaluated, and a literal whose value is not
+    // held: `1.0` and `1.00` are one float, written two ways.
+    let open = |constant: &Constant| {
+        matches!(
+            constant.value,
+            ConstantValue::Unevaluated | ConstantValue::Other(_)
+        )
+    };
+    open(left) || open(right) || left == right
 }
