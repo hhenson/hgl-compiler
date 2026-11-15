@@ -388,7 +388,9 @@ pub enum Detail {
     Callable(Signature),
     /// A struct.
     Struct(StructType),
-    /// An enum or a native type: nothing of them is a written type.
+    /// An enum.
+    Enum(EnumType),
+    /// A native type: nothing of it is a written type.
     Plain,
 }
 
@@ -483,6 +485,30 @@ pub struct Field {
     pub ty: Option<Type>,
     /// True when it has a default.
     pub has_default: bool,
+    /// True when that default is the literal `null`. On a member with a
+    /// type it marks the field optional (TYPE-4).
+    pub null_default: bool,
+}
+
+/// The members of an enum (TYPE-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumType {
+    /// Its members, in order.
+    pub members: Vec<EnumMember>,
+}
+
+/// One member of an enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumMember {
+    /// Its name.
+    pub name: String,
+    /// Where the name is written.
+    pub at: Location,
+    /// Its number: the one written, or one more than the member before
+    /// it, from zero. `None` when it is not known: the number written is
+    /// not an integer, or is an expression the analyser does not
+    /// evaluate yet.
+    pub value: Option<i64>,
 }
 
 impl fmt::Display for Signature {

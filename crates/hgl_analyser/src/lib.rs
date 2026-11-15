@@ -32,7 +32,10 @@
 //! * `read` turns every written type into a [`Type`], records each
 //!   declaration's signature or fields, and rejects a type made of what
 //!   its place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12,
-//!   TYPE-14, GEN-2).
+//!   TYPE-14, GEN-2);
+//! * `declared` reads the declarations against one another: a struct's
+//!   parents and fields, the structs that hold themselves, and an
+//!   enum's numbering (TYPE-3, TYPE-4, TYPE-6, TYPE-7).
 //!
 //! What an expression is, phases and constants are not checked yet.
 //!
@@ -54,6 +57,7 @@
 mod assemble;
 mod constant;
 mod declare;
+mod declared;
 mod forms;
 mod imports;
 mod program;
@@ -70,8 +74,8 @@ pub use program::{
     ModuleFile, NameUse, OperatorRef, PreludeName, Program, Role, Test,
 };
 pub use types::{
-    Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
-    Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, Field, GenericKind,
+    GenericParameter, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -153,6 +157,9 @@ pub mod codes {
     pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";
     /// A window's size is out of bounds (TYPE-11).
     pub const ROLLING_SIZE_BOUNDS: &str = "rolling.size_bounds";
+    /// An integer literal is outside the `i64` domain: 2^63 with no
+    /// minus before it (LEX-7).
+    pub const NUMBER_INTEGER_RANGE: &str = "number.integer_range";
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
@@ -176,15 +183,48 @@ pub mod codes {
         pub const LIST_SIZE: &str = "list.size";
         /// A temporal parameter has a default (UNIT-8).
         pub const DEFAULT_TEMPORAL_PARAMETER: &str = "default.temporal_parameter";
+        /// A struct's parent is not an abstract struct (TYPE-3).
+        pub const STRUCT_PARENT: &str = "struct.parent";
+        /// Structs inherit from one another (TYPE-6).
+        pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
+        /// A field's type or optionality differs between two parents, or
+        /// between a struct and a parent (TYPE-4).
+        pub const FIELD_CONFLICT: &str = "field.conflict";
+        /// `name = value` names no field a parent declares (TYPE-4).
+        pub const FIELD_NOT_INHERITED: &str = "field.not_inherited";
+        /// Two members of a struct have one name (TYPE-4).
+        pub const FIELD_DUPLICATE: &str = "field.duplicate";
+        /// A field makes its struct hold itself and is not an optional
+        /// `atomic<...>` defaulted to null, or a descendant removes that
+        /// null (TYPE-6).
+        pub const FIELD_RECURSIVE: &str = "field.recursive";
+        /// An enum member's number is not an integer (TYPE-7).
+        pub const ENUM_VALUE: &str = "enum.value";
+        /// Two members of an enum have one number (TYPE-7).
+        pub const ENUM_DUPLICATE_VALUE: &str = "enum.duplicate_value";
+        /// An enum's numbering passes the largest `i64` (TYPE-7).
+        pub const ENUM_OVERFLOW: &str = "enum.overflow";
+        /// Two members of an enum have one name (TYPE-7).
+        pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 16] = [
             TYPE_NOT_A_TYPE,
             TYPE_NOT_ORDINARY,
             SIGNAL_POSITION,
             GENERIC_ARGUMENT_COUNT,
             LIST_SIZE,
             DEFAULT_TEMPORAL_PARAMETER,
+            STRUCT_PARENT,
+            STRUCT_INHERITANCE_CYCLE,
+            FIELD_CONFLICT,
+            FIELD_NOT_INHERITED,
+            FIELD_DUPLICATE,
+            FIELD_RECURSIVE,
+            ENUM_VALUE,
+            ENUM_DUPLICATE_VALUE,
+            ENUM_OVERFLOW,
+            ENUM_DUPLICATE_MEMBER,
         ];
     }
 }
@@ -233,6 +273,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
     read::read(&mut program, diagnostics);
+    declared::check(&mut program, diagnostics);
     program
 }
 

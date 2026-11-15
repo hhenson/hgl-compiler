@@ -202,7 +202,7 @@ struct Reader<'a> {
 // ---- Reading the tree ----
 
 /// True for a node that is a type.
-fn is_type(kind: SyntaxKind) -> bool {
+pub(crate) fn is_type(kind: SyntaxKind) -> bool {
     matches!(
         kind,
         SyntaxKind::ScalarType
@@ -223,7 +223,7 @@ fn is_type(kind: SyntaxKind) -> bool {
 }
 
 /// The first child node of `node` of kind `kind`.
-fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
+pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
     node.children().find(|child| child.kind() == kind)
 }
 
@@ -233,14 +233,14 @@ fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// The tokens directly inside `node`, without whitespace and comments.
-fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|element| element.into_token())
         .filter(|token| !token.kind().is_trivia())
 }
 
 /// True when a token of `kind` is directly inside `node`.
-fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
+pub(crate) fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
     tokens(node).any(|token| token.kind() == kind)
 }
 
@@ -265,6 +265,26 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
         Some(qualified) => identifiers(&qualified).into_iter().nth(1),
         None => identifiers(node).into_iter().next(),
     }
+}
+
+/// True when an expression is the literal `null`, in parentheses or
+/// not: "Parentheses select grouping" (EXPR-1), so `(null)` is `null`.
+fn is_null(expression: &SyntaxNode) -> bool {
+    let mut node = expression.clone();
+    // The parser bounds how deep parentheses nest; so does this.
+    for _ in 0..128 {
+        if node.kind() != SyntaxKind::ParenExpr {
+            break;
+        }
+        match node.children().next() {
+            Some(inner) => node = inner,
+            None => return false,
+        }
+    }
+    node.kind() == SyntaxKind::Literal
+        && tokens(&node)
+            .next()
+            .is_some_and(|token| token.kind() == SyntaxKind::KwNull)
 }
 
 /// The text of `node` with one space wherever whitespace or a comment
@@ -551,11 +571,17 @@ impl Reader<'_> {
             } else {
                 None
             };
+            // The default is the member's child that is no type.
+            let null_default = member
+                .children()
+                .find(|part| !is_type(part.kind()))
+                .is_some_and(|default| is_null(&default));
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
                 ty,
                 has_default: has_token(&member, SyntaxKind::Eq),
+                null_default,
             });
         }
         StructType {

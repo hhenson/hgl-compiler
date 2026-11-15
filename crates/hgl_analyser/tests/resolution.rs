@@ -343,7 +343,7 @@ fn a_default_reads_no_parameter_and_no_field() {
     let checked = module(concat!(
         "const fn seed() -> i64 => 7\n",
         "const fn sized<const N: i64>(count: i64 = N, base: i64 = seed(), more: i64 = count) -> i64 => 1\n",
-        "struct Quote {\n    bid: f64 = 1.0\n    ask: f64 = bid\n    size = seed()\n}\n",
+        "struct Quote {\n    bid: f64 = 1.0\n    ask: f64 = bid\n    size: i64 = seed()\n}\n",
     ));
     assert_eq!(
         checked.summary(),

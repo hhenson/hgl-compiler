@@ -64,7 +64,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-5 | parser | done | A line break is ignored in a list, in an incomplete statement, and before a token that cannot begin one; two or more always separate |
 | LEX-6 | parser | done | Two statements on one line rejected; an inject list continues after a comma |
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
-| LEX-7 | analyser | partial | A minus before 2^63 is the least integer in a size. Left: 2^63 without a minus rejected; enum numbering range |
+| LEX-7 | analyser | done | 2^63 is an integer only directly under a minus; an enum's numbers are held as `i64`, the least included |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
 | LEX-9 | parser | done | Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position |
 | LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor |
@@ -122,13 +122,13 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-2 | lexer | done | Literal dates keep years 1 to 9999; literal durations fit signed 64-bit microseconds |
 | TYPE-2 | analyser | partial | Each temporal scalar a type of its own. Left: the domains of computed values |
 | TYPE-2 | transpiler | planned | Temporal scalar representations; zone names kept distinct |
-| TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments. Left: only abstract parents; concrete structs final |
-| TYPE-4 | analyser | planned | Field type, optionality and defaults; parent conflicts rejected |
+| TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments; a parent is an abstract struct. Left: an abstract struct is not constructed |
+| TYPE-4 | analyser | partial | A field's type and optionality agree between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name. Left: a default's value against its field's type |
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
-| TYPE-6 | analyser | planned | Recursive struct edges; inheritance and collection cycles rejected |
+| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an `atomic<...>` field defaulted to null, which a descendant keeps. Left: finite generic specialization |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
-| TYPE-7 | analyser | planned | Enum members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; numbering, range and duplicates; checked construction |
+| TYPE-7 | analyser | partial | Numbering from zero or the number written; numbers are integers no two members share; overflow rejected. Left: members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
 | TYPE-8 | analyser | planned | Typing of `any` |
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |

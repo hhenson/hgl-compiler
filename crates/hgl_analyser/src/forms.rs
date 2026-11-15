@@ -6,8 +6,12 @@
 //! native contract body may hold any hooks. Which combinations mean
 //! something is decided here, from the declaration alone: no name is
 //! looked up and no type is known.
+//!
+//! The lexer likewise admits one literal the domain does not: 2^63,
+//! which is an integer only under a minus (LEX-7).
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_lexer::literal::{MAX_INTEGER_MAGNITUDE, decode_integer};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -29,6 +33,58 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
             if let DeclarationKind::NativeImplementation(role) = declaration.kind {
                 hooks(node, file, role, diagnostics);
             }
+            integer_range(node, file, diagnostics);
+        }
+        for test in &module.tests {
+            integer_range(&test.syntax, module.files[test.file].file, diagnostics);
+        }
+        for (file, node) in &module.instantiations {
+            integer_range(node, module.files[*file].file, diagnostics);
+        }
+    }
+}
+
+/// LEX-7: "Minus is an operator, not part of a numeric literal.
+/// Required literal range checks use the i64/f64 domains. Enum numbering
+/// admits the full signed minimum."
+///
+/// The least `i64` is written as a minus before 2^63, so the lexer
+/// admits a literal of that magnitude. It is in the domain only as the
+/// operand of that minus; anywhere else it is rejected here.
+fn integer_range(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    // `descendants` walks the tree under `root` without calling itself.
+    for literal in root
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::Literal)
+    {
+        let Some(token) = tokens(&literal).next() else {
+            continue;
+        };
+        if token.kind() != SyntaxKind::Int
+            || decode_integer(token.text()) != Ok(MAX_INTEGER_MAGNITUDE)
+        {
+            continue;
+        }
+        let under_minus = literal.parent().is_some_and(|parent| {
+            parent.kind() == SyntaxKind::UnaryExpr
+                && tokens(&parent)
+                    .next()
+                    .is_some_and(|operator| operator.kind() == SyntaxKind::Minus)
+        });
+        if !under_minus {
+            diagnostics.emit(
+                error(
+                    Category::Parse,
+                    codes::NUMBER_INTEGER_RANGE,
+                    Location::new(file, token.span()),
+                    format!(
+                        "integer literal `{}` is outside the i64 domain",
+                        token.text()
+                    ),
+                    "LEX-7",
+                )
+                .with_note("it is an integer only directly under a minus: the least i64"),
+            );
         }
     }
 }

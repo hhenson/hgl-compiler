@@ -983,9 +983,9 @@ fn a_windows_sizes_are_in_bounds() {
 fn a_minus_before_two_to_the_sixty_third_is_the_least_integer() {
     let checked = module(concat!(
         "fn least(a: list<f64, -9223372036854775808>, b: list<f64, -9223372036854775807 - 1>) {}\n",
-        // 2^63 is no `i64` by itself, and what overflows is not a size
-        // this pass can judge: both are left for the pass that evaluates
-        // constants.
+        // What overflows is not a size this pass can judge: it is left
+        // for the pass that evaluates constants. 2^63 with no minus
+        // directly before it is no `i64`, and is rejected as a literal.
         "fn left(a: list<f64, 9223372036854775807 + 1>, b: list<f64, -(9223372036854775808)>) {}\n",
     ));
     assert_eq!(
@@ -993,6 +993,7 @@ fn a_minus_before_two_to_the_sixty_third_is_the_least_integer() {
         [
             "m.hgl:2:23 local:type/list.size TYPE-10",
             "m.hgl:2:59 local:type/list.size TYPE-10",
+            "m.hgl:3:63 parse/number.integer_range LEX-7",
         ]
     );
 }
