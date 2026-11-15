@@ -1728,6 +1728,30 @@ fn a_partly_known_argument_does_not_decide_a_generic_parameter() {
     assert_eq!(locals(&checked, "uses")[0], "ok: tuple<list<i64>, i64>");
 }
 
+/// EXPR-5, EXPR-9, TYPE-10: a sequence or a tuple written out is read as
+/// the type of its place, which says what its entries are and, for a
+/// sized list, how many. An argument that says what a generic parameter
+/// is is first read with no place; it is read again as its parameter's
+/// type once that is known, and not held to what it was without one.
+#[test]
+fn an_argument_typed_by_its_place_is_read_as_the_resolved_parameter() {
+    let checked = module(concat!(
+        "struct Pair<T> { both: list<T, 2> }\n",
+        "const fn keep<T>(xs: list<T, 2>) -> list<T, 2> => xs\n",
+        "const fn uses() {\n",
+        "    let a = keep([1, 2])\n",
+        "    let b = keep([1.5, 2])\n",
+        "    let c = Pair(both: [1, 2])\n",
+        "    let d = keep([1, 2, 3])\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:8:18 type/type.mismatch TYPE-10"]);
+    assert_eq!(
+        locals(&checked, "uses")[..3],
+        ["a: list<i64, 2>", "b: list<f64, 2>", "c: Pair<i64>"]
+    );
+}
+
 /// GEN-2 names the sources, "actual inputs, requested output, or
 /// solvable equality", and gives them no order. Where the type expected
 /// and an argument each say what a parameter is and differ, which

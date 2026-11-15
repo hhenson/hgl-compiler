@@ -1721,6 +1721,9 @@ impl<'a> Typer<'a> {
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
         let assigned = self.assign(name, list, slots, takes);
         let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
+        // True for a value kept from its first reading that is not
+        // then fitted to its place.
+        let mut unfitted: Vec<bool> = vec![false; assigned.len()];
         // The values that say what a parameter is are read first, out
         // of the order written. A block among the arguments may assign
         // what another reads (CTRL-10), so with one such a reading is
@@ -1754,13 +1757,23 @@ impl<'a> Typer<'a> {
             let value = self.expression(node, Some(&Type::Unknown));
             infer(pattern, &value.ty, generics, &mut found);
             // A value with no whole type while nothing is known of its
-            // place, `[1, "x"]`, has not been judged. It is read again
-            // below as the place's type, once the parameters are found.
-            // One that reported something is read once.
-            let again =
-                !whole(&value.ty) && self.diagnostics.len() == reported && self.may_reread();
+            // place, `[1, "x"]`, has not been judged. Neither has one
+            // that is read as the type of its place, a sequence or a
+            // tuple written out: its entries and a list's size are the
+            // place's to say (EXPR-5, EXPR-9, TYPE-10), so `[1, 2]` is
+            // a `list<i64>` here and a `list<i64, 2>` where one is
+            // expected. Each is read again below as the place's type,
+            // once the parameters are found. One that reported
+            // something is read once.
+            let by_place = typed_by_place(node);
+            let again = (by_place || !whole(&value.ty))
+                && self.diagnostics.len() == reported
+                && self.may_reread();
             if !again {
                 values[position] = Some(value);
+                // Kept as it was read, with no place: it is not held to
+                // the place's type, which that reading did not know.
+                unfitted[position] = by_place;
             }
         }
         // Every argument is of its place's type with what was found in
@@ -1784,6 +1797,10 @@ impl<'a> Typer<'a> {
                     ..slots[index]
                 };
                 match values[position].take() {
+                    Some(value) if unfitted[position] => hir::Argument {
+                        parameter: Some(index),
+                        value,
+                    },
                     Some(value) => {
                         let place = format!("the {} `{}`", takes.noun(), slot.name);
                         hir::Argument {
