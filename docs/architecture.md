@@ -330,7 +330,9 @@ Base<i64>` is held by a `Base<i64>` and not by a `Base<str>`. A
 parameter of the child stands for one thing wherever the child writes
 it, and is matched inside a type: `struct Child<U> : Base<U, U>` is not
 held by a `Base<i64, str>`, nor `struct Child<U> : Base<list<U>>` by a
-`Base<str>`. A
+`Base<str>`. Constant arguments are compared by what they come to: a
+window with no minimum written has its maximum for one (TYPE-11), and
+`1.0` is `1.00` (LEX-20). A
 recursive field stays within its module: a struct of another module is
 reached back only through an abstract struct declared there, and that
 is rejected. A field holds every struct its type names,

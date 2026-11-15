@@ -741,6 +741,17 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "abstract struct Rows<U> : Base<list<U>> { }\n",
         "struct Apart : Rows<i64> { apart: Base<list<str>> }\n",
         "struct Close : Rows<i64> { close: Base<list<i64>> }\n",
+        // TYPE-11: "Omitted minimum equals maximum."
+        "struct Windowed : Base<rolling<i64, 5, 2>> { next: Base<rolling<i64, 5>> }\n",
+        "struct Whole : Base<rolling<i64, 5>> { whole: Base<rolling<i64, 5, 5>> }\n",
+        // LEX-20: a float is the number it denotes, however written.
+        "struct Mark<const N: f64> { width: i64 }\n",
+        "struct Marked : Base<Mark<1.0>> { marked: Base<Mark<1.00>> }\n",
+        "struct Unmarked : Base<Mark<1.0>> { other: Base<Mark<2.0>> }\n",
+        // LEX-2: and a string is its contents.
+        "struct Named<const S: str> { width: i64 }\n",
+        "struct Spelt : Base<Named<\"A\">> { spelt: Base<Named<\"\\u{41}\">> }\n",
+        "struct Unspelt : Base<Named<\"A\">> { other: Base<Named<\"B\">> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -752,6 +763,9 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:13:35 type/field.recursive TYPE-6",
             "m.hgl:16:31 type/field.recursive TYPE-6",
             "m.hgl:19:28 type/field.recursive TYPE-6",
+            "m.hgl:21:40 type/field.recursive TYPE-6",
+            "m.hgl:23:35 type/field.recursive TYPE-6",
+            "m.hgl:26:35 type/field.recursive TYPE-6",
         ]
     );
 }

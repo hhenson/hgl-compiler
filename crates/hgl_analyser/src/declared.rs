@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_lexer::literal::{decode_float, decode_string};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 use petgraph::algo::kosaraju_scc;
@@ -1499,16 +1500,12 @@ fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
                 minimum: other_minimum,
             },
         ) => {
-            // A minimum written on one side only may be the maximum,
-            // which is what none written means (TYPE-11).
-            let minimums = match (minimum, other_minimum) {
-                (Some(minimum), Some(other_minimum)) => {
-                    constant_may_be(minimum, other_minimum, bound)
-                }
-                _ => true,
-            };
+            // TYPE-11: "Omitted minimum equals maximum." A window with
+            // none written has its maximum for one.
+            let minimum = minimum.as_ref().unwrap_or(maximum);
+            let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
             constant_may_be(maximum, other_maximum, bound)
-                && minimums
+                && constant_may_be(minimum, other_minimum, bound)
                 && type_may_be(value, other_value, bound)
         }
         (
@@ -1528,7 +1525,45 @@ fn constant_may_be(given: &Constant, applied: &Constant, bound: &mut Bindings) -
     if let ConstantValue::Parameter { at, .. } = &applied.value {
         return bind(*at, Argument::Constant(given.clone()), bound);
     }
-    is_open(given) || is_open(applied) || given == applied
+    may_be_one(given, applied)
+}
+
+/// True when two constants may be one value.
+///
+/// One that names a generic parameter, or is an expression not
+/// evaluated, may be anything. Two literals whose values this pass does
+/// not hold are one when they are written alike. Written differently,
+/// two floats are compared as the numbers they denote (LEX-20) and two
+/// strings as their contents (LEX-2), so `1.0` is `1.00`; a bool or
+/// `null` is as it is written; and two dates or times may be one.
+fn may_be_one(left: &Constant, right: &Constant) -> bool {
+    if is_open(left) || is_open(right) || left == right {
+        return true;
+    }
+    let (ConstantValue::Other(kind), ConstantValue::Other(other_kind)) =
+        (&left.value, &right.value)
+    else {
+        // Two values this pass holds, or one it holds and one it does
+        // not: they differ.
+        return false;
+    };
+    if kind != other_kind {
+        return false;
+    }
+    match *kind {
+        // A literal the lexer has reported, or one under a sign or in
+        // parentheses, is not read here: it may be the other.
+        "a float" => match (decode_float(&left.text), decode_float(&right.text)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => true,
+        },
+        "a string" => match (decode_string(&left.text), decode_string(&right.text)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => true,
+        },
+        "a date or time" => true,
+        _ => false,
+    }
 }
 
 /// Records that the parameter declared at `at` stands for `argument`.
@@ -1544,9 +1579,7 @@ fn bind(at: Location, argument: Argument, bound: &mut Bindings) -> bool {
         (Argument::Type(earlier), Argument::Type(later)) => {
             names_parameter(earlier) || names_parameter(later) || agree(earlier, later)
         }
-        (Argument::Constant(earlier), Argument::Constant(later)) => {
-            is_open(earlier) || is_open(later) || earlier == later
-        }
+        (Argument::Constant(earlier), Argument::Constant(later)) => may_be_one(earlier, later),
         _ => true,
     }
 }
