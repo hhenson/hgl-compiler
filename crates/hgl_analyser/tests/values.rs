@@ -1353,6 +1353,10 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
         // statement.
         "const fn dropped() => 1\n",
         "const fn unit() { 1 + 1 }\n",
+        // CTRL-10 is of an `if` whose value is used: one whose value is
+        // dropped has branches of any types.
+        "const fn either(c: bool) { if c { 1 } else { \"x\" } }\n",
+        "const fn stated(c: bool) {\n    if c { 1 } else { \"x\" }\n    let after = 1\n}\n",
         "const fn wrong(c: bool) -> i64 {\n    if c { 1 } else { \"x\" }\n}\n",
     ));
     assert_eq!(
@@ -1363,7 +1367,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
             "m.hgl:16:21 type/type.mismatch CTRL-10",
             "m.hgl:17:17 type/type.mismatch CTRL-10",
             "m.hgl:26:10 type/return.missing FN-7",
-            "m.hgl:38:23 type/type.mismatch EXPR-5",
+            "m.hgl:43:23 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -1438,7 +1442,16 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
         "    var k: i64?\n",
         "    while c { k = 1 }\n",
         "    let or_null = k\n",
+        // EXPR-6: the right operand of `&&` is not evaluated when the
+        // left is false, so what it assigns is not assigned after.
+        "    var m: i64\n",
+        "    let both = c && {\n        m = 1\n        true\n    }\n",
+        "    let skipped = m\n",
         "    return a\n",
+        "}\n",
+        // A `return` in an operand that may be skipped ends no path.
+        "const fn skips(c: bool) -> i64 {\n",
+        "    let done = c || {\n        return 1\n    }\n",
         "}\n",
     ));
     assert_eq!(
@@ -1447,6 +1460,8 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
             "m.hgl:9:17 name/binding.unassigned EXPR-3",
             "m.hgl:15:17 name/binding.unassigned EXPR-3",
             "m.hgl:26:19 name/binding.unassigned EXPR-3",
+            "m.hgl:41:19 name/binding.unassigned EXPR-3",
+            "m.hgl:44:10 type/return.missing FN-7",
         ]
     );
     assert_eq!(
@@ -1455,6 +1470,8 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
             "`b` is read before it is given a value",
             "`e` is read before it is given a value",
             "`g` is read before it is given a value",
+            "`m` is read before it is given a value",
+            "`skips` declares a result of `i64`, and can reach its end with no value",
         ]
     );
 }

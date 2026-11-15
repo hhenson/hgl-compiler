@@ -252,10 +252,10 @@ impl<'a> Typer<'a> {
     fn final_expression(&mut self, node: &SyntaxNode, result: Option<&Type>) -> Stmt {
         let at = self.at(node);
         let Some(result) = result else {
-            let (value, _) = self.flow(node, None);
+            let (value, _) = self.flow(node, None, false);
             return Stmt::Expr(value);
         };
-        let (value, outcome) = self.flow(node, Some(result));
+        let (value, outcome) = self.flow(node, Some(result), true);
         match outcome {
             Outcome::Value(_) => {
                 let value = self.fit(value, result, "the function's result");
@@ -311,7 +311,7 @@ impl<'a> Typer<'a> {
             // A block or an `if` on a line of its own: its value, when
             // it has one, is dropped.
             SyntaxKind::ExprStmt => match node.children().next() {
-                Some(value) => Stmt::Expr(self.flow(&value, None).0),
+                Some(value) => Stmt::Expr(self.flow(&value, None, false).0),
                 None => Stmt::Unread { at: self.at(node) },
             },
             SyntaxKind::WhileStmt => self.while_loop(node),
@@ -499,7 +499,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::IndexExpr => self.index(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
-                let (value, outcome) = self.flow(node, expected);
+                let (value, outcome) = self.flow(node, expected, true);
                 // CTRL-10: "A block whose last statement is an
                 // expression has that expression's value and type; any
                 // other block has none."
@@ -1015,7 +1015,19 @@ impl<'a> Typer<'a> {
                     None => self.expression(&left, Some(&BOOL)),
                 };
                 let left = self.fit(left, &BOOL, &what);
+                // EXPR-6: the right operand is not evaluated when the
+                // left decides. What it assigns is assigned only on the
+                // path that evaluates it, and a `return` in it does not
+                // end every path (CTRL-11, CTRL-5).
+                let before = self.assigned.clone();
+                let before_returned = self.returned;
                 let right = self.expression(&right, Some(&BOOL));
+                self.assigned = joined(
+                    (&self.assigned, self.returned),
+                    (&before, before_returned),
+                    self.locals.len(),
+                );
+                self.returned = before_returned;
                 (left, self.fit(right, &BOOL, &what))
             }
             // TYPE-7: `.member` "names a member of the enum type its
@@ -2553,15 +2565,17 @@ impl<'a> Typer<'a> {
     }
 
     /// An expression that may be a block or an `if`, with what it comes
-    /// to. Any other expression has its value.
-    fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (Expr, Outcome) {
+    /// to. Any other expression has its value. `used` is false when the
+    /// value is dropped: a statement, or the last expression of a
+    /// function that declares no result (FN-7).
+    fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
         match node.kind() {
-            SyntaxKind::Block => self.block(node, expected),
-            SyntaxKind::IfExpr => self.conditional(node, expected),
+            SyntaxKind::Block => self.block(node, expected, used),
+            SyntaxKind::IfExpr => self.conditional(node, expected, used),
             SyntaxKind::ParenExpr if node.children().next().is_some() => {
                 // "Parentheses select grouping" (EXPR-1).
                 let inner = node.children().next().expect("checked above");
-                self.flow(&inner, expected)
+                self.flow(&inner, expected, used)
             }
             _ => {
                 let value = self.expression(node, expected);
@@ -2577,12 +2591,12 @@ impl<'a> Typer<'a> {
     /// Where the place says what it expects, the value is checked
     /// against that here, where it is written; the block is then of the
     /// type expected and is not reported again.
-    fn block(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (Expr, Outcome) {
+    fn block(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
         let at = self.at(node);
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
             Some(last) => {
-                let (value, outcome) = self.flow(&last, expected);
+                let (value, outcome) = self.flow(&last, expected, used);
                 match (outcome, expected) {
                     (Outcome::Value(_), Some(expected)) if !open(expected) => {
                         let reported = self.diagnostics.len();
@@ -2637,12 +2651,13 @@ impl<'a> Typer<'a> {
         &mut self,
         node: &SyntaxNode,
         expected: Option<&Type>,
+        used: bool,
         before: &[bool],
         before_returned: bool,
     ) -> Branch {
         self.assigned = restored(before, self.locals.len());
         self.returned = before_returned;
-        let (value, outcome) = self.flow(node, expected);
+        let (value, outcome) = self.flow(node, expected, used);
         Branch {
             value,
             outcome,
@@ -2664,7 +2679,12 @@ impl<'a> Typer<'a> {
     /// CTRL-11: a `var` "is assigned after an `if` when every branch
     /// that does not return assigns it, so not by an `if` with no
     /// `else`".
-    fn conditional(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (Expr, Outcome) {
+    fn conditional(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+    ) -> (Expr, Outcome) {
         let at = self.at(node);
         let mut parts = node.children();
         let (Some(condition), Some(then)) = (parts.next(), parts.next()) else {
@@ -2700,15 +2720,24 @@ impl<'a> Typer<'a> {
             value_of_branch(branch).is_some_and(|value| takes_its_type(&value))
         };
         let (mut then, mut other) = match &otherwise {
-            None => (self.branch(&then, expected, &before, before_returned), None),
+            None => (
+                self.branch(&then, expected, used, &before, before_returned),
+                None,
+            ),
             Some(otherwise) if !told && by_place(&then) && !by_place(otherwise) => {
-                let other = self.branch(otherwise, expected, &before, before_returned);
+                let other = self.branch(otherwise, expected, used, &before, before_returned);
                 let hint = from_other(&other.outcome, &then);
-                let then = self.branch(&then, hint.as_ref().or(expected), &before, before_returned);
+                let then = self.branch(
+                    &then,
+                    hint.as_ref().or(expected),
+                    used,
+                    &before,
+                    before_returned,
+                );
                 (then, Some(other))
             }
             Some(otherwise) => {
-                let then = self.branch(&then, expected, &before, before_returned);
+                let then = self.branch(&then, expected, used, &before, before_returned);
                 let hint = if !told && by_place(otherwise) {
                     from_other(&then.outcome, otherwise)
                 } else {
@@ -2717,6 +2746,7 @@ impl<'a> Typer<'a> {
                 let other = self.branch(
                     otherwise,
                     hint.as_ref().or(expected),
+                    used,
                     &before,
                     before_returned,
                 );
@@ -2754,6 +2784,10 @@ impl<'a> Typer<'a> {
             (Outcome::Value(_), Some(Outcome::Value(_))) => {
                 let ty = match (expected, &mut other) {
                     (Some(expected), _) if told => expected.clone(),
+                    // CTRL-10 gives the one type to "an `if` whose value
+                    // is used". One whose value is dropped has branches
+                    // of any types.
+                    _ if !used => Type::Unknown,
                     (_, Some(other)) => self.one_type(&mut then.value, &mut other.value),
                     (_, None) => then.value.ty.clone(),
                 };
