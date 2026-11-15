@@ -470,7 +470,7 @@ Each rejection has a row of the catalogue: `type.mismatch`,
 
 The operator table is built into the pass for now. It stands in for
 core's operator declarations, which are in no HGL source yet. The owner's
-direction (2026-11-16) is that an operator is resolved as any function
+direction (2026-11-15) is that an operator is resolved as any function
 is: a symbol names a core operator, and its type comes from the
 candidate selected among that operator's implementations (GEN-4). When
 core declares them the table goes, and the typed body records the

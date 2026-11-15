@@ -1811,7 +1811,7 @@ fn scalar_of(ty: &Type) -> Option<Scalar> {
 /// This table stands in for core's operator declarations, which are in
 /// no HGL source yet. An operator is to be resolved as any call is, from
 /// the candidates its operator declares (GEN-4), and the table goes when
-/// core declares them (owner's note of 2026-11-16).
+/// core declares them (owner's note of 2026-11-15).
 ///
 /// NUM-1 for numbers. OPS-1's table for the others: "An operation that
 /// commutes admits its operands in either order; one that does not
