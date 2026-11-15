@@ -136,7 +136,11 @@ fn kinds_are_settled_across_structs() {
 }
 
 /// GEN-13: "Reject conflicting kinds or an unresolved kind lacking a
-/// determining declaration/constraint."
+/// determining declaration/constraint." A struct is always given its
+/// arguments, so nothing later says what an unused parameter of one is.
+/// A function's is supplied by a call: the function is accepted, and a
+/// call that supplies no type for it is rejected (owner's decision of
+/// 2026-11-15 on hgl_spec issue 21, reading 33).
 #[test]
 fn a_parameters_uses_agree_and_something_says_what_it_is() {
     let checked = module(concat!(
@@ -146,10 +150,10 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
         "fn both<T>(value: T, items: list<f64, T>) {}\n",
         "struct Mixed<N> {\n    items: list<f64, N>\n    value: N\n}\n",
         "fn crossed<X>(boxed: Box<X>, sized: Sized<X>) {}\n",
-        // Nothing in the signature names these.
+        // Nothing in the signature names these. The functions are for
+        // their calls to settle; the struct is not.
         "fn unused<T>(value: i64) {}\n",
         "struct Phantom<T> { width: i64 }\n",
-        // A body is no signature position.
         "const fn body_only<T>(value: i64) -> i64 {\n    let items: list<T> = []\n    return value\n}\n",
         // A constraint may say what it is; that is for the pass that
         // reads constraints.
@@ -161,9 +165,7 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
             "m.hgl:4:39 local:type/generic.kind_conflict GEN-13",
             "m.hgl:7:12 local:type/generic.kind_conflict GEN-13",
             "m.hgl:9:43 local:type/generic.kind_conflict GEN-13",
-            "m.hgl:10:11 local:type/generic.kind_unresolved GEN-13",
             "m.hgl:11:16 local:type/generic.kind_unresolved GEN-13",
-            "m.hgl:12:20 local:type/generic.kind_unresolved GEN-13",
         ]
     );
     assert_eq!(
@@ -172,12 +174,12 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
             "`T` is used as a type and as a value",
             "`N` is used as a type and as a value",
             "`X` is used as a type and as a value",
-            "nothing in the signature of `unused` says whether `T` is a type or a value",
             "nothing in the signature of `Phantom` says whether `T` is a type or a value",
-            "nothing in the signature of `body_only` says whether `T` is a type or a value",
         ]
     );
     assert_eq!(kinds(&checked, "both"), ["T:unsettled"]);
+    assert_eq!(kinds(&checked, "unused"), ["T:unsettled"]);
+    assert_eq!(kinds(&checked, "body_only"), ["T:unsettled"]);
     assert_eq!(kinds(&checked, "constrained"), ["T:unsettled"]);
 }
 

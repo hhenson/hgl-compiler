@@ -54,10 +54,18 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         diagnostics,
         parents: HashMap::new(),
         fields: HashMap::new(),
+        children: HashMap::new(),
     };
     let ids = structs.ids();
     for &id in &ids {
         let parents = structs.parents_of(id);
+        for parent in &parents {
+            structs
+                .children
+                .entry(parent.id)
+                .or_default()
+                .push((id, parent.arguments.clone()));
+        }
         structs.parents.insert(id, parents);
     }
     structs.inheritance_cycles(&ids);
@@ -236,12 +244,15 @@ struct FieldEdge {
     /// The position, among the owner's parents, of the parent the field
     /// came through; meaningless for a field of the owner's own.
     via: usize,
+    /// The field's type, with the arguments of the path it came by in
+    /// place.
+    ty: Type,
     /// True when the field has the form TYPE-6 gives a recursive one:
     /// an `atomic<...>` with a default of null.
     in_form: bool,
     /// The structs a value of the field's type holds, each with whether
     /// it is reached through the elements of a collection.
-    named: Vec<(Id, bool)>,
+    named: Vec<Held>,
 }
 
 /// The fields one struct has.
@@ -260,6 +271,22 @@ struct Structs<'a> {
     parents: HashMap<Id, Vec<Parent>>,
     /// The fields of each struct, worked out once for each.
     fields: HashMap<Id, Fields>,
+    /// The structs that inherit from each abstract struct, each with
+    /// the arguments it gives that parent.
+    children: HashMap<Id, Vec<(Id, Vec<Argument>)>>,
+}
+
+/// A struct a value of some type holds.
+#[derive(Debug, Clone, Copy)]
+struct Held {
+    /// The struct.
+    id: Id,
+    /// True when it is reached through the elements of a collection
+    /// outside an `atomic<...>`.
+    in_collection: bool,
+    /// The struct the type names that leads to it: itself, or the
+    /// abstract struct it inherits from.
+    written: Id,
 }
 
 /// How many fields of generic structs are followed for one field's
@@ -534,19 +561,31 @@ impl Structs<'_> {
                         DeclarationKind::Struct
                             if has_token(&declared.syntax, SyntaxKind::KwAbstract) =>
                         {
-                            let forwards_pack = arguments.iter().any(|argument| {
-                                matches!(argument, Argument::Type(Type::Parameter { at, .. })
-                                if read.generics.iter().any(|generic| {
-                                    generic.at == *at
-                                        && matches!(generic.kind, GenericKind::Pack { .. })
-                                }))
-                            });
-                            parents.push(Parent {
-                                id: parent,
-                                arguments: arguments.clone(),
-                                forwards_pack,
-                                at,
-                            });
+                            // TYPE-3: a parent is listed once.
+                            let listed =
+                                parents.iter().find(|listed: &&Parent| listed.id == parent);
+                            if let Some(first) = listed {
+                                problems.push((
+                                    codes::local::STRUCT_DUPLICATE_PARENT,
+                                    at,
+                                    format!("`{name}` is listed twice among the parents"),
+                                    Some((first.at, "first listed here")),
+                                ));
+                            } else {
+                                let forwards_pack = arguments.iter().any(|argument| {
+                                    matches!(argument, Argument::Type(Type::Parameter { at, .. })
+                                    if read.generics.iter().any(|generic| {
+                                        generic.at == *at
+                                            && matches!(generic.kind, GenericKind::Pack { .. })
+                                    }))
+                                });
+                                parents.push(Parent {
+                                    id: parent,
+                                    arguments: arguments.clone(),
+                                    forwards_pack,
+                                    at,
+                                });
+                            }
                             continue;
                         }
                         DeclarationKind::Struct => "a concrete struct".to_string(),
@@ -554,31 +593,27 @@ impl Structs<'_> {
                         kind => format!("a {}", kind.describe()),
                     };
                     problems.push((
+                        codes::local::STRUCT_PARENT,
                         at,
                         format!(
                             "`{name}` is {what} and cannot be a parent: only an abstract \
                              struct may be"
                         ),
-                        Some(declared.at),
+                        Some((declared.at, "declared here")),
                     ));
                 }
                 other => problems.push((
+                    codes::local::STRUCT_PARENT,
                     at,
                     format!("`{other}` cannot be a parent: only an abstract struct may be"),
                     None,
                 )),
             }
         }
-        for (at, message, declared) in problems {
-            let mut diagnostic = local_error(
-                Category::Type,
-                codes::local::STRUCT_PARENT,
-                at,
-                message,
-                "TYPE-3",
-            );
-            if let Some(declared) = declared {
-                diagnostic = diagnostic.with_related(declared, "declared here");
+        for (code, at, message, related) in problems {
+            let mut diagnostic = local_error(Category::Type, code, at, message, "TYPE-3");
+            if let Some((place, note)) = related {
+                diagnostic = diagnostic.with_related(place, note);
             }
             self.diagnostics.emit(diagnostic);
         }
@@ -921,10 +956,84 @@ impl Structs<'_> {
     /// a `Boxed<Node>` holds `Node`s as the elements of a list. So the
     /// fields of each generic struct named are followed, with its
     /// arguments in place.
-    fn holds(&self, ty: &Type) -> Vec<(Id, bool)> {
+    fn holds(&self, ty: &Type) -> Vec<Held> {
         let mut found = Vec::new();
         self.walk(ty, false, &mut found, &mut Vec::new(), &mut { EXPANSIONS });
         found
+    }
+
+    /// Adds to `found` the structs that inherit from the abstract struct
+    /// `id` and may be the application of it that `arguments` write: a
+    /// value of that type is a value of one of them.
+    ///
+    /// `struct Child : Base<i64>` is a `Base<i64>` and no `Base<str>`. A
+    /// struct that gives its parent one of its own parameters,
+    /// `struct Child<U> : Base<U>`, may be any application. What a
+    /// struct's own parameters are is not worked out, so every struct
+    /// that inherits from one found may be one too.
+    fn descendants(
+        &self,
+        id: Id,
+        arguments: &[Argument],
+        in_collection: bool,
+        found: &mut Vec<Held>,
+    ) {
+        let mut seen: HashSet<Id> = HashSet::new();
+        // The structs whose children are still to look at, each with
+        // what is known of the arguments it is applied to: one for each
+        // of its generic parameters, or `None` where it is not known.
+        let known: Vec<Option<Argument>> = arguments.iter().cloned().map(Some).collect();
+        let mut to_do: Vec<(Id, Vec<Option<Argument>>)> = vec![(id, known)];
+        while let Some((parent, given)) = to_do.pop() {
+            let Some(children) = self.children.get(&parent) else {
+                continue;
+            };
+            for (child, applied) in children {
+                // The child is this application of its parent when each
+                // argument it gives the parent may be the one known. A
+                // wrong count has been reported; what is there is
+                // compared.
+                let fits = given.iter().zip(applied).all(|(given, applied)| {
+                    given.as_ref().is_none_or(|given| may_be(given, applied))
+                });
+                // `insert` is false for a struct already seen.
+                if !fits || !seen.insert(*child) {
+                    continue;
+                }
+                found.push(Held {
+                    id: *child,
+                    in_collection,
+                    written: id,
+                });
+                // What the child is applied to, for its own children:
+                // a parameter it passes straight on to the parent is
+                // what the parent is given there.
+                let passed_on: Vec<Option<Argument>> = self
+                    .struct_type(*child)
+                    .map(|read| {
+                        read.generics
+                            .iter()
+                            .map(|generic| {
+                                applied.iter().zip(&given).find_map(|(applied, given)| {
+                                    let names_it = match applied {
+                                        Argument::Type(Type::Parameter { at, .. }) => {
+                                            *at == generic.at
+                                        }
+                                        Argument::Constant(constant) => matches!(
+                                            &constant.value,
+                                            ConstantValue::Parameter { at, .. } if *at == generic.at
+                                        ),
+                                        _ => false,
+                                    };
+                                    if names_it { given.clone() } else { None }
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                to_do.push((*child, passed_on));
+            }
+        }
     }
 
     /// Adds to `found` what a value of type `ty` holds. `path` is the
@@ -935,7 +1044,7 @@ impl Structs<'_> {
         &self,
         ty: &Type,
         in_collection: bool,
-        found: &mut Vec<(Id, bool)>,
+        found: &mut Vec<Held>,
         path: &mut Vec<Id>,
         budget: &mut u32,
     ) {
@@ -947,7 +1056,14 @@ impl Structs<'_> {
                 ..
             } => {
                 let id = (*module, *declaration);
-                found.push((id, in_collection));
+                found.push(Held {
+                    id,
+                    in_collection,
+                    written: id,
+                });
+                // TYPE-6: "A field whose type is an abstract struct
+                // holds every struct that inherits from it."
+                self.descendants(id, arguments, in_collection, found);
                 for argument in arguments {
                     if let Argument::Type(argument) = argument {
                         self.walk(argument, in_collection, found, path, budget);
@@ -993,8 +1109,18 @@ impl Structs<'_> {
                 self.walk(value, true, found, path, budget);
             }
             Type::Rolling { value, .. } => self.walk(value, true, found, path, budget),
-            Type::Ref(inner) | Type::Atomic(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
-                self.walk(inner, in_collection, found, path, budget)
+            // Inside an `atomic<...>` a collection is part of one
+            // snapshot. Only a collection outside it is on the path.
+            Type::Atomic(inner) => {
+                let mut inside = Vec::new();
+                self.walk(inner, false, &mut inside, path, budget);
+                found.extend(inside.into_iter().map(|held| Held {
+                    in_collection,
+                    ..held
+                }));
+            }
+            Type::Ref(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
+                self.walk(inner, in_collection, found, path, budget);
             }
             Type::Result { value, error } => {
                 self.walk(value, in_collection, found, path, budget);
@@ -1016,26 +1142,24 @@ impl Structs<'_> {
         // A graph with a node for each struct, and an edge from each to
         // every struct it holds: the structs its fields hold, those it
         // has from its parents included, with the parents' arguments in
-        // place. A struct that holds itself, directly or through
-        // others, is in a strongly connected group.
+        // place. A value of an abstract struct's type is a value of one
+        // of the structs that inherit from it, so an abstract struct
+        // has an edge to each of those. A struct that holds itself,
+        // directly or through others, is in a strongly connected group.
         let mut graph: DiGraph<Id, ()> = DiGraph::new();
         let nodes: HashMap<Id, NodeIndex> =
             ids.iter().map(|&id| (id, graph.add_node(id))).collect();
         // Each field that names a struct.
         let mut edges: Vec<FieldEdge> = Vec::new();
         for &id in ids {
-            // A parent's own fields may hold the child.
-            for parent in &self.parents[&id] {
-                graph.add_edge(nodes[&id], nodes[&parent.id], ());
-            }
             let Some(fields) = self.fields.get(&id) else {
                 continue;
             };
             for field in &fields.all {
                 let mut named = self.holds(&field.ty);
-                named.retain(|(target, _)| nodes.contains_key(target));
-                for (target, _) in &named {
-                    graph.add_edge(nodes[&id], nodes[target], ());
+                named.retain(|held| nodes.contains_key(&held.id));
+                for held in &named {
+                    graph.add_edge(nodes[&id], nodes[&held.id], ());
                 }
                 if !named.is_empty() {
                     edges.push(FieldEdge {
@@ -1044,9 +1168,13 @@ impl Structs<'_> {
                         origin: field.origin,
                         at: field.at,
                         via: field.via,
-                        // The default in force, which an override on
-                        // the way down may have changed.
-                        in_form: matches!(field.ty, Type::Atomic(_)) && field.null_default,
+                        ty: field.ty.clone(),
+                        // TYPE-6: an `atomic<...>` defaulted to null,
+                        // or a nullable type, so that the recursion can
+                        // end. The default is the one in force, which
+                        // an override on the way down may have changed.
+                        in_form: (matches!(field.ty, Type::Atomic(_)) && field.null_default)
+                            || matches!(field.ty, Type::Nullable(_)),
                         named,
                     });
                 }
@@ -1063,48 +1191,69 @@ impl Structs<'_> {
         // The fields that are recursive edges: they hold a struct of
         // the group their own struct is in. `recursive` has where each
         // is declared; `faulty` those that are not as TYPE-6 has them,
-        // with whether the fault is a collection.
+        // with what is wrong.
         let mut recursive: Vec<(Id, (Id, usize))> = Vec::new();
-        let mut faulty: Vec<(&FieldEdge, bool)> = Vec::new();
+        let mut faulty: Vec<(&FieldEdge, String)> = Vec::new();
         for edge in &edges {
-            let mut back = edge
+            let group = group_of[&edge.owner];
+            let back: Vec<&Held> = edge
                 .named
                 .iter()
-                .filter(|(target, _)| group_of[target] == group_of[&edge.owner])
-                .peekable();
-            // `peek` looks at the next one without taking it.
-            if back.peek().is_none() {
+                .filter(|held| group_of[&held.id] == group)
+                .collect();
+            if back.is_empty() {
                 continue;
             }
             // Recursive for the struct that has it: a parent's field of
             // type `atomic<T>` is one in `Node : Base<Node>` and not in
             // `Value : Base<i64>`.
             recursive.push((edge.owner, edge.origin));
-            // "Cycles through ... collection elements are rejected",
-            // inside an `atomic<...>` as outside one.
-            let through_collection = back.any(|(_, in_collection)| *in_collection);
-            if through_collection || !edge.in_form {
-                faulty.push((edge, through_collection));
+            // "Recursive fields stay within their defining module." A
+            // struct of another module is reached back through an
+            // abstract struct declared there.
+            let abroad = back.iter().find(|held| held.written.0 != edge.owner.0);
+            // "Cycles through ... collection elements outside the
+            // `atomic<...>`" are rejected; inside it a collection is
+            // part of one snapshot.
+            let through_collection = back.iter().any(|held| held.in_collection);
+            if let Some(held) = abroad {
+                faulty.push((
+                    edge,
+                    format!(
+                        " through `{}` of module `{}`: a recursive field stays within its \
+                         module",
+                        self.declaration(held.written).name,
+                        self.program.modules[held.written.0].path
+                    ),
+                ));
+            } else if through_collection {
+                faulty.push((
+                    edge,
+                    " through the elements of a collection outside an `atomic<...>`".to_string(),
+                ));
+            } else if !edge.in_form {
+                faulty.push((
+                    edge,
+                    ": a recursive field is an `atomic<...>` with a default of null, or nullable"
+                        .to_string(),
+                ));
+            } else if let Some(grown) = grown(&edge.ty, &|id| group_of.get(&id) == Some(&group)) {
+                // "Such a field gives a struct of its cycle each
+                // generic parameter whole ... and no type built from
+                // one."
+                faulty.push((
+                    edge,
+                    format!(
+                        ": `{grown}` is given a type built from a generic parameter, a new \
+                         type at every step"
+                    ),
+                ));
             }
         }
 
         let mut reports = Vec::new();
-        for &(edge, through_collection) in &faulty {
+        for (edge, fault) in &faulty {
             let owner = &self.declaration(edge.owner).name;
-            let fault = if through_collection {
-                "through the elements of a collection".to_string()
-            } else {
-                "a recursive field is an `atomic<...>` with a default of null".to_string()
-            };
-            if edge.origin.0 == edge.owner {
-                // A field of the struct's own.
-                let sep = if through_collection { " " } else { ": " };
-                reports.push((
-                    edge.at,
-                    format!("`{}` makes `{owner}` hold itself{sep}{fault}", edge.name),
-                ));
-                continue;
-            }
             // A struct that itself changes the field's default is
             // reported for that, below, where it writes the default.
             let overridden_here = self.struct_type(edge.owner).is_some_and(|read| {
@@ -1115,24 +1264,34 @@ impl Structs<'_> {
             if overridden_here {
                 continue;
             }
-            // A field from a parent. When the parent's own field is at
-            // fault, that is the one report; otherwise the fault is in
-            // what this struct gives the parent, and is reported where
-            // it names the parent.
-            let at_origin = faulty
-                .iter()
-                .any(|(other, _)| other.origin == edge.origin && other.origin.0 == other.owner);
-            if at_origin {
+            // A field from a parent is at fault where it is declared
+            // when its type there holds this struct whatever the
+            // arguments; otherwise the fault is in what this struct
+            // gives the parent, and is reported where it names it.
+            let declared_so = edge.origin.0 == edge.owner
+                || self
+                    .struct_type(edge.origin.0)
+                    .and_then(|read| read.fields.get(edge.origin.1))
+                    .and_then(|field| field.ty.as_ref())
+                    .is_some_and(|ty| {
+                        self.holds(ty)
+                            .iter()
+                            .any(|held| group_of.get(&held.id) == group_of.get(&edge.owner))
+                    });
+            if declared_so {
+                reports.push((
+                    edge.at,
+                    format!("`{}` makes `{owner}` hold itself{fault}", edge.name),
+                ));
                 continue;
             }
             let Some(parent) = self.parents[&edge.owner].get(edge.via) else {
                 continue;
             };
-            let sep = if through_collection { " " } else { ": " };
             reports.push((
                 parent.at,
                 format!(
-                    "`{owner}` holds itself through `{}`, a field of `{}`{sep}{fault}",
+                    "`{owner}` holds itself through `{}`, a field of `{}`{fault}",
                     edge.name,
                     self.declaration(edge.origin.0).name
                 ),
@@ -1160,8 +1319,12 @@ impl Structs<'_> {
             for field in &read.fields {
                 let overrides_recursive = field.ty.is_none()
                     && !field.null_default
+                    // Only a field that has the null default has one to
+                    // keep: a nullable recursive field ends the
+                    // recursion by its type.
                     && inherited.iter().any(|parent| {
                         parent.name == field.name
+                            && parent.optional
                             && recursive.iter().any(|(owner, origin)| {
                                 *origin == parent.origin && line.contains(owner)
                             })
@@ -1189,6 +1352,71 @@ impl Structs<'_> {
                 message,
                 "TYPE-6",
             ));
+        }
+    }
+}
+
+/// True when the argument a struct gives its parent, `applied`, may be
+/// the argument `given` that a type writes for that parent. One that
+/// names a generic parameter may be anything.
+fn may_be(given: &Argument, applied: &Argument) -> bool {
+    match (given, applied) {
+        (Argument::Type(given), Argument::Type(applied)) => {
+            names_parameter(given) || names_parameter(applied) || agree(given, applied)
+        }
+        (Argument::Constant(given), Argument::Constant(applied)) => {
+            let open = |constant: &Constant| {
+                matches!(
+                    constant.value,
+                    ConstantValue::Parameter { .. } | ConstantValue::Unevaluated
+                )
+            };
+            open(given) || open(applied) || given == applied
+        }
+        // A type against a constant has been reported as the wrong
+        // kind of argument.
+        _ => true,
+    }
+}
+
+/// The first type inside `ty` that gives a struct of the group an
+/// argument built from a generic parameter, as HGL writes it:
+/// `Node<list<T>>`. A parameter passed on whole, `Node<T>`, and a type
+/// that names none, `Node<i64>`, are not such arguments.
+fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
+    match ty {
+        Type::Named {
+            module,
+            declaration,
+            arguments,
+            ..
+        } => {
+            let built = arguments.iter().any(|argument| match argument {
+                Argument::Type(argument) => {
+                    !matches!(argument, Type::Parameter { .. }) && names_parameter(argument)
+                }
+                Argument::Constant(_) => false,
+            });
+            if built && in_group((*module, *declaration)) {
+                return Some(ty.to_string());
+            }
+            arguments.iter().find_map(|argument| match argument {
+                Argument::Type(argument) => grown(argument, in_group),
+                Argument::Constant(_) => None,
+            })
+        }
+        Type::Tuple(elements) => elements.iter().find_map(|element| grown(element, in_group)),
+        Type::List { element, .. } => grown(element, in_group),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => grown(inner, in_group),
+        Type::Dict { key, value } => grown(key, in_group).or_else(|| grown(value, in_group)),
+        Type::Rolling { value, .. } => grown(value, in_group),
+        Type::Result { value, error } => grown(value, in_group).or_else(|| grown(error, in_group)),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
+            None
         }
     }
 }

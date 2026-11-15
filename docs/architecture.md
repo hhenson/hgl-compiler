@@ -284,12 +284,13 @@ What the pass checks as it reads:
 | --- | --- | --- |
 | A name in a type position | UNIT-10, GEN-2, GEN-13 | Names a struct, an enum, a native type or a generic parameter that is a type. A function, operator, local, generic value parameter, or a type pack where one type is needed, is rejected |
 | A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
-| An ordinary value type | TYPE-12, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a parameter with a default, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
-| `signal` | TYPE-12 | The whole type of an input, or of each input of a positional pack |
-| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout: `ref<f64>?`, `rolling<f64, 5>?` and `list<ref<f64>>?` are rejected |
+| An ordinary value type | TYPE-12, FN-1, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a value function's parameters and result, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
+| `signal` | TYPE-12 | The whole type of a temporal function's input, or of each input of a positional pack. Not a local's annotation or an anonymous function's parameter |
+| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout: `ref<f64>?`, `rolling<f64, 5>?` and `list<ref<f64>>?` are rejected. A set's element and a dictionary's key take no `?` |
 | A list's size | TYPE-10 | A count that is not negative, or `unbounded` |
 | A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds. A minimum equal to the maximum is the window with none written |
-| A default | UNIT-8 | Not on a temporal parameter of a function or native function |
+| A default | UNIT-8 | Any parameter but a pack may have one. A temporal input with one keeps its temporal type; whether the default can be wired as a constant of that type is for the pass that evaluates constants |
+| A cardinality | GEN-10 | `{n:m}` has m at least n |
 
 A size is a constant expression, and no expression has a type yet. The
 pass folds what needs none: integer and duration literals, a minus
@@ -313,7 +314,8 @@ proposed in [hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
 | `signal.position` | `signal` other than as the whole type of an input |
 | `generic.argument_count` | The wrong number of generic arguments |
 | `list.size` | A list size that is not a count |
-| `default.temporal_parameter` | A default on a temporal parameter |
+| `nullable.key` | A set's element or a dictionary's key with a `?` |
+| `pack.cardinality` | A cardinality whose upper bound is below its lower |
 
 ### Declared types
 
@@ -321,28 +323,44 @@ The declarations are then read against one another:
 
 | Subject | Rule | What is done |
 | --- | --- | --- |
-| A parent | TYPE-3 | An abstract struct. A concrete struct, an enum, a native type or a generic parameter is rejected |
+| A parent | TYPE-3 | An abstract struct, listed once. A concrete struct, an enum, a native type or a generic parameter is rejected |
 | Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
 | A field of a struct and of a parent | TYPE-4 | The same type and optionality, the parent's generic arguments standing for its parameters. A null default makes a field optional |
 | A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
-| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, and never through the elements of a list, set, dictionary or window, inside an `atomic<...>` or not. Holding itself through a parent's field counts |
+| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, or through a nullable field. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
 A struct holds the structs its fields hold: its own fields and those it
 has from its parents, with the arguments it gives each parent in place
-of the parent's parameters. A field holds every struct its type names,
+of the parent's parameters. A field whose type is an abstract struct
+holds every struct that inherits from it, since its value is one of
+them: each that may be the application written, so `struct Child :
+Base<i64>` is held by a `Base<i64>` and not by a `Base<str>`. A
+recursive field stays within its module: a struct of another module is
+reached back only through an abstract struct declared there, and that
+is rejected. A field holds every struct its type names,
 and what a generic struct among them holds once its arguments stand for
 its parameters: with `struct Boxed<T> { values: list<T> }`, a
 `Boxed<Node>` holds `Node`s as the elements of a list. Structs that hold
 one another are found as the strongly connected groups of that graph,
 as modules that import one another are.
 
-A fault in a struct's own field is reported at the field. One that is
-in what a struct gives a parent, as in `struct Child : Base<Child>`
-where `Base<T>` has a field of type `T`, is reported where the struct
-names the parent.
+A fault in a struct's own field is reported at the field, and so is one
+in a parent's field whose type holds the child whatever the arguments.
+One that is in what a struct gives a parent, as in `struct Child :
+Base<Child>` where `Base<T>` has a field of type `T`, is reported where
+the struct names the parent.
+
+Several of these checks follow the owner's decisions of 2026-11-15 on
+[hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21),
+which hgl_spec pull request 22 writes into the chapters: a value
+function's signature, keys that take no `?`, a cardinality's bounds, a
+default on any parameter, where `signal` stands, a parent listed once,
+what an abstract-typed field holds, and what a recursive field may be:
+atomic or nullable, with a collection only inside an `atomic<...>`.
+The pin under `spec/` moves to them when that pull request is merged.
 
 The fields of each struct are worked out once, from those of its
 parents, and a field that reaches a struct by two paths is listed once.
@@ -362,11 +380,12 @@ The rejections of this pass have no catalogue row either:
 | Local code | Rejection |
 | --- | --- |
 | `struct.parent` | A parent that is not an abstract struct |
+| `struct.duplicate_parent` | A parent listed twice |
 | `struct.inheritance_cycle` | Structs that inherit from one another |
 | `field.conflict` | A field whose type or optionality differs between parents, or from a parent's |
 | `field.not_inherited` | `name = value` for a field no parent declares |
 | `field.duplicate` | Two members of a struct with one name |
-| `field.recursive` | A field that makes its struct hold itself and is not `atomic<...>` defaulted to null |
+| `field.recursive` | A field that makes its struct hold itself and is neither `atomic<...>` defaulted to null nor nullable, or gives a struct of its cycle a type built from a generic parameter |
 | `enum.value` | A number that is not an integer |
 | `enum.duplicate_value` | Two members with one number |
 | `enum.overflow` | Numbering past the largest `i64` |
@@ -385,9 +404,13 @@ signature uses it as:
 | An argument of a generic type | What that type's parameter is, once that is settled |
 | In a `requires` clause | Nothing yet: the pass that reads constraints says |
 
-Uses that disagree are rejected, and so is a parameter that nothing in
-the signature or a constraint names. A use in a body does not count:
-the rule infers a kind "from signature positions and constraints".
+Uses that disagree are rejected. A struct's parameter that nothing in
+its fields or a constraint names is rejected too: a struct is always
+given its arguments, so nothing later says what it is. A function's is
+left unsettled where it is declared, for a call to supply; a call that
+supplies no type for it is rejected, which is for the pass that reads
+calls. A use in a body does not settle a kind: the rule infers it "from
+signature positions and constraints".
 Neither does being handed on to a parameter that nothing settles: in
 `struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
 is. That is reported at the struct, and not again at each function
