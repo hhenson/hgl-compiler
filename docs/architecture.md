@@ -285,9 +285,9 @@ What the pass checks as it reads:
 | A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
 | An ordinary value type | TYPE-12, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a parameter with a default, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
 | `signal` | TYPE-12 | The whole type of an input, or of each input of a positional pack |
-| `T?` | TYPE-14, TYPE-15 | Not applied to `ref<T>` or `signal` |
+| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout: `ref<f64>?`, `rolling<f64, 5>?` and `list<ref<f64>>?` are rejected |
 | A list's size | TYPE-10 | A count that is not negative, or `unbounded` |
-| A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds |
+| A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds. A minimum equal to the maximum is the window with none written |
 | A default | UNIT-8 | Not on a temporal parameter of a function or native function |
 
 A size is a constant expression, and no expression has a type yet. The
@@ -308,9 +308,8 @@ proposed in [hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
 | Local code | Rejection |
 | --- | --- |
 | `type.not_a_type` | A name in a type position that is no type |
-| `type.not_ordinary` | A `rolling`, `ref`, `atomic` or `signal` where an ordinary value type is required |
+| `type.not_ordinary` | A `rolling`, `ref`, `atomic` or `signal` where an ordinary value type is required, under a `?` included |
 | `signal.position` | `signal` other than as the whole type of an input |
-| `nullable.not_ordinary` | `?` applied to `ref<T>` or `signal` |
 | `generic.argument_count` | The wrong number of generic arguments |
 | `list.size` | A list size that is not a count |
 | `default.temporal_parameter` | A default on a temporal parameter |

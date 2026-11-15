@@ -134,12 +134,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |
 | TYPE-9 | analyser | partial | An atomic payload is an ordinary value type. Left: temporalization of composite types; `atomic` normalisation |
 | TYPE-10 | analyser | partial | A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists. Left: sizes computed from other constants; an unsized pattern accepting a fixed size |
-| TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`). Left: sizes computed from other constants |
+| TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`); an omitted minimum is the maximum in identity. Left: sizes computed from other constants |
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
 | TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values and constant configuration; `signal` only as an input's whole type. Left: what a function's role and a body admit |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | partial | `?` not applied to `ref` or `signal`. Left: null is no value of plain T; which positions admit a nullable type |
+| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout. Left: null is no value of plain T; which positions admit a nullable type |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 

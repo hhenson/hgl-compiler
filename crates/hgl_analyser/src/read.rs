@@ -734,8 +734,13 @@ impl Reader<'_> {
             return;
         };
         // TYPE-12 says where `ref` and `signal` may not stand. For the
-        // others the place's own rule asks for an ordinary value.
-        let rule = if endpoint { "TYPE-12" } else { place_rule };
+        // others, and under a `?`, the place's own rule asks for an
+        // ordinary value.
+        let rule = if endpoint && place_rule != "TYPE-14" {
+            "TYPE-12"
+        } else {
+            place_rule
+        };
         self.diagnostics.emit(
             local_error(
                 Category::Type,
@@ -772,38 +777,25 @@ impl Reader<'_> {
     }
 
     /// `T?` (TYPE-14, TYPE-15).
+    ///
+    /// TYPE-14: "`T?` denotes an ordinary value that is either a T or
+    /// null, where T is an admitted ordinary value type." TYPE-15:
+    /// "The suffix admits only ordinary value types; applying it to
+    /// `ref<T>` or `signal` rejects under TYPE-12/14 rather than
+    /// creating nullable endpoint handles."
     fn nullable(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let Some(base) = type_child(node) else {
             return Type::Unknown;
         };
-        // `signal?` is reported once, as a `?` that cannot be applied.
-        let ty = self.type_(
-            &base,
-            Position {
-                signal: true,
-                ..position
-            },
-        );
-        // TYPE-15: "The suffix admits only ordinary value types;
-        // applying it to `ref<T>` or `signal` rejects under TYPE-12/14
-        // rather than creating nullable endpoint handles." Where an
-        // ordinary value type is required the base has been reported.
-        if matches!(ty, Type::Ref(_) | Type::Signal) && position.value.is_none() {
-            self.diagnostics.emit(
-                local_error(
-                    Category::Type,
-                    codes::local::NULLABLE_NOT_ORDINARY,
-                    self.at(node.span()),
-                    format!(
-                        "`{}` cannot be made nullable: `?` applies to an ordinary value type",
-                        text_of(&base)
-                    ),
-                    "TYPE-14",
-                )
-                .with_note("an endpoint is valid or invalid; it is never null"),
-            );
-        }
-        Type::Nullable(Box::new(ty))
+        // The whole of what `?` is applied to is an ordinary value
+        // type: `list<ref<f64>>?` is no more one than `ref<f64>?`.
+        // Where the place around it asks for one already, that place is
+        // the one named.
+        let base_position = match position.value {
+            Some(_) => position,
+            None => Position::value("what `?` is applied to", "TYPE-14"),
+        };
+        Type::Nullable(Box::new(self.type_(&base, base_position)))
     }
 
     /// `list<T>`, `list<T, size>` (TYPE-10).
@@ -918,6 +910,9 @@ impl Reader<'_> {
             &maximum,
             minimum_node.as_ref().zip(minimum.as_ref()),
         );
+        // "Omitted minimum equals maximum": a minimum written as the
+        // maximum is the same window as one with none.
+        let minimum = minimum.filter(|minimum| *minimum != maximum);
         Type::Rolling {
             value: Box::new(value),
             maximum,
@@ -1328,8 +1323,8 @@ impl Reader<'_> {
             let kind = argument.kind();
             if is_type(kind) {
                 // The parser reads a lone name as a type. One that names
-                // a generic value parameter is a constant.
-                match self.value_parameter(&argument) {
+                // a value is a constant.
+                match self.value_name(&argument) {
                     Some(constant) => arguments.push(Argument::Constant(constant)),
                     None => arguments.push(Argument::Type(self.type_(&argument, position))),
                 }
@@ -1343,30 +1338,37 @@ impl Reader<'_> {
         arguments
     }
 
-    /// The constant a lone name is, when it names a generic value
-    /// parameter of the declaration being read.
-    fn value_parameter(&self, node: &SyntaxNode) -> Option<Constant> {
+    /// The constant a lone name is, when it names a value: a generic
+    /// value parameter of the declaration being read, or a local, a
+    /// parameter or another binding of a body. Whether such a binding
+    /// may stand in a constant is for the pass that evaluates
+    /// constants.
+    fn value_name(&self, node: &SyntaxNode) -> Option<Constant> {
         if node.kind() != SyntaxKind::NamedType || child(node, SyntaxKind::GenericArgs).is_some() {
             return None;
         }
         let name = used_name(node)?;
         let &binding = self.bindings.get(&(self.file, name.span().start))?;
-        let Binding::Local {
-            at,
-            kind: LocalKind::GenericParameter,
-        } = binding
-        else {
-            return None;
+        let value = match binding {
+            Binding::Local {
+                at,
+                kind: LocalKind::GenericParameter,
+            } => {
+                // `?` on an `Option` leaves the function with `None`
+                // when there is nothing: here, for a generic parameter
+                // that is not a value.
+                self.value_type(*at)?;
+                ConstantValue::Parameter {
+                    name: name.text().to_string(),
+                    at: *at,
+                }
+            }
+            Binding::Local { .. } => ConstantValue::Unevaluated,
+            Binding::Declarations { .. } => return None,
         };
-        // `?` on an `Option` leaves the function with `None` when there
-        // is nothing.
-        self.value_type(*at)?;
         Some(Constant {
             text: name.text().to_string(),
-            value: ConstantValue::Parameter {
-                name: name.text().to_string(),
-                at: *at,
-            },
+            value,
         })
     }
 

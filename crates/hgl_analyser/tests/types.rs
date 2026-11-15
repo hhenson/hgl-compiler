@@ -285,9 +285,6 @@ fn a_name_in_a_type_position_is_a_type() {
         // A value parameter and a type pack as one type.
         "fn f4<const N: i64>(value: N) {}\n",
         "fn f5<...Ts>(value: Ts, rest: list<Ts>) {}\n",
-        // A constructor's argument that is a value.
-        "struct Box<T> { value: T }\n",
-        "const fn f6(count: i64) -> Box<i64> => Box<count>(value: 1)\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -298,7 +295,6 @@ fn a_name_in_a_type_position_is_a_type() {
             "m.hgl:12:28 local:type/type.not_a_type GEN-13",
             "m.hgl:13:21 local:type/type.not_a_type GEN-2",
             "m.hgl:13:36 local:type/type.not_a_type GEN-2",
-            "m.hgl:15:44 local:type/type.not_a_type UNIT-10",
         ]
     );
     let messages: Vec<&str> = checked
@@ -315,9 +311,35 @@ fn a_name_in_a_type_position_is_a_type() {
             "`N` is a generic value parameter, not a type",
             "`Ts` is a type pack: a sequence of types, not one type",
             "`Ts` is a type pack: a sequence of types, not one type",
-            "`count` is a parameter, not a type",
         ]
     );
+}
+
+/// The parser reads a lone name among generic arguments as a type
+/// (`generic_argument = type | const_expression`). One that names a
+/// value, a local or a parameter, is a constant argument; whether it may
+/// stand in a constant is for the pass that evaluates constants.
+#[test]
+fn a_value_name_among_generic_arguments_is_a_constant() {
+    let checked = module(concat!(
+        "struct Sized<const N: i64> { width: i64 }\n",
+        "const fn made(count: i64) -> i64 {\n",
+        "    let n = 3\n",
+        "    let first: Sized<n> = Sized<n>(width: 0)\n",
+        "    let second: Sized<count> = Sized<count>(width: 0)\n",
+        "    return 0\n",
+        "}\n",
+        // A function is no value by its name alone.
+        "const fn seed() -> i64 => 7\n",
+        "fn named(sized: Sized<seed>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:10:23 local:type/type.not_a_type UNIT-10"]
+    );
+    let all = written(&checked);
+    assert!(all.contains(&"Sized<n>".to_string()), "{all:?}");
+    assert!(all.contains(&"Sized<count>".to_string()), "{all:?}");
 }
 
 /// UNIT-10: a parameter's type is read in the scope around the
@@ -680,22 +702,33 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     let checked = module(concat!(
         "const fn good(a: f64?, b: list<f64?>, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
         "fn endpoints(a: ref<f64>?, b: signal?, c: list<ref<f64>?>) -> ref<f64>? {}\n",
+        // The whole of what `?` is applied to is an ordinary value.
+        "fn shapes(a: rolling<f64, 5>?, b: atomic<i64>?, c: list<ref<f64>>?,\n",
+        "    d: dict<str, tuple<i64, rolling<f64, 5>>>?) {}\n",
         // Reported once, as what a set's element must be.
         "fn once(a: set<ref<f64>?>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:17 local:type/nullable.not_ordinary TYPE-14",
-            "m.hgl:3:31 local:type/nullable.not_ordinary TYPE-14",
-            "m.hgl:3:48 local:type/nullable.not_ordinary TYPE-14",
-            "m.hgl:3:63 local:type/nullable.not_ordinary TYPE-14",
-            "m.hgl:4:16 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:3:17 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:3:31 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:3:48 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:3:63 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:4:14 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:4:35 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:4:57 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:5:29 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:6:16 local:type/type.not_ordinary TYPE-12",
         ]
     );
     assert_eq!(
         checked.findings[0].message,
-        "`ref<f64>` cannot be made nullable: `?` applies to an ordinary value type"
+        "`ref<f64>` is not an ordinary value type, and what `?` is applied to is one"
+    );
+    assert_eq!(
+        checked.findings[4].message,
+        "`rolling<f64, 5>` is not an ordinary value type, and what `?` is applied to is one"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
@@ -860,6 +893,36 @@ fn a_windows_sizes_are_of_one_kind() {
     );
     // `N` in `mixed` is left for the prelude: its kind is not known.
     assert_eq!(checked.prelude_names("m"), ["N"]);
+}
+
+/// TYPE-11: "Omitted minimum equals maximum ... Size/kind are part of
+/// identity." A window whose minimum is written as its maximum is the
+/// window with no minimum written.
+#[test]
+fn an_omitted_minimum_is_the_maximum() {
+    let checked = module(concat!(
+        "fn windows<const N: i64>(a: rolling<i64, 5>, b: rolling<i64, 5, 5>, c: rolling<i64, 5, 2>,\n",
+        "    d: rolling<f64, 5m>, e: rolling<f64, 5m, 300s>, f: rolling<f64, N>, g: rolling<f64, N, N>,\n",
+        "    h: rolling<i64, 2 + 3, 5>) {}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let Detail::Callable(windows) = detail(&checked, "windows") else {
+        panic!("windows is a function");
+    };
+    let ty = |name: &str| {
+        &windows
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == name)
+            .expect("the parameter exists")
+            .ty
+    };
+    assert_eq!(ty("a"), ty("b"));
+    assert_eq!(ty("b").to_string(), "rolling<i64, 5>");
+    assert_ne!(ty("a"), ty("c"));
+    assert_eq!(ty("d"), ty("e"));
+    assert_eq!(ty("f"), ty("g"));
+    assert_eq!(ty("a"), ty("h"));
 }
 
 /// TYPE-11: "Tick sizes are positive; duration maximum is positive and
