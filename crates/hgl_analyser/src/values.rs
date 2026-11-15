@@ -30,13 +30,13 @@ use hgl_lexer::literal::{
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
-use crate::declared::agree;
+use crate::declared::{agree, substitute_within};
 use crate::hir::{
     BinaryOperator, Body, Expr, ExprKind, Local, LocalId, Stmt, UnaryOperator, Value,
 };
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Module, Program, Role};
 use crate::read::{child, is_type, tokens};
-use crate::types::{ConstantValue, Detail, GenericKind, Scalar, Signature, Type};
+use crate::types::{Argument, ConstantValue, Detail, GenericKind, Scalar, Signature, Type};
 use crate::{codes, local_error};
 
 /// Types the body of every value function of the program, filling in
@@ -61,6 +61,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             let body = match (&declaration.kind, module.details.get(position)) {
                 (DeclarationKind::Function(Role::Value), Some(Detail::Callable(signature))) => {
                     Typer::new(
+                        program,
                         module,
                         declaration,
                         signature,
@@ -80,6 +81,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
 
 /// Reads one value function.
 struct Typer<'a> {
+    program: &'a Program,
     /// The file the function is written in.
     file: FileId,
     declaration: &'a Declaration,
@@ -98,6 +100,7 @@ struct Typer<'a> {
 
 impl<'a> Typer<'a> {
     fn new(
+        program: &'a Program,
         module: &'a Module,
         declaration: &'a Declaration,
         signature: &'a Signature,
@@ -106,6 +109,7 @@ impl<'a> Typer<'a> {
         diagnostics: &'a mut Diagnostics,
     ) -> Typer<'a> {
         let mut typer = Typer {
+            program,
             file: module.files[declaration.file].file,
             declaration,
             signature,
@@ -773,7 +777,7 @@ impl<'a> Typer<'a> {
     /// Reports a value of type `ty` in a place that expects `expected`
     /// when it is no value of that type.
     fn conforms(&mut self, ty: &Type, expected: &Type, at: Location, what: &str) {
-        if admits(expected, ty) {
+        if self.admits(expected, ty) {
             return;
         }
         self.diagnostics.emit(local_error(
@@ -783,6 +787,74 @@ impl<'a> Typer<'a> {
             format!("this is `{ty}`, and {what} is `{expected}`"),
             "EXPR-5",
         ));
+    }
+
+    /// True when a value of type `ty` is a value of `expected`: the same
+    /// type as far as each is known; a `T` where a `T?` is expected
+    /// (TYPE-14: "either a T or null"); or a struct where an abstract
+    /// struct it inherits from is expected.
+    fn admits(&self, expected: &Type, ty: &Type) -> bool {
+        if open(expected) || open(ty) || agree(expected, ty) {
+            return true;
+        }
+        match expected {
+            Type::Nullable(inner) => self.admits(inner, ty),
+            Type::Named { .. } => self.inherits(ty, expected),
+            _ => false,
+        }
+    }
+
+    /// True when the struct type `ty` inherits from `expected`, through
+    /// any number of parents, each with the generic arguments the
+    /// struct below gives it.
+    ///
+    /// TYPE-6: "A field whose type is an abstract struct holds every
+    /// struct that inherits from it": a value of a struct is a value of
+    /// the abstract structs it inherits from. TYPE-3: "Generic
+    /// applications are invariant", so a `Child : Base<i64>` is no
+    /// `Base<f64>`.
+    fn inherits(&self, ty: &Type, expected: &Type) -> bool {
+        // The parents still to look at. Structs that inherit from one
+        // another have been reported; the count ends the walk for them.
+        let mut to_do = vec![ty.clone()];
+        let mut budget = 100_000;
+        while let Some(current) = to_do.pop() {
+            let Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            } = &current
+            else {
+                continue;
+            };
+            let Some(Detail::Struct(read)) =
+                self.program.modules[*module].details.get(*declaration)
+            else {
+                continue;
+            };
+            // Each generic parameter before a type pack, with the
+            // argument it is given.
+            let map: Vec<(Location, &Argument)> = read
+                .generics
+                .iter()
+                .take_while(|generic| !matches!(generic.kind, GenericKind::Pack { .. }))
+                .map(|generic| generic.at)
+                .zip(arguments)
+                .collect();
+            for parent in &read.parents {
+                let parent = substitute_within(parent, &map);
+                if agree(expected, &parent) {
+                    return true;
+                }
+                if budget == 0 {
+                    return false;
+                }
+                budget -= 1;
+                to_do.push(parent);
+            }
+        }
+        false
     }
 }
 
@@ -806,19 +878,6 @@ fn accepts_float(expected: &Type) -> bool {
     match expected {
         Type::Scalar(Scalar::F64) => true,
         Type::Nullable(inner) => accepts_float(inner),
-        _ => false,
-    }
-}
-
-/// True when a value of type `ty` is a value of `expected`: the same
-/// type as far as each is known, or a `T` where a `T?` is expected
-/// (TYPE-14: "either a T or null").
-fn admits(expected: &Type, ty: &Type) -> bool {
-    if open(expected) || open(ty) || agree(expected, ty) {
-        return true;
-    }
-    match expected {
-        Type::Nullable(inner) => admits(inner, ty),
         _ => false,
     }
 }

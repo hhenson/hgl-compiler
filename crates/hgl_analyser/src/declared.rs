@@ -493,7 +493,7 @@ fn weight(ty: &Type) -> usize {
 /// parents that each give the next `tuple<T, T>` doubles a field's type
 /// at every link. The weight is bounded before anything is built: no
 /// more than the type's own, times the heaviest argument's.
-fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+pub(crate) fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
