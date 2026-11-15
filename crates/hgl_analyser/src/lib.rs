@@ -116,7 +116,8 @@ pub mod codes {
     pub const TEST_EXPORT: &str = "test.export";
     /// An `impl fn` stands in an unnamed test context (TST-1).
     pub const TEST_IMPLEMENTATION: &str = "test.implementation";
-    /// An `impl fn` names no operator (GEN-4).
+    /// A candidate, `impl fn` or `impl const fn`, native or not, names
+    /// no operator (GEN-4).
     pub const IMPL_UNKNOWN_OPERATOR: &str = "impl.unknown_operator";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";
@@ -268,11 +269,18 @@ pub mod codes {
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
-    /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// proposed to the specification (hgl_spec issue 30), and is
+    /// replaced by the catalogued code when one is agreed.
     pub mod local {
+        /// A call of an operator that no candidate admits (GEN-5: "No
+        /// match rejects").
+        pub const OPERATOR_NO_CANDIDATE: &str = "operator.no_candidate";
+        /// A call of an operator that two candidates admit equally
+        /// (GEN-5: "tied most-specific candidates are ambiguous").
+        pub const OPERATOR_AMBIGUOUS: &str = "operator.ambiguous";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 2] = [OPERATOR_NO_CANDIDATE, OPERATOR_AMBIGUOUS];
     }
 }
 
@@ -335,6 +343,18 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// An error with a code of this compiler's own (`codes::local`): the
+/// specification rejects what it reports and has no row for it yet.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

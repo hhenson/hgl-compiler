@@ -174,9 +174,10 @@ fn check_declarations_against_imports(module: &Module, diagnostics: &mut Diagnos
     }
 }
 
-/// GEN-4: "An `impl fn` binds that operator through local declaration,
+/// GEN-4: a candidate "binds that operator through local declaration,
 /// selective import, or the prelude. No matching operator is a
-/// declaration error."
+/// declaration error." A native candidate (NATIVE-1) binds its operator
+/// the same way.
 fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut Diagnostics) {
     // What is found is gathered first and written back after: the search
     // reads other modules, so it cannot change this one as it goes.
@@ -184,7 +185,7 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
     let mut prelude: Vec<PreludeName> = Vec::new();
     let module = &program.modules[index];
     for (position, implementation) in module.declarations.iter().enumerate() {
-        if !matches!(implementation.kind, DeclarationKind::Implementation(_)) {
+        if implementation.kind.candidate().is_none() {
             continue;
         }
         // TST-1: one in a test context has been rejected already.
@@ -276,7 +277,16 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
 
     let module = &mut program.modules[index];
     for (position, operator) in found {
-        module.declarations[position].kind = DeclarationKind::Implementation(Some(operator));
+        let kind = &mut module.declarations[position].kind;
+        *kind = match *kind {
+            DeclarationKind::Implementation(role, _) => {
+                DeclarationKind::Implementation(role, Some(operator))
+            }
+            DeclarationKind::NativeCandidate(role, _) => {
+                DeclarationKind::NativeCandidate(role, Some(operator))
+            }
+            other => other,
+        };
     }
     module.prelude_names.extend(prelude);
 }

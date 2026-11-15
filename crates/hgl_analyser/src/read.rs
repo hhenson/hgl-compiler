@@ -589,12 +589,9 @@ impl Reader<'_> {
         let node = &declaration.syntax;
         self.in_signature = true;
         self.reading_struct = declaration.kind == DeclarationKind::Struct;
-        self.value_function = matches!(
-            declaration.kind,
-            DeclarationKind::Function(Role::Value)
-                | DeclarationKind::NativeFunction(Role::Value)
-                | DeclarationKind::NativeImplementation(Role::Value)
-        );
+        // FN-1: a `const fn` of any form, a value candidate of an
+        // operator included (GEN-4).
+        self.value_function = declaration.kind.role() == Some(Role::Value);
         self.generic_parameters(node);
         let mut detail = match node.kind() {
             SyntaxKind::FnDecl | SyntaxKind::OperatorDecl | SyntaxKind::NativeFnDecl => {
@@ -1371,9 +1368,7 @@ impl Reader<'_> {
                 let Some((_, index)) = target else {
                     let first = &declared[declarations[0]];
                     let what = match first.kind {
-                        DeclarationKind::Operator | DeclarationKind::Implementation(_) => {
-                            "an operator".to_string()
-                        }
+                        DeclarationKind::Operator => "an operator".to_string(),
                         kind => format!("a {}", kind.describe()),
                     };
                     self.not_a_type(&name, &what, first.at);

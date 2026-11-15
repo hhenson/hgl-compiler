@@ -102,7 +102,7 @@ fn a_program_is_found_under_its_roots_and_listed() {
             "  use lib::{{shared}}\n",
             "  use lib::{{add}}\n",
             "  use lib as l\n",
-            "  operator implementation add(left: i64, right: i64) -> i64 of lib\n",
+            "  temporal operator implementation add(left: i64, right: i64) -> i64 of lib\n",
             "  temporal function main()\n",
             "  test temporal function helper()\n",
             "  test smoke\n",

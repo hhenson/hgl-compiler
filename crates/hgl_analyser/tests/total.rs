@@ -195,3 +195,33 @@ fn values_read_again_are_counted_for_the_whole_function() {
     // test; a bounded count ends at once.
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
 }
+
+/// GEN-5: an argument written as a sequence is tried as each candidate's
+/// parameter, and read once more as the selected one's. A call inside
+/// such an argument is tried in turn, which would multiply the work at
+/// each level; the readings are counted for the whole function, and a
+/// call past the bound is not judged.
+#[test]
+fn candidate_trials_are_counted_for_the_whole_function() {
+    let depth = 40;
+    let mut text = String::from(concat!(
+        "module m\n",
+        "operator wrap<T>(values: T) -> i64\n",
+        "impl const fn wrap(values: list<i64>) -> i64 => 0\n",
+        "impl const fn wrap(values: list<f64>) -> i64 => 0\n",
+        "const fn deep() {\n    let nested = ",
+    ));
+    for _ in 0..depth {
+        text.push_str("wrap([");
+    }
+    text.push('1');
+    for _ in 0..depth {
+        text.push_str("])");
+    }
+    text.push_str("\n}\n");
+    let started = std::time::Instant::now();
+    let checked = check_broken(&[("m.hgl", text.as_str())]);
+    assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
+    assert_eq!(checked.summary(), [] as [&str; 0]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}

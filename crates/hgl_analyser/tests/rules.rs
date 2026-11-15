@@ -669,7 +669,7 @@ fn an_implementation_finds_its_operator() {
         .declarations
         .iter()
         .filter_map(|declaration| match declaration.kind {
-            DeclarationKind::Implementation(operator) => Some(operator.map(|operator| {
+            DeclarationKind::Implementation(_, operator) => Some(operator.map(|operator| {
                 let module = &checked.program.modules[operator.module];
                 (
                     module.path.as_str(),
@@ -724,6 +724,126 @@ fn an_implementation_of_something_else_is_rejected() {
         ]
     );
     assert_eq!(checked.prelude_names("app"), ["mul"]);
+}
+
+/// GEN-4: "An `impl fn` is a temporal candidate of the operator it names
+/// and an `impl const fn` a value candidate." FN-1: a `const fn`'s
+/// "parameter and result types are ordinary value types".
+#[test]
+fn a_candidate_is_temporal_or_value() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "operator doubled<T>(value: T) -> T\n",
+            "impl const fn doubled(value: i64) -> i64 => value * 2\n",
+            "impl fn doubled(value: f64) -> f64 => value * 2.0\n",
+            // FN-1: a value candidate takes ordinary values.
+            "impl const fn doubled(value: signal) -> bool => true\n",
+            // A value candidate's body is a value function's.
+            "impl const fn doubled(value: str) -> str => 1\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:30 type/type.not_ordinary TYPE-12",
+            "m.hgl:6:45 type/type.mismatch EXPR-5",
+        ]
+    );
+    let module = checked.program.module("m").unwrap();
+    let kinds: Vec<String> = module
+        .declarations
+        .iter()
+        .map(|declaration| declaration.kind.describe())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "operator",
+            "value operator implementation",
+            "temporal operator implementation",
+            "value operator implementation",
+            "value operator implementation",
+        ]
+    );
+    // Each found the operator, and none binds the name (UNIT-12).
+    assert!(
+        module.declarations[1..]
+            .iter()
+            .all(|declaration| matches!(declaration.kind.candidate(), Some((_, Some(_)))))
+    );
+    assert_eq!(module.lookup("doubled").count(), 1);
+}
+
+// ---- Native candidates ----
+
+/// NATIVE-1: "A `native impl fn` or `native impl const fn` declares a
+/// candidate of the operator it names (GEN-4), temporal or value, whose
+/// body a provider supplies." NATIVE-2: "Native candidates of one
+/// operator that differ in role or parameter types are distinct
+/// declarations, and an implementation completes the candidate whose
+/// signature it matches."
+#[test]
+fn a_native_candidate_names_its_operator_and_is_completed_by_a_part() {
+    let checked = check(&[
+        (
+            "interface.hgl",
+            concat!(
+                "module examples.native\n",
+                "operator total<T>(lhs: T, rhs: T) -> T\n",
+                "native impl const fn total(lhs: i64, rhs: i64) -> i64\n",
+                "native impl const fn total(lhs: f64, rhs: f64) -> f64\n",
+                "native impl fn total(lhs: str, rhs: str) -> str\n",
+                // GEN-4: "No matching operator is a declaration error."
+                "fn plain() {}\n",
+                "native impl fn plain()\n",
+            ),
+        ),
+        (
+            "provider.hgl",
+            concat!(
+                "module examples.native part provider\n",
+                "native impl const fn total(lhs: i64, rhs: i64) -> i64 {}\n",
+                "native impl const fn total(lhs: f64, rhs: f64) -> f64 {}\n",
+                "native impl fn total(lhs: str, rhs: str) -> str { when; }\n",
+                // NATIVE-3: a const implementation has no hook.
+                "native impl const fn total(lhs: str, rhs: str) -> str { when; }\n",
+                // No candidate of this name is declared.
+                "native impl fn stray() {}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "interface.hgl:7:16 operator/impl.unknown_operator GEN-4",
+            "provider.hgl:5:57 phase/native.const_hook NATIVE-3",
+            "provider.hgl:6:16 name/native.missing_declaration NATIVE-2",
+        ]
+    );
+    let module = checked.program.module("examples.native").unwrap();
+    let kinds: Vec<String> = module
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.name == "total")
+        .map(|declaration| declaration.kind.describe())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "operator",
+            "native value operator implementation",
+            "native value operator implementation",
+            "native temporal operator implementation",
+            "native value operator implementation part",
+            "native value operator implementation part",
+            "native temporal operator implementation part",
+            "native value operator implementation part",
+        ]
+    );
+    // UNIT-12: a candidate binds no name.
+    assert_eq!(module.lookup("total").count(), 1);
 }
 
 // ---- Native declarations ----

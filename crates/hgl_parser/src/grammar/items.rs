@@ -162,9 +162,13 @@ impl Parser<'_> {
             // start of a declaration, they are modifiers.
             Ident if self.nth_word(n, "const") && self.nth(n + 1) == KwFn => Item::Function,
             Ident if self.nth_word(n, "native") && self.nth_word(n + 1, "type") => Item::NativeType,
+            // `native impl` begins a native candidate of an operator:
+            // `impl` is a reserved word, so nothing else follows `native`
+            // with it.
             Ident
                 if self.nth_word(n, "native")
                     && (self.nth(n + 1) == KwFn
+                        || self.nth(n + 1) == KwImpl
                         || self.nth_word(n + 1, "const") && self.nth(n + 2) == KwFn) =>
             {
                 Item::NativeFunction
@@ -293,7 +297,7 @@ impl Parser<'_> {
 
     /// ```text
     /// function_decl = { warning_annotation, NL },
-    ///     ( [ "export" | "impl" ], "fn" | [ "export" ], "const", "fn" ),
+    ///     [ "export" | "impl" ], [ "const" ], "fn",
     ///     callable_name, [ generic_parameters ], function_signature,
     ///     [ requires_clause ], function_body ;
     /// function_body = "=>", expression | block ;
@@ -318,25 +322,21 @@ impl Parser<'_> {
             return;
         }
 
-        let mut implementation = false;
         if self.eat(KwExport) {
             if self.at(KwImpl) && !self.cut() {
-                // The grammar has `export fn` and `impl fn` and no form
-                // with both: an implementation is reached through its
-                // operator.
+                // The grammar has `export` or `impl`, and no form with
+                // both: a candidate is reached through its operator
+                // (UNIT-3).
                 self.expected("`fn` or `const`");
                 self.bump();
-                implementation = true;
             }
-        } else if self.eat(KwImpl) {
-            implementation = true;
+        } else {
+            self.eat(KwImpl);
         }
         // FN-5: `const` is a modifier here because `fn` follows it. As the
         // function's name, after `fn`, it is an ordinary identifier.
+        // GEN-4: `impl const fn` is a value candidate of its operator.
         if self.at_word("const") && self.nth(1) == KwFn && !self.cut() {
-            if implementation {
-                self.expected("`fn`");
-            }
             self.bump();
         }
         self.expect(KwFn);
@@ -742,14 +742,18 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// native_function_decl = "native", [ "const" ], "fn", callable_name,
-    ///     [ generic_parameters ], function_signature, [ requires_clause ],
-    ///     [ native_contract_body ] ;
+    /// native_function_decl = "native", [ "impl" ], [ "const" ], "fn",
+    ///     callable_name, [ generic_parameters ], function_signature,
+    ///     [ requires_clause ], [ native_contract_body ] ;
     /// ```
     fn native_function_decl(&mut self) {
         self.start(NativeFnDecl);
         self.no_export();
         self.expect_word("native");
+        // NATIVE-1: `native impl` declares a candidate of an operator.
+        if self.at(KwImpl) && !self.cut() {
+            self.bump();
+        }
         if self.at_word("const") && !self.cut() {
             self.bump();
         }

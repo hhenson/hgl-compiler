@@ -1401,6 +1401,33 @@ fn an_anonymous_function_is_parenthesized_before_it_is_used() {
     }
 }
 
+// ---- GEN-4 ----
+
+#[test]
+fn a_candidate_is_temporal_or_value_and_is_not_exported() {
+    // GEN-4: "An `impl fn` is a temporal candidate of the operator it
+    // names and an `impl const fn` a value candidate."
+    assert_eq!(
+        declarations("impl fn doubled(value: f64) -> f64 => value"),
+        "FnDecl[\"impl\" \"fn\" \"doubled\" ParamList[\"(\" Param[\"value\" \":\" ScalarType[\"f64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"f64\"]] ArrowBody[\"=>\" NameExpr[\"value\"]]]"
+    );
+    assert_eq!(
+        declarations("impl const fn doubled(value: i64) -> i64 => value"),
+        "FnDecl[\"impl\" \"const\" \"fn\" \"doubled\" ParamList[\"(\" Param[\"value\" \":\" ScalarType[\"i64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"i64\"]] ArrowBody[\"=>\" NameExpr[\"value\"]]]"
+    );
+    // The grammar has `export` or `impl`, not both (UNIT-3: a candidate
+    // "is reached only through" its operator).
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "export impl const fn doubled(value: i64) -> i64 => value"
+        ),
+        ["- 1:8: expected `fn` or `const`, found `impl`"]
+    );
+}
+
 // ---- GEN-8 ----
 
 #[test]
@@ -1939,6 +1966,29 @@ fn a_brace_before_the_body_of_if_for_or_switch_is_parenthesized() {
     // The note says what to write.
     let outcome = run(Entry::Statements, "if { ready } { step() }");
     assert!(outcome.report.contains(message), "{}", outcome.report);
+}
+
+// ---- NATIVE-1 ----
+
+#[test]
+fn a_native_candidate_is_written_with_impl() {
+    // NATIVE-1: "A `native impl fn` or `native impl const fn` declares a
+    // candidate of the operator it names (GEN-4), temporal or value,
+    // whose body a provider supplies."
+    assert_eq!(
+        declarations("native impl fn total(lhs: f64, rhs: f64) -> f64"),
+        "NativeFnDecl[\"native\" \"impl\" \"fn\" \"total\" ParamList[\"(\" \
+         Param[\"lhs\" \":\" ScalarType[\"f64\"]] \",\" Param[\"rhs\" \":\" ScalarType[\"f64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"f64\"]]]"
+    );
+    assert_eq!(
+        declarations("native impl const fn total(lhs: i64, rhs: i64) -> i64 {}"),
+        "NativeFnDecl[\"native\" \"impl\" \"const\" \"fn\" \"total\" ParamList[\"(\" \
+         Param[\"lhs\" \":\" ScalarType[\"i64\"]] \",\" Param[\"rhs\" \":\" ScalarType[\"i64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"i64\"]] NativeContractBody[\"{\" \"}\"]]"
+    );
+    // The order is fixed: `native`, `impl`, `const`, `fn`.
+    assert!(!rejected(Entry::Declarations, "native const impl fn total() -> i64").is_empty());
 }
 
 // ---- NATIVE-3 ----

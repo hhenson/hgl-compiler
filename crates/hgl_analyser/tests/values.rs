@@ -1105,6 +1105,179 @@ fn an_element_is_read_by_its_index_or_its_key() {
     );
 }
 
+// ---- Operators called by name ----
+
+/// GEN-5: "Match candidates against the requested output before inputs
+/// ... Select exactly one most-specific admitted candidate ... No match
+/// rejects; tied most-specific candidates are ambiguous ... A call in a
+/// value function or a runtime body selects among the value candidates."
+/// GEN-4: "An operator is neither temporal nor value: the candidate a
+/// call selects is."
+#[test]
+fn a_call_of_an_operator_selects_a_value_candidate() {
+    let checked = module(concat!(
+        "operator doubled<T>(value: T) -> T\n",
+        "impl const fn doubled(value: i64) -> i64 => value * 2\n",
+        "impl const fn doubled(value: f64) -> f64 => value * 2.0\n",
+        "impl fn doubled(value: str) -> str => value\n",
+        "operator pick<T>(lhs: T, rhs: T) -> T\n",
+        "impl const fn pick(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn pick(lhs: i64, rhs: i64?) -> i64 => lhs\n",
+        "impl const fn pick(lhs: str, rhs: str = \"x\") -> str => lhs\n",
+        "operator only<T>(value: T) -> T\n",
+        "impl fn only(value: i64) -> i64 => value\n",
+        "const fn calls(a: i64, b: f64, s: str, round: Round, square: Square) {\n",
+        "    let whole = doubled(a)\n",
+        "    let real = doubled(b)\n",
+        // An integer literal selects as the `i64` it is.
+        "    let literal = doubled(1)\n",
+        // The requested output comes first, and the literal is widened.
+        "    let widened: f64 = doubled(1)\n",
+        // EXPR-2: the operator's public names.
+        "    let named = doubled(value: a)\n",
+        "    let other = doubled(number: a)\n",
+        // The candidate for `str` is temporal.
+        "    let text = doubled(s)\n",
+        "    let wrong: str = doubled(a)\n",
+        "    let tie = pick(a, a)\n",
+        // GEN-6: "A candidate may give any of its inputs a default."
+        "    let short = pick(s)\n",
+        // UNIT-8: a parameter written `T?` needs no default to be
+        // omitted.
+        "    let one = pick(a)\n",
+        "    let missing = pick(b)\n",
+        "    let temporal = only(a)\n",
+        // TYPE-14: `null` is a value of the `i64?` and of no `i64`.
+        "    let absent = pick(a, null)\n",
+        "    let nothing = pick(null, a)\n",
+        // EXPR-5, EXPR-9: a sequence or a tuple written out is read as
+        // the parameter's type, as in a function's call.
+        "    let summed = total([1])\n",
+        "    let size = count([1])\n",
+        "    let couple = count((1, \"x\"))\n",
+        "    let unfit = count([1.5])\n",
+        // TYPE-7: `.member` is of the enum the parameter expects.
+        "    let bought = sign(.buy)\n",
+        "    let held = sign(.hold)\n",
+        // An entry that takes its type from its place is read as the
+        // candidate's too: a `null` in a tuple, a `[]` in a list.
+        "    let partly = first((null, 1))\n",
+        "    let inner = first([[]])\n",
+        "    let neither = first((null, null))\n",
+        // An integer literal among the entries selects as the `i64` it
+        // is, and is widened only where no candidate takes one.
+        "    let whole_list = each([1])\n",
+        "    let real_list = each([1.5])\n",
+        "    let whole_pair = each((1, [1]))\n",
+        "    let real_pair = each((1.5, [1]))\n",
+        // The candidate's parameter gives entries of two types their
+        // one type.
+        "    let shapes = area([round, square])\n",
+        // The output a candidate's parameter requests selects among the
+        // candidates of a call inside the argument.
+        "    let made = each([make()])\n",
+        "    let tied = make()\n",
+        "}\n",
+        "operator total<T>(values: T) -> f64\n",
+        "impl const fn total(values: list<f64>) -> f64 => 0.0\n",
+        "operator count<T>(values: T) -> i64\n",
+        "impl const fn count(values: set<i64>) -> i64 => 0\n",
+        "impl const fn count(values: tuple<i64, str>) -> i64 => 0\n",
+        "enum Side { buy, sell }\n",
+        "operator sign<T>(side: T) -> i64\n",
+        "impl const fn sign(side: Side) -> i64 => 1\n",
+        "operator first<T>(values: T) -> i64\n",
+        "impl const fn first(values: tuple<i64?, i64>) -> i64 => 0\n",
+        "impl const fn first(values: list<list<i64>>) -> i64 => 0\n",
+        "operator each<T>(values: T) -> T\n",
+        "impl const fn each(values: list<i64>) -> list<i64> => values\n",
+        "impl const fn each(values: list<f64>) -> list<f64> => values\n",
+        "impl const fn each(values: tuple<i64, list<i64>>) -> tuple<i64, list<i64>> => values\n",
+        "impl const fn each(values: tuple<f64, list<f64>>) -> tuple<f64, list<f64>> => values\n",
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "struct Square : Shape { side: f64 }\n",
+        "operator area<T>(shapes: T) -> f64\n",
+        "impl const fn area(shapes: list<Shape>) -> f64 => 0.0\n",
+        "operator make<T>() -> T\n",
+        "impl const fn make() -> i64 => 1\n",
+        "impl const fn make() -> str => \"x\"\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:25 name/argument.unknown EXPR-2",
+            "m.hgl:19:16 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:20:22 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:21:15 local:operator/operator.ambiguous GEN-5",
+            "m.hgl:24:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:25:20 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:27:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:31:17 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:33:16 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:36:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:43:16 local:operator/operator.ambiguous GEN-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`doubled` has no parameter `number`",
+            "no value candidate of operator `doubled` takes `str`",
+            "no value candidate of operator `doubled` takes `i64` and gives `str`",
+            "2 value candidates of operator `pick` take `i64`, `i64` equally",
+            "no value candidate of operator `pick` takes `f64`",
+            "operator `only` has no value candidate, and a value function selects among those",
+            "no value candidate of operator `pick` takes `null`, `i64`",
+            "no value candidate of operator `count` takes `[1.5]`",
+            "no value candidate of operator `sign` takes `.hold`",
+            "no value candidate of operator `first` takes `(null, null)`",
+            "2 value candidates of operator `make` take no argument equally",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "calls"),
+        [
+            "a: i64",
+            "b: f64",
+            "s: str",
+            "round: Round",
+            "square: Square",
+            "whole: i64",
+            "real: f64",
+            "literal: i64",
+            "widened: f64",
+            "named: i64",
+            "other: _",
+            "text: _",
+            "wrong: str",
+            "tie: _",
+            "short: str",
+            "one: i64",
+            "missing: _",
+            "temporal: _",
+            "absent: i64",
+            "nothing: _",
+            "summed: f64",
+            "size: i64",
+            "couple: i64",
+            "unfit: _",
+            "bought: i64",
+            "held: _",
+            "partly: i64",
+            "inner: i64",
+            "neither: _",
+            "whole_list: list<i64>",
+            "real_list: list<f64>",
+            "whole_pair: tuple<i64, list<i64>>",
+            "real_pair: tuple<f64, list<f64>>",
+            "shapes: f64",
+            "made: list<i64>",
+            "tied: _",
+        ]
+    );
+}
+
 // ---- A parameter that may be omitted comes last ----
 
 /// UNIT-8: "A parameter that may be omitted follows every parameter that

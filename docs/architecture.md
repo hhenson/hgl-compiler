@@ -223,7 +223,7 @@ It is built in passes:
 | --- | --- | --- | --- |
 | Modules | Files grouped into modules and parts by their `module` lines | UNIT-1 | done |
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
-| Imports | The module and the declarations each `use` names; cycles; the operator of each `impl fn` | UNIT-2, UNIT-3, GEN-4 | done |
+| Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
@@ -452,8 +452,9 @@ binding where an `f64` is expected is rejected.
 What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): an operator given configuration, `if`,
 `switch`, `for`, a pair sequence, a call of a name left for the prelude
-or of an operator, a generic function's parameter and result types, the
-payload of a nullable or a result. The arguments of a call that is not
+or of an operator that has a pack or a generic value candidate, a generic
+function's parameter and result types, the payload of a nullable or a
+result. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
 taken to be assigned. An operand that is a generic parameter, or
 nullable, is not judged: its constraints, or its guard, say what it
@@ -483,8 +484,25 @@ constructor names each field it gives, so a struct that inherits fields
 places none of its own before or after them.
 
 Its rejection is `default.order`, and a tuple's index that is no
-constant or is outside the tuple is `tuple.index`. The analyser has no
-local code.
+constant or is outside the tuple is `tuple.index`.
+
+A call of an operator by its name selects one of the operator's value
+candidates (GEN-5, FN-3). The arguments are given to the operator's
+public parameters; a candidate is admitted when its result fits the type
+the place expects, each argument fits the parameter the candidate has in
+that place, and what the call leaves out has a default or a type written
+`T?`. An argument that is read as the type of its place, `null`,
+`.member`, or a sequence or tuple written out, is tried against each
+candidate's parameter, and what the trial reports is taken back. A
+candidate that fits with no integer literal widened is taken before one
+that needs it. An argument tried may hold a call that tries its own, so
+the readings are counted for the whole function: past a thousand a call
+that needs a trial is not judged, and the pass ends whatever it is given. The typed body records the operator and the
+candidate selected. No candidate, and a tie, are reported with the
+analyser's two local codes, `operator.no_candidate` and
+`operator.ambiguous`, proposed to the specification in hgl_spec issue 30.
+A symbol such as `+` is not yet a call of core's operator: see the
+operator table above.
 
 ### Order
 
