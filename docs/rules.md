@@ -208,7 +208,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. Left: operator identity in selection |
 | GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition and runtime bodies |
-| GEN-6 | analyser | planned | A candidate honours its operator's contract |
+| GEN-6 | analyser | planned | A candidate honours its operator's contract; its `requires` names the values of a const option it is for |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
 | GEN-8 | analyser | planned | `instantiate` requests candidates; a call's generic arguments, and the rejection of a call that leaves a parameter unresolved |
@@ -413,6 +413,8 @@ the same numeric rules the transpiler rows give.
 | OPS-6 | transpiler | planned | What each conversion yields |
 | OPS-7 | analyser | planned | A conversion's options, and the `result` its checked error policy returns |
 | OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
+| OPS-8 | analyser | planned | The options of `convert`: `rounding`, `nan`, and `invalid`, which selects the result type |
+| OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | planned | `delta_value(x)` needs proof that `x` is valid and modified |
