@@ -72,8 +72,10 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
 /// `-` does not, though it too begins an expression: "`-` at the start of
 /// a line is the binary operator: a statement that began with it would
 /// have no effect" (owner decision, 2026-11-14). Nor does `.`: at the
-/// start of a line it reaches into what the line before ended with, and
-/// `.member` alone (TYPE-7) is a value with nothing to give it a type.
+/// start of a line it reaches into what the line before ended with. Only
+/// as the first statement of its block, with no line before to reach
+/// into, is `.member` (TYPE-7) an expression (owner decision,
+/// 2026-11-15); the block parser reads that one itself.
 pub(crate) fn can_begin(kind: SyntaxKind) -> bool {
     (can_start_expression(kind) && kind != SyntaxKind::Minus && kind != SyntaxKind::Dot)
         || matches!(

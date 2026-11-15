@@ -400,6 +400,36 @@ fn a_bodys_opening_brace_stays_with_its_header() {
     assert!(!outcome.has_error_node());
 }
 
+#[test]
+fn a_member_is_an_expression_only_as_the_first_statement_of_its_block() {
+    // LEX-5: "`.member` (TYPE-7) begins no statement after another. Where
+    // no statement precedes it in its block it is an expression, and may
+    // be the block's value (CTRL-10): `{ .buy }`."
+    let branches = statements("if rising { .buy } else { .sell }");
+    assert!(
+        branches.contains("ImpliedMember[\".\" \"buy\"]"),
+        "{branches}"
+    );
+    assert!(
+        branches.contains("ImpliedMember[\".\" \"sell\"]"),
+        "{branches}"
+    );
+    // On a line of its own, after the brace.
+    same_tree(
+        Entry::Statements,
+        "if rising {\n    .buy\n} else {\n    .sell\n}",
+        "if rising { .buy } else { .sell }",
+    );
+    // After a statement it reaches into that statement, as before.
+    same_tree(
+        Entry::Statements,
+        "{\n    step()\n    .buy\n}",
+        "{ step().buy }",
+    );
+    // Outside a block it begins no statement.
+    assert!(!rejected(Entry::Statements, ".buy").is_empty());
+}
+
 // ---- LEX-6 ----
 
 #[test]

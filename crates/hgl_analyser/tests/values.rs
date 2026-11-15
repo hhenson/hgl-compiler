@@ -1169,11 +1169,11 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "    let held = sign(.hold)\n",
         // A block, and an `if`, whose value is of the enum its place
         // expects is tried as the parameter's too.
-        // LEX-5: "`.member` (TYPE-7) begins no statement", so one that
-        // is a block's value is written in parentheses.
-        "    let in_block = sign({ (.buy) })\n",
-        "    let either = sign(if a > 0 { (.buy) } else { (.sell) })\n",
-        "    let no_member = sign({ (.hold) })\n",
+        // LEX-5: `.member` is an expression where it is the first
+        // statement of its block.
+        "    let in_block = sign({ .buy })\n",
+        "    let either = sign(if a > 0 { .buy } else { .sell })\n",
+        "    let no_member = sign({ .hold })\n",
         // An entry that takes its type from its place is read as the
         // candidate's too: a `null` in a tuple, a `[]` in a list.
         "    let partly = first((null, 1))\n",
@@ -1253,7 +1253,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `pick` takes `null`, `i64`",
             "no value candidate of operator `count` takes `[1.5]`",
             "no value candidate of operator `sign` takes `.hold`",
-            "no value candidate of operator `sign` takes `{ (.hold) }`",
+            "no value candidate of operator `sign` takes `{ .hold }`",
             "no value candidate of operator `first` takes `(null, null)`",
             "2 value candidates of operator `make` take no argument equally",
         ]
@@ -1380,7 +1380,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
         "    let chain = if c { 1 } else if a > 1 { 2 } else { 3 }\n",
         // The first branch gives its type to the `if` of an `else if`
         // too: to its members, and to a null in it.
-        "    let side = if c { Side.buy } else if a > 1 { (.sell) } else { (.buy) }\n",
+        "    let side = if c { Side.buy } else if a > 1 { .sell } else { .buy }\n",
         "    let none = if c { a } else if a > 1 { null } else { 2 }\n",
         "}\n",
         "enum Side { buy, sell }\n",
