@@ -182,10 +182,13 @@ struct Evidence {
     as_type: Option<Location>,
     /// Where it is first used as a value.
     as_value: Option<Location>,
-    /// True when a constraint names it, or it is given to a generic
-    /// parameter whose own kind is not settled: something that may yet
-    /// say what it is.
+    /// True when something this pass does not read may yet say what
+    /// it is: a constraint names it, or it is given to a type whose
+    /// declaration is not known.
     open: bool,
+    /// True when it is given to a generic parameter of a struct whose
+    /// own kind nothing settles. That says nothing of what it is.
+    dependent: bool,
 }
 
 /// What the place a type is written in admits.
@@ -291,6 +294,11 @@ struct Reader<'a> {
     /// parameters, parameters, result, parents and fields. Only there
     /// does a use say what a generic parameter is (GEN-13).
     in_signature: bool,
+    /// True while a struct is read.
+    reading_struct: bool,
+    /// True while a generic argument is read that is given to a
+    /// parameter of a known struct whose kind is not settled.
+    unsettled_target: bool,
     /// The types of the declaration being read, by the offset each
     /// starts at, so that none is read twice.
     read: HashMap<u32, Type>,
@@ -329,6 +337,8 @@ impl<'a> Reader<'a> {
             generics: Vec::new(),
             evidence: Vec::new(),
             in_signature: false,
+            reading_struct: false,
+            unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
             diagnostics,
@@ -537,6 +547,7 @@ impl Reader<'_> {
         self.enter(self.module.files[declaration.file].file);
         let node = &declaration.syntax;
         self.in_signature = true;
+        self.reading_struct = declaration.kind == DeclarationKind::Struct;
         self.generic_parameters(node);
         let mut detail = match node.kind() {
             SyntaxKind::FnDecl | SyntaxKind::OperatorDecl | SyntaxKind::NativeFnDecl => {
@@ -1387,10 +1398,12 @@ impl Reader<'_> {
             // used as a type. Where a value might stand as well, the
             // use says nothing yet.
             Some(Kind::Unknown) => {
-                if position.constant {
-                    self.note_open(declared);
-                } else {
+                if !position.constant {
                     self.note_type(declared, self.at(name.span()));
+                } else if self.unsettled_target {
+                    self.note_dependent(declared);
+                } else {
+                    self.note_open(declared);
                 }
                 parameter
             }
@@ -1605,10 +1618,19 @@ impl Reader<'_> {
                     Kind::Type | Kind::Pack => Position::PACK,
                     Kind::Value | Kind::Unknown => position,
                 };
+                // A lone name given to a parameter of the target whose
+                // kind nothing has settled says nothing of what the
+                // name is (GEN-13).
+                let unsettled = parameter.is_some() && want == Kind::Unknown;
+                let before = std::mem::replace(&mut self.unsettled_target, unsettled);
                 let ty = self.type_(&argument, position);
-                // A name that is not known may yet be a constant; a
-                // type that is known to be one is not.
-                let is_type = kind != SyntaxKind::NamedType || matches!(ty, Type::Named { .. });
+                self.unsettled_target = before;
+                // A name that is not known may yet be a constant; one
+                // known to be a type is not: a declared type, or a
+                // generic parameter settled as a type.
+                let is_type = kind != SyntaxKind::NamedType
+                    || matches!(ty, Type::Named { .. })
+                    || self.is_type_parameter(&ty);
                 if want == Kind::Value && is_type {
                     self.argument_kind(&argument, mismatch("a value", "a type"));
                 }
@@ -1616,6 +1638,15 @@ impl Reader<'_> {
             }
         }
         arguments
+    }
+
+    /// True when `ty` is a generic parameter of the declaration being
+    /// read that is settled as a type.
+    fn is_type_parameter(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Parameter { at, .. } if self
+            .generics
+            .iter()
+            .any(|generic| generic.at == *at && generic.kind == GenericKind::Type))
     }
 
     fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {
@@ -1780,13 +1811,22 @@ impl Reader<'_> {
     }
 
     /// Notes a use of a plain generic parameter that may yet say what
-    /// it is: as an argument of a generic type whose own parameter is
-    /// not settled.
+    /// it is: as an argument of a type whose declaration is not known.
     fn note_open(&mut self, declared: Location) {
         if self.in_signature
             && let Some(evidence) = self.evidence_of(declared)
         {
             evidence.open = true;
+        }
+    }
+
+    /// Notes a use of a plain generic parameter as an argument of a
+    /// struct whose own parameter nothing settles.
+    fn note_dependent(&mut self, declared: Location) {
+        if self.in_signature
+            && let Some(evidence) = self.evidence_of(declared)
+        {
+            evidence.dependent = true;
         }
     }
 
@@ -1859,6 +1899,9 @@ impl Reader<'_> {
                 (None, Some(_)) => self.generics[index].kind = GenericKind::Value(Type::Unknown),
                 // Something may yet say what it is.
                 (None, None) if evidence.open => {}
+                // A function given a struct whose parameter nothing
+                // settles: the struct is where that is reported.
+                (None, None) if evidence.dependent && !self.reading_struct => {}
                 (None, None) => {
                     self.diagnostics.emit(
                         local_error(

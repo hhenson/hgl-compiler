@@ -181,6 +181,36 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
     assert_eq!(kinds(&checked, "constrained"), ["T:unsettled"]);
 }
 
+/// GEN-13: "an unresolved kind lacking a determining
+/// declaration/constraint" rejects. A parameter that is only handed on,
+/// to a parameter that nothing settles either, is determined by
+/// nothing: structs that only name one another settle no kind.
+#[test]
+fn a_parameter_that_is_only_handed_on_is_unresolved() {
+    let checked = module(concat!(
+        "struct Node<T> { next: atomic<Node<T>> = null }\n",
+        "struct Ping<T> { pong: atomic<Pong<T>> = null }\n",
+        "struct Pong<T> { ping: atomic<Ping<T>> = null }\n",
+        // One use elsewhere settles the whole ring.
+        "struct Tree<T> {\n    next: atomic<Tree<T>> = null\n    value: T\n}\n",
+        // A function given such a struct is not where the fault is.
+        "fn uses<K>(node: Node<K>) {}\n",
+        // A type nothing declares may yet say what its argument is.
+        "struct Open<T> { held: Missing<T> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:13 local:type/generic.kind_unresolved GEN-13",
+            "m.hgl:3:13 local:type/generic.kind_unresolved GEN-13",
+            "m.hgl:4:13 local:type/generic.kind_unresolved GEN-13",
+        ]
+    );
+    assert_eq!(kinds(&checked, "Tree"), ["T:type"]);
+    assert_eq!(kinds(&checked, "uses"), ["K:unsettled"]);
+    assert_eq!(kinds(&checked, "Open"), ["T:unsettled"]);
+}
+
 /// GEN-14: "Check each argument against the corresponding parameter
 /// kind; shared name syntax is not a second interpretation."
 #[test]
@@ -201,6 +231,8 @@ fn an_argument_is_of_its_parameters_kind() {
         "const fn made() -> Box<i64> => Box<7>(value: 1)\n",
         // A name nothing binds may yet be a constant (UNIT-11).
         "fn open(a: Sized<Missing>) {}\n",
+        // A parameter settled as a type is a type in a body too.
+        "const fn body<T>(value: T) -> i64 {\n    let sized: Sized<T> = make()\n    return 0\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -212,6 +244,7 @@ fn an_argument_is_of_its_parameters_kind() {
             "m.hgl:10:43 local:type/generic.argument_kind GEN-14",
             "m.hgl:10:59 local:type/generic.argument_kind GEN-14",
             "m.hgl:11:36 local:type/generic.argument_kind GEN-14",
+            "m.hgl:14:22 local:type/generic.argument_kind GEN-14",
         ]
     );
     assert_eq!(
@@ -224,11 +257,12 @@ fn an_argument_is_of_its_parameters_kind() {
             "`Sized` takes a value for `N`, and `Side` is a type",
             "`Count` takes a value for `N`, and `list<i64>` is a type",
             "`Box` takes a type for `T`, and `7` is a value",
+            "`Sized` takes a value for `N`, and `T` is a type",
         ]
     );
     assert_eq!(
         kinds(&checked, "good"),
         ["T:type", "N:value i64", "M:value _"]
     );
-    assert_eq!(checked.prelude_names("m"), ["Missing"]);
+    assert_eq!(checked.prelude_names("m"), ["Missing", "make"]);
 }

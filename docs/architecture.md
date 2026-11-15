@@ -388,6 +388,10 @@ signature uses it as:
 Uses that disagree are rejected, and so is a parameter that nothing in
 the signature or a constraint names. A use in a body does not count:
 the rule infers a kind "from signature positions and constraints".
+Neither does being handed on to a parameter that nothing settles: in
+`struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
+is. That is reported at the struct, and not again at each function
+that is given one.
 
 A use as an argument depends on another declaration, and structs name
 one another freely. So before any type is reported on, the structs are
