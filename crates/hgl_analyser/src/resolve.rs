@@ -621,13 +621,27 @@ impl Resolver<'_> {
             .module
             .lookup(name)
             .find(|declaration| self.in_test || !declaration.test_only);
-        let clash = match (import, declaration) {
-            (Some(import), _) => Some((import.at, "imported here".to_string())),
-            (None, Some(declaration)) => Some((
+        // UNIT-12: a local "takes no name bound there by ... a module
+        // declaration, a `use` in its file, or the prelude."
+        let prelude = self
+            .program
+            .core()
+            .filter(|core| *core != self.index)
+            .and_then(|core| {
+                self.program.modules[core]
+                    .lookup(name)
+                    .find(|declaration| declaration.is_public())
+            });
+        let clash = match (import, declaration, prelude) {
+            (Some(import), _, _) => Some((import.at, "imported here".to_string())),
+            (None, Some(declaration), _) => Some((
                 declaration.at,
                 format!("declared here, as a {}", declaration.kind.describe()),
             )),
-            (None, None) => None,
+            (None, None, Some(bound)) => {
+                Some((bound.at, "the prelude binds it: declared here".to_string()))
+            }
+            (None, None, None) => None,
         };
         if let Some((first, words)) = clash {
             self.diagnostics.emit(
@@ -640,7 +654,7 @@ impl Resolver<'_> {
                 )
                 .with_related(first, words)
                 .with_note(format!(
-                    "{} takes no name of its module or of its file's imports",
+                    "{} takes no name of its module, of its file's imports, or of the prelude",
                     kind.describe()
                 )),
             );
@@ -820,8 +834,27 @@ impl Resolver<'_> {
             return None;
         }
 
-        // UNIT-11: the prelude binds it, or nothing does. See
-        // `Module::prelude_names`.
+        // UNIT-11: "The prelude is the public declarations of core's
+        // mandatory module, `core`, and nothing else. Every module binds
+        // them without a `use`." Core's own module has found its
+        // declarations above.
+        if let Some(core) = self.program.core()
+            && core != self.index
+        {
+            let declarations = self.public(core, name);
+            if !declarations.is_empty() {
+                return self.used(
+                    token,
+                    Binding::Declarations {
+                        module: core,
+                        declarations,
+                    },
+                );
+            }
+        }
+
+        // The prelude does not bind it, or the program has no module
+        // `core`. See `Module::prelude_names`.
         if !self.prelude.iter().any(|known| known.name == name) {
             self.prelude.push(PreludeName {
                 name: name.to_string(),

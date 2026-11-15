@@ -192,7 +192,7 @@ fn a_name_left_for_the_prelude_is_listed() {
             concat!(
                 "checked 1 file in 1 module: no errors\n",
                 "modules, declarations, imports, names, written types and the bodies of value functions are checked; temporal bodies are not yet\n",
-                "left for the prelude (UNIT-11), which core has not declared yet:\n",
+                "left for the prelude (UNIT-11), which does not bind them yet:\n",
                 "  {file}:2:9 add\n",
             ),
             file = file

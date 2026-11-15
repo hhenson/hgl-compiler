@@ -640,6 +640,87 @@ fn a_test_context_exports_nothing_and_implements_no_operator() {
     );
 }
 
+// ---- The prelude ----
+
+/// UNIT-11: "The prelude is the public declarations of core's mandatory
+/// module, `core`, and nothing else. Every module binds them without a
+/// `use`." GEN-4: a candidate binds its operator "through local
+/// declaration, selective import, or the prelude". UNIT-12: "outside
+/// core's mandatory module neither a declaration nor an import alias
+/// takes a prelude name", and a local takes no name bound by "the
+/// prelude".
+#[test]
+fn a_module_binds_cores_public_names_without_a_use() {
+    let checked = check(&[
+        (
+            "core.hgl",
+            concat!(
+                "module core\n",
+                "export enum CmpResult { less, equivalent, greater, unordered }\n",
+                "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "operator sub_<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
+                // Private to core: no prelude name.
+                "const fn hidden() -> i64 => 1\n",
+                // Core's own module finds its declarations as any does.
+                "const fn own() -> i64 => add_(1, 2)\n",
+            ),
+        ),
+        (
+            "lib.hgl",
+            "module lib\nexport const fn helper() -> i64 => 1\n",
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "const fn sum(a: i64) -> i64 => add_(a, a)\n",
+                "const fn outcome() -> CmpResult => .less\n",
+                "const fn private() -> i64 => hidden()\n",
+                // A candidate of core's operator, bound through the
+                // prelude.
+                "impl const fn add_(lhs: str, rhs: str) -> str => lhs\n",
+                "const fn joined(s: str) -> str => add_(s, s)\n",
+            ),
+        ),
+        (
+            "bad.hgl",
+            concat!(
+                "module bad\n",
+                "use lib as add_\n",
+                "const fn CmpResult() -> i64 => 1\n",
+                "const fn local(a: i64) -> i64 {\n    let sub_ = a\n    return a\n}\n",
+            ),
+        ),
+        (
+            "worse.hgl",
+            // GEN-4: what the prelude binds to an enum is no operator.
+            "module worse\nimpl const fn CmpResult() -> i64 => 1\n",
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "bad.hgl:2:12 name/name.duplicate UNIT-12",
+            "bad.hgl:3:10 name/name.duplicate UNIT-12",
+            "bad.hgl:5:9 name/name.duplicate UNIT-12",
+            "worse.hgl:2:15 operator/impl.unknown_operator GEN-4",
+        ]
+    );
+    assert_eq!(checked.prelude_names("app"), ["hidden"]);
+    assert_eq!(checked.prelude_names("worse"), [] as [&str; 0]);
+    let app = checked.program.module("app").unwrap();
+    let core = checked.program.core().unwrap();
+    // Each use of `add_` and of `CmpResult` in `app` is core's.
+    let bound: Vec<bool> = app
+        .uses
+        .iter()
+        .filter(|used| matches!(used.name.as_str(), "add_" | "CmpResult"))
+        .map(|used| matches!(&used.binding, hgl_analyser::Binding::Declarations { module, .. } if *module == core))
+        .collect();
+    assert_eq!(bound, [true, true, true]);
+}
+
 // ---- Operators ----
 
 /// GEN-4: "An `impl fn` binds that operator through local declaration,

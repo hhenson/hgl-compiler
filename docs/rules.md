@@ -108,8 +108,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`. Left: defaults as required constants of the expected type; a temporal default as a constant of its type |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
-| UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
-| UNIT-12 | analyser | partial | No declaration, import, local, parameter or generic parameter takes a name already in scope. Left: prelude names |
+| UNIT-11 | analyser | partial | When the program has the module `core`, a name nothing nearer binds is its public declaration of that name. Left: a name core does not declare yet is listed, not reported; the module is given among the source roots, not found by the compiler |
+| UNIT-12 | analyser | partial | No declaration, import, local, parameter or generic parameter takes a name already in scope, a prelude name included for a declaration, an import alias and a local. Left: a prelude name core does not declare yet |
 
 ## Types and values
 
@@ -206,7 +206,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
-| GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares or its file imports, and a value candidate's body is read as a value function's. Left: the prelude; operator identity in selection |
+| GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. Left: operator identity in selection |
 | GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition and runtime bodies |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
