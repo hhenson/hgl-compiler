@@ -425,6 +425,89 @@ fn a_generic_type_is_given_the_arguments_it_declares() {
     );
 }
 
+/// GEN-10: an argument that names a type pack passes on as many types
+/// as the pack holds. The count is rejected when no length the pack may
+/// have fits; a length that may fit is for the pass that resolves it.
+#[test]
+fn a_forwarded_pack_counts_for_what_it_may_hold() {
+    let checked = module(concat!(
+        "struct Row<...Ts{2}> { width: i64 }\n",
+        "struct Box<T> { value: T }\n",
+        "fn exact<...Us{2}>(row: Row<Us>) {}\n",
+        "fn with_one<T, ...Us{1}>(row: Row<T, Us>) {}\n",
+        "fn single<...Us{1}>(boxed: Box<Us>) {}\n",
+        // Any number may be two.
+        "fn open<...Us>(row: Row<Us>) {}\n",
+        "fn at_least<...Us{1:*}>(row: Row<Us>) {}\n",
+        // No length these may have is two, or one.
+        "fn short<...Us{0:1}>(row: Row<Us>) {}\n",
+        "fn long<...Us{3:*}>(row: Row<Us>) {}\n",
+        "fn over<T, ...Us{2}>(row: Row<T, Us>) {}\n",
+        "fn pair<...Us{2:3}>(boxed: Box<Us>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:27 local:type/generic.argument_count GEN-2",
+            "m.hgl:10:26 local:type/generic.argument_count GEN-2",
+            "m.hgl:11:27 local:type/generic.argument_count GEN-2",
+            "m.hgl:12:28 local:type/generic.argument_count GEN-2",
+        ]
+    );
+    let messages: Vec<&str> = checked
+        .findings
+        .iter()
+        .map(|finding| finding.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "`Row` takes 2 arguments, and from 0 to 1 are given",
+            "`Row` takes 2 arguments, and at least 3 are given",
+            "`Row` takes 2 arguments, and 3 are given",
+            "`Box` takes 1 argument, and from 2 to 3 are given",
+        ]
+    );
+}
+
+/// TYPE-3: "Generic applications are invariant by origin and complete
+/// canonical arguments." Two applications are one type when their
+/// arguments are the same: a constant by its value, and one this pass
+/// holds no value for by how it is written.
+#[test]
+fn a_generic_application_is_known_by_its_arguments() {
+    let checked = module(concat!(
+        "struct Flag<const On: bool> { width: i64 }\n",
+        "struct Label<const Text: str> { width: i64 }\n",
+        "struct Sized<const N: i64> { width: i64 }\n",
+        "fn flags(a: Flag<true>, b: Flag<false>, c: Flag<true>) {}\n",
+        "fn labels(a: Label<\"bid\">, b: Label<\"ask\">, c: Label<\"bid\">) {}\n",
+        "fn sizes(a: Sized<6>, b: Sized<2 * 3>, c: Sized<7>, d: Sized<limit()>, e: Sized<limit()>,\n",
+        "    f: Sized<other()>) {}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let types = |name: &str| match detail(&checked, name) {
+        Detail::Callable(signature) => signature
+            .parameters
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .collect::<Vec<Type>>(),
+        other => panic!("{name} is {other:?}"),
+    };
+    let flags = types("flags");
+    assert_ne!(flags[0], flags[1]);
+    assert_eq!(flags[0], flags[2]);
+    let labels = types("labels");
+    assert_ne!(labels[0], labels[1]);
+    assert_eq!(labels[0], labels[2]);
+    let sizes = types("sizes");
+    // By value where it is folded; as written where it is not.
+    assert_eq!(sizes[0], sizes[1]);
+    assert_ne!(sizes[0], sizes[2]);
+    assert_eq!(sizes[3], sizes[4]);
+    assert_ne!(sizes[3], sizes[5]);
+}
+
 // ---- Ordinary value types ----
 
 /// The grammar gives `value_type` to a set's element, a dictionary's

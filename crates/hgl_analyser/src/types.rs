@@ -204,12 +204,15 @@ pub struct Constant {
     pub value: ConstantValue,
 }
 
-// Two constants are the same when they come to the same value. One that
-// is not evaluated yet is compared as it is written.
+// Two constants are the same when they come to the same value. One
+// whose value this pass does not hold, a literal of another kind or an
+// expression not evaluated yet, is compared as it is written: `true` is
+// not `false`, though both are "a bool".
 impl PartialEq for Constant {
     fn eq(&self, other: &Constant) -> bool {
         match (&self.value, &other.value) {
-            (ConstantValue::Unevaluated, ConstantValue::Unevaluated) => self.text == other.text,
+            (ConstantValue::Unevaluated, ConstantValue::Unevaluated)
+            | (ConstantValue::Other(_), ConstantValue::Other(_)) => self.text == other.text,
             (left, right) => left == right,
         }
     }
@@ -234,7 +237,8 @@ pub enum ConstantValue {
         /// Where it is declared.
         at: Location,
     },
-    /// A constant of another kind, named for messages: `a float`.
+    /// A constant of another kind, named for messages: `a float`. Its
+    /// value is not held here; the constant's text is.
     Other(&'static str),
     /// Not evaluated by this pass: an expression that calls a function
     /// or reads a name. The pass that evaluates constants in full reads

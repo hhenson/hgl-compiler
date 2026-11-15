@@ -270,7 +270,9 @@ for the passes that know types.
 Every type the source writes is read into one form, `Type`. Two types
 are the same type when their `Type` values are equal. A struct, enum or
 native type is known by the module and declaration that declare it
-(UNIT-4), whichever import or alias names it. What is read of each
+(UNIT-4), whichever import or alias names it, and by its generic
+arguments: a constant among them by its value, or as it is written
+while this pass holds no value for it. What is read of each
 declaration is kept for the passes after: a callable's generic
 parameters, parameters and result; a struct's parents and members.
 `hgl check --modules` prints each signature as it was read.
@@ -280,7 +282,7 @@ What the pass checks as it reads:
 | Subject | Rule | What is done |
 | --- | --- | --- |
 | A name in a type position | UNIT-10, GEN-2, GEN-13 | Names a struct, an enum, a native type or a generic parameter that is a type. A function, operator, local, generic value parameter, or a type pack where one type is needed, is rejected |
-| A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. A parent and a constructor are no different |
+| A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
 | An ordinary value type | TYPE-12, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a parameter with a default, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
 | `signal` | TYPE-12 | The whole type of an input, or of each input of a positional pack |
 | `T?` | TYPE-14, TYPE-15 | Not applied to `ref<T>` or `signal` |

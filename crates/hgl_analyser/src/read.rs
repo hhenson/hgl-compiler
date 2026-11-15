@@ -1202,21 +1202,35 @@ impl Reader<'_> {
                 declaration.name
             ),
             Some(list) => {
-                let given = list
+                // How many are given. An argument that names a type pack
+                // passes on as many types as the pack holds (GEN-10),
+                // which is a range until the pack is resolved.
+                let mut given_fewest = 0;
+                let mut given_most = Some(0);
+                for argument in list
                     .children()
                     .filter(|argument| argument.kind() != SyntaxKind::Error)
-                    .count() as u64;
-                if given >= fewest && most.is_none_or(|most| given <= most) {
+                {
+                    let (minimum, maximum) = self.pack_bounds(&argument).unwrap_or((1, Some(1)));
+                    given_fewest += minimum;
+                    // `zip` gives `None`, no limit, when either has none.
+                    given_most = given_most.zip(maximum).map(|(most, more)| most + more);
+                }
+                // Rejected only when no length the packs may have fits.
+                // Whether the length a pack is resolved to fits is for
+                // the pass that resolves it.
+                let too_many = most.is_some_and(|most| given_fewest > most);
+                let too_few = given_most.is_some_and(|given_most| given_most < fewest);
+                if !too_many && !too_few {
                     return;
                 }
-                format!(
-                    "`{}` takes {takes}, and {} given",
-                    declaration.name,
-                    match given {
-                        1 => "1 is".to_string(),
-                        given => format!("{given} are"),
-                    }
-                )
+                let given = match given_most {
+                    Some(1) if given_fewest == 1 => "1 is".to_string(),
+                    Some(most) if most == given_fewest => format!("{most} are"),
+                    Some(most) => format!("from {given_fewest} to {most} are"),
+                    None => format!("at least {given_fewest} are"),
+                };
+                format!("`{}` takes {takes}, and {given} given", declaration.name)
             }
         };
         self.diagnostics.emit(
@@ -1229,6 +1243,33 @@ impl Reader<'_> {
             )
             .with_related(declaration.at, "declared here"),
         );
+    }
+
+    /// How many types a generic argument passes on when it names a type
+    /// pack of the declaration being read: the fewest and the most
+    /// (GEN-10). `None` for any other argument, which is one.
+    fn pack_bounds(&self, argument: &SyntaxNode) -> Option<(u64, Option<u64>)> {
+        if argument.kind() != SyntaxKind::NamedType
+            || child(argument, SyntaxKind::GenericArgs).is_some()
+        {
+            return None;
+        }
+        let name = used_name(argument)?;
+        let &binding = self.bindings.get(&(self.file, name.span().start))?;
+        let Binding::Local {
+            at,
+            kind: LocalKind::GenericParameter,
+        } = binding
+        else {
+            return None;
+        };
+        self.generics
+            .iter()
+            .find(|generic| generic.at == *at)
+            .and_then(|generic| match generic.kind {
+                GenericKind::Pack { minimum, maximum } => Some((minimum, maximum)),
+                _ => None,
+            })
     }
 
     /// The arguments of `<...>`: each a type or a constant.
