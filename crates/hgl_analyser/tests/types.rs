@@ -470,6 +470,30 @@ fn a_forwarded_pack_counts_for_what_it_may_hold() {
     );
 }
 
+/// GEN-10: a cardinality is any integer literal. Forwarded packs whose
+/// lengths sum past what a `u64` holds are counted without wrapping
+/// round: the fewest stays more than any type takes, and the most is no
+/// limit.
+#[test]
+fn forwarded_packs_too_long_to_sum_are_still_counted() {
+    let checked = module(concat!(
+        "struct Row<...Ts{2}> { width: i64 }\n",
+        "struct Any<...Ts> { width: i64 }\n",
+        // Three times this is 2^64 + 2.
+        "fn exact<...Us{6148914691236517206}>(row: Row<Us, Us, Us>) {}\n",
+        "fn at_most<...Us{0:6148914691236517206}>(row: Row<Us, Us, Us>, rest: Any<Us, Us, Us>) {}\n",
+        "fn open<...Us{6148914691236517206}>(rest: Any<Us, Us, Us>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:43 local:type/generic.argument_count GEN-2"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`Row` takes 2 arguments, and more than can be counted are given"
+    );
+}
+
 /// TYPE-3: "Generic applications are invariant by origin and complete
 /// canonical arguments." Two applications are one type when their
 /// arguments are the same: a constant by its value, and one this pass

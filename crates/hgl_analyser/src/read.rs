@@ -1208,7 +1208,7 @@ impl Reader<'_> {
     ) {
         // How many the type declares: its fixed parameters, and what a
         // pack among them may add (GEN-10).
-        let mut fixed = 0;
+        let mut fixed: u64 = 0;
         let mut pack = None;
         let forms = generic_forms(&declaration.syntax);
         for (_, _, form) in &forms {
@@ -1217,11 +1217,15 @@ impl Reader<'_> {
                 Form::Plain | Form::Value => fixed += 1,
             }
         }
-        let fewest = fixed + pack.map_or(0, |(minimum, _)| minimum);
+        // A cardinality may be any integer literal, so the sums are
+        // taken with care. `saturating_add` stops at the largest `u64`
+        // where a sum would pass it; `checked_add` gives `None`, which
+        // here is no limit.
+        let fewest = fixed.saturating_add(pack.map_or(0, |(minimum, _)| minimum));
         // `None`: no limit.
         let most = match pack {
             None => Some(fixed),
-            Some((_, maximum)) => maximum.map(|maximum| fixed + maximum),
+            Some((_, maximum)) => maximum.and_then(|maximum| fixed.checked_add(maximum)),
         };
         let takes = match most {
             Some(most) if most == fewest => arguments(fewest),
@@ -1244,16 +1248,20 @@ impl Reader<'_> {
                 // How many are given. An argument that names a type pack
                 // passes on as many types as the pack holds (GEN-10),
                 // which is a range until the pack is resolved.
-                let mut given_fewest = 0;
-                let mut given_most = Some(0);
+                let mut given_fewest: u64 = 0;
+                let mut given_most: Option<u64> = Some(0);
                 for argument in list
                     .children()
                     .filter(|argument| argument.kind() != SyntaxKind::Error)
                 {
                     let (minimum, maximum) = self.pack_bounds(&argument).unwrap_or((1, Some(1)));
-                    given_fewest += minimum;
-                    // `zip` gives `None`, no limit, when either has none.
-                    given_most = given_most.zip(maximum).map(|(most, more)| most + more);
+                    given_fewest = given_fewest.saturating_add(minimum);
+                    // `zip` gives `None`, no limit, when either has
+                    // none; a sum past the largest `u64` is no limit
+                    // either.
+                    given_most = given_most
+                        .zip(maximum)
+                        .and_then(|(most, more)| most.checked_add(more));
                 }
                 // Rejected only when no length the packs may have fits.
                 // Whether the length a pack is resolved to fits is for
@@ -1267,6 +1275,8 @@ impl Reader<'_> {
                     Some(1) if given_fewest == 1 => "1 is".to_string(),
                     Some(most) if most == given_fewest => format!("{most} are"),
                     Some(most) => format!("from {given_fewest} to {most} are"),
+                    // The sum stopped at the largest `u64`.
+                    None if given_fewest == u64::MAX => "more than can be counted are".to_string(),
                     None => format!("at least {given_fewest} are"),
                 };
                 format!("`{}` takes {takes}, and {given} given", declaration.name)
