@@ -332,7 +332,10 @@ it, and is matched inside a type: `struct Child<U> : Base<U, U>` is not
 held by a `Base<i64, str>`, nor `struct Child<U> : Base<list<U>>` by a
 `Base<str>`. Constant arguments are compared by what they come to: a
 window with no minimum written has its maximum for one (TYPE-11), and
-`1.0` is `1.00` (LEX-20). A
+`1.0` is `1.00` (LEX-20). One type pack a child passes on stands for
+the arguments between those before it and those after, as many as its
+cardinality admits (GEN-10); where two are passed on, or the field's
+type passes one on, the child may be held. A
 recursive field stays within its module: a struct of another module is
 reached back only through an abstract struct declared there, and that
 is rejected. A field holds every struct its type names,

@@ -56,8 +56,21 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         parents: HashMap::new(),
         fields: HashMap::new(),
         children: HashMap::new(),
+        packs: HashMap::new(),
     };
     let ids = structs.ids();
+    for &id in &ids {
+        let packs: Vec<(Location, Cardinality)> = structs
+            .struct_type(id)
+            .into_iter()
+            .flat_map(|read| &read.generics)
+            .filter_map(|generic| match generic.kind {
+                GenericKind::Pack { minimum, maximum } => Some((generic.at, (minimum, maximum))),
+                _ => None,
+            })
+            .collect();
+        structs.packs.extend(packs);
+    }
     for &id in &ids {
         let parents = structs.parents_of(id);
         for parent in &parents {
@@ -279,6 +292,8 @@ struct Structs<'a> {
     /// The structs that inherit from each abstract struct, each with
     /// the arguments it gives that parent.
     children: HashMap<Id, Vec<(Id, Vec<Argument>)>>,
+    /// The type packs the structs declare.
+    packs: Packs,
 }
 
 /// A struct a value of some type holds.
@@ -1032,12 +1047,22 @@ impl Structs<'_> {
                 // its own parameters standing for one thing throughout.
                 // A wrong count has been reported; what is there is
                 // compared.
-                let mut bound: Bindings = Vec::new();
-                let fits = given.iter().zip(applied).all(|(given, applied)| {
-                    given
-                        .as_ref()
-                        .is_none_or(|given| may_be(given, applied, &mut bound))
-                });
+                let mut matching = Matching {
+                    bound: Vec::new(),
+                    packs: &self.packs,
+                };
+                // `collect` into an `Option` gives `None` when any
+                // item is `None`: what the parent is applied to is
+                // then not all known, and what is known is compared.
+                let fits = match given.iter().cloned().collect::<Option<Vec<Argument>>>() {
+                    Some(given) => arguments_may_be(&given, applied, &mut matching),
+                    None => given.iter().zip(applied).all(|(given, applied)| {
+                        given
+                            .as_ref()
+                            .is_none_or(|given| may_be(given, applied, &mut matching))
+                    }),
+                };
+                let bound = matching.bound;
                 // `insert` is false for a struct already seen.
                 if !fits || !seen.insert(*child) {
                     continue;
@@ -1396,6 +1421,23 @@ impl Structs<'_> {
 /// declared, with the argument found for it.
 type Bindings = Vec<(Location, Argument)>;
 
+/// The fewest and the most types a type pack holds (GEN-10); `None`
+/// for no most.
+type Cardinality = (u64, Option<u64>);
+
+/// Every type pack the program's structs declare, by where it is
+/// declared, with its cardinality.
+type Packs = HashMap<Location, Cardinality>;
+
+/// What matching a struct against one application of its parent has
+/// found, and what it reads.
+struct Matching<'a> {
+    /// What has been found for the struct's parameters.
+    bound: Bindings,
+    /// The type packs of the program's structs.
+    packs: &'a Packs,
+}
+
 /// True when a constant is one this pass cannot compare: it names a
 /// generic parameter, or is an expression not evaluated.
 fn is_open(constant: &Constant) -> bool {
@@ -1416,11 +1458,11 @@ fn is_open(constant: &Constant) -> bool {
 /// inside a type is matched there: with `Base<list<U>>`, a `Base<str>`
 /// is no `Child`. What is not known, and a parameter of the struct that
 /// writes `given`, may be anything.
-fn may_be(given: &Argument, applied: &Argument, bound: &mut Bindings) -> bool {
+fn may_be(given: &Argument, applied: &Argument, found: &mut Matching<'_>) -> bool {
     match (given, applied) {
-        (Argument::Type(given), Argument::Type(applied)) => type_may_be(given, applied, bound),
+        (Argument::Type(given), Argument::Type(applied)) => type_may_be(given, applied, found),
         (Argument::Constant(given), Argument::Constant(applied)) => {
-            constant_may_be(given, applied, bound)
+            constant_may_be(given, applied, found)
         }
         // A type against a constant has been reported as the wrong
         // kind of argument.
@@ -1428,12 +1470,88 @@ fn may_be(given: &Argument, applied: &Argument, bound: &mut Bindings) -> bool {
     }
 }
 
+/// The cardinality of the type pack `ty` names, when it names one.
+fn pack_of(ty: &Type, packs: &Packs) -> Option<Cardinality> {
+    match ty {
+        Type::Parameter { at, .. } => packs.get(at).copied(),
+        _ => None,
+    }
+}
+
+/// [`may_be`], for the arguments one generic type is given.
+fn arguments_may_be(given: &[Argument], applied: &[Argument], found: &mut Matching<'_>) -> bool {
+    let packs = found.packs;
+    in_sequence(
+        given,
+        applied,
+        &|argument| match argument {
+            Argument::Type(ty) => pack_of(ty, packs),
+            Argument::Constant(_) => None,
+        },
+        &mut |given, applied| may_be(given, applied, found),
+    )
+}
+
+/// True when the sequence a struct writes, `applied`, may be the
+/// sequence `given`: the arguments of a generic type, or the elements
+/// of a tuple. `pack_of` gives the cardinality of an item that passes
+/// on a type pack, and `each` matches one item with another.
+///
+/// A type pack passed on stands for a run of items (GEN-10), as many
+/// as the items before and after it leave, which is a number the pack
+/// admits. With `struct Child<...Us> : Base<Row<Us, i64>>`, a
+/// `Base<Row<str, f64, i64>>` may be a `Child`, `Us` holding `str` and
+/// `f64`; a `Base<Row<str, f64>>` is none. Which types a pack holds is
+/// not recorded. Where `given` passes on a pack, or `applied` two, the
+/// places are not known and the sequences may be one.
+fn in_sequence<T>(
+    given: &[T],
+    applied: &[T],
+    pack_of: &dyn Fn(&T) -> Option<Cardinality>,
+    each: &mut dyn FnMut(&T, &T) -> bool,
+) -> bool {
+    if given.iter().any(|item| pack_of(item).is_some()) {
+        return true;
+    }
+    let mut passed_on = applied
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| pack_of(item).map(|cardinality| (index, cardinality)));
+    let Some((index, (minimum, maximum))) = passed_on.next() else {
+        // No pack: item for item.
+        return given.len() == applied.len()
+            && given
+                .iter()
+                .zip(applied)
+                .all(|(given, applied)| each(given, applied));
+    };
+    if passed_on.next().is_some() {
+        return true;
+    }
+    // The items after the pack are the last of `given`.
+    let after = applied.len() - index - 1;
+    let Some(held) = given.len().checked_sub(index + after) else {
+        return false;
+    };
+    let held = held as u64;
+    if held < minimum || maximum.is_some_and(|maximum| held > maximum) {
+        return false;
+    }
+    let before = given[..index].iter().zip(&applied[..index]);
+    let last = given[given.len() - after..]
+        .iter()
+        .zip(&applied[index + 1..]);
+    before
+        .chain(last)
+        .all(|(given, applied)| each(given, applied))
+}
+
 /// [`may_be`], for a type.
-fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
+fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
     match (given, applied) {
         // In what a struct gives its parent, a parameter is the
         // struct's own.
-        (_, Type::Parameter { at, .. }) => bind(*at, Argument::Type(given.clone()), bound),
+        (_, Type::Parameter { at, .. }) => bind(*at, Argument::Type(given.clone()), found),
         (Type::Unknown | Type::Parameter { .. }, _) | (_, Type::Unknown) => true,
         (
             Type::Named {
@@ -1451,17 +1569,16 @@ fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
         ) => {
             module == other_module
                 && declaration == other_declaration
-                && arguments
-                    .iter()
-                    .zip(other_arguments)
-                    .all(|(given, applied)| may_be(given, applied, bound))
+                && arguments_may_be(arguments, other_arguments, found)
         }
         (Type::Tuple(given), Type::Tuple(applied)) => {
-            given.len() == applied.len()
-                && given
-                    .iter()
-                    .zip(applied)
-                    .all(|(given, applied)| type_may_be(given, applied, bound))
+            let packs = found.packs;
+            in_sequence(
+                given,
+                applied,
+                &|ty| pack_of(ty, packs),
+                &mut |given, applied| type_may_be(given, applied, found),
+            )
         }
         (
             Type::List { element, size },
@@ -1471,23 +1588,23 @@ fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
             },
         ) => {
             let sizes = match (size, other_size) {
-                (Some(size), Some(other_size)) => constant_may_be(size, other_size, bound),
+                (Some(size), Some(other_size)) => constant_may_be(size, other_size, found),
                 (size, other_size) => size.is_none() == other_size.is_none(),
             };
-            sizes && type_may_be(element, other_element, bound)
+            sizes && type_may_be(element, other_element, found)
         }
         (Type::Set(given), Type::Set(applied))
         | (Type::Ref(given), Type::Ref(applied))
         | (Type::Atomic(given), Type::Atomic(applied))
         | (Type::Delta(given), Type::Delta(applied))
-        | (Type::Nullable(given), Type::Nullable(applied)) => type_may_be(given, applied, bound),
+        | (Type::Nullable(given), Type::Nullable(applied)) => type_may_be(given, applied, found),
         (
             Type::Dict { key, value },
             Type::Dict {
                 key: other_key,
                 value: other_value,
             },
-        ) => type_may_be(key, other_key, bound) && type_may_be(value, other_value, bound),
+        ) => type_may_be(key, other_key, found) && type_may_be(value, other_value, found),
         (
             Type::Rolling {
                 value,
@@ -1504,9 +1621,9 @@ fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
             // none written has its maximum for one.
             let minimum = minimum.as_ref().unwrap_or(maximum);
             let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
-            constant_may_be(maximum, other_maximum, bound)
-                && constant_may_be(minimum, other_minimum, bound)
-                && type_may_be(value, other_value, bound)
+            constant_may_be(maximum, other_maximum, found)
+                && constant_may_be(minimum, other_minimum, found)
+                && type_may_be(value, other_value, found)
         }
         (
             Type::Result { value, error },
@@ -1514,16 +1631,16 @@ fn type_may_be(given: &Type, applied: &Type, bound: &mut Bindings) -> bool {
                 value: other_value,
                 error: other_error,
             },
-        ) => type_may_be(value, other_value, bound) && type_may_be(error, other_error, bound),
+        ) => type_may_be(value, other_value, found) && type_may_be(error, other_error, found),
         // Two scalars, or two types of different forms.
         (given, applied) => given == applied,
     }
 }
 
 /// [`may_be`], for a constant.
-fn constant_may_be(given: &Constant, applied: &Constant, bound: &mut Bindings) -> bool {
+fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_>) -> bool {
     if let ConstantValue::Parameter { at, .. } = &applied.value {
-        return bind(*at, Argument::Constant(given.clone()), bound);
+        return bind(*at, Argument::Constant(given.clone()), found);
     }
     may_be_one(given, applied)
 }
@@ -1568,9 +1685,9 @@ fn may_be_one(left: &Constant, right: &Constant) -> bool {
 
 /// Records that the parameter declared at `at` stands for `argument`.
 /// False when it already stands for something else.
-fn bind(at: Location, argument: Argument, bound: &mut Bindings) -> bool {
-    let Some((_, earlier)) = bound.iter().find(|(known, _)| *known == at) else {
-        bound.push((at, argument));
+fn bind(at: Location, argument: Argument, found: &mut Matching<'_>) -> bool {
+    let Some((_, earlier)) = found.bound.iter().find(|(known, _)| *known == at) else {
+        found.bound.push((at, argument));
         return true;
     };
     // Both are written by the struct that has the field: a parameter

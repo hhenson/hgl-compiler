@@ -752,6 +752,15 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "struct Named<const S: str> { width: i64 }\n",
         "struct Spelt : Base<Named<\"A\">> { spelt: Base<Named<\"\\u{41}\">> }\n",
         "struct Unspelt : Base<Named<\"A\">> { other: Base<Named<\"B\">> }\n",
+        // GEN-10: a pack passed on stands for the arguments between
+        // those before it and those after, as many as it admits.
+        "struct Row<...Ts> { width: i64 }\n",
+        "struct Packed<...Us> : Base<Row<Us, i64>> { packed: Base<Row<str, f64, i64>> }\n",
+        "struct Ended<...Us> : Base<Row<Us, i64>> { other: Base<Row<str, f64>> }\n",
+        "struct Counted<...Us{2}> : Base<Row<Us>> { other: Base<Row<str>> }\n",
+        "abstract struct Wide<...Ts> { width: i64 }\n",
+        "struct Two<...Us{2}> : Wide<Us> { two: Wide<i64, str> }\n",
+        "struct Triple<...Us{2}> : Wide<Us> { other: Wide<i64, str, f64> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -766,6 +775,8 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:21:40 type/field.recursive TYPE-6",
             "m.hgl:23:35 type/field.recursive TYPE-6",
             "m.hgl:26:35 type/field.recursive TYPE-6",
+            "m.hgl:29:45 type/field.recursive TYPE-6",
+            "m.hgl:33:35 type/field.recursive TYPE-6",
         ]
     );
 }
