@@ -408,6 +408,28 @@ impl Reader<'_> {
                 },
             })
             .collect();
+
+        // The type of each value parameter. A size inside one may name
+        // another, declared before it or after:
+        // `<const N: list<i64, D>, const D: duration>`. So each is read
+        // twice: first to learn what it is, with what is reported set
+        // aside and nothing recorded; then, with the type of every one
+        // known, for the record.
+        //
+        // `mem::replace` puts an empty sink where the real one was and
+        // gives the real one back, to be restored after.
+        let reported = std::mem::replace(self.diagnostics, Diagnostics::new());
+        let recorded = self.written.len();
+        self.value_parameter_types(&forms);
+        *self.diagnostics = reported;
+        self.written.truncate(recorded);
+        self.read.clear();
+        self.value_parameter_types(&forms);
+    }
+
+    /// Reads the type of each `const N: V` among `forms` into
+    /// `self.generics`.
+    fn value_parameter_types(&mut self, forms: &[(SyntaxNode, SyntaxToken, Form)]) {
         for (index, (parameter, _, form)) in forms.iter().enumerate() {
             if let (Form::Value, Some(written)) = (form, type_child(parameter)) {
                 self.generics[index].kind = GenericKind::Value(self.outermost(&written));

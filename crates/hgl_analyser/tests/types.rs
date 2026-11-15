@@ -739,6 +739,45 @@ fn a_lists_size_is_a_nonnegative_count() {
     assert_ne!(ty("k").to_string(), "list<f64, 2>");
 }
 
+/// GEN-1: "Generic scope covers the whole declaration." A size that
+/// names a generic value parameter is checked against that parameter's
+/// type wherever the parameter is declared, before the use or after.
+#[test]
+fn a_size_is_checked_against_a_parameter_declared_after_it() {
+    let checked = module(concat!(
+        "fn good<const N: list<i64, C>, const C: i64>(value: f64) {}\n",
+        "fn later<const N: list<i64, D>, const D: duration>(value: f64) {}\n",
+        "fn earlier<const D: duration, const N: list<i64, D>>(value: f64) {}\n",
+    ));
+    // Each once: reading a type to learn it reports nothing.
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:29 local:type/list.size TYPE-10",
+            "m.hgl:4:50 local:type/list.size TYPE-10",
+        ]
+    );
+    assert_eq!(
+        signature(&checked, "later"),
+        "<const N: list<i64, D>, const D: duration>(value: f64)"
+    );
+    // And each written type is recorded once.
+    assert_eq!(
+        written(&checked),
+        [
+            "list<i64, C>",
+            "i64",
+            "f64",
+            "list<i64, D>",
+            "duration",
+            "f64",
+            "duration",
+            "list<i64, D>",
+            "f64",
+        ]
+    );
+}
+
 /// TYPE-11: "A rolling maximum/minimum has one constant kind: tick count
 /// or duration. Omitted minimum equals maximum."
 #[test]
