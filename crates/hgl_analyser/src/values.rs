@@ -2189,7 +2189,8 @@ impl<'a> Typer<'a> {
     /// one of them still names a generic parameter.
     ///
     /// The requirement is read where it is `O in {types}` for the bare
-    /// parameter `O` the result is, alone or joined to others by `&&`.
+    /// parameter `O` the result is, alone or joined to others by `&&`:
+    /// where several are so joined, the result is in every set.
     fn result_among(
         &self,
         operator: OperatorRef,
@@ -2203,26 +2204,49 @@ impl<'a> Typer<'a> {
         let module = &self.program.modules[operator.module];
         let declaration = &module.declarations[operator.declaration];
         let clause = child(&declaration.syntax, SyntaxKind::RequiresClause)?;
-        let set = result_set(&clause.children().next()?, name)?;
+        let mut sets = Vec::new();
+        result_sets(&clause.children().next()?, name, &mut sets);
         let file = module.files[declaration.file].file;
-        let mut among = Vec::new();
-        for member in set.children() {
-            if !is_type(member.kind()) {
-                return None;
+        // The types one set admits; `None` for a set with a member that
+        // is no type, or that still names a generic parameter. Such a
+        // set says nothing here.
+        let types_of = |set: &SyntaxNode| -> Option<Vec<Type>> {
+            let mut types = Vec::new();
+            for member in set.children() {
+                if !is_type(member.kind()) {
+                    return None;
+                }
+                // What the `read` pass said the type written there
+                // means.
+                let start = member.span().start;
+                let written = module
+                    .written
+                    .iter()
+                    .find(|written| written.at.file == file && written.at.span.start == start)?;
+                let ty = placed(substitute_within(&written.ty, map), own);
+                if !whole(&ty) {
+                    return None;
+                }
+                types.push(ty);
             }
-            // What the `read` pass said the type written there means.
-            let start = member.span().start;
-            let written = module
-                .written
-                .iter()
-                .find(|written| written.at.file == file && written.at.span.start == start)?;
-            let ty = placed(substitute_within(&written.ty, map), own);
-            if !whole(&ty) {
-                return None;
-            }
-            among.push(ty);
+            Some(types)
+        };
+        // Requirements joined by `&&` all hold: the result is in every
+        // set.
+        let mut among: Option<Vec<Type>> = None;
+        for set in &sets {
+            let Some(types) = types_of(set) else {
+                continue;
+            };
+            among = Some(match among {
+                None => types,
+                Some(mut among) => {
+                    among.retain(|ty| types.contains(ty));
+                    among
+                }
+            });
         }
-        Some(among)
+        among
     }
 
     /// The call of an operator for which no candidate is selected: its
@@ -3319,26 +3343,35 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
     Some(places)
 }
 
-/// The set of a requirement `name in {...}` in `node`: the relation
-/// itself, a side of an `&&`, or one of those in parentheses.
-fn result_set(node: &SyntaxNode, name: &str) -> Option<SyntaxNode> {
+/// The set of each requirement `name in {...}` in `node`: the relation
+/// itself, the sides of an `&&`, and those in parentheses. Each must
+/// hold, so the name is in every one of them.
+fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
     match node.kind() {
         SyntaxKind::ConstraintRelation => {
             let operands: Vec<SyntaxNode> = node.children().collect();
             let [left, right] = operands.as_slice() else {
-                return None;
+                return;
             };
             let named = left.kind() == SyntaxKind::NamedType
                 && left.text().to_string().trim() == name
                 && right.kind() == SyntaxKind::ConstraintSet
                 && tokens(node).any(|token| token.text() == "in");
-            named.then(|| right.clone())
+            if named {
+                sets.push(right.clone());
+            }
         }
         SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
-            node.children().find_map(|side| result_set(&side, name))
+            for side in node.children() {
+                result_sets(&side, name, sets);
+            }
         }
-        SyntaxKind::ConstraintParen => result_set(&node.children().next()?, name),
-        _ => None,
+        SyntaxKind::ConstraintParen => {
+            if let Some(inner) = node.children().next() {
+                result_sets(&inner, name, sets);
+            }
+        }
+        _ => {}
     }
 }
 

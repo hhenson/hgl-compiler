@@ -2186,6 +2186,32 @@ fn an_operators_requirement_says_what_its_result_may_be() {
     );
 }
 
+/// GEN-15: constraints joined by `&&` all hold. Two requirements of an
+/// operator's result so joined admit only a result that is in both
+/// sets.
+#[test]
+fn an_operators_joined_requirements_of_its_result_all_hold() {
+    let checked = module(concat!(
+        "operator both<V, O>(value: V) -> O\n",
+        "    requires O in {i64, str} && (O in {str, bool})\n",
+        "impl const fn both(value: i64) -> i64 => 1\n",
+        "impl const fn both(value: i64) -> str => \"x\"\n",
+        "operator neither<V, O>(value: V) -> O\n",
+        "    requires O in {i64} && O in {str}\n",
+        "impl const fn neither(value: i64) -> i64 => 1\n",
+        "impl const fn neither(value: i64) -> str => \"x\"\n",
+        "const fn uses(n: i64) {\n",
+        "    let one = both(n)\n",
+        "    let none = neither(n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:12:16 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[1], "one: str");
+}
+
 /// EXPR-12: "Resolve configuration that selects an expression's source
 /// result type during source checking. A runtime-varying selector
 /// cannot change that type." An option a candidate's condition reads is
