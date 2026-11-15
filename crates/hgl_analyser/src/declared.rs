@@ -317,6 +317,10 @@ struct Held {
     /// True when it is reached through the elements of a collection
     /// outside an `atomic<...>`.
     in_collection: bool,
+    /// True when it is reached through the elements of a collection
+    /// that may be empty: an unsized list, a list of size zero, a set
+    /// or a dictionary (TYPE-6).
+    may_be_empty: bool,
     /// The struct the type names that leads to it: itself, or the
     /// abstract struct it inherits from.
     written: Id,
@@ -1052,7 +1056,9 @@ impl Structs<'_> {
     /// arguments in place.
     fn holds(&self, ty: &Type) -> Vec<Held> {
         let mut found = Vec::new();
-        self.walk(ty, false, &mut found, &mut Vec::new(), &mut { EXPANSIONS });
+        self.walk(ty, false, false, &mut found, &mut Vec::new(), &mut {
+            EXPANSIONS
+        });
         found
     }
 
@@ -1070,6 +1076,7 @@ impl Structs<'_> {
         id: Id,
         arguments: &[Argument],
         in_collection: bool,
+        may_be_empty: bool,
         found: &mut Vec<Held>,
     ) {
         // The structs found, each added once.
@@ -1147,6 +1154,7 @@ impl Structs<'_> {
                     found.push(Held {
                         id: *child,
                         in_collection,
+                        may_be_empty,
                         written: id,
                     });
                 }
@@ -1188,6 +1196,7 @@ impl Structs<'_> {
         &self,
         ty: &Type,
         in_collection: bool,
+        may_be_empty: bool,
         found: &mut Vec<Held>,
         path: &mut Vec<Id>,
         budget: &mut u32,
@@ -1203,14 +1212,15 @@ impl Structs<'_> {
                 found.push(Held {
                     id,
                     in_collection,
+                    may_be_empty,
                     written: id,
                 });
                 // TYPE-6: "A field whose type is an abstract struct
                 // holds every struct that inherits from it."
-                self.descendants(id, arguments, in_collection, found);
+                self.descendants(id, arguments, in_collection, may_be_empty, found);
                 for argument in arguments {
                     if let Argument::Type(argument) = argument {
-                        self.walk(argument, in_collection, found, path, budget);
+                        self.walk(argument, in_collection, may_be_empty, found, path, budget);
                     }
                 }
                 // Only a struct given arguments has fields that depend
@@ -1237,38 +1247,50 @@ impl Structs<'_> {
                     }
                     *budget -= 1;
                     let given = self.in_place(&field.ty, id, arguments);
-                    self.walk(&given, in_collection, found, path, budget);
+                    self.walk(&given, in_collection, may_be_empty, found, path, budget);
                 }
                 path.pop();
             }
             Type::Tuple(elements) => {
                 for element in elements {
-                    self.walk(element, in_collection, found, path, budget);
+                    self.walk(element, in_collection, may_be_empty, found, path, budget);
                 }
             }
-            Type::List { element, .. } => self.walk(element, true, found, path, budget),
-            Type::Set(element) => self.walk(element, true, found, path, budget),
-            Type::Dict { key, value } => {
-                self.walk(key, true, found, path, budget);
-                self.walk(value, true, found, path, budget);
+            // TYPE-6: "a collection that may be empty, an unsized list, a
+            // list of size zero, a set, or a dictionary".
+            Type::List { element, size } => {
+                let empty = match size {
+                    None => true,
+                    Some(size) => {
+                        matches!(size.value, ConstantValue::Int(0) | ConstantValue::Unbounded)
+                    }
+                };
+                self.walk(element, true, may_be_empty || empty, found, path, budget);
             }
-            Type::Rolling { value, .. } => self.walk(value, true, found, path, budget),
+            Type::Set(element) => self.walk(element, true, true, found, path, budget),
+            Type::Dict { key, value } => {
+                self.walk(key, true, true, found, path, budget);
+                self.walk(value, true, true, found, path, budget);
+            }
+            Type::Rolling { value, .. } => {
+                self.walk(value, true, may_be_empty, found, path, budget);
+            }
             // Inside an `atomic<...>` a collection is part of one
             // snapshot. Only a collection outside it is on the path.
             Type::Atomic(inner) => {
                 let mut inside = Vec::new();
-                self.walk(inner, false, &mut inside, path, budget);
+                self.walk(inner, false, may_be_empty, &mut inside, path, budget);
                 found.extend(inside.into_iter().map(|held| Held {
                     in_collection,
                     ..held
                 }));
             }
             Type::Ref(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
-                self.walk(inner, in_collection, found, path, budget);
+                self.walk(inner, in_collection, may_be_empty, found, path, budget);
             }
             Type::Result { value, error } => {
-                self.walk(value, in_collection, found, path, budget);
-                self.walk(error, in_collection, found, path, budget);
+                self.walk(value, in_collection, may_be_empty, found, path, budget);
+                self.walk(error, in_collection, may_be_empty, found, path, budget);
             }
             Type::Scalar(_)
             | Type::Parameter { .. }
@@ -1279,10 +1301,14 @@ impl Structs<'_> {
     }
 
     /// TYPE-6: "Recursive fields stay within their defining module. So
-    /// that the recursion can end, a recursive field is optional
-    /// (TYPE-4) ... Descendants cannot remove a null default it has.
-    /// Cycles through ... collection elements outside an `atomic<...>`"
-    /// are rejected.
+    /// that the recursion can end, a recursive field has a value that
+    /// holds no struct of its cycle. It is optional (TYPE-4) ... or,
+    /// inside an `atomic<...>`, it holds the struct only as elements of
+    /// a collection that may be empty ... A recursive field's default,
+    /// its own or a descendant's, is such a value: `null`, or the empty
+    /// collection `[]`. Descendants cannot remove a null default it has
+    /// ... Cycles through ... collection elements outside an
+    /// `atomic<...>`" are rejected.
     fn recursion(&mut self, ids: &[Id]) {
         // A graph with a node for each struct, and an edge from each to
         // every struct it holds: the structs its fields hold, those it
@@ -1382,11 +1408,15 @@ impl Structs<'_> {
                     edge,
                     " through the elements of a collection outside an `atomic<...>`".to_string(),
                 ));
-            } else if !edge.in_form {
+            } else if !edge.in_form && !back.iter().all(|held| held.may_be_empty) {
+                // Optional, and so able to be null; or holding the
+                // struct only as elements of a collection that may be
+                // empty.
                 faulty.push((
                     edge,
                     ": a recursive field is optional, its type nullable or an `atomic<...>` \
-                     of a nullable type"
+                     of a nullable type, or holds its struct only as elements of a \
+                     collection that may be empty"
                         .to_string(),
                 ));
             } else if !edge.kept && !removed_here {
@@ -1446,7 +1476,12 @@ impl Structs<'_> {
             ));
         }
 
-        // "Descendants cannot remove a null default it has."
+        // "A recursive field's default, its own or a descendant's, is
+        // such a value: `null`, or the empty collection `[]`.
+        // Descendants cannot remove a null default it has, not for an
+        // empty collection either."
+        let faulty_fields: HashSet<(Id, usize)> =
+            faulty.iter().map(|(edge, _)| edge.origin).collect();
         for &id in ids {
             let Some(read) = self.struct_type(id) else {
                 continue;
@@ -1461,26 +1496,46 @@ impl Structs<'_> {
                 continue;
             }
             let inherited = self.inherited(id);
-            // The struct and every struct it inherits from: the field is
-            // one to keep null when it is recursive in any of them.
+            // The struct and every struct it inherits from: a field is
+            // recursive here when it is in any of them.
             let line = self.line(id);
-            for field in &read.fields {
-                let overrides_recursive = field.has_default
-                    && !field.null_default
+            let is_recursive = |origin: (Id, usize)| {
+                recursive
+                    .iter()
+                    .any(|(owner, declared)| *declared == origin && line.contains(owner))
+            };
+            for (index, field) in read.fields.iter().enumerate() {
+                if !field.has_default || field.null_default {
+                    continue;
+                }
+                // The field as a parent declares it, when this struct
+                // gives a parent's field its default.
+                let from_parents: Vec<&Introduced> = inherited
+                    .iter()
+                    .filter(|parent| parent.name == field.name && is_recursive(parent.origin))
+                    .collect();
+                // The field as this struct declares it. One reported
+                // above for its type is not reported for its default
+                // as well.
+                let own = field.ty.is_some()
+                    && is_recursive((id, index))
+                    && !faulty_fields.contains(&(id, index));
+                if from_parents.iter().any(|parent| parent.declared_null) {
                     // Only a field declared with a null default has one
                     // to keep.
-                    && inherited.iter().any(|parent| {
-                        parent.name == field.name
-                            && parent.declared_null
-                            && recursive.iter().any(|(owner, origin)| {
-                                *origin == parent.origin && line.contains(owner)
-                            })
-                    });
-                if overrides_recursive {
                     reports.push((
                         field.at,
                         format!(
                             "`{}` is a recursive field, and its default stays null",
+                            field.name
+                        ),
+                    ));
+                } else if (own || !from_parents.is_empty()) && !field.empty_default {
+                    reports.push((
+                        field.at,
+                        format!(
+                            "`{}` is a recursive field, and its default is `null` or the \
+                             empty collection `[]`",
                             field.name
                         ),
                     ));

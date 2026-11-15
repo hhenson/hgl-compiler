@@ -441,6 +441,23 @@ fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
         .find_map(|element| element.into_node())
 }
 
+/// True when an expression is the empty collection `[]`, in parentheses
+/// or not (EXPR-9: "Empty brackets have no entries").
+fn is_empty_sequence(expression: &SyntaxNode) -> bool {
+    let mut node = expression.clone();
+    // The parser bounds how deep parentheses nest; so does this.
+    for _ in 0..128 {
+        if node.kind() != SyntaxKind::ParenExpr {
+            break;
+        }
+        match node.children().next() {
+            Some(inner) => node = inner,
+            None => return false,
+        }
+    }
+    node.kind() == SyntaxKind::SequenceExpr && node.children().next().is_none()
+}
+
 /// True when an expression is the literal `null`, in parentheses or
 /// not: "Parentheses select grouping" (EXPR-1), so `(null)` is `null`.
 fn is_null(expression: &SyntaxNode) -> bool {
@@ -746,16 +763,16 @@ impl Reader<'_> {
                 self.note_values_in(default);
             }
             // The default is the member's child that is no type.
-            let null_default = member
-                .children()
-                .find(|part| !is_type(part.kind()))
-                .is_some_and(|default| is_null(&default));
+            let written = member.children().find(|part| !is_type(part.kind()));
+            let null_default = written.as_ref().is_some_and(is_null);
+            let empty_default = written.as_ref().is_some_and(is_empty_sequence);
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
                 ty,
                 has_default: has_token(&member, SyntaxKind::Eq),
                 null_default,
+                empty_default,
                 default_at: default.map(|default| self.at(default.span())),
             });
         }
