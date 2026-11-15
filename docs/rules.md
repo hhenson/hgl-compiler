@@ -128,7 +128,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
 | TYPE-6 | analyser | planned | Recursive struct edges; inheritance and collection cycles rejected |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
-| TYPE-7 | analyser | planned | Enum members as typed constants; `.member` given its enum by the type its position expects; numbering, range and duplicates; checked construction |
+| TYPE-7 | analyser | planned | Enum members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; numbering, range and duplicates; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
 | TYPE-8 | analyser | planned | Typing of `any` |
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |
@@ -330,7 +330,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-4 | analyser | planned | `assert` needs a wiring-time bool |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | planned | Eval target selection and argument binding |
-| TST-6 | runner | planned | Dense traces: positions, horizon, `_` |
+| TST-6 | runner | planned | Dense traces: positions, `_` placeholders, a result ending at its last publication |
 | TST-7 | analyser | planned | Timed traces: increasing keys, no `_`, one style in an eval |
 | TST-7 | runner | planned | Sparse expectations match the actual ticks and times |
 | TST-8 | runner | planned | Eval builds core replay, the target and core record; fresh state for each invocation |
@@ -410,8 +410,8 @@ the same numeric rules the transpiler rows give.
 | CONF-3 | runner | planned | `conformance` and `conformance.rejections` assembled from parts; never shipped |
 | CONF-4 | runner | planned | Conformance results reported apart from this repository's own tests |
 | CEVAL-1 | runner | planned | Eval uses core's designated replay and record |
-| CEVAL-2 | runner | planned | Typed input data omits silent cells; the horizon is kept |
+| CEVAL-2 | runner | planned | Typed replay entries for present publications; a dense placeholder adds no entry and no run bound |
 | CEVAL-3 | transpiler | planned | Replay publishes present entries; silence publishes nothing |
 | CEVAL-4 | transpiler | planned | The recorder retains each publication and its time |
-| CEVAL-5 | runner | planned | A fresh run and recording for each eval; dense result construction |
+| CEVAL-5 | runner | planned | A fresh run and recording for each eval; dense results built from the recording by TST-6 |
 | CEVAL-6 | runner | planned | Failure or a missing recording is an error, never an empty result |

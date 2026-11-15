@@ -2227,7 +2227,8 @@ fn a_leading_dot_names_a_member_of_the_expected_enum() {
     // TYPE-7: "Where a position expects the enum's type, `.member`
     // names one too: the value of an argument or configuration option of
     // that type, an initializer or result declared with it, an operand
-    // compared with it." The chapter's illustration:
+    // compared with it, a `switch` label for a selector of it." The
+    // chapter's illustration:
     assert_eq!(
         statements("if side == .buy { return .sell }"),
         "ExprStmt[IfExpr[\"if\" BinaryExpr[NameExpr[\"side\"] \"==\" ImpliedMember[\".\" \"buy\"]] \
@@ -2239,12 +2240,18 @@ fn a_leading_dot_names_a_member_of_the_expected_enum() {
          ArgList[\"(\" Arg[ImpliedMember[\".\" \"buy\"]] \")\"]] \"==\" \
          MemberExpr[NameExpr[\"Side\"] \".\" \"sell\"]]]"
     );
-    // An argument by name, an initializer, a sequence, a case label.
+    // "in a `switch` on a `Side`, `case .buy:` takes it from the
+    // selector."
+    assert_eq!(
+        statements("switch side {\n    case .buy:\n        step()\n}"),
+        "SwitchStmt[\"switch\" NameExpr[\"side\"] \"{\" SwitchCase[\"case\" ImpliedMember[\".\" \"buy\"] \":\" \
+         ExprStmt[CallExpr[NameExpr[\"step\"] ArgList[\"(\" \")\"]]]] \"}\"]"
+    );
+    // An argument by name, an initializer, a sequence.
     for text in [
         "place(side: .buy, size: 1)",
         "let side: Side = .buy",
         "let sides: list<Side> = [.buy, .sell]",
-        "switch side {\n    case .buy:\n        step()\n}",
     ] {
         assert!(statements(text).contains("ImpliedMember["), "{text}");
     }
