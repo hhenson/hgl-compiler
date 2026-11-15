@@ -1366,11 +1366,17 @@ impl<'a> Typer<'a> {
     /// a generic parameter unresolved." GEN-1: "Repeated parameters
     /// require equivalent types or equal constants."
     ///
-    /// What a generic parameter stands for is taken, in order, from
-    /// what the call writes, from the type its place expects, and from
-    /// the arguments: the first that says what a parameter is decides
-    /// it, and every argument is then checked against its parameter's
-    /// type with that in place.
+    /// What the call writes decides first (GEN-8). What is left is
+    /// found from the type the call's place expects of the result and
+    /// from the arguments, in the order written: the first argument
+    /// that says what a parameter is decides it, and every argument is
+    /// then checked against its parameter's type with that in place.
+    ///
+    /// GEN-2 gives the expected type and the arguments no order. Where
+    /// both say what one parameter is and they differ, as in
+    /// `let real: f64 = same(1, 2)`, which of them decides is not
+    /// settled (hgl_spec issue 44): the call is then not judged. It has
+    /// no type and nothing is reported of it.
     ///
     /// Not read here: a function with a type pack or a pack parameter.
     /// A type of it that names a generic parameter is then not known.
@@ -1441,6 +1447,7 @@ impl<'a> Typer<'a> {
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
         // result given to a `T?` place is the `T`.
+        let written = found.clone();
         if let (Some(result), Some(expected)) = (&signature.result, expected)
             && !open(expected)
         {
@@ -1470,6 +1477,11 @@ impl<'a> Typer<'a> {
                 .collect(),
             generics,
         };
+        // Where an argument says of a parameter something other than
+        // the expected type does, the call is not judged.
+        if self.sources_differ(name, list, &places, &written, &found) {
+            return self.unread_call(list);
+        }
         let reported = self.diagnostics.len();
         let (arguments, found) =
             self.infer_arguments(name, list, &places, found, Takes::Parameters);
@@ -1527,6 +1539,66 @@ impl<'a> Typer<'a> {
             generics: resolved,
         };
         (ExprKind::Call { callee, arguments }, ty)
+    }
+
+    /// True when the arguments of a call say of a generic parameter
+    /// something other than the type the call's place expects does.
+    /// `written` is what the call writes of each parameter, and `found`
+    /// that with what the expected type says added.
+    ///
+    /// GEN-2 names both sources and gives them no order, so a call for
+    /// which they differ is not judged here (hgl_spec issue 44). The
+    /// arguments are read to learn what they say, with nothing expected
+    /// of them, and the reading is taken back: nothing it reports or
+    /// assigns stays.
+    fn sources_differ(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        places: &Places,
+        written: &[Option<Argument>],
+        found: &[Option<Argument>],
+    ) -> bool {
+        // The parameters the expected type says something of.
+        let expected: Vec<Location> = places
+            .generics
+            .iter()
+            .zip(written.iter().zip(found))
+            .filter(|(_, (written, found))| written.is_none() && found.is_some())
+            .map(|(generic, _)| generic.at)
+            .collect();
+        if expected.is_empty() {
+            return false;
+        }
+        // Past the function's bound nothing more is tried, and the call
+        // is not judged.
+        if !self.may_reread() {
+            return true;
+        }
+        let mark = self.mark();
+        let assigned = self.assign(name, list, places.slots, Takes::Parameters);
+        let mut inputs = written.to_vec();
+        for (slot, node) in &assigned {
+            let Some(index) = *slot else {
+                continue;
+            };
+            let pattern = places.patterns[index];
+            // `null` and `.member` take their type from the place and
+            // say nothing of it.
+            if takes_its_type(node) || !mentions(pattern, &expected) {
+                continue;
+            }
+            let value = self.expression(node, Some(&Type::Unknown));
+            infer(pattern, &value.ty, places.generics, &mut inputs);
+        }
+        self.take_back(mark, false);
+        inputs
+            .iter()
+            .zip(found)
+            .zip(written)
+            .any(|((input, found), written)| {
+                written.is_none() && input.is_some() && found.is_some() && input != found
+            })
     }
 
     /// What the generic arguments a call writes say of the callee's

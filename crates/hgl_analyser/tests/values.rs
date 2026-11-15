@@ -1650,9 +1650,10 @@ fn a_generic_function_is_resolved_at_each_call() {
         "    let texts = same(text, \"b\")\n",
         "    let head = first([1.5, 2.5])\n",
         "    let both = pair(text, 1)\n",
-        // From the type the place expects of the result.
+        // From the type the place expects of the result, which the
+        // arguments agree with: the `2` is then widened (EXPR-5).
         "    let names: list<str> = repeat(3)\n",
-        "    let real: f64 = same(1, 2)\n",
+        "    let real: f64 = same(1.5, 2)\n",
         "    let maybe: i64? = same(1, 2)\n",
         // An argument that is itself a generic call, and a field.
         "    let nested = same(same(1, 2), 3)\n",
@@ -1688,7 +1689,7 @@ fn a_repeated_generic_parameter_is_one_type() {
         "const fn uses(count: i64) {\n",
         "    let a = same(\"a\", 1)\n",
         // Only a literal is widened (EXPR-5): `count` is an `i64`.
-        "    let b: f64 = same(1, count)\n",
+        "    let b: f64 = same(1.5, count)\n",
         "    let c = same(right: 1, left: \"a\")\n",
         "}\n",
     ));
@@ -1696,7 +1697,7 @@ fn a_repeated_generic_parameter_is_one_type() {
         checked.summary(),
         [
             "m.hgl:4:23 type/type.mismatch EXPR-5",
-            "m.hgl:5:26 type/type.mismatch EXPR-5",
+            "m.hgl:5:28 type/type.mismatch EXPR-5",
             "m.hgl:6:34 type/type.mismatch EXPR-5",
         ]
     );
@@ -1708,6 +1709,37 @@ fn a_repeated_generic_parameter_is_one_type() {
             "this is `str`, and the parameter `left` is `i64`",
         ]
     );
+}
+
+/// GEN-2 names the sources, "actual inputs, requested output, or
+/// solvable equality", and gives them no order. Where the type expected
+/// and an argument each say what a parameter is and differ, which
+/// decides is the specification's to say (hgl_spec issue 44), so the
+/// call is not judged: it has no type, and nothing is reported of it.
+#[test]
+fn a_call_its_sources_differ_on_is_not_judged() {
+    let checked = module(concat!(
+        "const fn same<T>(left: T, right: T) -> T => left\n",
+        "const fn uses(count: i64) {\n",
+        // The arguments say `i64`, and the place `f64`.
+        "    let real: f64 = same(1, 2)\n",
+        "    let other: f64 = same(count, 2)\n",
+        // What the call writes decides (GEN-8): this one is judged.
+        "    let written: f64 = same<f64>(1, 2)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let types: Vec<String> = body(&checked, "uses")
+        .statements
+        .iter()
+        .map(|statement| match statement {
+            Stmt::Declare {
+                value: Some(value), ..
+            } => value.ty.to_string(),
+            other => panic!("a declaration with a value: {other:?}"),
+        })
+        .collect();
+    assert_eq!(types, ["_", "_", "f64"]);
 }
 
 /// GEN-8: "A call may supply its generic arguments as a generic
