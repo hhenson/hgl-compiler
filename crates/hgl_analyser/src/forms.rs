@@ -16,7 +16,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::program::{DeclarationKind, Program, Role};
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 /// Checks every declaration of the program.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
@@ -34,12 +34,43 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 hooks(node, file, role, diagnostics);
             }
             integer_range(node, file, diagnostics);
+            cardinalities(node, file, diagnostics);
         }
         for test in &module.tests {
             integer_range(&test.syntax, module.files[test.file].file, diagnostics);
         }
         for (file, node) in &module.instantiations {
             integer_range(node, module.files[*file].file, diagnostics);
+        }
+    }
+}
+
+/// GEN-10: "`{n}`, `{n:*}`, and `{n:m}` mean exact, minimum, and
+/// inclusive bounded arity." A range has its upper bound at least its
+/// lower.
+fn cardinalities(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    for cardinality in declaration
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::Cardinality)
+    {
+        let bounds: Vec<(SyntaxToken, u64)> = tokens(&cardinality)
+            .filter(|token| token.kind() == SyntaxKind::Int)
+            .filter_map(|token| {
+                let value = decode_integer(token.text()).ok()?;
+                Some((token, value))
+            })
+            .collect();
+        // `as_slice` lets the pattern say "exactly two".
+        if let [(_, lower), (upper_token, upper)] = bounds.as_slice()
+            && upper < lower
+        {
+            diagnostics.emit(local_error(
+                Category::Type,
+                codes::local::PACK_CARDINALITY,
+                Location::new(file, upper_token.span()),
+                format!("a pack holds from {lower} to {upper}: the upper bound is below the lower"),
+                "GEN-10",
+            ));
         }
     }
 }

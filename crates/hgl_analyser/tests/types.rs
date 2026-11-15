@@ -624,10 +624,10 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
 }
 
 /// The grammar gives `value_type` to a `const` parameter (FN-1), a
-/// parameter with a default (UNIT-8), a generic value parameter
-/// (GEN-13: "a value parameter of ordinary type V") and the domain of an
-/// operator's properties (GEN-9). TYPE-12: `ref` and `signal` are no
-/// const value.
+/// generic value parameter (GEN-13: "a value parameter of ordinary type
+/// V") and the domain of an operator's properties (GEN-9). TYPE-12:
+/// `ref` and `signal` are no const value. A value function's parameters
+/// are ordinary values, with a default or without (FN-1).
 #[test]
 fn constant_configuration_is_an_ordinary_value_type() {
     let checked = module(concat!(
@@ -641,7 +641,7 @@ fn constant_configuration_is_an_ordinary_value_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:58 local:type/type.not_ordinary UNIT-8",
+            "m.hgl:3:58 local:type/type.not_ordinary FN-1",
             "m.hgl:4:23 local:type/type.not_ordinary TYPE-12",
             "m.hgl:4:42 local:type/type.not_ordinary TYPE-12",
             "m.hgl:4:59 local:type/type.not_ordinary FN-1",
@@ -651,7 +651,8 @@ fn constant_configuration_is_an_ordinary_value_type() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and a parameter with a default is one"
+        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
+         one"
     );
     assert_eq!(
         checked.findings[4].message,
@@ -674,6 +675,9 @@ fn signal_is_the_whole_type_of_an_input() {
         "fn nested(a: list<signal>, b: ref<signal>, c: tuple<i64, signal>, d: dict<str, signal>) {}\n",
         // FN-8: each argument a positional pack captures is an input.
         "fn packed(ticks: ...signal) {}\n",
+        // Neither a local nor an anonymous function's parameter is an
+        // input of a function.
+        "fn body(value: f64) -> f64 {\n    let tick: signal = make()\n    let each = fn(x: signal) => 1\n    return value\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -684,6 +688,8 @@ fn signal_is_the_whole_type_of_an_input() {
             "m.hgl:6:35 local:type/signal.position TYPE-12",
             "m.hgl:6:58 local:type/signal.position TYPE-12",
             "m.hgl:6:80 local:type/signal.position TYPE-12",
+            "m.hgl:9:15 local:type/signal.position TYPE-12",
+            "m.hgl:10:22 local:type/signal.position TYPE-12",
         ]
     );
     assert_eq!(
@@ -705,7 +711,8 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         // The whole of what `?` is applied to is an ordinary value.
         "fn shapes(a: rolling<f64, 5>?, b: atomic<i64>?, c: list<ref<f64>>?,\n",
         "    d: dict<str, tuple<i64, rolling<f64, 5>>>?) {}\n",
-        // Reported once, as what a set's element must be.
+        // As what a set's element must be, and as a key that takes no
+        // `?`.
         "fn once(a: set<ref<f64>?>) {}\n",
     ));
     assert_eq!(
@@ -719,6 +726,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
             "m.hgl:4:35 local:type/type.not_ordinary TYPE-14",
             "m.hgl:4:57 local:type/type.not_ordinary TYPE-14",
             "m.hgl:5:29 local:type/type.not_ordinary TYPE-14",
+            "m.hgl:6:16 local:type/nullable.key TYPE-14",
             "m.hgl:6:16 local:type/type.not_ordinary TYPE-12",
         ]
     );
@@ -735,6 +743,58 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     assert_eq!(
         signature(&checked, "good"),
         "(a: f64?, b: list<f64?>, c: list<f64>?, d: dict<str, f64?>?) -> f64?"
+    );
+}
+
+/// TYPE-14: "A set's element and a dictionary's key are never null and
+/// take no `?`" (owner's decision of 2026-11-15 on hgl_spec issue 21,
+/// item 14).
+#[test]
+fn a_key_is_never_null() {
+    let checked = module(concat!(
+        "fn good(a: set<str>, b: dict<str, f64?>, c: list<str?>, d: dict<str, set<i64>>?) {}\n",
+        "fn keys(a: set<str?>, b: dict<str?, f64>, c: list<set<i64?>>, d: dict<tuple<i64, str>?, f64>) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:16 local:type/nullable.key TYPE-14",
+            "m.hgl:3:31 local:type/nullable.key TYPE-14",
+            "m.hgl:3:55 local:type/nullable.key TYPE-14",
+            "m.hgl:3:71 local:type/nullable.key TYPE-14",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "a set's element is never null and takes no `?`"
+    );
+    assert_eq!(
+        checked.findings[1].message,
+        "a dictionary's key is never null and takes no `?`"
+    );
+}
+
+/// GEN-10: "`{n:m}` ... inclusive bounded arity, with m at least n"
+/// (owner's decision of 2026-11-15 on hgl_spec issue 21, item 15).
+#[test]
+fn a_cardinalitys_upper_bound_is_at_least_its_lower() {
+    let checked = module(concat!(
+        "fn good<...Ts{2:2}>(rest: ...Ts, named: ...{Ts}{0:3}) {}\n",
+        "fn generic<...Ts{3:2}>(rest: ...Ts) {}\n",
+        "fn positional(rest: ...f64{2:1}) {}\n",
+        "struct Row<T, ...Ts{5:0}> { first: T }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:20 local:type/pack.cardinality GEN-10",
+            "m.hgl:4:30 local:type/pack.cardinality GEN-10",
+            "m.hgl:5:23 local:type/pack.cardinality GEN-10",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "a pack holds from 3 to 2: the upper bound is below the lower"
     );
 }
 
@@ -995,33 +1055,70 @@ fn a_minus_before_two_to_the_sixty_third_is_the_least_integer() {
 
 // ---- Defaults ----
 
-/// UNIT-8: "Value-function parameters and const configuration may have
-/// defaults; ordinary temporal parameters may not."
+/// UNIT-8, by the owner's decision of 2026-11-15 on hgl_spec issue 21,
+/// item 16: any parameter but a pack may have a default, a temporal
+/// input included, which is then wired as a constant of it. The type of
+/// such an input is a temporal type like any other.
 #[test]
-fn a_temporal_parameter_has_no_default() {
+fn any_parameter_but_a_pack_may_have_a_default() {
     let checked = module(concat!(
         "const fn value(first: f64, second: f64 = 2.0) -> f64 => first\n",
         "fn configured(first: f64, const second: f64 = 2.0) -> f64 {}\n",
         "native const fn native_value(first: f64 = 1.0) -> f64\n",
-        "fn temporal(first: f64, second: f64 = 2.0) -> f64 {}\n",
+        "fn temporal(first: f64, second: f64 = 2.0, window: rolling<f64, 5> = []) -> f64 {}\n",
         "native fn native_temporal(first: f64 = 1.0) -> f64\n",
-        // A native implementation is no way round the rule.
         "native fn completed(first: f64) -> f64\n",
         "native fn completed(first: f64 = 1.0) -> f64 { when; }\n",
-        "native const fn completed_value(first: f64) -> f64\n",
-        "native const fn completed_value(first: f64 = 1.0) -> f64 { }\n",
+        "operator scale(left: f64, right: f64 = 2.0) -> f64\n",
+        "impl fn scale(left: f64, right: f64 = 3.0) -> f64 => left\n",
+        // FN-8: a pack has none.
+        "fn packed(rest: ...f64 = 1.0) {}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:11:24 type/pack.default FN-8"]);
+    assert_eq!(
+        signature(&checked, "temporal"),
+        "(first: f64, second: f64 = ..., window: rolling<f64, 5> = ...) -> f64"
+    );
+}
+
+// ---- Value functions ----
+
+/// FN-1: a `const fn` "computes ordinary values for one invocation": its
+/// parameter and result types are ordinary value types (owner's decision
+/// of 2026-11-15 on hgl_spec issue 21, item 12).
+#[test]
+fn a_value_functions_signature_is_of_ordinary_values() {
+    let checked = module(concat!(
+        "const fn good(a: list<f64?>, b: dict<str, f64>, c: tuple<i64, str>?, rest: ...f64) -> set<str> => []\n",
+        "const fn parameters(a: ref<f64>, b: signal, c: rolling<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
+        "const fn nested(a: list<ref<f64>>, rest: ...ref<f64>) -> i64 => 1\n",
+        "const fn gives() -> ref<f64> => make()\n",
+        "native const fn native_value(a: rolling<f64, 5>) -> atomic<i64>\n",
+        // A temporal function takes and gives them all.
+        "fn temporal(a: ref<f64>, b: signal, c: rolling<f64, 5>, d: atomic<i64>) -> ref<f64> {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:25 local:function-kind/default.temporal_parameter UNIT-8",
-            "m.hgl:6:27 local:function-kind/default.temporal_parameter UNIT-8",
-            "m.hgl:8:21 local:function-kind/default.temporal_parameter UNIT-8",
+            "m.hgl:3:24 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:3:37 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:3:48 local:type/type.not_ordinary FN-1",
+            "m.hgl:3:68 local:type/type.not_ordinary FN-1",
+            "m.hgl:4:25 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:4:45 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:5:21 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:6:33 local:type/type.not_ordinary FN-1",
+            "m.hgl:6:53 local:type/type.not_ordinary FN-1",
         ]
     );
     assert_eq!(
-        checked.findings[0].message,
-        "`second` is a temporal parameter and cannot have a default"
+        checked.findings[2].message,
+        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
+         one"
+    );
+    assert_eq!(
+        checked.findings[6].message,
+        "`ref<f64>` is not an ordinary value type, and the result of a value function is one"
     );
 }
 

@@ -296,6 +296,9 @@ struct Reader<'a> {
     in_signature: bool,
     /// True while a struct is read.
     reading_struct: bool,
+    /// True while a value function is read: a `const fn` or a native
+    /// one (FN-1).
+    value_function: bool,
     /// True while a generic argument is read that is given to a
     /// parameter of a known struct whose kind is not settled.
     unsettled_target: bool,
@@ -338,6 +341,7 @@ impl<'a> Reader<'a> {
             evidence: Vec::new(),
             in_signature: false,
             reading_struct: false,
+            value_function: false,
             unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
@@ -540,6 +544,8 @@ impl Reader<'_> {
         self.generics.clear();
         self.evidence.clear();
         self.in_signature = false;
+        self.reading_struct = false;
+        self.value_function = false;
         self.read.clear();
     }
 
@@ -548,10 +554,16 @@ impl Reader<'_> {
         let node = &declaration.syntax;
         self.in_signature = true;
         self.reading_struct = declaration.kind == DeclarationKind::Struct;
+        self.value_function = matches!(
+            declaration.kind,
+            DeclarationKind::Function(Role::Value)
+                | DeclarationKind::NativeFunction(Role::Value)
+                | DeclarationKind::NativeImplementation(Role::Value)
+        );
         self.generic_parameters(node);
         let mut detail = match node.kind() {
             SyntaxKind::FnDecl | SyntaxKind::OperatorDecl | SyntaxKind::NativeFnDecl => {
-                Detail::Callable(self.signature(node, declaration.kind))
+                Detail::Callable(self.signature(node))
             }
             SyntaxKind::StructDecl => Detail::Struct(self.structure(node)),
             _ => Detail::Plain,
@@ -626,7 +638,7 @@ impl Reader<'_> {
 
     /// The parameters and result of a function, an operator or a native
     /// function.
-    fn signature(&mut self, node: &SyntaxNode, kind: DeclarationKind) -> Signature {
+    fn signature(&mut self, node: &SyntaxNode) -> Signature {
         let mut parameters = Vec::new();
         let written = child(node, SyntaxKind::ParamList)
             .into_iter()
@@ -653,33 +665,6 @@ impl Reader<'_> {
                 self.note_values_in(&default);
             }
 
-            // UNIT-8: "Value-function parameters and const configuration
-            // may have defaults; ordinary temporal parameters may not."
-            // A native implementation states its signature again
-            // (NATIVE-2), and is held to the rule as its declaration is.
-            let temporal = matches!(
-                kind,
-                DeclarationKind::Function(Role::Temporal)
-                    | DeclarationKind::NativeFunction(Role::Temporal)
-                    | DeclarationKind::NativeImplementation(Role::Temporal)
-            );
-            if temporal && has_default && !constant && pack.is_none() {
-                self.diagnostics.emit(
-                    local_error(
-                        Category::FunctionKind,
-                        codes::local::DEFAULT_TEMPORAL_PARAMETER,
-                        self.at(name.span()),
-                        format!(
-                            "`{}` is a temporal parameter and cannot have a default",
-                            name.text()
-                        ),
-                        "UNIT-8",
-                    )
-                    .with_note(
-                        "a `const` parameter, and a parameter of a `const fn`, may have one",
-                    ),
-                );
-            }
             parameters.push(Parameter {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
@@ -820,7 +805,15 @@ impl Reader<'_> {
         };
         match parent.kind() {
             SyntaxKind::Param => {
-                if has_token(&parent, SyntaxKind::Ellipsis) {
+                let pack = has_token(&parent, SyntaxKind::Ellipsis);
+                if self.value_function {
+                    // FN-1: a `const fn` "computes ordinary values": its
+                    // parameter types are ordinary value types.
+                    Position {
+                        pack,
+                        ..Position::value("a parameter of a value function", "FN-1")
+                    }
+                } else if pack {
                     // FN-8: "`...T` captures the positional ones: all of
                     // type T, or each of its own type when T is a
                     // declared type pack." Each one captured is an
@@ -833,16 +826,28 @@ impl Reader<'_> {
                     // FN-1: "Parameter-level `const` instead fixes
                     // configuration."
                     Position::value("a `const` parameter", "FN-1")
-                } else if has_token(&parent, SyntaxKind::Eq) {
-                    // UNIT-8: a default is a constant, so what takes one
-                    // is an ordinary value.
-                    Position::value("a parameter with a default", "UNIT-8")
                 } else {
+                    // A temporal input, with a default or without one
+                    // (UNIT-8).
                     Position::INPUT
                 }
             }
             SyntaxKind::PackType => Position::PACK,
-            SyntaxKind::ReturnType => Position::PLAIN,
+            SyntaxKind::ReturnType => {
+                // The result of the declaration itself, not of an
+                // anonymous function inside it.
+                let of_declaration = parent.parent().is_some_and(|declaration| {
+                    matches!(
+                        declaration.kind(),
+                        SyntaxKind::FnDecl | SyntaxKind::NativeFnDecl
+                    )
+                });
+                if self.value_function && of_declaration {
+                    Position::value("the result of a value function", "FN-1")
+                } else {
+                    Position::PLAIN
+                }
+            }
             SyntaxKind::StructMember | SyntaxKind::StructBases => Position::PLAIN,
             // GEN-13: "An explicit `const N: V` declares a value
             // parameter of ordinary type V."
@@ -852,13 +857,14 @@ impl Reader<'_> {
             SyntaxKind::OperatorProperties => {
                 Position::value("the domain of an operator's properties", "GEN-9")
             }
-            // A local's annotation and an anonymous function's
-            // parameter: which types those may have is for the pass
-            // that knows the phase.
+            // TYPE-12: `signal` is the whole type of a function's
+            // temporal parameter, and neither a local's annotation nor
+            // an anonymous function's parameter. Which other types
+            // those may have is for the pass that knows the phase.
             SyntaxKind::LocalDecl
             | SyntaxKind::StateDecl
             | SyntaxKind::CacheDecl
-            | SyntaxKind::LambdaParam => Position::INPUT,
+            | SyntaxKind::LambdaParam => Position::PLAIN,
             _ => Position::OPEN,
         }
     }
@@ -889,9 +895,14 @@ impl Reader<'_> {
             ),
             SyntaxKind::ListType => self.list(node, position),
             // The grammar: `set_type = "set", "<", value_type, ">"`.
-            SyntaxKind::SetType => Type::Set(Box::new(
-                self.inner(node, Position::value("a set's element", "TYPE-9")),
-            )),
+            SyntaxKind::SetType => {
+                if let Some(element) = type_child(node) {
+                    self.key(&element, "a set's element");
+                }
+                Type::Set(Box::new(
+                    self.inner(node, Position::value("a set's element", "TYPE-9")),
+                ))
+            }
             SyntaxKind::DictType => self.dict(node, position),
             SyntaxKind::RollingType => self.rolling(node, position),
             SyntaxKind::RefType => {
@@ -962,6 +973,23 @@ impl Reader<'_> {
                     "TYPE-12",
                 )
                 .with_note("it is not a result, a field, or a part of another type"),
+            );
+        }
+    }
+
+    /// TYPE-14: a set's element and a dictionary's key are never null
+    /// and take no `?`.
+    fn key(&mut self, node: &SyntaxNode, what: &str) {
+        if node.kind() == SyntaxKind::NullableType {
+            self.diagnostics.emit(
+                local_error(
+                    Category::Type,
+                    codes::local::NULLABLE_KEY,
+                    self.at(node.span()),
+                    format!("{what} is never null and takes no `?`"),
+                    "TYPE-14",
+                )
+                .with_note("a list's element and a dictionary's value may be nullable"),
             );
         }
     }
@@ -1049,6 +1077,7 @@ impl Reader<'_> {
     fn dict(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let mut parts = node.children().filter(|part| is_type(part.kind()));
         let key = parts.next().map_or(Type::Unknown, |key| {
+            self.key(&key, "a dictionary's key");
             self.type_(&key, Position::value("a dictionary's key", "TYPE-9"))
         });
         let value = parts

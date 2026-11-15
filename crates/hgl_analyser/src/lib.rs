@@ -192,10 +192,14 @@ pub mod codes {
         /// A generic argument is a type where the parameter is a value,
         /// or a value where it is a type (GEN-14).
         pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
-        /// A temporal parameter has a default (UNIT-8).
-        pub const DEFAULT_TEMPORAL_PARAMETER: &str = "default.temporal_parameter";
+        /// A set's element or a dictionary's key is nullable (TYPE-14).
+        pub const NULLABLE_KEY: &str = "nullable.key";
+        /// A cardinality's upper bound is below its lower (GEN-10).
+        pub const PACK_CARDINALITY: &str = "pack.cardinality";
         /// A struct's parent is not an abstract struct (TYPE-3).
         pub const STRUCT_PARENT: &str = "struct.parent";
+        /// A struct lists one parent twice (TYPE-3).
+        pub const STRUCT_DUPLICATE_PARENT: &str = "struct.duplicate_parent";
         /// Structs inherit from one another (TYPE-6).
         pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
         /// A field's type or optionality differs between two parents, or
@@ -206,8 +210,9 @@ pub mod codes {
         /// Two members of a struct have one name (TYPE-4).
         pub const FIELD_DUPLICATE: &str = "field.duplicate";
         /// A field makes its struct hold itself and is not an optional
-        /// `atomic<...>` defaulted to null, or a descendant removes that
-        /// null (TYPE-6).
+        /// `atomic<...>` defaulted to null, a descendant removes that
+        /// null, or the field gives a struct of its cycle a type built
+        /// from a generic parameter (TYPE-6).
         pub const FIELD_RECURSIVE: &str = "field.recursive";
         /// An enum member's number is not an integer (TYPE-7).
         pub const ENUM_VALUE: &str = "enum.value";
@@ -219,7 +224,7 @@ pub mod codes {
         pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 19] = [
+        pub const ALL: [&str; 21] = [
             TYPE_NOT_A_TYPE,
             TYPE_NOT_ORDINARY,
             SIGNAL_POSITION,
@@ -228,8 +233,10 @@ pub mod codes {
             GENERIC_KIND_CONFLICT,
             GENERIC_KIND_UNRESOLVED,
             GENERIC_ARGUMENT_KIND,
-            DEFAULT_TEMPORAL_PARAMETER,
+            NULLABLE_KEY,
+            PACK_CARDINALITY,
             STRUCT_PARENT,
+            STRUCT_DUPLICATE_PARENT,
             STRUCT_INHERITANCE_CYCLE,
             FIELD_CONFLICT,
             FIELD_NOT_INHERITED,

@@ -96,6 +96,33 @@ fn a_parent_is_an_abstract_struct() {
     assert_eq!(checked.prelude_names("m"), ["Missing"]);
 }
 
+/// TYPE-3: "Only abstract structs may be parents, each listed once."
+#[test]
+fn a_parent_is_listed_once() {
+    let checked = module(concat!(
+        "abstract struct Base { id: i64 }\n",
+        "abstract struct Generic<T> { value: T }\n",
+        "struct Twice : Base, Base { }\n",
+        // With other arguments it is the same parent still.
+        "struct Both : Generic<i64>, Generic<str> { }\n",
+        "struct Fine : Base, Generic<i64> { }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:22 local:type/struct.duplicate_parent TYPE-3",
+            "m.hgl:5:29 local:type/struct.duplicate_parent TYPE-3",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`Base` is listed twice among the parents",
+            "`Generic` is listed twice among the parents",
+        ]
+    );
+}
+
 /// TYPE-6: "Cycles through inheritance ... are rejected."
 #[test]
 fn no_struct_inherits_from_itself() {
@@ -285,7 +312,8 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
         "struct Tree { children: list<Tree> }\n",
         "struct Keyed { children: dict<str, atomic<Keyed>> = null }\n",
         "struct InBox { inner: Boxed<InBox> }\n",
-        // A collection inside an `atomic<...>` is a collection still.
+        // A collection inside the `atomic<...>` is part of one
+        // snapshot.
         "struct Forest { trees: atomic<list<Forest>> = null }\n",
         "struct Index { entries: atomic<dict<str, Boxed<Index>>> = null }\n",
         "struct Recent { last: atomic<set<Recent>> = null }\n",
@@ -303,25 +331,20 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:16:15 local:type/field.recursive TYPE-6",
             "m.hgl:17:16 local:type/field.recursive TYPE-6",
             "m.hgl:18:16 local:type/field.recursive TYPE-6",
-            "m.hgl:19:17 local:type/field.recursive TYPE-6",
-            "m.hgl:20:16 local:type/field.recursive TYPE-6",
-            "m.hgl:21:17 local:type/field.recursive TYPE-6",
             "m.hgl:22:19 local:type/field.recursive TYPE-6",
             "m.hgl:23:17 local:type/field.recursive TYPE-6",
             "m.hgl:24:15 local:type/field.recursive TYPE-6",
         ]
     );
     let recursive = "a recursive field is an `atomic<...>` with a default of null";
+    let collection = "through the elements of a collection outside an `atomic<...>`";
     assert_eq!(
         messages(&checked),
         [
             format!("`inner` makes `Direct` hold itself: {recursive}"),
-            "`children` makes `Tree` hold itself through the elements of a collection".to_string(),
-            "`children` makes `Keyed` hold itself through the elements of a collection".to_string(),
+            format!("`children` makes `Tree` hold itself {collection}"),
+            format!("`children` makes `Keyed` hold itself {collection}"),
             format!("`inner` makes `InBox` hold itself: {recursive}"),
-            "`trees` makes `Forest` hold itself through the elements of a collection".to_string(),
-            "`entries` makes `Index` hold itself through the elements of a collection".to_string(),
-            "`last` makes `Recent` hold itself through the elements of a collection".to_string(),
             format!("`next` makes `Required` hold itself: {recursive}"),
             format!("`next` makes `Filled` hold itself: {recursive}"),
             format!("`right` makes `Left` hold itself: {recursive}"),
@@ -387,48 +410,108 @@ fn a_struct_holds_itself_through_what_it_gives_a_parent() {
             "`Child` holds itself through `next`, a field of `Base`: a recursive field is an \
              `atomic<...>` with a default of null",
             "`Bag` holds itself through `all`, a field of `Items` through the elements of a \
-             collection",
+             collection outside an `atomic<...>`",
         ]
     );
 }
 
 /// TYPE-6: a generic struct holds what its fields hold once its
 /// arguments stand for its parameters, so a collection among those
-/// fields is a collection on the path: "Cycles through ... collection
-/// elements are rejected."
+/// fields is a collection on the path. Inside an `atomic<...>` field it
+/// is part of one snapshot and admitted; outside one it is a cycle
+/// through collection elements.
 #[test]
 fn a_generic_structs_fields_are_followed_with_its_arguments() {
     let checked = module(concat!(
         "struct Boxed<T> { value: T }\n",
         "struct Listed<T> { values: list<T> }\n",
         "struct Outer<T> { inner: Boxed<T> }\n",
-        "struct Keyed<K, V> { entries: dict<K, V> }\n",
-        // No collection on the way back.
         "struct Plain { next: atomic<Boxed<Plain>> = null }\n",
-        "struct Nested { next: atomic<Outer<Boxed<Nested>>> = null }\n",
-        // A list in the struct named, and in one it names in turn.
         "struct Chain { next: atomic<Listed<Chain>> = null }\n",
         "struct Deep { next: atomic<Outer<Listed<Deep>>> = null }\n",
-        "struct Mapped { next: atomic<Keyed<str, Mapped>> = null }\n",
-        // A struct that names itself with ever larger arguments is
-        // followed once.
-        "struct Grow<T> {\n    next: atomic<Grow<list<T>>> = null\n    value: T\n}\n",
+        // No `atomic<...>` round the path: a list two structs down.
+        "struct Loose { items: Outer<Listed<Loose>> }\n",
+        "struct Direct { inner: Boxed<Direct> }\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:8:16 local:type/field.recursive TYPE-6",
-            "m.hgl:9:15 local:type/field.recursive TYPE-6",
-            "m.hgl:10:17 local:type/field.recursive TYPE-6",
+            "m.hgl:9:17 local:type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
         messages(&checked),
         [
-            "`next` makes `Chain` hold itself through the elements of a collection",
-            "`next` makes `Deep` hold itself through the elements of a collection",
-            "`next` makes `Mapped` hold itself through the elements of a collection",
+            "`items` makes `Loose` hold itself through the elements of a collection outside an \
+             `atomic<...>`",
+            "`inner` makes `Direct` hold itself: a recursive field is an `atomic<...>` with a \
+             default of null",
         ]
+    );
+}
+
+/// TYPE-6: "Such a field gives a struct of its cycle each generic
+/// parameter whole, `Node<T>`, and no type built from one,
+/// `Node<list<T>>`."
+#[test]
+fn a_recursive_field_passes_each_parameter_on_whole() {
+    let checked = module(concat!(
+        "struct Node<T> {\n    next: atomic<Node<T>> = null\n    value: T\n}\n",
+        "struct Fixed<T> {\n    next: atomic<Fixed<i64>> = null\n    value: T\n}\n",
+        "struct Swap<A, B> {\n    other: atomic<Swap<B, A>> = null\n    first: A\n    second: B\n}\n",
+        // A new type at every step.
+        "struct Grow<T> {\n    next: atomic<Grow<list<T>>> = null\n    value: T\n}\n",
+        // Through another struct of the cycle.
+        "struct Ping<T> {\n    pong: atomic<Pong<tuple<T, T>>> = null\n    value: T\n}\n",
+        "struct Pong<U> {\n    ping: atomic<Ping<U>> = null\n    value: U\n}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:5 local:type/field.recursive TYPE-6",
+            "m.hgl:20:5 local:type/field.recursive TYPE-6",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`next` makes `Grow` hold itself: `Grow<list<T>>` is given a type built from a \
+             generic parameter, a new type at every step",
+            "`pong` makes `Ping` hold itself: `Pong<tuple<T, T>>` is given a type built from a \
+             generic parameter, a new type at every step",
+        ]
+    );
+}
+
+/// TYPE-6: "A field whose type is an abstract struct holds every struct
+/// that inherits from it."
+#[test]
+fn a_field_of_an_abstract_type_holds_each_descendant() {
+    let checked = module(concat!(
+        "abstract struct Shape { }\n",
+        "struct Circle : Shape { radius: f64 }\n",
+        // Holds a struct that cannot hold it back.
+        "struct Ring : Shape { inner: Circle }\n",
+        // A `Shape` may be a `Group`.
+        "struct Group : Shape { first: Shape }\n",
+        "struct Bunch : Shape { members: atomic<list<Shape>> = null }\n",
+        // Through a struct outside the family.
+        "struct Frame { shape: Shape }\n",
+        "struct Framed : Shape { frame: Frame }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:24 local:type/field.recursive TYPE-6",
+            "m.hgl:7:16 local:type/field.recursive TYPE-6",
+            "m.hgl:8:25 local:type/field.recursive TYPE-6",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`first` makes `Group` hold itself: a recursive field is an `atomic<...>` with a default \
+         of null"
     );
 }
 
@@ -456,7 +539,7 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         messages(&checked),
         [
             "`next` is a recursive field, and its default stays null",
-            "`inner` makes `Held` hold itself: a recursive field is an `atomic<...>` with a \
+            "`inner` makes `Holder` hold itself: a recursive field is an `atomic<...>` with a \
              default of null",
         ]
     );
