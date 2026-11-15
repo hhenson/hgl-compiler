@@ -292,6 +292,10 @@ fn a_struct_is_a_value_of_the_abstract_structs_it_inherits_from() {
         "abstract struct Wide<...Ts> { width: i64 }\n",
         "struct Narrow<...Ts> : Wide<Ts> { }\n",
         "const fn packed(x: Narrow<i64>) -> Wide<i64> => x\n",
+        // A parameter of the function is a type like any other.
+        "struct Kept<T> : Boxed<T> { }\n",
+        "const fn kept<T>(x: Kept<T>) -> Boxed<T> => x\n",
+        "const fn lost<T>(x: Kept<T>) -> Boxed<i64> => x\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -299,8 +303,32 @@ fn a_struct_is_a_value_of_the_abstract_structs_it_inherits_from() {
             "m.hgl:10:37 local:type/type.mismatch EXPR-5",
             "m.hgl:11:36 local:type/type.mismatch EXPR-5",
             "m.hgl:13:45 local:type/type.mismatch EXPR-5",
+            "m.hgl:19:47 local:type/type.mismatch EXPR-5",
         ]
     );
+}
+
+/// TYPE-6: a struct that reaches its parents by many lines is still a
+/// value of each: a ladder of diamonds beside the parent expected does
+/// not hide it.
+#[test]
+fn a_parent_is_found_beside_a_ladder_of_diamonds() {
+    const RUNGS: usize = 24;
+    let mut text =
+        String::from("abstract struct Base { id: i64 }\nabstract struct Left : Base { }\n");
+    // Each rung has two structs that both inherit from the two of the
+    // rung below: twice as many lines of parents at every rung.
+    text.push_str("abstract struct A0 { }\nabstract struct B0 { }\n");
+    for rung in 1..=RUNGS {
+        let below = rung - 1;
+        text.push_str(&format!(
+            "abstract struct A{rung} : A{below}, B{below} {{ }}\nabstract struct B{rung} : A{below}, B{below} {{ }}\n"
+        ));
+    }
+    text.push_str(&format!("struct Child : Left, A{RUNGS} {{ }}\n"));
+    text.push_str("const fn up(x: Child) -> Base => x\n");
+    let checked = module(&text);
+    assert_eq!(checked.summary(), NONE);
 }
 
 // ---- Bindings ----
@@ -690,6 +718,11 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "    let both = Both(1.5, [1])\n",
         "    let maybe = Maybe(a)\n",
         "}\n",
+        // A parameter of the function is a type like any other: a field
+        // given it is of it.
+        "const fn kept<U>(value: U) -> Box<U> => Box<U>(value)\n",
+        "const fn lost<U>() -> Box<U> => Box<U>(1)\n",
+        "const fn read<U>(box: Box<U>) -> U => box.value\n",
         "enum Side { buy, sell }\n",
         "struct Bag<T> { values: list<T> }\n",
         "struct Both<T> {\n    first: T\n    rest: list<T>\n}\n",
@@ -702,6 +735,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "m.hgl:14:28 local:type/argument.missing EXPR-2",
             "m.hgl:15:26 local:type/type.mismatch TYPE-14",
             "m.hgl:19:24 local:type/type.mismatch EXPR-5",
+            "m.hgl:24:40 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -711,6 +745,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "`Box` is given no `value`, a field with no default",
             "`null` is no value of `i64`: write `i64?`",
             "this is `i64`, and the type written for it is `str`",
+            "this is `i64`, and the field `value` is `U`",
         ]
     );
     assert_eq!(
