@@ -210,27 +210,22 @@ pub mod codes {
     /// Two members of an enum have one name (TYPE-7).
     pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
+    /// A generic parameter is used as a type and as a value (GEN-13).
+    pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
+    /// Nothing in a struct's fields or a constraint says whether a
+    /// generic parameter is a type or a value (GEN-13).
+    pub const GENERIC_KIND_UNRESOLVED: &str = "generic.kind_unresolved";
+    /// A generic argument is a type where the parameter is a value, or
+    /// a value where it is a type (GEN-14).
+    pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
+
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed.
+    /// code when one is agreed. There is none at present.
     pub mod local {
-        /// A generic parameter is used as a type and as a value
-        /// (GEN-13).
-        pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
-        /// Nothing in a signature says whether a generic parameter is a
-        /// type or a value (GEN-13).
-        pub const GENERIC_KIND_UNRESOLVED: &str = "generic.kind_unresolved";
-        /// A generic argument is a type where the parameter is a value,
-        /// or a value where it is a type (GEN-14).
-        pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
-
         /// Every local code of this stage.
-        pub const ALL: [&str; 3] = [
-            GENERIC_KIND_CONFLICT,
-            GENERIC_KIND_UNRESOLVED,
-            GENERIC_ARGUMENT_KIND,
-        ];
+        pub const ALL: [&str; 0] = [];
     }
 }
 
@@ -292,19 +287,6 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
-}
-
-/// An error with one of this compiler's own codes ([`codes::local`]):
-/// the rule cited rejects the source, and the catalogue has no row for
-/// it.
-fn local_error(
-    category: Category,
-    code: &'static str,
-    at: Location,
-    message: String,
-    rule: &'static str,
-) -> Diagnostic {
-    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

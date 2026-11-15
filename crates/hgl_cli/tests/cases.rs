@@ -348,30 +348,27 @@ fn the_specifications_rejection_illustration_passes() {
         )
     );
 
-    // One it has no row for cannot: the code is this compiler's own,
-    // and the output says so.
-    let local = scratch("illustration_local");
+    // And so can the chapter's own under GEN-13, "using the same
+    // generic as both an element type and a list size", since the
+    // generic-kind rows were agreed.
+    let kinds = scratch("illustration_kinds");
     let file = write(
-        &local,
-        "local.hgl",
+        &kinds,
+        "kinds.hgl",
         concat!(
-            "module examples.local\n",
-            "# expect-error(type, \"rolling.size_kind\")\n",
+            "module examples.kinds\n",
+            "# expect-error(type, \"generic.kind_conflict\")\n",
             "fn invalid<T>(value: T, items: list<f64, T>) {}\n",
         ),
     );
-    let output = hgl(&["test", &argument(&local)]);
-    assert_eq!(output.status.code(), Some(1));
+    let output = hgl(&["test", &argument(&kinds)]);
+    assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         text(&output.stdout),
         format!(
             concat!(
-                "FAILED   rejection   {file}:3 fn invalid\n",
-                "    expected type/rolling.size_kind on line 3 of {file}: not reported\n",
-                "    reported type/generic.kind_conflict at {file}:3:42, not expected ",
-                "(a compiler-local code, which no annotation can expect): ",
-                "`T` is used as a type and as a value\n",
-                "rejection cases: 0 passed, 1 failed\n",
+                "passed   rejection   {file}:3 fn invalid\n",
+                "rejection cases: 1 passed, 0 failed\n",
                 "executable cases: none selected\n",
             ),
             file = file

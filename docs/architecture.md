@@ -404,14 +404,12 @@ value goes, is rejected. A lone name is read as a type by the parser;
 here it is a constant when it names a value parameter, or a plain one
 given where a value goes. A name `each T in ...` binds is a type.
 
-These three have no catalogue row yet and carry codes local to this
-compiler (`hgl_analyser::codes::local`), proposed in
-[hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
+Each has a row of the catalogue:
 
-| Local code | Rejection |
+| Code | Rejection |
 | --- | --- |
 | `generic.kind_conflict` | A generic parameter used as a type and as a value |
-| `generic.kind_unresolved` | A generic parameter nothing in the signature or a constraint names |
+| `generic.kind_unresolved` | A struct's generic parameter that no field or constraint names |
 | `generic.argument_kind` | A generic argument of the other kind than its parameter |
 
 ### Order
@@ -518,7 +516,7 @@ condition but names no code). Only a catalogued code may satisfy
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
-the limit is the compiler's, not the language's. The analyser reports 28
+the limit is the compiler's, not the language's. The analyser reports 53
 codes, all catalogued (`hgl_analyser::codes`), and its tests check each
 diagnostic's category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved

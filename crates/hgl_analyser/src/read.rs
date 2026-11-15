@@ -35,7 +35,7 @@ use crate::types::{
     Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
     Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// Reads the types of every module, filling in [`Module::details`] and
 /// [`Module::written`].
@@ -1768,9 +1768,9 @@ impl Reader<'_> {
 
     fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {
         if let Some(message) = message {
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Type,
-                codes::local::GENERIC_ARGUMENT_KIND,
+                codes::GENERIC_ARGUMENT_KIND,
                 self.at(argument.span()),
                 message,
                 "GEN-14",
@@ -2002,9 +2002,9 @@ impl Reader<'_> {
                         (as_value, as_type, "used as a type here")
                     };
                     self.diagnostics.emit(
-                        local_error(
+                        error(
                             Category::Type,
-                            codes::local::GENERIC_KIND_CONFLICT,
+                            codes::GENERIC_KIND_CONFLICT,
                             at,
                             format!("`{name}` is used as a type and as a value"),
                             "GEN-13",
@@ -2025,9 +2025,9 @@ impl Reader<'_> {
                 (None, None) if !self.reading_struct => {}
                 (None, None) => {
                     self.diagnostics.emit(
-                        local_error(
+                        error(
                             Category::Type,
-                            codes::local::GENERIC_KIND_UNRESOLVED,
+                            codes::GENERIC_KIND_UNRESOLVED,
                             self.generics[index].at,
                             format!(
                                 "nothing in the signature of `{}` says whether `{name}` is a \

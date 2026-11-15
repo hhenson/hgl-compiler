@@ -162,10 +162,10 @@ fn a_parameters_uses_agree_and_something_says_what_it_is() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:39 local:type/generic.kind_conflict GEN-13",
-            "m.hgl:7:12 local:type/generic.kind_conflict GEN-13",
-            "m.hgl:9:43 local:type/generic.kind_conflict GEN-13",
-            "m.hgl:11:16 local:type/generic.kind_unresolved GEN-13",
+            "m.hgl:4:39 type/generic.kind_conflict GEN-13",
+            "m.hgl:7:12 type/generic.kind_conflict GEN-13",
+            "m.hgl:9:43 type/generic.kind_conflict GEN-13",
+            "m.hgl:11:16 type/generic.kind_unresolved GEN-13",
         ]
     );
     assert_eq!(
@@ -203,9 +203,9 @@ fn a_parameter_that_is_only_handed_on_is_unresolved() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:13 local:type/generic.kind_unresolved GEN-13",
-            "m.hgl:3:13 local:type/generic.kind_unresolved GEN-13",
-            "m.hgl:4:13 local:type/generic.kind_unresolved GEN-13",
+            "m.hgl:2:13 type/generic.kind_unresolved GEN-13",
+            "m.hgl:3:13 type/generic.kind_unresolved GEN-13",
+            "m.hgl:4:13 type/generic.kind_unresolved GEN-13",
         ]
     );
     assert_eq!(kinds(&checked, "Tree"), ["T:type"]);
@@ -253,20 +253,20 @@ fn an_argument_is_of_its_parameters_kind() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:26 local:type/generic.argument_kind GEN-14",
-            "m.hgl:9:37 local:type/generic.argument_kind GEN-14",
-            "m.hgl:9:57 local:type/generic.argument_kind GEN-14",
-            "m.hgl:10:28 local:type/generic.argument_kind GEN-14",
-            "m.hgl:10:43 local:type/generic.argument_kind GEN-14",
-            "m.hgl:10:59 local:type/generic.argument_kind GEN-14",
-            "m.hgl:11:36 local:type/generic.argument_kind GEN-14",
-            "m.hgl:13:38 local:type/generic.argument_kind GEN-14",
-            "m.hgl:15:46 local:type/generic.argument_kind GEN-14",
-            "m.hgl:15:81 local:type/generic.argument_kind GEN-14",
-            "m.hgl:16:70 local:type/generic.argument_kind GEN-14",
-            "m.hgl:16:84 local:type/generic.argument_kind GEN-14",
-            "m.hgl:19:22 local:type/generic.argument_kind GEN-14",
-            "m.hgl:22:69 local:type/generic.argument_kind GEN-14",
+            "m.hgl:9:26 type/generic.argument_kind GEN-14",
+            "m.hgl:9:37 type/generic.argument_kind GEN-14",
+            "m.hgl:9:57 type/generic.argument_kind GEN-14",
+            "m.hgl:10:28 type/generic.argument_kind GEN-14",
+            "m.hgl:10:43 type/generic.argument_kind GEN-14",
+            "m.hgl:10:59 type/generic.argument_kind GEN-14",
+            "m.hgl:11:36 type/generic.argument_kind GEN-14",
+            "m.hgl:13:38 type/generic.argument_kind GEN-14",
+            "m.hgl:15:46 type/generic.argument_kind GEN-14",
+            "m.hgl:15:81 type/generic.argument_kind GEN-14",
+            "m.hgl:16:70 type/generic.argument_kind GEN-14",
+            "m.hgl:16:84 type/generic.argument_kind GEN-14",
+            "m.hgl:19:22 type/generic.argument_kind GEN-14",
+            "m.hgl:22:69 type/generic.argument_kind GEN-14",
         ]
     );
     assert_eq!(
