@@ -631,27 +631,41 @@ impl<'a> Typer<'a> {
             }
             return (ExprKind::Sequence(elements), expected.clone());
         }
-        let mut elements: Vec<Expr> = items
+        // An entry that takes its type from its place, `null`, says
+        // nothing of what the sequence holds: the others are read
+        // first, and it is then read as an element of their type.
+        let mut read: Vec<Option<Expr>> = items
             .iter()
-            .map(|item| self.expression(item, None))
+            .map(|item| (!takes_its_type(item)).then(|| self.expression(item, None)))
             .collect();
-        // Nothing says what an empty sequence holds.
-        let Some(first) = elements.first().map(|first| first.ty.clone()) else {
+        let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
+        // Nothing says what an empty sequence holds, or one of such
+        // entries alone.
+        let Some(&first) = known.first() else {
+            let elements = items
+                .iter()
+                .map(|item| self.expression(item, Some(&Type::Unknown)))
+                .collect();
             return (ExprKind::Sequence(elements), Type::Unknown);
         };
         let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
-        let of = if elements.iter().all(|element| numbers(&element.ty))
-            && elements
-                .iter()
-                .any(|element| element.ty == Type::Scalar(Scalar::F64))
+        let of = if known.iter().all(|ty| numbers(ty))
+            && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64))
         {
             Type::Scalar(Scalar::F64)
         } else {
-            first
+            first.clone()
         };
-        elements = elements
-            .into_iter()
-            .map(|element| self.fit(element, &of, "an element, as the first is"))
+        let elements: Vec<Expr> = items
+            .iter()
+            .enumerate()
+            .map(|(position, item)| {
+                let entry = match read[position].take() {
+                    Some(entry) => entry,
+                    None => self.expression(item, Some(&of)),
+                };
+                self.fit(entry, &of, "an element, as the first is")
+            })
             .collect();
         let ty = Type::List {
             element: Box::new(of),
@@ -1775,6 +1789,20 @@ fn accepts_float(expected: &Type) -> bool {
     match expected {
         Type::Scalar(Scalar::F64) => true,
         Type::Nullable(inner) => accepts_float(inner),
+        _ => false,
+    }
+}
+
+/// True when an expression takes its type from its place and has none
+/// of its own: `null`, and `.member`, in parentheses or not.
+fn takes_its_type(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| takes_its_type(&inner)),
+        SyntaxKind::ImpliedMember => true,
+        SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
         _ => false,
     }
 }

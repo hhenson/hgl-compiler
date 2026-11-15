@@ -408,6 +408,10 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         // TYPE-10: "Size participates in identity."
         "    let sized: list<i64, 2> = [1, 2]\n",
         "    let short: list<i64, 2> = [1]\n",
+        // `null` takes its type from its place: among values, theirs.
+        "    let holes = [1, null]\n",
+        "    let maybe_holes: list<i64?> = [1, null]\n",
+        "    let nothing = [null]\n",
         "}\n",
         "const fn member_set() -> set<i64>? => [1, 2]\n",
         "const fn trio() -> list<i64, 2> => [1, 2, 3]\n",
@@ -420,7 +424,8 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "m.hgl:12:43 local:type/type.mismatch EXPR-5",
             "m.hgl:16:36 local:type/type.mismatch EXPR-5",
             "m.hgl:18:31 local:type/type.mismatch TYPE-10",
-            "m.hgl:21:36 local:type/type.mismatch TYPE-10",
+            "m.hgl:19:21 local:type/type.mismatch TYPE-14",
+            "m.hgl:24:36 local:type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
@@ -447,6 +452,9 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "maybe_wrong: list<str>?",
             "sized: list<i64, 2>",
             "short: list<i64, 2>",
+            "holes: list<i64>",
+            "maybe_holes: list<i64?>",
+            "nothing: _",
         ]
     );
 }
