@@ -167,3 +167,31 @@ fn the_default_limits_fit_a_small_stack() {
     assert_eq!(front_end_errors, 0, "{report}");
     assert_eq!(findings, [] as [&str; 0]);
 }
+
+/// A value read before a generic struct's arguments are found is read
+/// again once they are, when its first reading gave it no whole type
+/// (GEN-2). One such value inside another would double the work at each
+/// level, so the pass counts them for the whole function and stops
+/// reading again past its bound: the analysis ends.
+#[test]
+fn values_read_again_are_counted_for_the_whole_function() {
+    let depth = 40;
+    let mut text =
+        String::from("module m\nstruct Box<T> { value: T }\nconst fn deep() {\n    let nested = ");
+    for _ in 0..depth {
+        text.push_str("Box(value: [");
+    }
+    // Entries of two types: with nothing known of their place they give
+    // the sequence no type, at every level above.
+    text.push_str("1, \"x\"");
+    for _ in 0..depth {
+        text.push_str("])");
+    }
+    text.push_str("\n}\n");
+    let started = std::time::Instant::now();
+    let checked = check_broken(&[("m.hgl", text.as_str())]);
+    assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
+    // Two to the fortieth readings would not end in the life of the
+    // test; a bounded count ends at once.
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+}

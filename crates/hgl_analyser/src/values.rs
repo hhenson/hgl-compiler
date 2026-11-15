@@ -105,8 +105,18 @@ struct Typer<'a> {
     /// For each local, whether every path to here has given it a value
     /// (EXPR-3).
     assigned: Vec<bool>,
+    /// How many more expressions of the function may be read a second
+    /// time: see [`REREADS`].
+    rereads: u32,
     diagnostics: &'a mut Diagnostics,
 }
+
+/// How many expressions of one function are read a second time, as the
+/// type their place turns out to have. An expression read again may hold
+/// others that are, so the count is for the whole function: past it an
+/// expression keeps its first reading, and the pass ends whatever it is
+/// given.
+const REREADS: u32 = 1_000;
 
 impl<'a> Typer<'a> {
     fn new(
@@ -129,6 +139,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             declared: HashMap::new(),
             assigned: Vec::new(),
+            rereads: REREADS,
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -1126,6 +1137,14 @@ impl<'a> Typer<'a> {
         (ExprKind::Call { callee, arguments }, ty)
     }
 
+    /// True when one more expression of the function may be read a
+    /// second time, which this counts.
+    fn may_reread(&mut self) -> bool {
+        let may = self.rereads > 0;
+        self.rereads = self.rereads.saturating_sub(1);
+        may
+    }
+
     /// `Name<arguments>(fields)`: the construction of a generic struct
     /// with its arguments written.
     fn typed_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
@@ -1263,9 +1282,20 @@ impl<'a> Typer<'a> {
                     if takes_its_type(node) || !mentions(pattern, &unfound) {
                         continue;
                     }
+                    let reported = self.diagnostics.len();
                     let value = self.expression(node, Some(&Type::Unknown));
                     infer(pattern, &value.ty, &read.generics, &mut found);
-                    values[position] = Some(value);
+                    // A value with no whole type while nothing is known
+                    // of its place, `[1, "x"]`, has not been judged. It
+                    // is read again below as the field's type, once the
+                    // arguments are found. One that reported something
+                    // is read once.
+                    let again = !whole(&value.ty)
+                        && self.diagnostics.len() == reported
+                        && self.may_reread();
+                    if !again {
+                        values[position] = Some(value);
+                    }
                 }
                 let found: Vec<Argument> = found
                     .into_iter()
@@ -1944,6 +1974,29 @@ fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Opt
         }
         // Equality and the connectives are not read from this table.
         Op::Equal | Op::NotEqual | Op::And | Op::Or => Some(BOOL),
+    }
+}
+
+/// True when a type is known all the way down: no part of it is
+/// `Type::Unknown`.
+fn whole(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => false,
+        Type::Named { arguments, .. } => arguments.iter().all(|argument| match argument {
+            Argument::Type(argument) => whole(argument),
+            Argument::Constant(_) => true,
+        }),
+        Type::Tuple(elements) => elements.iter().all(whole),
+        Type::List { element, .. } => whole(element),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => whole(inner),
+        Type::Dict { key, value } => whole(key) && whole(value),
+        Type::Rolling { value, .. } => whole(value),
+        Type::Result { value, error } => whole(value) && whole(error),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
     }
 }
 
