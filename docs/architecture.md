@@ -336,7 +336,11 @@ A struct holds the structs its fields hold: its own fields and those it
 has from its parents, with the arguments it gives each parent in place
 of the parent's parameters. A field whose type is an abstract struct
 holds every struct that inherits from it, since its value is one of
-them. A field holds every struct its type names,
+them: each that may be the application written, so `struct Child :
+Base<i64>` is held by a `Base<i64>` and not by a `Base<str>`. A
+recursive field stays within its module: a struct of another module is
+reached back only through an abstract struct declared there, and that
+is rejected. A field holds every struct its type names,
 and what a generic struct among them holds once its arguments stand for
 its parameters: with `struct Boxed<T> { values: list<T> }`, a
 `Boxed<Node>` holds `Node`s as the elements of a list. Structs that hold

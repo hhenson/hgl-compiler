@@ -626,6 +626,61 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
     );
 }
 
+/// TYPE-6: a struct that inherits from `Base<i64>` is a `Base<i64>` and
+/// no `Base<str>`, so a field of type `Base<str>` does not hold it. One
+/// that gives its parent a parameter of its own may be any application.
+#[test]
+fn a_descendant_is_held_by_the_application_it_inherits_from() {
+    let checked = module(concat!(
+        "abstract struct Base<T> { value: T }\n",
+        "struct Other : Base<i64> { other: Base<str> }\n",
+        "struct Same : Base<i64> { same: Base<i64> }\n",
+        "struct Open<U> : Base<U> { open: Base<str> }\n",
+        "abstract struct Sized<const N: i64> { width: i64 }\n",
+        "struct Three : Sized<3> { four: Sized<4> }\n",
+        "struct Again : Sized<3> { three: Sized<1 + 2> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:27 local:type/field.recursive TYPE-6",
+            "m.hgl:5:28 local:type/field.recursive TYPE-6",
+            "m.hgl:8:27 local:type/field.recursive TYPE-6",
+        ]
+    );
+}
+
+/// TYPE-6: "Recursive fields stay within their defining module." A
+/// struct is reached back from another module through an abstract
+/// struct declared there.
+#[test]
+fn a_recursive_field_stays_within_its_module() {
+    let checked = check(&[
+        ("lib.hgl", "module lib\nexport abstract struct Shape { }\n"),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib::{Shape}\n",
+                "struct Node : Shape { next: atomic<Shape> = null }\n",
+                "struct Leaf : Shape { size: i64 }\n",
+                // An abstract struct of its own module is no way out.
+                "abstract struct Local { }\n",
+                "struct Chain : Local { next: atomic<Local> = null }\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:23 local:type/field.recursive TYPE-6"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`next` makes `Node` hold itself through `Shape` of module `lib`: a recursive field \
+         stays within its module"
+    );
+}
+
 /// TYPE-6, by the owner's statement of 2026-11-15 on hgl_spec issue 21:
 /// "a recursive field must either be atomic or nullable to ensure the
 /// recursion can be broken". A nullable field ends the recursion as an
