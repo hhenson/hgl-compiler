@@ -42,7 +42,7 @@ use crate::hir::{
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
 };
-use crate::read::{child, has_token, is_type, tokens};
+use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack,
     Scalar, Signature, Type,
@@ -1832,27 +1832,33 @@ impl<'a> Typer<'a> {
         // is left to resolve: `convert<f64>(count)` asks for an `f64`.
         // What they say of the operands is for the pass that resolves
         // generic candidates.
-        let requested: Option<Type> = match generics {
-            None => None,
+        let explicit: Vec<Argument> = match generics {
+            None => Vec::new(),
             Some(_) => {
                 let Some((explicit, _)) = self.generic_arguments(name, &public.generics, generics)
                 else {
                     return self.unread_call(list);
                 };
-                let own: Vec<Location> = public.generics.iter().map(|generic| generic.at).collect();
-                let resolved: Vec<Argument> = explicit
+                explicit
                     .into_iter()
                     .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
-                    .collect();
-                let map: Vec<(Location, &Argument)> =
-                    fixed(&public.generics).zip(&resolved).collect();
-                public
-                    .result
-                    .as_ref()
-                    .map(|result| placed(substitute_within(result, &map), &own))
-                    .filter(whole)
+                    .collect()
             }
         };
+        let own_generics: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
+        let requested: Option<Type> = generics.and_then(|_| {
+            public
+                .result
+                .as_ref()
+                .map(|result| placed(substitute_within(result, &map), &own_generics))
+                .filter(whole)
+        });
+        // GEN-4: an operator "owns ... generic relationships, and
+        // requirements". Where its requirement says what its result may
+        // be, a candidate's result is one of those.
+        let among = self.result_among(operator, public, &map, &own_generics);
         // The operator's value candidates, wherever they are declared.
         // GEN-5: "Library membership and registration order grant no
         // priority."
@@ -1879,26 +1885,24 @@ impl<'a> Typer<'a> {
         }
 
         // EXPR-2: "Named arguments use the selected public callable's
-        // parameter names." What a call may leave out is the
-        // candidate's to say (GEN-6: "A candidate may give any of its
-        // inputs a default"), so nothing is required here.
-        let slots: Vec<Slot> = public
-            .parameters
+        // parameter names; a call of an operator may also name an
+        // option its candidates declare (GEN-6)." Which parameter of a
+        // candidate an argument is given to, and what a call may leave
+        // out, is each candidate's to say (GEN-6: "A call is matched
+        // against each candidate's own signature").
+        let own = public.parameters.len();
+        let options: std::collections::HashSet<&str> = candidates
             .iter()
-            .map(|parameter| Slot {
-                name: &parameter.name,
-                ty: Type::Unknown,
-                required: false,
-                pack: None,
-            })
+            .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
+            .map(|parameter| parameter.name.as_str())
             .collect();
         let reported = self.diagnostics.len();
-        let assigned = self.assign(name, list, &slots, Takes::Parameters);
+        let written = self.operator_arguments(name, list, public, &options);
         // Each argument, read with nothing expected of it: what it
         // reports itself is reported here, once.
-        let given: Vec<Given> = assigned
+        let given: Vec<Given> = written
             .into_iter()
-            .map(|(slot, node)| {
+            .map(|(key, node)| {
                 let by_place = typed_by_place(&node);
                 let mark = self.mark();
                 let value = self.expression(&node, Some(&Type::Unknown));
@@ -1912,7 +1916,7 @@ impl<'a> Typer<'a> {
                     self.take_back(mark, true);
                 }
                 Given {
-                    slot,
+                    key,
                     by_place,
                     value,
                     retried,
@@ -1934,19 +1938,43 @@ impl<'a> Typer<'a> {
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
-        let wanted = requested
-            .as_ref()
-            .or(expected.filter(|expected| !open(expected)));
+        let operator_declaration =
+            &program.modules[operator.module].declarations[operator.declaration];
+        let wanted = Wanted {
+            place: requested
+                .as_ref()
+                .or(expected.filter(|expected| !open(expected))),
+            among,
+        };
         let mut selected: Vec<(usize, usize, &Signature)> = Vec::new();
+        let mut untold = false;
         for widening in [false, true] {
             for &(module, declaration, signature) in &candidates {
-                if self.admits_call(signature, public, &given, wanted, widening) {
-                    selected.push((module, declaration, signature));
+                let candidate = &program.modules[module].declarations[declaration];
+                let admits = self.admits_call(
+                    (candidate, signature),
+                    (operator_declaration, public),
+                    &given,
+                    &wanted,
+                    widening,
+                );
+                match admits {
+                    Admits::Yes => selected.push((module, declaration, signature)),
+                    Admits::No => {}
+                    Admits::Unknown => untold = true,
                 }
             }
             if !selected.is_empty() {
                 break;
             }
+        }
+        // EXPR-12: "Resolve configuration that selects an expression's
+        // source result type during source checking." An option a
+        // candidate's condition reads is given here as no constant this
+        // pass reads: which candidates admit the call cannot be told,
+        // and the call is not judged.
+        if untold {
+            return (self.unselected(given), Type::Unknown);
         }
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
@@ -1966,10 +1994,17 @@ impl<'a> Typer<'a> {
             let takes: Vec<String> = given
                 .iter()
                 .map(|given| {
-                    if given.by_place {
-                        format!("`{}`", given.node.text().to_string().trim())
+                    let value = if given.by_place {
+                        given.node.text().to_string().trim().to_string()
                     } else {
-                        format!("`{}`", given.value.ty)
+                        given.value.ty.to_string()
+                    };
+                    match &given.key {
+                        // An option is known by its name.
+                        Key::Name(name) if !public.parameters.iter().any(|p| p.name == *name) => {
+                            format!("`{name}: {value}`")
+                        }
+                        _ => format!("`{value}`"),
                     }
                 })
                 .collect();
@@ -1989,9 +2024,15 @@ impl<'a> Typer<'a> {
                     format!(
                         "no value candidate of operator `{}` takes {takes}{}",
                         name.text(),
-                        match wanted {
-                            Some(wanted) => format!(" and gives `{wanted}`"),
-                            None => String::new(),
+                        match (wanted.place, &wanted.among) {
+                            (Some(wanted), _) => format!(" and gives `{wanted}`"),
+                            // What the operator's requirement admits.
+                            (None, Some(among)) => {
+                                let among: Vec<String> =
+                                    among.iter().map(|ty| format!("`{ty}`")).collect();
+                                format!(" and gives {}", among.join(" or "))
+                            }
+                            (None, None) => String::new(),
                         }
                     )
                 };
@@ -2025,11 +2066,14 @@ impl<'a> Typer<'a> {
         };
 
         // Each argument is of the type the selected candidate's
-        // parameter has.
+        // parameter has. The candidate was admitted, so each is given
+        // to one of its parameters.
+        let bound = bound(signature, public, &given).unwrap_or_default();
         let arguments = given
             .into_iter()
-            .map(|given| {
-                let Some(index) = given.slot else {
+            .enumerate()
+            .map(|(position, given)| {
+                let Some(&index) = bound.get(position) else {
                     return hir::Argument {
                         parameter: None,
                         value: given.value,
@@ -2062,6 +2106,149 @@ impl<'a> Typer<'a> {
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
+    /// The arguments of an operator's call as they are written, each
+    /// with its position or its name. What is wrong with the call
+    /// whichever candidate takes it is reported here (EXPR-2): an
+    /// argument with no name after a named one; a name that neither the
+    /// operator nor any candidate declares; a name given twice, or a
+    /// parameter of the operator given in position and by name.
+    ///
+    /// Which parameter an option's argument is given to differs from
+    /// candidate to candidate, so that is not judged here: a candidate
+    /// the arguments do not fit is not admitted (GEN-6).
+    fn operator_arguments(
+        &mut self,
+        callee: &SyntaxToken,
+        list: &SyntaxNode,
+        public: &Signature,
+        options: &std::collections::HashSet<&str>,
+    ) -> Vec<(Key, SyntaxNode)> {
+        let mut named_seen = false;
+        let mut position = 0;
+        let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut arguments = Vec::new();
+        for (name, value) in arguments_of(list) {
+            let key = match name {
+                None => {
+                    if named_seen {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::ARGUMENT_ORDER,
+                            self.at(&value),
+                            "an argument with no name follows a named one: positional \
+                             arguments come first"
+                                .to_string(),
+                            "EXPR-2",
+                        ));
+                    }
+                    position += 1;
+                    Key::Position(position - 1)
+                }
+                Some(name) => {
+                    named_seen = true;
+                    let text = name.text();
+                    let at = Location::new(self.file, name.span());
+                    // The operator's parameters are the same places in
+                    // every candidate, the first of each.
+                    let own = public
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name == text);
+                    if own.is_none() && !options.contains(text) {
+                        self.diagnostics.emit(error(
+                            Category::Name,
+                            codes::ARGUMENT_UNKNOWN,
+                            at,
+                            format!("`{}` has no parameter `{text}`", callee.text()),
+                            "EXPR-2",
+                        ));
+                    } else if !names.insert(text.to_string())
+                        || own.is_some_and(|index| index < position)
+                    {
+                        self.diagnostics.emit(error(
+                            Category::Name,
+                            codes::ARGUMENT_DUPLICATE,
+                            at,
+                            format!("`{text}` is given twice"),
+                            "EXPR-2",
+                        ));
+                    }
+                    Key::Name(text.to_string())
+                }
+            };
+            arguments.push((key, value));
+        }
+        arguments
+    }
+
+    /// The types an operator's requirement admits for its result, with
+    /// the call's generic arguments `map` in place: for `operator
+    /// convert<T, V, O>(value: V) -> O requires O in {T, result<T,
+    /// error>}` called as `convert<f64>(count)`, an `f64` and a
+    /// `result<f64, error>`. `None` when the operator states none, or
+    /// one of them still names a generic parameter.
+    ///
+    /// The requirement is read where it is `O in {types}` for the bare
+    /// parameter `O` the result is, alone or joined to others by `&&`:
+    /// where several are so joined, the result is in every set.
+    fn result_among(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        map: &[(Location, &Argument)],
+        own: &[Location],
+    ) -> Option<Vec<Type>> {
+        let Some(Type::Parameter { name, .. }) = &public.result else {
+            return None;
+        };
+        let module = &self.program.modules[operator.module];
+        let declaration = &module.declarations[operator.declaration];
+        let clause = child(&declaration.syntax, SyntaxKind::RequiresClause)?;
+        let mut sets = Vec::new();
+        result_sets(&clause.children().next()?, name, &mut sets);
+        let file = module.files[declaration.file].file;
+        // The types one set admits; `None` for a set with a member that
+        // is no type, or that still names a generic parameter. Such a
+        // set says nothing here.
+        let types_of = |set: &SyntaxNode| -> Option<Vec<Type>> {
+            let mut types = Vec::new();
+            for member in set.children() {
+                if !is_type(member.kind()) {
+                    return None;
+                }
+                // What the `read` pass said the type written there
+                // means.
+                let start = member.span().start;
+                let written = module
+                    .written
+                    .iter()
+                    .find(|written| written.at.file == file && written.at.span.start == start)?;
+                let ty = placed(substitute_within(&written.ty, map), own);
+                if !whole(&ty) {
+                    return None;
+                }
+                types.push(ty);
+            }
+            Some(types)
+        };
+        // Requirements joined by `&&` all hold: the result is in every
+        // set.
+        let mut among: Option<Vec<Type>> = None;
+        for set in &sets {
+            let Some(types) = types_of(set) else {
+                continue;
+            };
+            among = Some(match among {
+                None => types,
+                Some(mut among) => {
+                    among.retain(|ty| types.contains(ty));
+                    among
+                }
+            });
+        }
+        among
+    }
+
     /// The call of an operator for which no candidate is selected: its
     /// arguments as they were read, and no callee. One whose first
     /// reading was taken back is read where it stands.
@@ -2089,28 +2276,47 @@ impl<'a> Typer<'a> {
     /// literal is admitted where an `f64` is taken (EXPR-5).
     fn admits_call(
         &mut self,
-        signature: &Signature,
-        public: &Signature,
+        (candidate, signature): (&Declaration, &Signature),
+        (operator, public): (&Declaration, &Signature),
         given: &[Given],
-        wanted: Option<&Type>,
+        wanted: &Wanted,
         widening: bool,
-    ) -> bool {
-        let result_fits = match (wanted, &signature.result) {
+    ) -> Admits {
+        let result_fits = match (wanted.place, &signature.result) {
             (Some(wanted), Some(result)) => self.admits(wanted, result),
             (Some(_), None) => false,
             (None, _) => true,
         };
-        if !result_fits || signature.parameters.len() != public.parameters.len() {
-            return false;
+        // The operator's own requirement of its result.
+        let among = match (&wanted.among, &signature.result) {
+            (Some(among), Some(result)) => among.contains(result),
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        if !result_fits || !among {
+            return Admits::No;
         }
+        // GEN-6: "A call is matched against each candidate's own
+        // signature. One that names an option admits only the
+        // candidates that declare it."
+        let Some(bound) = bound(signature, public, given) else {
+            return Admits::No;
+        };
+        let own = public.parameters.len();
         for (index, parameter) in signature.parameters.iter().enumerate() {
-            let admitted = match given.iter().find(|given| given.slot == Some(index)) {
+            let argument = bound
+                .iter()
+                .position(|&place| place == index)
+                .map(|position| &given[position]);
+            let admitted = match argument {
                 // What the call leaves out has a default, the
-                // candidate's or the operator's, or is written `T?`
-                // (UNIT-8).
+                // candidate's or for one of its own parameters the
+                // operator's, or is written `T?` (UNIT-8). GEN-6: "a
+                // candidate whose option has none is admitted only when
+                // the call gives it."
                 None => {
                     parameter.has_default
-                        || public.parameters[index].has_default
+                        || (index < own && public.parameters[index].has_default)
                         || matches!(parameter.ty, Type::Nullable(_))
                 }
                 Some(given) if given.by_place => {
@@ -2124,10 +2330,49 @@ impl<'a> Typer<'a> {
                 }
             };
             if !admitted {
-                return false;
+                return Admits::No;
             }
         }
-        true
+        // GEN-6: "A candidate states in `requires` the values of a
+        // const option it is for ... A call admits the candidate only
+        // where that holds for the option's value at the call, a
+        // default included."
+        let Some(clause) = child(&candidate.syntax, SyntaxKind::RequiresClause) else {
+            return Admits::Yes;
+        };
+        let Some(condition) = clause.children().next() else {
+            return Admits::Yes;
+        };
+        // The value an option has at this call: what the call gives
+        // it, or its default, the candidate's and then, for one of the
+        // operator's own parameters, the operator's. `None` when it is
+        // no constant this pass reads.
+        let value_of = |name: &str| -> Option<OptionValue> {
+            let index = signature
+                .parameters
+                .iter()
+                .position(|parameter| parameter.name == name)?;
+            if let Some(position) = bound.iter().position(|&place| place == index) {
+                return constant_of(&given[position].node);
+            }
+            let default =
+                default_at(&candidate.syntax, &signature.parameters[index]).or_else(|| {
+                    public
+                        .parameters
+                        .get(index)
+                        .and_then(|parameter| default_at(&operator.syntax, parameter))
+                });
+            match default {
+                Some(default) => constant_of(&default),
+                // Written `T?` and left out: it is null.
+                None => Some(OptionValue::Literal(Value::Null)),
+            }
+        };
+        match holds(&condition, &value_of) {
+            Some(true) => Admits::Yes,
+            Some(false) => Admits::No,
+            None => Admits::Unknown,
+        }
     }
 
     /// True when the expression at `node`, which is read as the type of
@@ -3007,8 +3252,9 @@ struct Mark {
 
 /// One argument of an operator's call, before a candidate is selected.
 struct Given {
-    /// The public parameter it is given to, when it is given to one.
-    slot: Option<usize>,
+    /// How it is written: in a position, or by a name. Which parameter
+    /// of a candidate that is, is the candidate's to say (GEN-6).
+    key: Key,
     /// Where it is written.
     node: SyntaxNode,
     /// True when it is read as the type of the parameter it is given
@@ -3020,6 +3266,262 @@ struct Given {
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
     retried: bool,
+}
+
+/// How a call writes an argument.
+enum Key {
+    /// With no name: the place it stands in, from 0.
+    Position(usize),
+    /// `name: value`.
+    Name(String),
+}
+
+/// Whether a candidate admits a call.
+#[derive(Clone, Copy, PartialEq)]
+enum Admits {
+    Yes,
+    No,
+    /// It cannot be told: a condition of the candidate reads an option
+    /// whose value at the call is no constant this pass reads.
+    Unknown,
+}
+
+/// What a call asks of a candidate's result (GEN-5: "the requested
+/// output before inputs").
+struct Wanted<'w> {
+    /// The type the call's place expects, or the one the call's generic
+    /// arguments make of the operator's result.
+    place: Option<&'w Type>,
+    /// The types the operator's own requirement admits for its result,
+    /// when it states them and they are known: for
+    /// `operator convert<T, V, O>(value: V) -> O
+    ///     requires O in {T, result<T, error>}`
+    /// called as `convert<f64>(count)`, an `f64` and a
+    /// `result<f64, error>`.
+    among: Option<Vec<Type>>,
+}
+
+/// The parameter of a candidate each argument of a call is given to,
+/// in the order the arguments are written; `None` when the candidate
+/// does not take them.
+///
+/// GEN-6: "An operator declares the parameters every candidate takes. A
+/// candidate's shape honors them ... and it may declare further const
+/// options of its own". So a candidate's first parameters are the
+/// operator's, place for place, and are named as the operator names
+/// them (EXPR-2); those after are its options, by its own names. An
+/// argument with no name is given to the parameter in its position.
+fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<Vec<usize>> {
+    let own = public.parameters.len();
+    if signature.parameters.len() < own {
+        return None;
+    }
+    let mut taken = vec![false; signature.parameters.len()];
+    let mut places = Vec::with_capacity(given.len());
+    for given in given {
+        let index = match &given.key {
+            Key::Position(position) => *position,
+            Key::Name(name) => public
+                .parameters
+                .iter()
+                .position(|parameter| parameter.name == *name)
+                .or_else(|| {
+                    signature
+                        .parameters
+                        .iter()
+                        .skip(own)
+                        .position(|parameter| parameter.name == *name)
+                        .map(|option| option + own)
+                })?,
+        };
+        if index >= signature.parameters.len() || taken[index] {
+            return None;
+        }
+        taken[index] = true;
+        places.push(index);
+    }
+    Some(places)
+}
+
+/// The set of each requirement `name in {...}` in `node`: the relation
+/// itself, the sides of an `&&`, and those in parentheses. Each must
+/// hold, so the name is in every one of them.
+fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
+    match node.kind() {
+        SyntaxKind::ConstraintRelation => {
+            let operands: Vec<SyntaxNode> = node.children().collect();
+            let [left, right] = operands.as_slice() else {
+                return;
+            };
+            let named = left.kind() == SyntaxKind::NamedType
+                && left.text().to_string().trim() == name
+                && right.kind() == SyntaxKind::ConstraintSet
+                && tokens(node).any(|token| token.text() == "in");
+            if named {
+                sets.push(right.clone());
+            }
+        }
+        SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
+            for side in node.children() {
+                result_sets(&side, name, sets);
+            }
+        }
+        SyntaxKind::ConstraintParen => {
+            if let Some(inner) = node.children().next() {
+                result_sets(&inner, name, sets);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A constant a candidate's condition compares an option with, or the
+/// value a call gives an option (GEN-6).
+#[derive(Debug, PartialEq)]
+enum OptionValue {
+    /// `.member`: the member's name. The enum it is of is the option's
+    /// type, the same for what the call gives and what it is compared
+    /// with.
+    Member(String),
+    /// A literal, as the value it denotes: `1_000` is `1000`, and a
+    /// string is its contents.
+    Literal(Value),
+}
+
+impl OptionValue {
+    /// True when two constants are one value. An integer and a float
+    /// are compared as numbers: an option of type `f64` may be given
+    /// `1` (EXPR-5).
+    fn same(&self, other: &OptionValue) -> bool {
+        match (self, other) {
+            (OptionValue::Literal(Value::Int(whole)), OptionValue::Literal(Value::Float(real)))
+            | (OptionValue::Literal(Value::Float(real)), OptionValue::Literal(Value::Int(whole))) =>
+            {
+                // `as` here converts an integer to the nearest float.
+                *whole as f64 == *real
+            }
+            _ => self == other,
+        }
+    }
+}
+
+/// The constant an expression is, when it is a literal, a number under
+/// a minus, or a `.member`; `None` for any other expression.
+fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
+    match node.kind() {
+        SyntaxKind::ParenExpr => constant_of(&node.children().next()?),
+        // `.member`: the name is the last token, any word (LEX-9).
+        SyntaxKind::ImpliedMember => tokens(node)
+            .last()
+            .map(|name| OptionValue::Member(name.text().to_string())),
+        SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
+            let operand = node.children().next()?;
+            // LEX-7: the least `i64` is written as a minus over 2^63,
+            // which is itself no `i64`.
+            if is_least_magnitude(&operand) {
+                return Some(OptionValue::Literal(Value::Int(i64::MIN)));
+            }
+            let value = match constant_of(&operand)? {
+                OptionValue::Literal(Value::Int(value)) => Value::Int(value.checked_neg()?),
+                OptionValue::Literal(Value::Float(value)) => Value::Float(-value),
+                OptionValue::Literal(Value::Duration(value)) => {
+                    Value::Duration(value.checked_neg()?)
+                }
+                _ => return None,
+            };
+            Some(OptionValue::Literal(value))
+        }
+        SyntaxKind::Literal => {
+            let token = tokens(node).next()?;
+            let text = token.text();
+            let value = match token.kind() {
+                SyntaxKind::Int => Value::Int(i64::try_from(decode_integer(text).ok()?).ok()?),
+                SyntaxKind::Float => Value::Float(decode_float(text).ok()?),
+                SyntaxKind::Str => Value::Str(decode_string(text).ok()?),
+                SyntaxKind::KwTrue => Value::Bool(true),
+                SyntaxKind::KwFalse => Value::Bool(false),
+                SyntaxKind::KwNull => Value::Null,
+                SyntaxKind::Duration => Value::Duration(decode_duration(text).ok()?),
+                SyntaxKind::Temporal => Value::Temporal(text.to_string()),
+                _ => return None,
+            };
+            Some(OptionValue::Literal(value))
+        }
+        _ => None,
+    }
+}
+
+/// The default a declaration writes for `parameter`, one of its own.
+fn default_at(declaration: &SyntaxNode, parameter: &crate::types::Parameter) -> Option<SyntaxNode> {
+    let written = parameters(declaration).into_iter().find(|written| {
+        tokens(written)
+            .take_while(|token| token.kind() != SyntaxKind::Colon)
+            .any(|token| token.span().start == parameter.at.span.start)
+    })?;
+    default_of(&written)
+}
+
+/// Whether a candidate's condition holds, where `value_of` gives the
+/// value an option has at the call. `None` when it cannot be told: the
+/// condition is of a form this pass does not read, or an option's value
+/// is no constant.
+///
+/// GEN-6: a candidate compares "the option with constants: `requires
+/// zero == .error`, `requires zero in {.ieee, .nan}`". GEN-15:
+/// "negation binds before conjunction, which binds before disjunction".
+fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<OptionValue>) -> Option<bool> {
+    match node.kind() {
+        SyntaxKind::ConstraintParen => holds(&node.children().next()?, value_of),
+        SyntaxKind::ConstraintNot => holds(&node.children().next()?, value_of).map(|held| !held),
+        SyntaxKind::ConstraintBinary => {
+            let mut sides = node.children();
+            let left = holds(&sides.next()?, value_of);
+            let right = holds(&sides.next()?, value_of);
+            let both = has_token(node, SyntaxKind::AmpAmp);
+            match (left, right) {
+                (Some(left), Some(right)) if both => Some(left && right),
+                (Some(left), Some(right)) => Some(left || right),
+                // One side settles it whatever the other is.
+                (Some(false), _) | (_, Some(false)) if both => Some(false),
+                (Some(true), _) | (_, Some(true)) if !both => Some(true),
+                _ => None,
+            }
+        }
+        SyntaxKind::ConstraintRelation => {
+            let operands: Vec<SyntaxNode> = node.children().collect();
+            let [left, right] = operands.as_slice() else {
+                return None;
+            };
+            // The option is the lone name; the read pass has checked
+            // that it names one.
+            let option = |operand: &SyntaxNode| {
+                (operand.kind() == SyntaxKind::NamedType)
+                    .then(|| operand.text().to_string().trim().to_string())
+            };
+            if has_token(node, SyntaxKind::EqEq) {
+                let (name, constant) = match (option(left), option(right)) {
+                    (Some(name), None) => (name, right),
+                    (None, Some(name)) => (name, left),
+                    _ => return None,
+                };
+                Some(value_of(&name)?.same(&constant_of(constant)?))
+            } else if tokens(node).any(|token| token.text() == "in") {
+                let name = option(left)?;
+                if right.kind() != SyntaxKind::ConstraintSet {
+                    return None;
+                }
+                let value = value_of(&name)?;
+                let mut found = false;
+                for member in right.children() {
+                    found |= constant_of(&member)?.same(&value);
+                }
+                Some(found)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// True when an expression holds a block, at any depth: reading it may

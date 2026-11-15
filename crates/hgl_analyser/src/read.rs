@@ -448,7 +448,7 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
 
 /// The default of a parameter or struct member: its first child node
 /// after the `=`.
-fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
+pub(crate) fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.children_with_tokens()
         .skip_while(|element| element.kind() != SyntaxKind::Eq)
         .find_map(|element| element.into_node())
@@ -526,7 +526,7 @@ fn is_const(parameter: &SyntaxNode) -> bool {
 
 /// The parameters a function, an operator or a native function
 /// declares, as written.
-fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
+pub(crate) fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
     child(declaration, SyntaxKind::ParamList)
         .into_iter()
         .flat_map(|list| list.children())

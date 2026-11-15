@@ -2051,3 +2051,307 @@ fn an_operators_generic_arguments_request_its_output() {
         ["real: f64", "text: str", "truth: f64"]
     );
 }
+
+// ---- Options a candidate declares ----
+
+/// GEN-6: "An operator declares the parameters every candidate takes. A
+/// candidate's shape honors them ... and it may declare further const
+/// options of its own, each with a default or without. A call is
+/// matched against each candidate's own signature. One that names an
+/// option admits only the candidates that declare it. An option the
+/// call omits takes its candidate's default, and a candidate whose
+/// option has none is admitted only when the call gives it ... A call
+/// admits the candidate only where that holds for the option's value at
+/// the call, a default included."
+#[test]
+fn a_call_selects_by_the_options_its_candidates_declare() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, n: i64, text: str) {\n",
+        // The default fills `zero`, and the first candidate's
+        // condition holds for it.
+        "    let plain = ratio(a, b)\n",
+        "    let nan = ratio(a, b, zero: .nan)\n",
+        // Only the second is for `.error`; it has no default, and is
+        // admitted because the call gives the option.
+        "    let checked = ratio(a, b, zero: .error)\n",
+        // An argument with no name is given to the candidate's
+        // parameter in that position.
+        "    let placed = ratio(a, b, .error)\n",
+        // A candidate that declares no option.
+        "    let texts = ratio(text, n)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[4..],
+        [
+            "plain: f64",
+            "nan: f64",
+            "checked: result<f64, error>",
+            "placed: result<f64, error>",
+            "texts: str",
+        ]
+    );
+}
+
+/// GEN-6: a call "that names an option admits only the candidates that
+/// declare it". EXPR-2: a name that neither the operator nor any
+/// candidate declares is unknown.
+#[test]
+fn an_option_no_candidate_for_the_operands_declares_is_rejected() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, n: i64, text: str) {\n",
+        // The candidate for a `str` and an `i64` declares no `zero`.
+        "    let a1 = ratio(text, n, zero: .nan)\n",
+        // No candidate is for `.error` here.
+        "    let a2 = ratio(a, b, zero: .error)\n",
+        "    let a3 = ratio(a, b, zerro: .nan)\n",
+        "    let a4 = ratio(a, b, zero: .nan, zero: .ieee)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:14 operator/operator.no_candidate GEN-5",
+            "m.hgl:9:14 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:26 name/argument.unknown EXPR-2",
+            "m.hgl:11:38 name/argument.duplicate EXPR-2",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[..2],
+        [
+            "no value candidate of operator `ratio` takes `str`, `i64`, `zero: .nan`",
+            "no value candidate of operator `ratio` takes `f64`, `f64`, `zero: .error`",
+        ]
+    );
+}
+
+/// GEN-4: an operator "owns ... generic relationships, and
+/// requirements". Where its requirement says what its result may be, a
+/// candidate's result is one of those: with the call's generic
+/// arguments in place (GEN-8), that tells apart candidates the
+/// arguments alone do not.
+#[test]
+fn an_operators_requirement_says_what_its_result_may_be() {
+    let checked = module(concat!(
+        "enum Invalid { error, fail }\n",
+        "operator change<T, V, O>(value: V) -> O\n",
+        "    requires O in {T, result<T, error>}\n",
+        "impl const fn change(value: i64) -> f64 => 1.0\n",
+        "impl const fn change(value: i64) -> str => \"x\"\n",
+        "impl const fn change(value: str, invalid: Invalid = .error) -> result<i64, error>\n",
+        "    requires invalid == .error => ok(1)\n",
+        "impl const fn change(value: str, invalid: Invalid) -> i64\n",
+        "    requires invalid == .fail => 1\n",
+        "const fn uses(n: i64, text: str) {\n",
+        "    let real = change<f64>(n)\n",
+        "    let words = change<str>(n)\n",
+        "    let parsed = change<i64>(text)\n",
+        "    let forced = change<i64>(text, invalid: .fail)\n",
+        "    let none = change<bool>(n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:16 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "no value candidate of operator `change` takes `i64` and gives `bool` or \
+          `result<bool, error>`"
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[2..6],
+        [
+            "real: f64",
+            "words: str",
+            "parsed: result<i64, error>",
+            "forced: i64",
+        ]
+    );
+}
+
+/// GEN-15: constraints joined by `&&` all hold. Two requirements of an
+/// operator's result so joined admit only a result that is in both
+/// sets.
+#[test]
+fn an_operators_joined_requirements_of_its_result_all_hold() {
+    let checked = module(concat!(
+        "operator both<V, O>(value: V) -> O\n",
+        "    requires O in {i64, str} && (O in {str, bool})\n",
+        "impl const fn both(value: i64) -> i64 => 1\n",
+        "impl const fn both(value: i64) -> str => \"x\"\n",
+        "operator neither<V, O>(value: V) -> O\n",
+        "    requires O in {i64} && O in {str}\n",
+        "impl const fn neither(value: i64) -> i64 => 1\n",
+        "impl const fn neither(value: i64) -> str => \"x\"\n",
+        "const fn uses(n: i64) {\n",
+        "    let one = both(n)\n",
+        "    let none = neither(n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:12:16 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[1], "one: str");
+}
+
+/// EXPR-12: "Resolve configuration that selects an expression's source
+/// result type during source checking. A runtime-varying selector
+/// cannot change that type." An option a candidate's condition reads is
+/// given as no constant: which candidate is for it cannot be told. The
+/// catalogue has no row for it, so the call is not judged here.
+#[test]
+fn an_option_that_is_no_constant_is_not_judged() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "const fn uses(a: f64, b: f64, policy: Zero) {\n",
+        "    let untold = ratio(a, b, zero: policy)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(locals(&checked, "uses")[3], "untold: _");
+}
+
+/// GEN-6: "The operator owns the defaults of the parameters it
+/// declares." A candidate that takes such a parameter with no default
+/// of its own is admitted for a call that leaves it out, and its
+/// condition is checked against the operator's default.
+#[test]
+fn an_operators_default_is_the_options_value_for_a_candidates_condition() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "const fn uses(a: f64, b: f64) {\n",
+        "    let plain = ratio(a, b)\n",
+        "    let checked = ratio(a, b, zero: .error)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[2..],
+        ["plain: f64", "checked: result<f64, error>"]
+    );
+}
+
+/// GEN-6: "A call is matched against each candidate's own signature."
+/// Candidates may declare their options in different orders, so which
+/// option an argument with no name is given to is each candidate's to
+/// say: one given in position for one candidate and named for another
+/// is given twice only to a candidate that has both in one place.
+#[test]
+fn an_option_given_in_position_is_each_candidates_own() {
+    let checked = module(concat!(
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick(value: str, a: i64 = 0) -> i64 => a\n",
+        "impl const fn pick(value: i64, b: i64 = 0, a: i64 = 0) -> i64 => a + b\n",
+        "const fn uses() {\n",
+        // For the second candidate `2` is `b`, and `a` is given once.
+        "    let fine = pick(1, 2, a: 3)\n",
+        // For the first, `2` is `a`, which is then given twice: it is
+        // not admitted, and nothing else takes a `str`.
+        "    let twice = pick(\"x\", 2, a: 3)\n",
+        // A parameter of the operator is the same place in every
+        // candidate.
+        "    let again = pick(1, value: 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:8:25 name/argument.duplicate EXPR-2",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[0], "fine: i64");
+}
+
+/// GEN-6: a candidate compares "the option with constants". They are
+/// compared as the values they denote, not as they are written: a
+/// string by its contents, a number by its value, an integer given to
+/// an `f64` option as that number.
+#[test]
+fn an_options_value_is_compared_as_a_value() {
+    let checked = module(concat!(
+        "operator mark<V>(value: V) -> str\n",
+        "impl const fn mark(value: i64, mode: str = \"ab\") -> str\n",
+        "    requires mode == \"ab\" => \"exact\"\n",
+        "impl const fn mark(value: i64, mode: str) -> str\n",
+        "    requires mode == \"a b\" => \"spaced\"\n",
+        "operator sized<V>(value: V) -> i64\n",
+        "impl const fn sized(value: i64, limit: i64 = 1000) -> i64\n",
+        "    requires limit == 1_000 => 1\n",
+        "impl const fn sized(value: i64, limit: i64) -> i64\n",
+        "    requires limit in {-1, 2} => 2\n",
+        "operator near<V>(value: V) -> i64\n",
+        "impl const fn near(value: f64, within: f64 = 0.0) -> i64\n",
+        "    requires within == 1.0 => 1\n",
+        // A number under a minus: the least `i64`, whose magnitude is
+        // no `i64` (LEX-7), and a duration.
+        "operator floor<V>(value: V) -> i64\n",
+        "impl const fn floor(value: i64, least: i64 = 0) -> i64\n",
+        "    requires least == -9223372036854775808 => 1\n",
+        "impl const fn floor(value: f64, offset: duration = 0s) -> i64\n",
+        "    requires offset == -1s => 2\n",
+        "const fn uses(x: f64) {\n",
+        "    let least = floor(1, least: -9223372036854775808)\n",
+        "    let offset = floor(x, offset: -1s)\n",
+        // Each is one candidate: were the two strings taken for one,
+        // the second call would be ambiguous.
+        "    let exact = mark(1)\n",
+        "    let spaced = mark(1, mode: \"a b\")\n",
+        "    let default = sized(1)\n",
+        "    let written = sized(1, limit: 1000)\n",
+        "    let negative = sized(1, limit: -1)\n",
+        "    let widened = near(x, within: 1)\n",
+        // No candidate is for these values.
+        "    let other = sized(1, limit: 3)\n",
+        "    let unset = near(x)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:29:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:30:17 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[1..9],
+        [
+            "least: i64",
+            "offset: i64",
+            "exact: str",
+            "spaced: str",
+            "default: i64",
+            "written: i64",
+            "negative: i64",
+            "widened: i64",
+        ]
+    );
+}
