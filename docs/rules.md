@@ -139,7 +139,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits; a `signal` input's default other than `null` |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. Left: null is no value of plain T |
+| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. a literal `null` is no value of a type with no `?`. Left: null from other expressions |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 
@@ -153,15 +153,15 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
 | EXPR-2 | analyser | planned | Positional before named; duplicate, unknown, missing and mistyped arguments rejected |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
-| EXPR-3 | analyser | planned | Category and type of `let` and `var`; definite assignment |
+| EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned. Left: assignment through control flow; values against connections; inner declarations |
 | EXPR-4 | analyser | planned | Values and connections kept distinct; reassigning a graph `var` rewires |
-| EXPR-5 | analyser | planned | Expected type; numeric widening; const expression restrictions |
-| EXPR-6 | analyser | planned | A guard precedes the payload read it protects |
+| EXPR-5 | analyser | partial | A value fits the type its place expects; an `i64` is widened where an `f64` is expected; `null`, a tuple and a sequence take the expected type. Left: constructors; const expression restrictions |
+| EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
 | EXPR-7 | analyser | planned | Structural and atomic projection; `ref` access kept |
 | EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
 | EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
-| EXPR-9 | analyser | planned | The use site and expected type give a sequence its meaning |
+| EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type. Left: pairs; `_`; ordering and uniqueness |
 | EXPR-10 | parser | done | A named-entry brace directly after an operator is its configuration; an empty one rejected |
 | EXPR-10 | analyser | planned | Configuration bound to the operator's public parameters; unknown, duplicate and unsupported options rejected |
 | EXPR-11 | parser | done | `<=>` at the comparison tier |
@@ -185,7 +185,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
-| FN-7 | analyser | planned | Return by phase; an anonymous function takes its context from the accepting form |
+| FN-7 | analyser | partial | A value function's `return` and arrow body are of its result type. Left: return by phase; a function that ends without returning; an anonymous function's context |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
@@ -379,7 +379,7 @@ the same numeric rules the transpiler rows give.
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| NUM-1 | analyser | planned | Result types of arithmetic |
+| NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions. Left: configured operators; operands that are no numbers; temporal bodies |
 | NUM-1 | transpiler | planned | Floor division and modulo rounding |
 | NUM-2 | transpiler | planned | i64 overflow is an error; IEEE float arithmetic; exact mixed comparison |
 | NUM-3 | transpiler | planned | Division by zero under `ieee` and `nan` |

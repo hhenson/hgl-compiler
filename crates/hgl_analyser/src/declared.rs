@@ -1846,7 +1846,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
 }
 
 /// True when two types are the same as far as each is known.
-fn agree(left: &Type, right: &Type) -> bool {
+pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
     let all = |left: &[Type], right: &[Type]| {

@@ -61,11 +61,13 @@ mod constant;
 mod declare;
 mod declared;
 mod forms;
+pub mod hir;
 mod imports;
 mod program;
 mod read;
 mod resolve;
 mod types;
+mod values;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
@@ -222,10 +224,19 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
+        /// A value's type is not the type its place requires (EXPR-5),
+        /// or `null` stands where the type is not nullable (TYPE-14).
+        pub const TYPE_MISMATCH: &str = "type.mismatch";
+        /// A `var` is read on a path that has given it no value
+        /// (EXPR-3).
+        pub const BINDING_UNASSIGNED: &str = "binding.unassigned";
+        /// A binding that is no `var` is assigned (EXPR-3).
+        pub const BINDING_IMMUTABLE: &str = "binding.immutable";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 3] = [TYPE_MISMATCH, BINDING_UNASSIGNED, BINDING_IMMUTABLE];
     }
 }
 
@@ -274,6 +285,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     forms::check(&program, diagnostics);
     read::read(&mut program, diagnostics);
     declared::check(&mut program, diagnostics);
+    values::check(&mut program, diagnostics);
     program
 }
 
@@ -287,6 +299,19 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// An error with one of this compiler's own codes ([`codes::local`]):
+/// the rule cited rejects the source, and the catalogue has no row for
+/// it.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

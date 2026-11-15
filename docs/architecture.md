@@ -38,7 +38,7 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types; expressions, phases and constants planned |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the simple expressions of value functions; calls, control flow, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
 | formatter | Syntax tree to source text | planned |
@@ -229,7 +229,7 @@ It is built in passes:
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
-| Value expressions | The type of every expression of a value function and of every constant | | planned |
+| Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-3, EXPR-5, EXPR-9, NUM-1, FN-7, TYPE-14 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return` |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
 | Tests and eval | Test blocks, `assert`, eval targets and traces | | planned |
@@ -417,6 +417,46 @@ Each has a row of the catalogue:
 | `generic.kind_unresolved` | A struct's generic parameter that no field or constraint names |
 | `generic.argument_kind` | A generic argument of the other kind than its parameter |
 
+### Value expressions
+
+The body of each value function, `const fn`, is read into a typed form,
+`hgl_analyser::hir`: every local with its type, every expression with
+its type, and a node wherever the source leaves a step unwritten, such
+as an `i64` taken as an `f64`. It names no target. It is what the stages
+after the analyser read; the syntax tree stays for the formatter.
+
+The pass is built form by form. So far it reads:
+
+| Form | Rule | What is done |
+| --- | --- | --- |
+| A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime` |
+| `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?` it is rejected |
+| A name | UNIT-10, GEN-13 | A parameter, a local, or a generic value parameter, with its type |
+| An operator | NUM-1, NUM-6, EXPR-6 | `+ - * // %` of two `i64` are `i64`, with an `f64` they are `f64`; `/` is `f64`; a comparison is a `bool`; `&&`, `\|\|` and `!` take bools |
+| A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have |
+| `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
+| `return`, `=> value` | FN-7 | Of the function's result type |
+
+A value fits its place when its type is the one expected, when it is a
+`T` where a `T?` is expected, or when it is an `i64` where an `f64` is
+expected, which is written down as widened (EXPR-5).
+
+What the pass does not read yet has no type, and nothing is reported of
+it or of what uses it (ERR-9): a call, a member, an index, an operator
+given configuration, `if`, `switch`, `for`, a pair sequence. After such
+a form every `var` is taken to be assigned. What an operator gives for
+operands that are not numbers, and the type of a `<=>` outcome, are for
+core to say and are not known here.
+
+Three rejections have no catalogue row yet and carry codes local to this
+compiler (`hgl_analyser::codes::local`), proposed to the specification:
+
+| Local code | Rejection |
+| --- | --- |
+| `type.mismatch` | A value's type is not the type its place expects; `null` where the type has no `?` |
+| `binding.unassigned` | A `var` read before it is given a value |
+| `binding.immutable` | A binding that is no `var` assigned |
+
 ### Order
 
 Nothing depends on the order the files are given in (UNIT-1). Where a
@@ -522,8 +562,9 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser reports 53
-codes, all catalogued (`hgl_analyser::codes`), and its tests check each
-diagnostic's category and code against the catalogue.
+catalogued codes (`hgl_analyser::codes`) and three local ones
+(`hgl_analyser::codes::local`), and its tests check each diagnostic's
+category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.

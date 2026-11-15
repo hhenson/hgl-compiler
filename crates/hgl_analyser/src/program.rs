@@ -10,6 +10,7 @@ use hgl_parser::SyntaxNode;
 use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
+use crate::hir::Body;
 use crate::types::{Detail, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
@@ -71,6 +72,10 @@ pub struct Module {
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
     pub written: Vec<WrittenType>,
+    /// The typed body of each value function: one entry for each of
+    /// `declarations`, in the same order, `None` for a declaration that
+    /// is no value function or has no body.
+    pub bodies: Vec<Option<Body>>,
     /// The module's declaration scope: for each name, the positions in
     /// `declarations` of what it is bound to. One, or the two of a
     /// temporal and value pair (FN-4).
