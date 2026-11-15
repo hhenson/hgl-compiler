@@ -158,7 +158,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-5 | analyser | partial | A value fits the type its place expects; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type. Left: const expression restrictions; temporal bodies |
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
-| EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length. Left: temporal projection; `ref` access; the payload of a nullable or a result |
+| EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length, where the constant is integer literals under a minus or joined by `+`, `-` and `*`. Left: a tuple's index that is any other constant; temporal projection; `ref` access; the payload of a nullable or a result |
 | EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
 | EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
 | EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected. Left: pairs; `_`; ordering and uniqueness |
