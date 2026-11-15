@@ -2658,13 +2658,29 @@ fn typed_by_place(node: &SyntaxNode) -> bool {
             .next()
             .is_some_and(|inner| typed_by_place(&inner)),
         SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
-        SyntaxKind::Block => value_of_branch(node).is_some_and(|value| typed_by_place(&value)),
+        // An integer literal that is a block's value is an `f64` where
+        // one is expected (EXPR-5), as the block's place says.
+        SyntaxKind::Block => value_of_branch(node)
+            .is_some_and(|value| typed_by_place(&value) || is_integer_written(&value)),
         // The condition is first; the branches follow it.
         SyntaxKind::IfExpr => node
             .children()
             .skip(1)
             .any(|branch| typed_by_place(&branch)),
         _ => takes_its_type(node),
+    }
+}
+
+/// True when an expression is an integer literal as it is written,
+/// under a minus or in parentheses or not.
+fn is_integer_written(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::Int),
+        SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| is_integer_written(&inner)),
+        _ => false,
     }
 }
 
@@ -2765,6 +2781,12 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
+            // CTRL-5: what follows a `return` is not reached. It is read
+            // for what it reports itself, and is not the block's value.
+            Some(last) if self.returned => {
+                let (value, _) = self.flow(&last, Some(&Type::Unknown), false);
+                (Some(Box::new(value)), Outcome::Returns)
+            }
             Some(last) => {
                 let (value, outcome) = self.flow(&last, expected, used);
                 match (outcome, expected) {
