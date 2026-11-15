@@ -646,9 +646,32 @@ fn entries_of_two_types_are_judged_only_where_nothing_is_expected() {
         "    let passed = missing([a, b])\n",
         "    let typed: list<Shape> = [a, b]\n",
         "    let alone = [a, b]\n",
+        // A place that is known and holds no sequence reports it, once.
+        "    let number: i64 = [1, \"x\"]\n",
+        "    let empty: i64 = []\n",
+        "    let nested: list<i64> = [[1, \"x\"]]\n",
+        // A dictionary's entries are for a later pass.
+        "    let named: dict<str, i64> = []\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:8:21 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:21 type/type.mismatch EXPR-5",
+            "m.hgl:9:23 type/type.mismatch EXPR-5",
+            "m.hgl:10:22 type/type.mismatch EXPR-5",
+            "m.hgl:11:30 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `Square`, and an element, as the first is, is `Round`",
+            "this is `list<_>`, and the type written for it is `i64`",
+            "this is `list<_>`, and the type written for it is `i64`",
+            "this is `list<_>`, and an element is `i64`",
+        ]
+    );
     assert_eq!(
         locals(&checked, "shapes"),
         [
@@ -657,6 +680,10 @@ fn entries_of_two_types_are_judged_only_where_nothing_is_expected() {
             "passed: _",
             "typed: list<Shape>",
             "alone: list<Round>",
+            "number: i64",
+            "empty: i64",
+            "nested: list<i64>",
+            "named: dict<str, i64>",
         ]
     );
 }

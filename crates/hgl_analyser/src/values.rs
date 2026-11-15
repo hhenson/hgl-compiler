@@ -681,6 +681,22 @@ impl<'a> Typer<'a> {
             }
             return (ExprKind::Sequence(elements), expected.clone());
         }
+        // From here the place gives the entries no type. Where it
+        // expects a type that is known and holds no sequence, an `i64`,
+        // the sequence is no value of it. It is then a list of what is
+        // not known, which the place reports as no `i64`, and its
+        // entries are not judged as well. A dictionary's entries are for
+        // the pass that reads dictionaries.
+        let misplaced = expected
+            .is_some_and(|expected| !open(expected) && !matches!(expected, Type::Dict { .. }));
+        let unjudged = if misplaced {
+            Type::List {
+                element: Box::new(Type::Unknown),
+                size: None,
+            }
+        } else {
+            Type::Unknown
+        };
         // An entry that takes its type from its place, `null`, says
         // nothing of what the sequence holds: the others are read
         // first, and it is then read as an element of their type.
@@ -715,7 +731,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|item| self.expression(item, Some(&Type::Unknown)))
                 .collect();
-            return (ExprKind::Sequence(elements), Type::Unknown);
+            return (ExprKind::Sequence(elements), unjudged);
         };
         let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
         let of = if known.iter().all(|ty| numbers(ty))
@@ -735,7 +751,8 @@ impl<'a> Typer<'a> {
         // Where what the place expects is not known, it may be what
         // gives entries of two types their one type: a `list<Base>` for
         // an `A` and a `B` that inherit from it. Such entries are not
-        // judged here, and the sequence has no type.
+        // judged here, and the sequence has no type. Where the place
+        // is known and holds no sequence, the place reports it.
         let disagree = read.iter().flatten().any(|entry| {
             !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
         });
@@ -748,7 +765,7 @@ impl<'a> Typer<'a> {
                     None => self.expression(item, Some(&Type::Unknown)),
                 })
                 .collect();
-            return (ExprKind::Sequence(elements), Type::Unknown);
+            return (ExprKind::Sequence(elements), unjudged);
         }
         let elements: Vec<Expr> = items
             .iter()
@@ -758,7 +775,7 @@ impl<'a> Typer<'a> {
                     Some(entry) => entry,
                     None => self.expression(item, Some(&of)),
                 };
-                self.fit(entry, &of, "an element, as the first is")
+                self.fit(entry, &of, "an element, as the first is,")
             })
             .collect();
         let ty = Type::List {
