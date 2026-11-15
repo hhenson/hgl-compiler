@@ -506,7 +506,7 @@ impl<'a> Typer<'a> {
     /// expected type.
     fn tuple(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let items: Vec<SyntaxNode> = node.children().collect();
-        let expected = match expected {
+        let expected = match not_null(expected) {
             Some(Type::Tuple(expected)) if expected.len() == items.len() => Some(expected),
             _ => None,
         };
@@ -547,6 +547,8 @@ impl<'a> Typer<'a> {
         {
             return (ExprKind::Unread, Type::Unknown);
         }
+        // A sequence is no `null`: of a `set<i64>?` expected, the set.
+        let expected = not_null(expected);
         let element = match expected {
             Some(Type::List { element, .. }) | Some(Type::Set(element)) => Some(&**element),
             _ => None,
@@ -612,6 +614,14 @@ impl<'a> Typer<'a> {
                 (kind, BOOL)
             }
             SyntaxKind::Minus => {
+                // LEX-7: 2^63 is an integer only as the operand of a
+                // minus, where the two are the least `i64`.
+                if is_least_magnitude(&operand) {
+                    return (
+                        ExprKind::Literal(Value::Int(i64::MIN)),
+                        Type::Scalar(Scalar::I64),
+                    );
+                }
                 let operand = self.expression(&operand, None);
                 // What `-` gives for a value that is no number is for
                 // core to say.
@@ -775,6 +785,25 @@ fn admits(expected: &Type, ty: &Type) -> bool {
     match expected {
         Type::Nullable(inner) => admits(inner, ty),
         _ => false,
+    }
+}
+
+/// True when `node` is the integer literal 2^63, which is one more
+/// than the greatest `i64`.
+fn is_least_magnitude(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::Literal
+        && tokens(node).next().is_some_and(|token| {
+            token.kind() == SyntaxKind::Int
+                && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
+        })
+}
+
+/// The type a value that is not `null` is expected to have: of `T?`,
+/// `T` (TYPE-14: "either a T or null").
+fn not_null(expected: Option<&Type>) -> Option<&Type> {
+    match expected {
+        Some(Type::Nullable(inner)) => not_null(Some(inner)),
+        other => other,
     }
 }
 

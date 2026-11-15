@@ -117,9 +117,16 @@ fn an_operator_has_the_type_cores_contract_gives() {
         "    let outcome = a <=> b\n",
         "    let joined = \"a\" + \"b\"\n",
         "    let grouped = (a + 1) * 2\n",
+        // LEX-7: "the literal 2^63 only as the direct operand of a
+        // unary minus", where the two are the least `i64`.
+        "    let least = -9223372036854775808\n",
         "}\n",
+        "const fn minimum() -> str => -9223372036854775808\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:19:30 local:type/type.mismatch EXPR-5"]
+    );
     assert_eq!(
         locals(&checked, "operators"),
         [
@@ -139,6 +146,7 @@ fn an_operator_has_the_type_cores_contract_gives() {
             "outcome: _",
             "joined: _",
             "grouped: i64",
+            "least: i64",
         ]
     );
 }
@@ -354,7 +362,14 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         "    let pair = (1, \"a\")\n",
         "    let wanted_pair: tuple<f64, str> = (a, \"a\")\n",
         "    let wrong_pair: tuple<i64, i64> = (1, \"a\")\n",
+        // TYPE-14: a `T?` is "either a T or null", so what is expected
+        // of a sequence or a tuple that is no `null` is the `T`.
+        "    let maybe: set<i64>? = [1, 2]\n",
+        "    let maybe_real: list<f64>? = [1, a]\n",
+        "    let maybe_pair: tuple<f64, str>? = (a, \"a\")\n",
+        "    let maybe_wrong: list<str>? = [1]\n",
         "}\n",
+        "const fn member_set() -> set<i64>? => [1, 2]\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -362,6 +377,7 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "m.hgl:5:21 local:type/type.mismatch EXPR-5",
             "m.hgl:8:34 local:type/type.mismatch EXPR-5",
             "m.hgl:12:43 local:type/type.mismatch EXPR-5",
+            "m.hgl:16:36 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -378,6 +394,10 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "pair: tuple<i64, str>",
             "wanted_pair: tuple<f64, str>",
             "wrong_pair: tuple<i64, i64>",
+            "maybe: set<i64>?",
+            "maybe_real: list<f64>?",
+            "maybe_pair: tuple<f64, str>?",
+            "maybe_wrong: list<str>?",
         ]
     );
 }
