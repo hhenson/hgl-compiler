@@ -42,7 +42,8 @@ use crate::hir::{
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Module, Program, Role};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
-    Argument, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar,
+    Signature, Type,
 };
 use crate::{codes, local_error};
 
@@ -1084,7 +1085,7 @@ impl<'a> Typer<'a> {
             // nothing of it.
             None => {
                 let assigned = self.assign(name, list, &slots, "field");
-                let mut found: Vec<Option<Type>> = vec![None; read.generics.len()];
+                let mut found: Vec<Option<Argument>> = vec![None; read.generics.len()];
                 let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
                 for (position, (slot, node)) in assigned.iter().enumerate() {
                     let Some(index) = *slot else {
@@ -1098,7 +1099,7 @@ impl<'a> Typer<'a> {
                         .filter(|(_, found)| found.is_none())
                         .map(|(generic, _)| generic.at)
                         .collect();
-                    if takes_its_type(node) || !names_one_of(pattern, &unfound) {
+                    if takes_its_type(node) || !mentions(pattern, &unfound) {
                         continue;
                     }
                     let value = self.expression(node, Some(&Type::Unknown));
@@ -1107,7 +1108,7 @@ impl<'a> Typer<'a> {
                 }
                 let found: Vec<Argument> = found
                     .into_iter()
-                    .map(|found| Argument::Type(found.unwrap_or(Type::Unknown)))
+                    .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
                     .collect();
                 // Every field given is of its type with the arguments
                 // found in place: `Pair(1, "x")` gives `second: T` a
@@ -1685,24 +1686,26 @@ fn applies(generics: &[GenericParameter], given: &[Argument]) -> bool {
 
 /// Finds what generic parameters stand for from a field's type,
 /// `pattern`, and the type of the value the field is given, `actual`:
-/// `T` is `i64` when `list<T>` is given a `list<i64>`. `found` has an
-/// entry for each of `generics`; one already found is left as it is,
-/// and a type that is not known finds nothing.
-fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &mut [Option<Type>]) {
-    let mut both = |pattern: &Type, actual: &Type| infer(pattern, actual, generics, found);
+/// `T` is `i64` when `list<T>` is given a `list<i64>`, and `N` is 2
+/// when `list<i64, N>` is given a `list<i64, 2>`. `found` has an entry
+/// for each of `generics`; one already found is left as it is, and a
+/// type that is not known finds nothing.
+fn infer(
+    pattern: &Type,
+    actual: &Type,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
     match (pattern, actual) {
         (_, Type::Unknown) => {}
         (Type::Parameter { at, .. }, actual) => {
-            let position = generics.iter().position(|generic| generic.at == *at);
-            if let Some(position) = position
-                && found[position].is_none()
-            {
-                found[position] = Some(actual.clone());
-            }
+            find(*at, Argument::Type(actual.clone()), generics, found);
         }
-        (Type::Nullable(pattern), Type::Nullable(actual)) => both(pattern, actual),
+        (Type::Nullable(pattern), Type::Nullable(actual)) => {
+            infer(pattern, actual, generics, found)
+        }
         // A `T` given where a `T?` is expected (TYPE-14).
-        (Type::Nullable(pattern), actual) => both(pattern, actual),
+        (Type::Nullable(pattern), actual) => infer(pattern, actual, generics, found),
         (
             Type::Named {
                 module,
@@ -1718,26 +1721,38 @@ fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &m
             },
         ) if (module, declaration) == (actual_module, actual_declaration) => {
             for pair in arguments.iter().zip(actual_arguments) {
-                if let (Argument::Type(pattern), Argument::Type(actual)) = pair {
-                    both(pattern, actual);
+                match pair {
+                    (Argument::Type(pattern), Argument::Type(actual)) => {
+                        infer(pattern, actual, generics, found);
+                    }
+                    (Argument::Constant(pattern), Argument::Constant(actual)) => {
+                        infer_constant(pattern, actual, generics, found);
+                    }
+                    _ => {}
                 }
             }
         }
         (Type::Tuple(patterns), Type::Tuple(actuals)) if patterns.len() == actuals.len() => {
             for (pattern, actual) in patterns.iter().zip(actuals) {
-                both(pattern, actual);
+                infer(pattern, actual, generics, found);
             }
         }
         (
-            Type::List { element, .. },
+            Type::List { element, size },
             Type::List {
-                element: actual, ..
+                element: actual,
+                size: actual_size,
             },
-        ) => both(element, actual),
+        ) => {
+            infer(element, actual, generics, found);
+            if let (Some(size), Some(actual_size)) = (size, actual_size) {
+                infer_constant(size, actual_size, generics, found);
+            }
+        }
         (Type::Set(pattern), Type::Set(actual))
         | (Type::Ref(pattern), Type::Ref(actual))
         | (Type::Atomic(pattern), Type::Atomic(actual))
-        | (Type::Delta(pattern), Type::Delta(actual)) => both(pattern, actual),
+        | (Type::Delta(pattern), Type::Delta(actual)) => infer(pattern, actual, generics, found),
         (
             Type::Dict { key, value },
             Type::Dict {
@@ -1745,10 +1760,29 @@ fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &m
                 value: actual_value,
             },
         ) => {
-            both(key, actual_key);
-            both(value, actual_value);
+            infer(key, actual_key, generics, found);
+            infer(value, actual_value, generics, found);
         }
-        (Type::Rolling { value, .. }, Type::Rolling { value: actual, .. }) => both(value, actual),
+        (
+            Type::Rolling {
+                value,
+                maximum,
+                minimum,
+            },
+            Type::Rolling {
+                value: actual,
+                maximum: actual_maximum,
+                minimum: actual_minimum,
+            },
+        ) => {
+            infer(value, actual, generics, found);
+            infer_constant(maximum, actual_maximum, generics, found);
+            // TYPE-11: "Omitted minimum equals maximum."
+            if let Some(minimum) = minimum {
+                let actual_minimum = actual_minimum.as_ref().unwrap_or(actual_maximum);
+                infer_constant(minimum, actual_minimum, generics, found);
+            }
+        }
         (
             Type::Result { value, error },
             Type::Result {
@@ -1756,10 +1790,39 @@ fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &m
                 error: actual_error,
             },
         ) => {
-            both(value, actual_value);
-            both(error, actual_error);
+            infer(value, actual_value, generics, found);
+            infer(error, actual_error, generics, found);
         }
         _ => {}
+    }
+}
+
+/// [`infer`], for a size or a constant argument: a generic value
+/// parameter written there is the constant given in its place.
+fn infer_constant(
+    pattern: &Constant,
+    actual: &Constant,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    if let ConstantValue::Parameter { at, .. } = &pattern.value {
+        find(*at, Argument::Constant(actual.clone()), generics, found);
+    }
+}
+
+/// Records that the generic parameter declared at `at` stands for
+/// `argument`, unless something has been found for it already.
+fn find(
+    at: Location,
+    argument: Argument,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    let position = generics.iter().position(|generic| generic.at == at);
+    if let Some(position) = position
+        && found[position].is_none()
+    {
+        found[position] = Some(argument);
     }
 }
 
@@ -1798,10 +1861,44 @@ fn accepts_float(expected: &Type) -> bool {
 /// declared at `own`: not known when it still names one of them, which
 /// has then been given no argument.
 fn placed(ty: Type, own: &[Location]) -> Type {
-    if names_one_of(&ty, own) {
+    if mentions(&ty, own) {
         Type::Unknown
     } else {
         ty
+    }
+}
+
+/// True when `ty` names one of the generic parameters declared at
+/// `own`: as a type, or as a value in a size or a constant argument.
+fn mentions(ty: &Type, own: &[Location]) -> bool {
+    names_one_of(ty, own) || names_value_of(ty, own)
+}
+
+/// True when a size or a constant argument inside `ty` is a generic
+/// value parameter declared at one of `own`: the `N` of `list<i64, N>`.
+fn names_value_of(ty: &Type, own: &[Location]) -> bool {
+    let named = |constant: &Constant| matches!(&constant.value, ConstantValue::Parameter { at, .. } if own.contains(at));
+    let inner = |ty: &Type| names_value_of(ty, own);
+    match ty {
+        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
+            Argument::Type(ty) => inner(ty),
+            Argument::Constant(constant) => named(constant),
+        }),
+        Type::Tuple(elements) => elements.iter().any(inner),
+        Type::List { element, size } => size.as_ref().is_some_and(named) || inner(element),
+        Type::Set(ty) | Type::Ref(ty) | Type::Atomic(ty) | Type::Delta(ty) | Type::Nullable(ty) => {
+            inner(ty)
+        }
+        Type::Dict { key, value } => inner(key) || inner(value),
+        Type::Rolling {
+            value,
+            maximum,
+            minimum,
+        } => named(maximum) || minimum.as_ref().is_some_and(named) || inner(value),
+        Type::Result { value, error } => inner(value) || inner(error),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
+            false
+        }
     }
 }
 

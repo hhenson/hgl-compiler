@@ -727,6 +727,13 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "struct Bag<T> { values: list<T> }\n",
         "struct Both<T> {\n    first: T\n    rest: list<T>\n}\n",
         "struct Maybe<T> { value: T? }\n",
+        // A value parameter is found in a size, as a type is.
+        "struct Sized<const N: i64> { items: list<i64, N> }\n",
+        "const fn sized(xs: list<i64, 2>) {\n",
+        "    let two = Sized(xs)\n",
+        "    let written = Sized<2>(xs)\n",
+        "    let wrong = Sized<3>(xs)\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -736,6 +743,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "m.hgl:15:26 local:type/type.mismatch TYPE-14",
             "m.hgl:19:24 local:type/type.mismatch EXPR-5",
             "m.hgl:24:40 local:type/type.mismatch EXPR-5",
+            "m.hgl:37:26 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -746,6 +754,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "`null` is no value of `i64`: write `i64?`",
             "this is `i64`, and the type written for it is `str`",
             "this is `i64`, and the field `value` is `U`",
+            "this is `list<i64, 2>`, and the field `items` is `list<i64, 3>`",
         ]
     );
     assert_eq!(
@@ -766,6 +775,15 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "element: str",
             "both: Both<f64>",
             "maybe: Maybe<i64>",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "sized"),
+        [
+            "xs: list<i64, 2>",
+            "two: Sized<2>",
+            "written: Sized<2>",
+            "wrong: Sized<3>",
         ]
     );
 }
