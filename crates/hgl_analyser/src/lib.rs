@@ -61,11 +61,13 @@ mod constant;
 mod declare;
 mod declared;
 mod forms;
+pub mod hir;
 mod imports;
 mod program;
 mod read;
 mod resolve;
 mod types;
+mod values;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
@@ -77,7 +79,7 @@ pub use program::{
 };
 pub use types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, Field, GenericKind,
-    GenericParameter, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    GenericParameter, Member, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -222,10 +224,53 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
+        /// A value's type is not the type its place requires (EXPR-5),
+        /// or `null` stands where the type is not nullable (TYPE-14).
+        pub const TYPE_MISMATCH: &str = "type.mismatch";
+        /// A `var` is read on a path that has given it no value
+        /// (EXPR-3).
+        pub const BINDING_UNASSIGNED: &str = "binding.unassigned";
+        /// A binding that is no `var` is assigned (EXPR-3).
+        pub const BINDING_IMMUTABLE: &str = "binding.immutable";
+        /// An argument with no name follows a named one (EXPR-2).
+        pub const ARGUMENT_ORDER: &str = "argument.order";
+        /// A call or a constructor is given more positional arguments
+        /// than it has parameters or fields (EXPR-2).
+        pub const ARGUMENT_UNEXPECTED: &str = "argument.unexpected";
+        /// A named argument names no parameter or field (EXPR-2).
+        pub const ARGUMENT_UNKNOWN: &str = "argument.unknown";
+        /// A parameter or field is given twice (EXPR-2).
+        pub const ARGUMENT_DUPLICATE: &str = "argument.duplicate";
+        /// A parameter or field with no default is given nothing
+        /// (EXPR-2, TYPE-5).
+        pub const ARGUMENT_MISSING: &str = "argument.missing";
+        /// A value function calls a temporal function (FN-4).
+        pub const CALL_ROLE: &str = "call.role";
+        /// An abstract struct is constructed (TYPE-3).
+        pub const STRUCT_ABSTRACT: &str = "struct.abstract";
+        /// A struct has no field, or an enum no member, of the name
+        /// (EXPR-7, TYPE-7).
+        pub const MEMBER_UNKNOWN: &str = "member.unknown";
+        /// `.member` stands where no enum type is expected (TYPE-7).
+        pub const ENUM_CONTEXT: &str = "enum.context_type";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 12] = [
+            TYPE_MISMATCH,
+            BINDING_UNASSIGNED,
+            BINDING_IMMUTABLE,
+            ARGUMENT_ORDER,
+            ARGUMENT_UNEXPECTED,
+            ARGUMENT_UNKNOWN,
+            ARGUMENT_DUPLICATE,
+            ARGUMENT_MISSING,
+            CALL_ROLE,
+            STRUCT_ABSTRACT,
+            MEMBER_UNKNOWN,
+            ENUM_CONTEXT,
+        ];
     }
 }
 
@@ -274,6 +319,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     forms::check(&program, diagnostics);
     read::read(&mut program, diagnostics);
     declared::check(&mut program, diagnostics);
+    values::check(&mut program, diagnostics);
     program
 }
 
@@ -287,6 +333,19 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// An error with one of this compiler's own codes ([`codes::local`]):
+/// the rule cited rejects the source, and the catalogue has no row for
+/// it.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

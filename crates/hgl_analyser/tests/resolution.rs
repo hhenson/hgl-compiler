@@ -421,7 +421,7 @@ fn production_names_no_test_only_declaration() {
                 "module m part tests\n",
                 "test {\n",
                 "    struct Fixture { x: i64 }\n",
-                "    const fn helper() -> i64 => private()\n",
+                "    const fn helper() -> Fixture => Fixture(x: private())\n",
                 // A helper's local takes no helper's name; a
                 // production local may.
                 "    const fn clash() -> i64 {\n        let helper = 1\n        return helper\n    }\n",
@@ -559,7 +559,7 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         "struct Plain { value: i64 }\n",
         "const fn decide(a: i64, b: i64, c: i64) -> bool {\n",
         // Both readings parse. `Box` is a generic type: a constructor.
-        "    let made = Box<Plain>(c)\n",
+        "    let made = Box<Plain>(Plain(c))\n",
         // `a` is a parameter: comparisons.
         "    let compared = a<b>(c)\n",
         // `Plain` is a type with no generic parameters: comparisons.
@@ -624,7 +624,7 @@ fn an_imported_generic_type_is_not_ordered_either() {
                 "module m\n",
                 "use lib as l\n",
                 "const fn first(a: i64) -> bool => l::Box < a\n",
-                "const fn made(b: i64) -> bool => l::Box<l::Unit>(b)\n",
+                "const fn made(b: i64) -> l::Box<l::Unit> => l::Box<l::Unit>(l::Unit(b))\n",
             ),
         ),
         (

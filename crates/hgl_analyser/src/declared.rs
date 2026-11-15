@@ -29,7 +29,8 @@ use crate::constant::fold;
 use crate::program::{Declaration, DeclarationKind, Program};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, GenericKind, StructType, Type,
+    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, GenericKind, Member,
+    StructType, Type,
 };
 use crate::{codes, error};
 
@@ -88,6 +89,14 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         structs.fields(id);
     }
     structs.recursion(&ids);
+    // What each struct has, for the passes that read constructors and
+    // member accesses.
+    let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
+    for ((module, declaration), members) in members {
+        if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
+            read.members = members;
+        }
+    }
 }
 
 // ---- Enums (TYPE-7) ----
@@ -228,6 +237,10 @@ struct Introduced {
     /// Its type, with the generic arguments of the path it came by put
     /// in place of the parameters.
     ty: Type,
+    /// True when a construction that omits it has a default to take:
+    /// the one it is declared with, or one a struct on the way down
+    /// gives it.
+    has_default: bool,
     /// True when the default it is declared with is null.
     declared_null: bool,
     /// True when the default a construction takes is null: the one it
@@ -323,7 +336,7 @@ const DEPTH: usize = 64;
 const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
-fn names_parameter(ty: &Type) -> bool {
+pub(crate) fn names_parameter(ty: &Type) -> bool {
     match ty {
         Type::Parameter { .. } => true,
         Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
@@ -433,7 +446,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
 
 /// True when `ty` names one of the generic parameters declared at
 /// `declared`, itself or inside it.
-fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
+pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
     if declared.is_empty() {
         return false;
     }
@@ -493,7 +506,7 @@ fn weight(ty: &Type) -> usize {
 /// parents that each give the next `tuple<T, T>` doubles a field's type
 /// at every link. The weight is bounded before anything is built: no
 /// more than the type's own, times the heaviest argument's.
-fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+pub(crate) fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     let heaviest = map
         .iter()
         .map(|(_, argument)| match argument {
@@ -797,6 +810,7 @@ impl Structs<'_> {
         if let Some(read) = self.struct_type(id) {
             for field in read.fields.iter().filter(|field| field.has_default) {
                 for inherited in all.iter_mut().filter(|parent| parent.name == field.name) {
+                    inherited.has_default = true;
                     inherited.null_default = field.null_default;
                 }
             }
@@ -808,6 +822,7 @@ impl Structs<'_> {
                     all.push(Introduced {
                         name: field.name.clone(),
                         ty: ty.clone(),
+                        has_default: field.has_default,
                         declared_null: field.null_default,
                         null_default: field.null_default,
                         origin: (id, index),
@@ -848,6 +863,28 @@ impl Structs<'_> {
             return Type::Unknown;
         }
         substitute_within(ty, &map)
+    }
+
+    /// Every field the struct `id` has, its parents' first. A field
+    /// the struct declares again is listed once, as the struct has it.
+    fn members(&self, id: Id) -> Vec<Member> {
+        let mut members: Vec<Member> = Vec::new();
+        let Some(fields) = self.fields.get(&id) else {
+            return members;
+        };
+        for field in &fields.all {
+            let member = Member {
+                name: field.name.clone(),
+                at: field.at,
+                ty: field.ty.clone(),
+                has_default: field.has_default,
+            };
+            match members.iter_mut().find(|known| known.name == member.name) {
+                Some(known) => *known = member,
+                None => members.push(member),
+            }
+        }
+        members
     }
 
     /// The struct `id` and every struct it inherits from.
@@ -1846,7 +1883,7 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
 }
 
 /// True when two types are the same as far as each is known.
-fn agree(left: &Type, right: &Type) -> bool {
+pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
     let all = |left: &[Type], right: &[Type]| {
