@@ -1169,6 +1169,13 @@ fn a_const_option_compared_in_a_constraint_is_no_type() {
         "impl const fn div_(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
         // A const parameter of a function that is no candidate.
         "fn scaled(value: f64, const mode: Zero) -> f64 requires mode == .ieee => value\n",
+        // An option of the candidate's own, which its operator does not
+        // declare: "it may declare further const options of its own".
+        "operator halved<T>(value: T) -> T\n",
+        "impl const fn halved(value: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => value\n",
+        "native impl fn halved(value: i64, const zero: Zero) -> i64\n",
+        "    requires zero == .error\n",
     ));
     assert_eq!(checked.summary(), NONE);
     // No type was written where the option stands.

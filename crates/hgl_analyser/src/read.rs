@@ -858,8 +858,9 @@ impl Reader<'_> {
     /// value, which the parser cannot tell, so it guesses a type. Here
     /// the name is known: it is the option when it is a parameter
     /// marked `const`, or a parameter of a value candidate that its
-    /// operator marks `const` ("Every parameter of a value candidate is
-    /// a value, so it writes the option with no marker").
+    /// operator marks `const` or does not declare at all ("Every
+    /// parameter of a value candidate is a value, so it writes the
+    /// option with no marker").
     ///
     /// Any other parameter is left to be read as the type it is not,
     /// and is reported: GEN-3, "It cannot inspect temporal values".
@@ -921,17 +922,25 @@ impl Reader<'_> {
         if marked {
             return true;
         }
-        // A value candidate: the mark is its operator's.
+        // A value candidate. GEN-6: "Every parameter of a value
+        // candidate is a value, so it writes the option with no
+        // marker." Of a parameter its operator declares, the mark is
+        // the operator's. One the operator does not declare is the
+        // candidate's own option: a candidate "may declare further
+        // const options of its own".
         let Some(operator) = self.option_owner else {
             return false;
         };
         let operator = &self.program.modules[operator.module].declarations[operator.declaration];
-        parameters(&operator.syntax).iter().any(|parameter| {
-            is_const(parameter)
-                && names_before_colon(parameter)
-                    .last()
-                    .is_some_and(|declared| declared.text() == name.text())
-        })
+        let declared = parameters(&operator.syntax).into_iter().find(|parameter| {
+            names_before_colon(parameter)
+                .last()
+                .is_some_and(|declared| declared.text() == name.text())
+        });
+        match declared {
+            Some(parameter) => is_const(&parameter),
+            None => true,
+        }
     }
 
     /// Reads a type that stands in no other type, once.

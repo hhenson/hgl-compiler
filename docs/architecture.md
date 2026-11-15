@@ -431,7 +431,7 @@ knows what the name is bound to, and confirms or corrects the guess:
 | The name is | Read as |
 | --- | --- |
 | A parameter marked `const`, an operand of `==` or `in` whose other operand holds no type | The option: a value, and no type is recorded |
-| A parameter of a value candidate that its operator marks `const`, likewise | The option: a value candidate writes it with no marker |
+| A parameter of a value candidate that its operator marks `const` or does not declare, likewise | The option: a value candidate writes it with no marker, and one its operator does not declare is the candidate's own |
 | Any other parameter, an option anywhere else in a constraint, or one compared with a type | `type.not_a_type`, with a note of what a constraint may name (GEN-3: it "cannot inspect temporal values") |
 
 Nothing is selected by the option yet: comparing its value at a call is
