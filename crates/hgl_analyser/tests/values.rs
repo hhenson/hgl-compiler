@@ -428,16 +428,13 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
 #[test]
 fn a_form_not_read_yet_is_not_reported() {
     let checked = module(concat!(
-        "struct Quote { bid: f64 }\n",
-        "const fn helper(a: i64) -> i64 => a\n",
-        "const fn later(a: i64, quote: Quote) -> str {\n",
-        "    let called = helper(a)\n",
-        "    let member = quote.bid\n",
+        "const fn later(a: i64) -> str {\n",
         "    let prelude = missing(a)\n",
+        "    let configured = a /{zero: .ieee} 2\n",
         "    var total: i64\n",
         "    if (a > 1) {\n        total = 1\n    } else {\n        total = 2\n    }\n",
-        "    let after: str = total + called\n",
-        "    return called\n",
+        "    let after: str = total + prelude\n",
+        "    return prelude\n",
         "}\n",
         // A temporal function is for the pass that reads phases.
         "fn temporal(a: i64) -> str => a\n",
@@ -447,12 +444,221 @@ fn a_form_not_read_yet_is_not_reported() {
         locals(&checked, "later"),
         [
             "a: i64",
-            "quote: Quote",
-            "called: _",
-            "member: _",
             "prelude: _",
+            "configured: _",
             "total: i64",
             "after: str",
+        ]
+    );
+}
+
+// ---- Calls and constructions ----
+
+/// EXPR-2: "Positional arguments precede named ones; reject duplicates,
+/// unknown names, missing required arguments, and wrong types." UNIT-8:
+/// "A parameter whose type is written `T?` needs no default to be
+/// omitted." FN-4: "runtime/value evaluation chooses the value
+/// definition."
+#[test]
+fn an_argument_is_given_to_its_parameter() {
+    let checked = module(concat!(
+        "const fn scale(value: f64, factor: f64 = 2.0, bias: f64? = null, note: str?) -> f64 => value\n",
+        "fn temporal(value: f64) -> f64 => value\n",
+        "const fn calls(a: i64, text: str) -> f64 {\n",
+        "    let plain = scale(1.5)\n",
+        "    let widened = scale(a, factor: a)\n",
+        "    let named = scale(value: 1.5, bias: 2.0)\n",
+        "    let wrong = scale(text)\n",
+        "    let missing = scale(factor: 2.0)\n",
+        "    let unknown = scale(1.5, weight: 2.0)\n",
+        "    let twice = scale(1.5, value: 2.5)\n",
+        "    let order = scale(value: 1.5, 2.5)\n",
+        "    let many = scale(1.5, 2.5, 3.5, \"n\", 5.5)\n",
+        "    let role = temporal(1.5)\n",
+        // A name left for the prelude is not read, and its arguments
+        // are.
+        "    let left = prelude(a, !text)\n",
+        "    return plain\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:23 local:type/type.mismatch EXPR-5",
+            "m.hgl:9:19 local:type/argument.missing EXPR-2",
+            "m.hgl:10:30 local:name/argument.unknown EXPR-2",
+            "m.hgl:11:28 local:name/argument.duplicate EXPR-2",
+            "m.hgl:12:35 local:type/argument.order EXPR-2",
+            "m.hgl:13:42 local:type/argument.unexpected EXPR-2",
+            "m.hgl:14:16 local:function-kind/call.role FN-4",
+            "m.hgl:15:28 local:type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `str`, and the parameter `value` is `f64`",
+            "`scale` is given no `value`, a parameter with no default",
+            "`scale` has no parameter `weight`",
+            "`value` is given twice",
+            "an argument with no name follows a named one: positional arguments come first",
+            "`scale` has 4 parameters, and this is one more",
+            "`temporal` is a temporal function, and a value function calls value functions",
+            "this is `str`, and the operand of `!` is `bool`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "calls"),
+        [
+            "a: i64",
+            "text: str",
+            "plain: f64",
+            "widened: f64",
+            "named: f64",
+            "wrong: f64",
+            "missing: f64",
+            "unknown: f64",
+            "twice: f64",
+            "order: f64",
+            "many: f64",
+            "role: _",
+            "left: _",
+        ]
+    );
+}
+
+/// TYPE-5: "An ordinary constructor supplies complete required data."
+/// TYPE-3: "abstract values are not constructible." GEN-2: "A generic
+/// struct application supplies all arguments or infers them from
+/// constructor fields and expected type." TYPE-7: `.member` "names a
+/// member of the enum type its position expects and rejects where none
+/// is."
+#[test]
+fn a_struct_is_made_from_its_fields_and_read_by_them() {
+    let checked = module(concat!(
+        "struct Quote {\n    bid: f64\n    ask: f64 = 0.0\n    note: str?\n}\n",
+        "abstract struct Base { id: i64 }\n",
+        "struct Child : Base { extra: f64 }\n",
+        "struct Box<T> { value: T }\n",
+        "enum Side { buy, sell }\n",
+        "const fn build(a: i64, side: Side) -> Quote {\n",
+        "    let quote = Quote(bid: 1.5)\n",
+        "    let positional = Quote(a, 2.5)\n",
+        "    let short = Quote(ask: 1.0)\n",
+        "    let extra = Quote(bid: 1.0, mid: 2.0)\n",
+        // A parent's fields come first.
+        "    let child = Child(1, extra: 2.5)\n",
+        "    let base = Base(id: 1)\n",
+        "    let boxed = Box(value: a)\n",
+        "    let typed = Box<f64>(value: a)\n",
+        "    let expected: Box<str> = Box(value: a)\n",
+        "    let bid = quote.bid\n",
+        "    let id = child.id\n",
+        "    let inner = typed.value\n",
+        "    let nothing = quote.mid\n",
+        "    let buy = Side.buy\n",
+        "    let hold = Side.hold\n",
+        "    let implied: Side = .sell\n",
+        "    let same = side == .buy\n",
+        "    let none = .buy\n",
+        "    let number: i64 = .buy\n",
+        "    return Quote(bid: 1.5, note: \"n\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:17 local:type/argument.missing EXPR-2",
+            "m.hgl:15:33 local:name/argument.unknown EXPR-2",
+            "m.hgl:17:16 local:type/struct.abstract TYPE-3",
+            "m.hgl:20:41 local:type/type.mismatch EXPR-5",
+            "m.hgl:24:25 local:name/member.unknown EXPR-7",
+            "m.hgl:26:21 local:name/member.unknown TYPE-7",
+            "m.hgl:29:16 local:type/enum.context_type TYPE-7",
+            "m.hgl:30:23 local:type/enum.context_type TYPE-7",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`Quote` is given no `bid`, a field with no default",
+            "`Quote` has no field `mid`",
+            "`Base` is an abstract struct and is not constructed",
+            "this is `i64`, and the field `value` is `str`",
+            "`Quote` has no field `mid`",
+            "`Side` has no member `hold`",
+            "`.buy` is a member of the enum its place expects, and nothing here says which",
+            "`.buy` is a member of the enum its place expects, and a `i64` is expected here",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "build"),
+        [
+            "a: i64",
+            "side: Side",
+            "quote: Quote",
+            "positional: Quote",
+            "short: Quote",
+            "extra: Quote",
+            "child: Child",
+            "base: Base",
+            "boxed: Box<i64>",
+            "typed: Box<f64>",
+            "expected: Box<str>",
+            "bid: f64",
+            "id: i64",
+            "inner: f64",
+            "nothing: _",
+            "buy: Side",
+            "hold: Side",
+            "implied: Side",
+            "same: bool",
+            "none: _",
+            "number: i64",
+        ]
+    );
+}
+
+/// ERR-6: "Ordinary/atomic dictionary brackets ... are strict
+/// point-in-time reads." A list is indexed by an `i64`, a dictionary by
+/// its key.
+#[test]
+fn an_element_is_read_by_its_index_or_its_key() {
+    let checked = module(concat!(
+        "const fn elements(items: list<f64>, by_name: dict<str, i64>, a: i64) -> f64 {\n",
+        "    let first = items[0]\n",
+        "    let at = items[a]\n",
+        "    let bad = items[\"x\"]\n",
+        "    let count = by_name[\"x\"]\n",
+        "    let wrong = by_name[a]\n",
+        "    return first\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:21 local:type/type.mismatch EXPR-5",
+            "m.hgl:7:25 local:type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `str`, and the index of a list is `i64`",
+            "this is `i64`, and the key of the dictionary is `str`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "elements"),
+        [
+            "items: list<f64>",
+            "by_name: dict<str, i64>",
+            "a: i64",
+            "first: f64",
+            "at: f64",
+            "bad: f64",
+            "count: i64",
+            "wrong: i64",
         ]
     );
 }

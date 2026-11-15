@@ -766,6 +766,7 @@ impl Reader<'_> {
             generics: self.generics.clone(),
             parents,
             fields,
+            members: Vec::new(),
         }
     }
 

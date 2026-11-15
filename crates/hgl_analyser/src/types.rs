@@ -475,6 +475,25 @@ pub struct StructType {
     /// Its own members, in order: the parents' fields are not repeated
     /// here.
     pub fields: Vec<Field>,
+    /// Every field the struct has, its parents' first and each once:
+    /// what a constructor is given and a member access reads. It is
+    /// filled in once the structs have been read against one another.
+    pub members: Vec<Member>,
+}
+
+/// A field a struct has: its own, or one from a parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    /// Its name.
+    pub name: String,
+    /// Where it is declared.
+    pub at: Location,
+    /// Its type, in the struct's own generic parameters: a parent's
+    /// field has the arguments the struct gives that parent in place.
+    pub ty: Type,
+    /// True when a construction that omits the field has a default to
+    /// take: the field's own, or one a struct on the way down gives it.
+    pub has_default: bool,
 }
 
 /// One member of a struct.

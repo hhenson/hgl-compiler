@@ -127,12 +127,79 @@ pub enum ExprKind {
     /// An `i64` taken as the `f64` of the same number, where an `f64`
     /// is wanted (EXPR-5, NUM-1). The source writes nothing for it.
     Widen(Box<Expr>),
+    /// A call: `scale(value, factor: 2.0)`.
+    Call {
+        /// What is called.
+        callee: Callee,
+        /// The arguments, as they are written.
+        arguments: Vec<Argument>,
+    },
+    /// A struct made from its fields: `Quote(bid: 1.0, ask: 2.0)`. The
+    /// expression's type is the struct, with its generic arguments.
+    Construct {
+        /// The position of the struct's module in `Program::modules`.
+        module: usize,
+        /// The position of the struct in that module's `declarations`.
+        declaration: usize,
+        /// The fields given, as they are written. A field's position
+        /// is its place among the struct's `members`.
+        arguments: Vec<Argument>,
+    },
+    /// A member of an enum: `Side.buy`, or `.buy` where a `Side` is
+    /// expected (TYPE-7).
+    EnumMember {
+        /// The position of the enum's module in `Program::modules`.
+        module: usize,
+        /// The position of the enum in that module's `declarations`.
+        declaration: usize,
+        /// The member's position among the enum's members.
+        member: usize,
+    },
+    /// A field of a struct value: `quote.bid`.
+    Field {
+        /// The struct value.
+        base: Box<Expr>,
+        /// The field's position among the struct's `members`.
+        member: usize,
+    },
+    /// `base[index]`.
+    Index {
+        /// What is indexed.
+        base: Box<Expr>,
+        /// The index or key.
+        index: Box<Expr>,
+    },
     /// `(a, b)`.
     Tuple(Vec<Expr>),
     /// `[a, b]`: a sequence of values. Its type says what it makes.
     Sequence(Vec<Expr>),
     /// An expression no pass reads yet, or one that has been reported.
     Unread,
+}
+
+/// What a call calls.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Callee {
+    /// A value function.
+    Function {
+        /// The position of its module in `Program::modules`.
+        module: usize,
+        /// Its position in that module's `declarations`.
+        declaration: usize,
+    },
+    /// What no pass reads yet: a name left for the prelude, an
+    /// operator, a function that is itself an expression.
+    Unread,
+}
+
+/// One argument of a call or a constructor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Argument {
+    /// The parameter or field it is given to, by position in the
+    /// callee's list; `None` when it is given to a pack, or to nothing.
+    pub parameter: Option<usize>,
+    /// Its value.
+    pub value: Expr,
 }
 
 /// The value of a literal.

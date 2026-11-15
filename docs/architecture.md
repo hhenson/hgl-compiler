@@ -38,7 +38,7 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the simple expressions of value functions; calls, control flow, phases and constants planned |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
 | formatter | Syntax tree to source text | planned |
@@ -229,7 +229,7 @@ It is built in passes:
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
-| Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-3, EXPR-5, EXPR-9, NUM-1, FN-7, TYPE-14 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return` |
+| Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
 | Tests and eval | Test blocks, `assert`, eval targets and traces | | planned |
@@ -436,20 +436,31 @@ The pass is built form by form. So far it reads:
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have |
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type |
+| A call | EXPR-2, FN-4, UNIT-8 | Of the value function its name is bound to. Each argument is given to a parameter, by place and then by name; one given twice, to no parameter, or too many is rejected, and so is a parameter left with nothing that has no default and no `?`. A temporal function is not called from a value function |
+| A construction | TYPE-5, TYPE-3, GEN-2 | Its arguments are given to the struct's fields, a parent's first, as a call's are. A generic struct takes its arguments from `Name<...>`, from the type expected, or from the fields given. An abstract struct is not constructed |
+| `Side.buy`, `.buy` | TYPE-7 | A member of the enum named, or of the enum the place expects: an annotation, a parameter, a field, a result, the other operand of a comparison |
+| `value.field` | EXPR-7 | A field the struct has, a parent's included, with the value's generic arguments in place |
+| `base[index]` | ERR-6 | An element of a list by an `i64`, or the value a dictionary has for a key |
 
 A value fits its place when its type is the one expected, when it is a
 `T` where a `T?` is expected, or when it is an `i64` where an `f64` is
 expected, which is written down as widened (EXPR-5).
 
 What the pass does not read yet has no type, and nothing is reported of
-it or of what uses it (ERR-9): a call, a member, an index, an operator
-given configuration, `if`, `switch`, `for`, a pair sequence. After such
-a form every `var` is taken to be assigned. What an operator gives for
-operands that are not numbers, and the type of a `<=>` outcome, are for
-core to say and are not known here.
+it or of what uses it (ERR-9): an operator given configuration, `if`,
+`switch`, `for`, a pair sequence, a call of a name left for the prelude
+or of an operator, a generic function's parameter and result types, the
+payload of a nullable or a result. The arguments of a call that is not
+read are read themselves. After a form that is not read every `var` is
+taken to be assigned. What an operator gives for operands that are not
+numbers, and the type of a `<=>` outcome, are for core to say and are
+not known here.
 
-Three rejections have no catalogue row yet and carry codes local to this
-compiler (`hgl_analyser::codes::local`), proposed in
+A generic application that has been reported, `Box<7>(value: 1)`, makes
+a value whose type is not known: nothing more is reported of it.
+
+Twelve rejections have no catalogue row yet and carry codes local to
+this compiler (`hgl_analyser::codes::local`), proposed in
 [hgl_spec issue 28](https://github.com/hhenson/hgl_spec/issues/28):
 
 | Local code | Rejection |
@@ -457,6 +468,15 @@ compiler (`hgl_analyser::codes::local`), proposed in
 | `type.mismatch` | A value's type is not the type its place expects; `null` where the type has no `?` |
 | `binding.unassigned` | A `var` read before it is given a value |
 | `binding.immutable` | A binding that is no `var` assigned |
+| `argument.order` | An argument with no name after a named one |
+| `argument.unexpected` | More positional arguments than parameters or fields |
+| `argument.unknown` | A named argument that names no parameter or field |
+| `argument.duplicate` | A parameter or field given twice |
+| `argument.missing` | A parameter or field with no default given nothing |
+| `call.role` | A temporal function called from a value function |
+| `struct.abstract` | An abstract struct constructed |
+| `member.unknown` | A field a struct has not, or a member an enum has not |
+| `enum.context_type` | `.member` where no enum type is expected |
 
 ### Order
 
@@ -563,7 +583,7 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser reports 53
-catalogued codes (`hgl_analyser::codes`) and three local ones
+catalogued codes (`hgl_analyser::codes`) and twelve local ones
 (`hgl_analyser::codes::local`), and its tests check each diagnostic's
 category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
