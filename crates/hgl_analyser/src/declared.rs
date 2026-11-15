@@ -217,6 +217,17 @@ struct Introduced {
     via: usize,
 }
 
+/// A field whose type names structs.
+struct FieldEdge {
+    /// The struct that declares the field.
+    owner: Id,
+    /// The field's position among that struct's members.
+    field: usize,
+    /// The structs its type names, each with whether it is reached
+    /// through the elements of a collection.
+    named: Vec<(Id, bool)>,
+}
+
 /// The fields one struct has.
 #[derive(Debug, Clone, Default)]
 struct Fields {
@@ -719,9 +730,8 @@ impl Structs<'_> {
         let mut graph: DiGraph<Id, ()> = DiGraph::new();
         let nodes: HashMap<Id, NodeIndex> =
             ids.iter().map(|&id| (id, graph.add_node(id))).collect();
-        // Each field that names a struct, with the structs it names
-        // and whether each is reached through a collection's elements.
-        let mut edges: Vec<(Id, usize, Vec<(Id, bool)>)> = Vec::new();
+        // Each field that names a struct.
+        let mut edges: Vec<FieldEdge> = Vec::new();
         for &id in ids {
             for parent in &self.parents[&id] {
                 graph.add_edge(nodes[&id], nodes[&parent.id], ());
@@ -739,7 +749,11 @@ impl Structs<'_> {
                     graph.add_edge(nodes[&id], nodes[target], ());
                 }
                 if !named.is_empty() {
-                    edges.push((id, index, named));
+                    edges.push(FieldEdge {
+                        owner: id,
+                        field: index,
+                        named,
+                    });
                 }
             }
         }
@@ -755,15 +769,16 @@ impl Structs<'_> {
         // the group their own struct is in. With each, whether it
         // reaches such a struct through a collection's elements.
         let mut recursive: HashMap<(Id, usize), bool> = HashMap::new();
-        for (id, index, named) in &edges {
-            let mut back = named
+        for edge in &edges {
+            let mut back = edge
+                .named
                 .iter()
-                .filter(|(target, _)| group_of[target] == group_of[id])
+                .filter(|(target, _)| group_of[target] == group_of[&edge.owner])
                 .peekable();
             // `peek` looks at the next one without taking it.
             if back.peek().is_some() {
                 let through_collection = back.any(|(_, in_collection)| *in_collection);
-                recursive.insert((*id, *index), through_collection);
+                recursive.insert((edge.owner, edge.field), through_collection);
             }
         }
         let mut reports = Vec::new();
