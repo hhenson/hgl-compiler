@@ -245,6 +245,8 @@ fn a_return_is_of_the_result_type() {
         // A generic type parameter is its own type and no other.
         "const fn same<T>(value: T) -> T => value\n",
         "const fn other<T>(value: T) -> T => 1\n",
+        // A `return` with nothing written yields no value.
+        "const fn bare() -> i64 {\n    return\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -253,11 +255,16 @@ fn a_return_is_of_the_result_type() {
             "m.hgl:7:12 local:type/type.mismatch EXPR-5",
             "m.hgl:10:42 local:type/type.mismatch EXPR-5",
             "m.hgl:12:37 local:type/type.mismatch EXPR-5",
+            "m.hgl:14:5 local:type/type.mismatch FN-7",
         ]
     );
     assert_eq!(
         checked.findings[0].message,
         "this is `i64`, and the function's result is `str`"
+    );
+    assert_eq!(
+        checked.findings[4].message,
+        "this returns no value, and the function's result is `i64`"
     );
 }
 
@@ -368,8 +375,12 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         "    let maybe_real: list<f64>? = [1, a]\n",
         "    let maybe_pair: tuple<f64, str>? = (a, \"a\")\n",
         "    let maybe_wrong: list<str>? = [1]\n",
+        // TYPE-10: "Size participates in identity."
+        "    let sized: list<i64, 2> = [1, 2]\n",
+        "    let short: list<i64, 2> = [1]\n",
         "}\n",
         "const fn member_set() -> set<i64>? => [1, 2]\n",
+        "const fn trio() -> list<i64, 2> => [1, 2, 3]\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -378,7 +389,13 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "m.hgl:8:34 local:type/type.mismatch EXPR-5",
             "m.hgl:12:43 local:type/type.mismatch EXPR-5",
             "m.hgl:16:36 local:type/type.mismatch EXPR-5",
+            "m.hgl:18:31 local:type/type.mismatch TYPE-10",
+            "m.hgl:21:36 local:type/type.mismatch TYPE-10",
         ]
+    );
+    assert_eq!(
+        checked.findings[4].message,
+        "this has 1 entry, and a `list<i64, 2>` has 2"
     );
     assert_eq!(
         locals(&checked, "sequences"),
@@ -398,6 +415,8 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "maybe_real: list<f64>?",
             "maybe_pair: tuple<f64, str>?",
             "maybe_wrong: list<str>?",
+            "sized: list<i64, 2>",
+            "short: list<i64, 2>",
         ]
     );
 }

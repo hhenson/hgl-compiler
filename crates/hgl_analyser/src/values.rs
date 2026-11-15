@@ -36,7 +36,7 @@ use crate::hir::{
 };
 use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Module, Program, Role};
 use crate::read::{child, is_type, tokens};
-use crate::types::{Detail, GenericKind, Scalar, Signature, Type};
+use crate::types::{ConstantValue, Detail, GenericKind, Scalar, Signature, Type};
 use crate::{codes, local_error};
 
 /// Types the body of every value function of the program, filling in
@@ -188,10 +188,21 @@ impl<'a> Typer<'a> {
             SyntaxKind::AssignStmt => self.assignment(node),
             SyntaxKind::ReturnStmt => {
                 let value = node.children().next().map(|value| self.returned(&value));
-                Stmt::Return {
-                    value,
-                    at: self.at(node),
+                let at = self.at(node);
+                // FN-7: "A value return yields an ordinary value." One
+                // with nothing written yields none.
+                if let (None, Some(result)) = (&value, &self.signature.result)
+                    && !open(result)
+                {
+                    self.diagnostics.emit(local_error(
+                        Category::Type,
+                        codes::local::TYPE_MISMATCH,
+                        at,
+                        format!("this returns no value, and the function's result is `{result}`"),
+                        "FN-7",
+                    ));
                 }
+                Stmt::Return { value, at }
             }
             SyntaxKind::ExprStmt => match node.children().next() {
                 Some(value) => Stmt::Expr(self.expression(&value, None)),
@@ -554,13 +565,37 @@ impl<'a> Typer<'a> {
             _ => None,
         };
         if let (Some(element), Some(expected)) = (element, expected) {
-            let elements = items
+            let elements: Vec<Expr> = items
                 .iter()
                 .map(|item| {
                     let value = self.expression(item, Some(element));
                     self.fit(value, element, "an element")
                 })
                 .collect();
+            // TYPE-10: "Size participates in identity." A list of a
+            // size that is known has that many entries.
+            if let Type::List {
+                size: Some(size), ..
+            } = expected
+                && let ConstantValue::Int(size) = size.value
+                && i64::try_from(elements.len()) != Ok(size)
+            {
+                self.diagnostics.emit(local_error(
+                    Category::Type,
+                    codes::local::TYPE_MISMATCH,
+                    self.at(node),
+                    format!(
+                        "this has {} {}, and a `{expected}` has {size}",
+                        elements.len(),
+                        if elements.len() == 1 {
+                            "entry"
+                        } else {
+                            "entries"
+                        }
+                    ),
+                    "TYPE-10",
+                ));
+            }
             return (ExprKind::Sequence(elements), expected.clone());
         }
         let mut elements: Vec<Expr> = items
