@@ -1369,7 +1369,9 @@ impl<'a> Typer<'a> {
                         || public.parameters[index].has_default
                         || matches!(parameter.ty, Type::Nullable(_))
                 }
-                Some(given) if given.by_place => self.fits_place(&given.node, &parameter.ty),
+                Some(given) if given.by_place => {
+                    self.fits_place(&given.node, &parameter.ty, widening)
+                }
                 Some(given) => {
                     self.admits(&parameter.ty, &given.value.ty)
                         || widening
@@ -1387,17 +1389,19 @@ impl<'a> Typer<'a> {
     /// True when the expression at `node`, which is read as the type of
     /// its place, is a value of `ty`. It is read as one, and what that
     /// reading reports is taken back: the caller asks, and reports for
-    /// itself.
+    /// itself. Without `widening`, it is no value of `ty` when an
+    /// integer literal among its entries had to be widened to be one:
+    /// `[1]` is then a `list<i64>` and no `list<f64>`.
     ///
     /// The expression has been read once already, with nothing expected
     /// of it, so a reading here changes nothing but the diagnostics.
-    fn fits_place(&mut self, node: &SyntaxNode, ty: &Type) -> bool {
+    fn fits_place(&mut self, node: &SyntaxNode, ty: &Type, widening: bool) -> bool {
         let reported = self.diagnostics.len();
         let value = self.expression(node, Some(ty));
-        self.fit(value, ty, "its place");
+        let value = self.fit(value, ty, "its place");
         let fits = self.diagnostics.len() == reported;
         self.diagnostics.truncate(reported);
-        fits
+        fits && (widening || !widens_an_entry(&value))
     }
 
     /// `Name<arguments>(fields)`: the construction of a generic struct
@@ -2246,6 +2250,19 @@ fn unselected(given: Vec<Given>) -> ExprKind {
                 value: given.value,
             })
             .collect(),
+    }
+}
+
+/// True when an integer literal was widened among the entries of a
+/// sequence or a tuple written out, at any depth. A literal widened
+/// inside a call among the entries is that call's, and is not counted.
+fn widens_an_entry(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Widen(_) => true,
+        ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => {
+            entries.iter().any(widens_an_entry)
+        }
+        _ => false,
     }
 }
 

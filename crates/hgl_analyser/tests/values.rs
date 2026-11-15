@@ -1078,7 +1078,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "impl const fn pick(lhs: str, rhs: str = \"x\") -> str => lhs\n",
         "operator only<T>(value: T) -> T\n",
         "impl fn only(value: i64) -> i64 => value\n",
-        "const fn calls(a: i64, b: f64, s: str) {\n",
+        "const fn calls(a: i64, b: f64, s: str, round: Round, square: Square) {\n",
         "    let whole = doubled(a)\n",
         "    let real = doubled(b)\n",
         // An integer literal selects as the `i64` it is.
@@ -1116,6 +1116,15 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "    let partly = first((null, 1))\n",
         "    let inner = first([[]])\n",
         "    let neither = first((null, null))\n",
+        // An integer literal among the entries selects as the `i64` it
+        // is, and is widened only where no candidate takes one.
+        "    let whole_list = each([1])\n",
+        "    let real_list = each([1.5])\n",
+        "    let whole_pair = each((1, [1]))\n",
+        "    let real_pair = each((1.5, [1]))\n",
+        // The candidate's parameter gives entries of two types their
+        // one type.
+        "    let shapes = area([round, square])\n",
         "}\n",
         "operator total<T>(values: T) -> f64\n",
         "impl const fn total(values: list<f64>) -> f64 => 0.0\n",
@@ -1128,6 +1137,16 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "operator first<T>(values: T) -> i64\n",
         "impl const fn first(values: tuple<i64?, i64>) -> i64 => 0\n",
         "impl const fn first(values: list<list<i64>>) -> i64 => 0\n",
+        "operator each<T>(values: T) -> T\n",
+        "impl const fn each(values: list<i64>) -> list<i64> => values\n",
+        "impl const fn each(values: list<f64>) -> list<f64> => values\n",
+        "impl const fn each(values: tuple<i64, list<i64>>) -> tuple<i64, list<i64>> => values\n",
+        "impl const fn each(values: tuple<f64, list<f64>>) -> tuple<f64, list<f64>> => values\n",
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "struct Square : Shape { side: f64 }\n",
+        "operator area<T>(shapes: T) -> f64\n",
+        "impl const fn area(shapes: list<Shape>) -> f64 => 0.0\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1165,6 +1184,8 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "a: i64",
             "b: f64",
             "s: str",
+            "round: Round",
+            "square: Square",
             "whole: i64",
             "real: f64",
             "literal: i64",
@@ -1189,6 +1210,11 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "partly: i64",
             "inner: i64",
             "neither: _",
+            "whole_list: list<i64>",
+            "real_list: list<f64>",
+            "whole_pair: tuple<i64, list<i64>>",
+            "real_pair: tuple<f64, list<f64>>",
+            "shapes: f64",
         ]
     );
 }
