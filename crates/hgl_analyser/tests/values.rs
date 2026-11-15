@@ -998,6 +998,102 @@ fn an_element_is_read_by_its_index_or_its_key() {
     );
 }
 
+// ---- Operators called by name ----
+
+/// GEN-5: "Match candidates against the requested output before inputs
+/// ... Select exactly one most-specific admitted candidate ... No match
+/// rejects; tied most-specific candidates are ambiguous ... A call in a
+/// value function or a runtime body selects among the value candidates."
+/// GEN-4: "An operator is neither temporal nor value: the candidate a
+/// call selects is."
+#[test]
+fn a_call_of_an_operator_selects_a_value_candidate() {
+    let checked = module(concat!(
+        "operator doubled<T>(value: T) -> T\n",
+        "impl const fn doubled(value: i64) -> i64 => value * 2\n",
+        "impl const fn doubled(value: f64) -> f64 => value * 2.0\n",
+        "impl fn doubled(value: str) -> str => value\n",
+        "operator pick<T>(lhs: T, rhs: T) -> T\n",
+        "impl const fn pick(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn pick(lhs: i64, rhs: i64?) -> i64 => lhs\n",
+        "impl const fn pick(lhs: str, rhs: str = \"x\") -> str => lhs\n",
+        "operator only<T>(value: T) -> T\n",
+        "impl fn only(value: i64) -> i64 => value\n",
+        "const fn calls(a: i64, b: f64, s: str) {\n",
+        "    let whole = doubled(a)\n",
+        "    let real = doubled(b)\n",
+        // An integer literal selects as the `i64` it is.
+        "    let literal = doubled(1)\n",
+        // The requested output comes first, and the literal is widened.
+        "    let widened: f64 = doubled(1)\n",
+        // EXPR-2: the operator's public names.
+        "    let named = doubled(value: a)\n",
+        "    let other = doubled(number: a)\n",
+        // The candidate for `str` is temporal.
+        "    let text = doubled(s)\n",
+        "    let wrong: str = doubled(a)\n",
+        "    let tie = pick(a, a)\n",
+        // GEN-6: "A candidate may give any of its inputs a default."
+        "    let short = pick(s)\n",
+        // UNIT-8: a parameter written `T?` needs no default to be
+        // omitted.
+        "    let one = pick(a)\n",
+        "    let missing = pick(b)\n",
+        "    let temporal = only(a)\n",
+        // TYPE-14: `null` is a value of the `i64?` and of no `i64`.
+        "    let absent = pick(a, null)\n",
+        "    let nothing = pick(null, a)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:25 name/argument.unknown EXPR-2",
+            "m.hgl:19:16 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:20:22 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:21:15 local:operator/operator.ambiguous GEN-5",
+            "m.hgl:24:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:25:20 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:27:19 local:operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`doubled` has no parameter `number`",
+            "no value candidate of operator `doubled` takes `str`",
+            "no value candidate of operator `doubled` takes `i64` and gives `str`",
+            "2 value candidates of operator `pick` take `i64`, `i64` equally",
+            "no value candidate of operator `pick` takes `f64`",
+            "operator `only` has no value candidate, and a value function selects among those",
+            "no value candidate of operator `pick` takes `null`, `i64`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "calls"),
+        [
+            "a: i64",
+            "b: f64",
+            "s: str",
+            "whole: i64",
+            "real: f64",
+            "literal: i64",
+            "widened: f64",
+            "named: i64",
+            "other: _",
+            "text: _",
+            "wrong: str",
+            "tie: _",
+            "short: str",
+            "one: i64",
+            "missing: _",
+            "temporal: _",
+            "absent: i64",
+            "nothing: _",
+        ]
+    );
+}
+
 // ---- A parameter that may be omitted comes last ----
 
 /// UNIT-8: "A parameter that may be omitted follows every parameter that

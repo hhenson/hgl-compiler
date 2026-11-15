@@ -179,7 +179,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded. Left: roles of `const fn` and a temporal `fn` in bodies |
 | FN-2 | analyser | planned | A body is classified composition or runtime before phase checking |
-| FN-3 | analyser | partial | A value function calls only value functions (with FN-4). Left: phase rules for iteration, conditionals and hooks; what a runtime body and a composition body call |
+| FN-3 | analyser | partial | A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5). Left: phase rules for iteration, conditionals and hooks; what a runtime body and a composition body call |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. a call in a value function takes the value definition, and a temporal one alone is rejected. Left: selection in composition and eval |
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
@@ -207,7 +207,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares or its file imports, and a value candidate's body is read as a value function's. Left: the prelude; operator identity in selection |
-| GEN-5 | analyser | planned | Candidate selection: output first, exactly one most specific |
+| GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected, with local codes. Left: generic candidates and their specificity (GEN-12); an operator with a pack; symbols, which wait on core's declarations; composition and runtime bodies |
 | GEN-6 | analyser | planned | A candidate honours its operator's contract |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |

@@ -187,8 +187,21 @@ pub enum Callee {
         /// Its position in that module's `declarations`.
         declaration: usize,
     },
+    /// The value candidate selected for a call of an operator (GEN-5).
+    Candidate {
+        /// The operator called: the position of its module in
+        /// `Program::modules`, and its position in that module's
+        /// `declarations`.
+        operator: (usize, usize),
+        /// The position of the candidate's module in
+        /// `Program::modules`.
+        module: usize,
+        /// The candidate's position in that module's `declarations`.
+        declaration: usize,
+    },
     /// What no pass reads yet: a name left for the prelude, an
-    /// operator, a function that is itself an expression.
+    /// operator whose candidates are generic, a function that is
+    /// itself an expression.
     Unread,
 }
 

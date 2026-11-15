@@ -39,13 +39,15 @@ use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, Local, LocalId, Stmt, UnaryOperator, Value,
 };
-use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Module, Program, Role};
+use crate::program::{
+    Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
+};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar,
     Signature, Type,
 };
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -992,6 +994,17 @@ impl<'a> Typer<'a> {
             };
             return self.construct(&name, &list, module, declaration, given);
         }
+        let operator = declarations
+            .iter()
+            .copied()
+            .find(|&declaration| kind_of(declaration) == DeclarationKind::Operator);
+        if let Some(declaration) = operator {
+            let operator = OperatorRef {
+                module,
+                declaration,
+            };
+            return self.call_operator(&name, &list, operator, expected);
+        }
         let temporal = declarations.iter().any(|&declaration| {
             matches!(
                 kind_of(declaration),
@@ -1076,6 +1089,287 @@ impl<'a> Typer<'a> {
         let arguments = self.bind(name, list, &slots, Takes::Parameters);
         let ty = signature.result.as_ref().map_or(Type::Unknown, known);
         (ExprKind::Call { callee, arguments }, ty)
+    }
+
+    /// A call of the operator `operator` by its name.
+    ///
+    /// GEN-5: "Match candidates against the requested output before
+    /// inputs, then check their conditions. Select exactly one
+    /// most-specific admitted candidate ... No match rejects; tied
+    /// most-specific candidates are ambiguous ... A call in a value
+    /// function or a runtime body selects among the value candidates."
+    /// FN-3: "Any body calls an operator; in a runtime body or a value
+    /// function the call selects a value candidate."
+    ///
+    /// The arguments are given to the operator's public parameters
+    /// (GEN-4: the operator "owns public names/order"), and a candidate
+    /// is admitted when each fits the parameter the candidate has in
+    /// that place. A candidate that fits with no integer literal
+    /// widened is taken before one that needs it.
+    ///
+    /// What is not read here: a call of an operator that has a pack, and
+    /// one that has a generic value candidate. Which of two candidates
+    /// is the more specific is for the pass that resolves generics
+    /// (GEN-12). Such a call has no type.
+    fn call_operator(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        operator: OperatorRef,
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return self.unread_call(list);
+        };
+        // The operator's value candidates, wherever they are declared.
+        // GEN-5: "Library membership and registration order grant no
+        // priority."
+        let mut candidates: Vec<(usize, usize, &Signature)> = Vec::new();
+        for (module, declared) in program.modules.iter().enumerate() {
+            for (declaration, candidate) in declared.declarations.iter().enumerate() {
+                if candidate.kind.candidate() != Some((Role::Value, Some(operator))) {
+                    continue;
+                }
+                if let Some(Detail::Callable(signature)) = declared.details.get(declaration) {
+                    candidates.push((module, declaration, signature));
+                }
+            }
+        }
+        let unread = public
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+            || candidates
+                .iter()
+                .any(|(_, _, signature)| !signature.generics.is_empty());
+        if unread {
+            return self.unread_call(list);
+        }
+
+        // EXPR-2: "Named arguments use the selected public callable's
+        // parameter names." What a call may leave out is the
+        // candidate's to say (GEN-6: "A candidate may give any of its
+        // inputs a default"), so nothing is required here.
+        let slots: Vec<Slot> = public
+            .parameters
+            .iter()
+            .map(|parameter| Slot {
+                name: &parameter.name,
+                ty: Type::Unknown,
+                required: false,
+                pack: None,
+            })
+            .collect();
+        let reported = self.diagnostics.len();
+        let assigned = self.assign(name, list, &slots, Takes::Parameters);
+        let misplaced = self.diagnostics.len() != reported;
+        // Each argument's value, read with nothing expected of it. One
+        // that takes its type from its place, `null` or `.member`, is
+        // read once the candidate is known.
+        let mut values: Vec<Option<Expr>> = assigned
+            .iter()
+            .map(|(_, node)| {
+                (!takes_its_type(node)).then(|| self.expression(node, Some(&Type::Unknown)))
+            })
+            .collect();
+        // An argument given to no parameter has been reported, and one
+        // whose type is not known says nothing of the candidates: the
+        // call is then not judged (ERR-9).
+        let unknown = values.iter().flatten().any(|value| open(&value.ty));
+        if misplaced || unknown {
+            let arguments = self.unselected(&assigned, &mut values);
+            let kind = ExprKind::Call {
+                callee: Callee::Unread,
+                arguments,
+            };
+            return (kind, Type::Unknown);
+        }
+
+        // GEN-5: "the requested output before inputs".
+        let wanted = expected.filter(|expected| !open(expected));
+        let admitted = |typer: &Self, signature: &Signature, widening: bool| {
+            let result_fits = match (wanted, &signature.result) {
+                (Some(wanted), Some(result)) => typer.admits(wanted, result),
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            result_fits
+                && signature.parameters.len() == public.parameters.len()
+                && signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .all(|(index, parameter)| {
+                        let given = assigned.iter().position(|(slot, _)| *slot == Some(index));
+                        match given {
+                            // What the call leaves out has a default, the
+                            // candidate's or the operator's, or is written
+                            // `T?` (UNIT-8).
+                            None => {
+                                parameter.has_default
+                                    || public.parameters[index].has_default
+                                    || matches!(parameter.ty, Type::Nullable(_))
+                            }
+                            Some(position) => match &values[position] {
+                                // TYPE-14: `null` is a value of a type
+                                // written `T?` and of no other. `.member`
+                                // is judged once the candidate is selected.
+                                None => {
+                                    !is_null(&assigned[position].1)
+                                        || open(&parameter.ty)
+                                        || matches!(parameter.ty, Type::Nullable(_))
+                                }
+                                Some(value) => {
+                                    typer.admits(&parameter.ty, &value.ty)
+                                        || widening
+                                            && is_integer_literal(value)
+                                            && accepts_float(&parameter.ty)
+                                }
+                            },
+                        }
+                    })
+        };
+        // EXPR-5: an integer literal is an `f64` where one is expected.
+        // It selects as the `i64` it is where a candidate takes one.
+        let mut selected: Vec<&(usize, usize, &Signature)> = candidates
+            .iter()
+            .filter(|(_, _, signature)| admitted(self, signature, false))
+            .collect();
+        if selected.is_empty() {
+            selected = candidates
+                .iter()
+                .filter(|(_, _, signature)| admitted(self, signature, true))
+                .collect();
+        }
+        let at = Location::new(self.file, name.span());
+        let &[&(module, declaration, signature)] = selected.as_slice() else {
+            let given: Vec<String> = values
+                .iter()
+                .zip(&assigned)
+                .map(|(value, (_, node))| match value {
+                    Some(value) => format!("`{}`", value.ty),
+                    None if is_null(node) => "`null`".to_string(),
+                    None => "a member of an enum".to_string(),
+                })
+                .collect();
+            let given = if given.is_empty() {
+                "no argument".to_string()
+            } else {
+                given.join(", ")
+            };
+            let diagnostic = if selected.is_empty() {
+                let message = if candidates.is_empty() {
+                    format!(
+                        "operator `{}` has no value candidate, and a value function selects \
+                         among those",
+                        name.text()
+                    )
+                } else {
+                    format!(
+                        "no value candidate of operator `{}` takes {given}{}",
+                        name.text(),
+                        match wanted {
+                            Some(wanted) => format!(" and gives `{wanted}`"),
+                            None => String::new(),
+                        }
+                    )
+                };
+                local_error(
+                    Category::Operator,
+                    codes::local::OPERATOR_NO_CANDIDATE,
+                    at,
+                    message,
+                    "GEN-5",
+                )
+            } else {
+                let mut diagnostic = local_error(
+                    Category::Operator,
+                    codes::local::OPERATOR_AMBIGUOUS,
+                    at,
+                    format!(
+                        "{} value candidates of operator `{}` take {given} equally",
+                        selected.len(),
+                        name.text()
+                    ),
+                    "GEN-5",
+                );
+                for (module, declaration, _) in &selected {
+                    let candidate = &program.modules[*module].declarations[*declaration];
+                    diagnostic = diagnostic.with_related(candidate.at, "this candidate");
+                }
+                diagnostic
+            };
+            self.diagnostics.emit(diagnostic);
+            let arguments = self.unselected(&assigned, &mut values);
+            let kind = ExprKind::Call {
+                callee: Callee::Unread,
+                arguments,
+            };
+            return (kind, Type::Unknown);
+        };
+
+        // Each argument is of the type the selected candidate's
+        // parameter has.
+        let arguments = assigned
+            .iter()
+            .enumerate()
+            .map(|(position, (slot, node))| {
+                let Some(index) = *slot else {
+                    return self.argument(None, node, None, Takes::Parameters);
+                };
+                let parameter = &signature.parameters[index];
+                let slot = Slot {
+                    name: &parameter.name,
+                    ty: parameter.ty.clone(),
+                    required: false,
+                    pack: None,
+                };
+                match values[position].take() {
+                    Some(value) => {
+                        let place = format!("the parameter `{}`", slot.name);
+                        hir::Argument {
+                            parameter: Some(index),
+                            value: self.fit(value, &slot.ty, &place),
+                        }
+                    }
+                    None => self.argument(Some(index), node, Some(&slot), Takes::Parameters),
+                }
+            })
+            .collect();
+        let kind = ExprKind::Call {
+            callee: Callee::Candidate {
+                operator: (operator.module, operator.declaration),
+                module,
+                declaration,
+            },
+            arguments,
+        };
+        (kind, signature.result.clone().unwrap_or(Type::Unknown))
+    }
+
+    /// The arguments of an operator's call for which no candidate is
+    /// selected: those read already as they are, and the others read
+    /// for what they report themselves.
+    fn unselected(
+        &mut self,
+        assigned: &[(Option<usize>, SyntaxNode)],
+        values: &mut [Option<Expr>],
+    ) -> Vec<hir::Argument> {
+        assigned
+            .iter()
+            .enumerate()
+            .map(|(position, (_, node))| hir::Argument {
+                parameter: None,
+                value: match values[position].take() {
+                    Some(value) => value,
+                    None => self.expression(node, Some(&Type::Unknown)),
+                },
+            })
+            .collect()
     }
 
     /// `Name<arguments>(fields)`: the construction of a generic struct
