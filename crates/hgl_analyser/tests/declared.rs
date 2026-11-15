@@ -681,6 +681,11 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "abstract struct Sized<const N: i64> { width: i64 }\n",
         "struct Three : Sized<3> { four: Sized<4> }\n",
         "struct Again : Sized<3> { three: Sized<1 + 2> }\n",
+        // Through a parent between: what `Mid` is given is what it
+        // gives `Base`.
+        "abstract struct Mid<U> : Base<U> { }\n",
+        "struct Far : Mid<i64> { far: Base<str> }\n",
+        "struct Near : Mid<i64> { near: Base<i64> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -688,6 +693,7 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:4:27 local:type/field.recursive TYPE-6",
             "m.hgl:5:28 local:type/field.recursive TYPE-6",
             "m.hgl:8:27 local:type/field.recursive TYPE-6",
+            "m.hgl:11:26 local:type/field.recursive TYPE-6",
         ]
     );
 }

@@ -980,29 +980,58 @@ impl Structs<'_> {
     ) {
         let mut seen: HashSet<Id> = HashSet::new();
         // The structs whose children are still to look at, each with
-        // the arguments it is known to be applied to, when it is known.
-        let mut to_do: Vec<(Id, Option<&[Argument]>)> = vec![(id, Some(arguments))];
+        // what is known of the arguments it is applied to: one for each
+        // of its generic parameters, or `None` where it is not known.
+        let known: Vec<Option<Argument>> = arguments.iter().cloned().map(Some).collect();
+        let mut to_do: Vec<(Id, Vec<Option<Argument>>)> = vec![(id, known)];
         while let Some((parent, given)) = to_do.pop() {
             let Some(children) = self.children.get(&parent) else {
                 continue;
             };
             for (child, applied) in children {
-                let fits = given.is_none_or(|given| {
-                    given.len() == applied.len()
-                        && given
-                            .iter()
-                            .zip(applied)
-                            .all(|(given, applied)| may_be(given, applied))
+                // The child is this application of its parent when each
+                // argument it gives the parent may be the one known. A
+                // wrong count has been reported; what is there is
+                // compared.
+                let fits = given.iter().zip(applied).all(|(given, applied)| {
+                    given.as_ref().is_none_or(|given| may_be(given, applied))
                 });
                 // `insert` is false for a struct already seen.
-                if fits && seen.insert(*child) {
-                    found.push(Held {
-                        id: *child,
-                        in_collection,
-                        written: id,
-                    });
-                    to_do.push((*child, None));
+                if !fits || !seen.insert(*child) {
+                    continue;
                 }
+                found.push(Held {
+                    id: *child,
+                    in_collection,
+                    written: id,
+                });
+                // What the child is applied to, for its own children:
+                // a parameter it passes straight on to the parent is
+                // what the parent is given there.
+                let passed_on: Vec<Option<Argument>> = self
+                    .struct_type(*child)
+                    .map(|read| {
+                        read.generics
+                            .iter()
+                            .map(|generic| {
+                                applied.iter().zip(&given).find_map(|(applied, given)| {
+                                    let names_it = match applied {
+                                        Argument::Type(Type::Parameter { at, .. }) => {
+                                            *at == generic.at
+                                        }
+                                        Argument::Constant(constant) => matches!(
+                                            &constant.value,
+                                            ConstantValue::Parameter { at, .. } if *at == generic.at
+                                        ),
+                                        _ => false,
+                                    };
+                                    if names_it { given.clone() } else { None }
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                to_do.push((*child, passed_on));
             }
         }
     }
