@@ -404,6 +404,10 @@ the same numeric rules the transpiler rows give.
 | OPS-4 | analyser | planned | `convert<T>(value)` and the conversions it admits |
 | OPS-4 | transpiler | planned | Each conversion |
 | OPS-5 | analyser | partial | The Boolean connectives and `!` take bools, in a value function. Left: temporal bodies |
+| OPS-6 | analyser | planned | The type each conversion yields; `convert<list<B>>(values)` for a list of structs that inherit from B |
+| OPS-6 | transpiler | planned | What each conversion yields |
+| OPS-7 | analyser | planned | A conversion's options, and the `result` its checked error policy returns |
+| OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | planned | `delta_value(x)` needs proof that `x` is valid and modified |
