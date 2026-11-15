@@ -1447,7 +1447,21 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
         "    var m: i64\n",
         "    let both = c && {\n        m = 1\n        true\n    }\n",
         "    let skipped = m\n",
+        // UNIT-12: a case's local is in scope after the `switch`, and is
+        // not assigned on a path that did not declare it.
+        "    switch side {\n        case .buy: var n: i64 = 1\n    }\n",
+        "    let outside = n\n",
         "    return a\n",
+        "}\n",
+        // Arguments are read in the order written: a block in one may
+        // assign what a later one reads, and not what an earlier one
+        // does (CTRL-10).
+        "struct Two<T> {\n    first: i64\n    second: T\n}\n",
+        "const fn ordered() {\n",
+        "    var x: i64\n",
+        "    let early = Two(first: x, second: {\n        x = 1\n        2\n    })\n",
+        "    var y: i64\n",
+        "    let late = Two(second: {\n        y = 1\n        2\n    }, first: y)\n",
         "}\n",
         // A `return` in an operand that may be skipped ends no path.
         "const fn skips(c: bool) -> i64 {\n",
@@ -1461,7 +1475,9 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
             "m.hgl:15:17 name/binding.unassigned EXPR-3",
             "m.hgl:26:19 name/binding.unassigned EXPR-3",
             "m.hgl:41:19 name/binding.unassigned EXPR-3",
-            "m.hgl:44:10 type/return.missing FN-7",
+            "m.hgl:45:19 name/binding.unassigned EXPR-3",
+            "m.hgl:54:28 name/binding.unassigned EXPR-3",
+            "m.hgl:64:10 type/return.missing FN-7",
         ]
     );
     assert_eq!(
@@ -1471,6 +1487,8 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
             "`e` is read before it is given a value",
             "`g` is read before it is given a value",
             "`m` is read before it is given a value",
+            "`n` is read before it is given a value",
+            "`x` is read before it is given a value",
             "`skips` declares a result of `i64`, and can reach its end with no value",
         ]
     );

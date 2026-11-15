@@ -297,6 +297,10 @@ fn a_switch_case_declares_in_the_block_around_its_switch() {
         [
             "m.hgl:3:18 name/name.used_before_declaration UNIT-6",
             "m.hgl:9:17 name/name.duplicate UNIT-5",
+            // The names resolve, being in scope. A case's local has no
+            // value on a path that did not declare it (CTRL-11).
+            "m.hgl:11:25 name/binding.unassigned EXPR-3",
+            "m.hgl:13:12 name/binding.unassigned EXPR-3",
         ]
     );
     assert_eq!(checked.prelude_names("m"), NONE);

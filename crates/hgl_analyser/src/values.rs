@@ -1387,11 +1387,26 @@ impl<'a> Typer<'a> {
         // reports itself is reported here, once.
         let given: Vec<Given> = assigned
             .into_iter()
-            .map(|(slot, node)| Given {
-                slot,
-                by_place: typed_by_place(&node),
-                value: self.expression(&node, Some(&Type::Unknown)),
-                node,
+            .map(|(slot, node)| {
+                let by_place = typed_by_place(&node);
+                let mark = self.mark();
+                let value = self.expression(&node, Some(&Type::Unknown));
+                // An argument read as the type of its place is read
+                // again once the candidate is known. Its first reading,
+                // when it reports nothing, is taken back but for what
+                // it assigned, which a later argument may read.
+                let retried =
+                    by_place && self.diagnostics.len() == mark.diagnostics && self.may_reread();
+                if retried {
+                    self.take_back(mark, true);
+                }
+                Given {
+                    slot,
+                    by_place,
+                    value,
+                    retried,
+                    node,
+                }
             })
             .collect();
         // An argument given to no parameter, or rejected itself, has
@@ -1402,7 +1417,7 @@ impl<'a> Typer<'a> {
             .iter()
             .any(|given| !given.by_place && open(&given.value.ty));
         if faulty || unknown {
-            return (unselected(given), Type::Unknown);
+            return (self.unselected(given), Type::Unknown);
         }
 
         // GEN-5: "the requested output before inputs". EXPR-5: an
@@ -1423,7 +1438,7 @@ impl<'a> Typer<'a> {
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
         if self.rereads == 0 && given.iter().any(|given| given.by_place) {
-            return (unselected(given), Type::Unknown);
+            return (self.unselected(given), Type::Unknown);
         }
         let at = Location::new(self.file, name.span());
         let &[(module, declaration, signature)] = selected.as_slice() else {
@@ -1433,7 +1448,7 @@ impl<'a> Typer<'a> {
             // `list<i64>`. The tie is then not reported, and the call
             // has no type.
             if selected.len() > 1 && expected.is_some_and(open) {
-                return (unselected(given), Type::Unknown);
+                return (self.unselected(given), Type::Unknown);
             }
             let takes: Vec<String> = given
                 .iter()
@@ -1493,7 +1508,7 @@ impl<'a> Typer<'a> {
                 diagnostic
             };
             self.diagnostics.emit(diagnostic);
-            return (unselected(given), Type::Unknown);
+            return (self.unselected(given), Type::Unknown);
         };
 
         // Each argument is of the type the selected candidate's
@@ -1509,8 +1524,8 @@ impl<'a> Typer<'a> {
                 };
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let value = if given.by_place && self.may_reread() {
-                    // Read again, as the parameter's type: the
+                let value = if given.retried {
+                    // Read where it stands, as the parameter's type: the
                     // candidate was admitted because it fits.
                     let value = self.expression(&given.node, Some(&parameter.ty));
                     self.fit(value, &parameter.ty, &place)
@@ -1532,6 +1547,27 @@ impl<'a> Typer<'a> {
             arguments,
         };
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
+    }
+
+    /// The call of an operator for which no candidate is selected: its
+    /// arguments as they were read, and no callee. One whose first
+    /// reading was taken back is read where it stands.
+    fn unselected(&mut self, given: Vec<Given>) -> ExprKind {
+        let arguments = given
+            .into_iter()
+            .map(|given| hir::Argument {
+                parameter: None,
+                value: if given.retried {
+                    self.expression(&given.node, Some(&Type::Unknown))
+                } else {
+                    given.value
+                },
+            })
+            .collect();
+        ExprKind::Call {
+            callee: Callee::Unread,
+            arguments,
+        }
     }
 
     /// True when the candidate `signature`, of an operator whose public
@@ -1596,12 +1632,47 @@ impl<'a> Typer<'a> {
         if !self.may_reread() {
             return true;
         }
-        let reported = self.diagnostics.len();
+        let mark = self.mark();
         let value = self.expression(node, Some(ty));
         let value = self.fit(value, ty, "its place");
-        let fits = self.diagnostics.len() == reported;
-        self.diagnostics.truncate(reported);
+        let fits = self.take_back(mark, false);
         fits && (widening || !widens_an_entry(&value))
+    }
+
+    /// What a reading may change, as it stands now: see
+    /// [`Typer::take_back`].
+    fn mark(&self) -> Mark {
+        Mark {
+            diagnostics: self.diagnostics.len(),
+            locals: self.locals.len(),
+            assigned: self.assigned.clone(),
+            returned: self.returned,
+            unsure: self.unsure,
+        }
+    }
+
+    /// Takes back what has been read since `mark`: what it reported and
+    /// the locals it declared, which the reading that stands declares
+    /// again. Unless `keep_flow`, also what it assigned and whether it
+    /// returned (CTRL-11, CTRL-5). True when it had reported nothing.
+    ///
+    /// A block is an expression (CTRL-10), so reading an expression may
+    /// declare a local, assign one, or return. An expression read twice,
+    /// first to learn something and then where it stands, must leave
+    /// one reading's worth of each.
+    fn take_back(&mut self, mark: Mark, keep_flow: bool) -> bool {
+        let clean = self.diagnostics.len() == mark.diagnostics;
+        self.diagnostics.truncate(mark.diagnostics);
+        self.locals.truncate(mark.locals);
+        self.declared.retain(|_, local| *local < mark.locals);
+        if keep_flow {
+            self.assigned.truncate(mark.locals);
+        } else {
+            self.assigned = mark.assigned;
+            self.returned = mark.returned;
+            self.unsure = mark.unsure;
+        }
+        clean
     }
 
     /// True when one more expression of the function may be read a
@@ -1734,6 +1805,12 @@ impl<'a> Typer<'a> {
                 let assigned = self.assign(name, list, &slots, Takes::Fields);
                 let mut found: Vec<Option<Argument>> = vec![None; read.generics.len()];
                 let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
+                // The values that say what a parameter is are read
+                // first, out of the order written. A block among the
+                // arguments may assign what another reads (CTRL-10), so
+                // with one such a reading is tried and taken back, and
+                // every argument is then read where it is written.
+                let ordered = assigned.iter().any(|(_, node)| holds_block(node));
                 for (position, (slot, node)) in assigned.iter().enumerate() {
                     let Some(index) = *slot else {
                         continue;
@@ -1747,6 +1824,15 @@ impl<'a> Typer<'a> {
                         .map(|(generic, _)| generic.at)
                         .collect();
                     if takes_its_type(node) || !mentions(pattern, &unfound) {
+                        continue;
+                    }
+                    if ordered {
+                        if self.may_reread() {
+                            let mark = self.mark();
+                            let value = self.expression(node, Some(&Type::Unknown));
+                            infer(pattern, &value.ty, &read.generics, &mut found);
+                            self.take_back(mark, false);
+                        }
                         continue;
                     }
                     let reported = self.diagnostics.len();
@@ -2444,6 +2530,20 @@ fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Opt
     }
 }
 
+/// What a reading may change, at one moment: see [`Typer::take_back`].
+struct Mark {
+    /// How many diagnostics there are.
+    diagnostics: usize,
+    /// How many locals there are.
+    locals: usize,
+    /// What is assigned.
+    assigned: Vec<bool>,
+    /// Whether every path has returned.
+    returned: bool,
+    /// Whether a statement not read has been met.
+    unsure: bool,
+}
+
 /// One argument of an operator's call, before a candidate is selected.
 struct Given {
     /// The public parameter it is given to, when it is given to one.
@@ -2455,21 +2555,17 @@ struct Given {
     by_place: bool,
     /// Its value, read with nothing expected of it.
     value: Expr,
+    /// True when that reading has been taken back, the argument being
+    /// read again as the selected candidate's parameter: `value` is
+    /// then not what stands.
+    retried: bool,
 }
 
-/// The call of an operator for which no candidate is selected: its
-/// arguments as they were read, and no callee.
-fn unselected(given: Vec<Given>) -> ExprKind {
-    ExprKind::Call {
-        callee: Callee::Unread,
-        arguments: given
-            .into_iter()
-            .map(|given| hir::Argument {
-                parameter: None,
-                value: given.value,
-            })
-            .collect(),
-    }
+/// True when an expression holds a block, at any depth: reading it may
+/// then declare a local, assign one, or return (CTRL-10).
+fn holds_block(node: &SyntaxNode) -> bool {
+    node.descendants()
+        .any(|part| part.kind() == SyntaxKind::Block)
 }
 
 /// True when an integer literal was widened among the entries of a
@@ -2655,7 +2751,7 @@ impl<'a> Typer<'a> {
         before: &[bool],
         before_returned: bool,
     ) -> Branch {
-        self.assigned = restored(before, self.locals.len());
+        self.assigned = restored(before, self.locals.len(), true);
         self.returned = before_returned;
         let (value, outcome) = self.flow(node, expected, used);
         Branch {
@@ -2861,7 +2957,7 @@ impl<'a> Typer<'a> {
                 .collect(),
             None => Vec::new(),
         };
-        self.assigned = restored(&before, self.locals.len());
+        self.assigned = restored(&before, self.locals.len(), true);
         self.returned = before_returned;
         statements
     }
@@ -3036,7 +3132,7 @@ impl<'a> Typer<'a> {
                     let Some(label) = inside.next() else {
                         continue;
                     };
-                    self.assigned = restored(&before, self.locals.len());
+                    self.assigned = restored(&before, self.locals.len(), false);
                     self.returned = before_returned;
                     let label = self.expression(&label, Some(&of));
                     let label = self.fit(label, &of, "the selector");
@@ -3060,7 +3156,7 @@ impl<'a> Typer<'a> {
                     cases.push(hir::Case { label, body });
                 }
                 SyntaxKind::SwitchDefault => {
-                    self.assigned = restored(&before, self.locals.len());
+                    self.assigned = restored(&before, self.locals.len(), false);
                     self.returned = before_returned;
                     let body = part
                         .children()
@@ -3081,14 +3177,16 @@ impl<'a> Typer<'a> {
         if exhaustive && !ends.is_empty() {
             self.assigned = (0..count)
                 .map(|local| {
+                    // A local a later case declares is not assigned
+                    // at the end of an earlier one.
                     ends.iter().all(|(assigned, returned)| {
-                        *returned || assigned.get(local).copied().unwrap_or(true)
+                        *returned || assigned.get(local).copied().unwrap_or(false)
                     })
                 })
                 .collect();
             self.returned = ends.iter().all(|(_, returned)| *returned);
         } else {
-            self.assigned = restored(&before, count);
+            self.assigned = restored(&before, count, false);
             self.returned = before_returned;
         }
         Stmt::Switch {
@@ -3100,11 +3198,14 @@ impl<'a> Typer<'a> {
     }
 }
 
-/// What was assigned at `before`, for as many locals as there are now:
-/// one declared since has its value from its declaration on.
-fn restored(before: &[bool], count: usize) -> Vec<bool> {
+/// What was assigned at `before`, for as many locals as there are now.
+/// One declared since is `since`: assigned, when its block has ended
+/// and it is in scope no more; not assigned, when it is a `switch`
+/// case's, which is in scope after the `switch` (UNIT-12) on paths that
+/// did not declare it.
+fn restored(before: &[bool], count: usize, since: bool) -> Vec<bool> {
     let mut assigned = before.to_vec();
-    assigned.resize(count, true);
+    assigned.resize(count, since);
     assigned
 }
 
