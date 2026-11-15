@@ -747,12 +747,14 @@ impl<'a> Typer<'a> {
             }
             // TYPE-7: `.member` "names a member of the enum type its
             // position expects": beside an operand, that operand's.
-            _ if right.kind() == SyntaxKind::ImpliedMember => {
+            // "Parentheses select grouping" (EXPR-1): `(.buy)` is
+            // `.buy`.
+            _ if is_implied_member(&right) => {
                 let left = self.expression(&left, None);
                 let right = self.expression(&right, Some(&left.ty));
                 (left, right)
             }
-            _ if left.kind() == SyntaxKind::ImpliedMember => {
+            _ if is_implied_member(&left) => {
                 let right = self.expression(&right, None);
                 let left = self.expression(&left, Some(&right.ty));
                 (left, right)
@@ -1748,20 +1750,6 @@ fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &m
     }
 }
 
-/// True when an expression takes its type from its place and has none
-/// of its own: `null`, and `.member`, in parentheses or not.
-fn takes_its_type(node: &SyntaxNode) -> bool {
-    match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| takes_its_type(&inner)),
-        SyntaxKind::ImpliedMember => true,
-        SyntaxKind::Literal => has_token(node, SyntaxKind::KwNull),
-        _ => false,
-    }
-}
-
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
 /// `atomic<...>` of a nullable type, `atomic<T?>`."
 fn is_optional(ty: &Type) -> bool {
@@ -1789,6 +1777,18 @@ fn accepts_float(expected: &Type) -> bool {
     match expected {
         Type::Scalar(Scalar::F64) => true,
         Type::Nullable(inner) => accepts_float(inner),
+        _ => false,
+    }
+}
+
+/// True when an expression is `.member`, in parentheses or not.
+fn is_implied_member(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| is_implied_member(&inner)),
+        SyntaxKind::ImpliedMember => true,
         _ => false,
     }
 }

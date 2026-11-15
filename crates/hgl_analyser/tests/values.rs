@@ -597,7 +597,7 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
         "    let buy = Side.buy\n",
         "    let hold = Side.hold\n",
         "    let implied: Side = .sell\n",
-        "    let same = side == .buy\n",
+        "    let same = side == .buy && (.sell) != side\n",
         "    let none = .buy\n",
         "    let number: i64 = .buy\n",
         "    return Quote(bid: 1.5, note: \"n\")\n",
