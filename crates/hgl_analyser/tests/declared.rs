@@ -761,6 +761,13 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "abstract struct Wide<...Ts> { width: i64 }\n",
         "struct Two<...Us{2}> : Wide<Us> { two: Wide<i64, str> }\n",
         "struct Triple<...Us{2}> : Wide<Us> { other: Wide<i64, str, f64> }\n",
+        // EXPR-1: parentheses select grouping, and a literal is the
+        // same inside them.
+        "struct Flag<const B: bool> { width: i64 }\n",
+        "struct Grouped : Base<Flag<true>> { grouped: Base<Flag<(true)>> }\n",
+        "struct Ungrouped : Base<Flag<true>> { other: Base<Flag<(false)>> }\n",
+        "struct Signed : Base<Mark<-1.0>> { signed: Base<Mark<-(1.00)>> }\n",
+        "struct Unsigned : Base<Mark<-1.0>> { other: Base<Mark<1.0>> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -777,6 +784,8 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:26:35 type/field.recursive TYPE-6",
             "m.hgl:29:45 type/field.recursive TYPE-6",
             "m.hgl:33:35 type/field.recursive TYPE-6",
+            "m.hgl:36:37 type/field.recursive TYPE-6",
+            "m.hgl:38:36 type/field.recursive TYPE-6",
         ]
     );
 }

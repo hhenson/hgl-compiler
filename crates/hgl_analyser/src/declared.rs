@@ -1649,10 +1649,11 @@ fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_
 ///
 /// One that names a generic parameter, or is an expression not
 /// evaluated, may be anything. Two literals whose values this pass does
-/// not hold are one when they are written alike. Written differently,
-/// two floats are compared as the numbers they denote (LEX-20) and two
-/// strings as their contents (LEX-2), so `1.0` is `1.00`; a bool or
-/// `null` is as it is written; and two dates or times may be one.
+/// not hold are read through the parentheses and the minus around them
+/// (EXPR-1): `(true)` is `true`. Two floats are compared as the numbers
+/// they denote (LEX-20) and two strings as their contents (LEX-2), so
+/// `1.0` is `1.00`; a bool or `null` is as it is written; and two dates
+/// or times written differently may be one.
 fn may_be_one(left: &Constant, right: &Constant) -> bool {
     if is_open(left) || is_open(right) || left == right {
         return true;
@@ -1667,19 +1668,48 @@ fn may_be_one(left: &Constant, right: &Constant) -> bool {
     if kind != other_kind {
         return false;
     }
+    let (negative, text) = bare_literal(&left.text);
+    let (other_negative, other_text) = bare_literal(&right.text);
     match *kind {
-        // A literal the lexer has reported, or one under a sign or in
-        // parentheses, is not read here: it may be the other.
-        "a float" => match (decode_float(&left.text), decode_float(&right.text)) {
-            (Ok(left), Ok(right)) => left == right,
+        // A literal the lexer has reported is not read here: it may be
+        // the other.
+        "a float" => match (decode_float(text), decode_float(other_text)) {
+            (Ok(value), Ok(other)) => {
+                let signed = |value: f64, negative: bool| if negative { -value } else { value };
+                signed(value, negative) == signed(other, other_negative)
+            }
             _ => true,
         },
-        "a string" => match (decode_string(&left.text), decode_string(&right.text)) {
-            (Ok(left), Ok(right)) => left == right,
+        "a string" => match (decode_string(text), decode_string(other_text)) {
+            (Ok(value), Ok(other)) => value == other,
             _ => true,
         },
         "a date or time" => true,
-        _ => false,
+        // `true`, `false` and `null` are as they are written.
+        _ => negative == other_negative && text == other_text,
+    }
+}
+
+/// The literal inside a constant that is one literal in parentheses or
+/// under a minus, with whether an odd number of minuses stand before
+/// it: `-(1.0)` gives `1.0`, negative.
+fn bare_literal(text: &str) -> (bool, &str) {
+    let mut negative = false;
+    let mut rest = text.trim();
+    loop {
+        // `strip_prefix` gives what follows the prefix, or `None` when
+        // the text does not start with it.
+        if let Some(inner) = rest.strip_prefix('-') {
+            negative = !negative;
+            rest = inner.trim();
+        } else if let Some(inner) = rest
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix(')'))
+        {
+            rest = inner.trim();
+        } else {
+            return (negative, rest);
+        }
     }
 }
 
