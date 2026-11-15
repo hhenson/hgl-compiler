@@ -746,7 +746,7 @@ fn a_recursive_field_may_be_nullable() {
 #[test]
 fn a_descendant_keeps_a_recursive_fields_null() {
     let checked = module(concat!(
-        "abstract struct Linked { next: atomic<Item> = null }\n",
+        "abstract struct Linked { next: atomic<Linked> = null }\n",
         "struct Item : Linked { value: i64 }\n",
         "struct Kept : Linked { next = null }\n",
         "struct Removed : Linked { next = make() }\n",
@@ -756,12 +756,19 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         // A nullable recursive field has no null default to keep.
         "abstract struct Chain { next: Chain? }\n",
         "struct Ended : Chain { next = make() }\n",
+        // A generic parent's field is recursive in the struct that
+        // gives it itself, and in no other.
+        "abstract struct Base<T> { next: atomic<T> = null }\n",
+        "struct Node : Base<Node> { }\n",
+        "struct Value : Base<i64> { next = 0 }\n",
+        "struct Loop : Base<Loop> { next = make() }\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:5:27 local:type/field.recursive TYPE-6",
             "m.hgl:6:24 local:type/field.recursive TYPE-6",
+            "m.hgl:13:28 local:type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -770,6 +777,7 @@ fn a_descendant_keeps_a_recursive_fields_null() {
             "`next` is a recursive field, and its default stays null",
             "`inner` makes `Holder` hold itself: a recursive field is an `atomic<...>` with a \
              default of null, or nullable",
+            "`next` is a recursive field, and its default stays null",
         ]
     );
 }
