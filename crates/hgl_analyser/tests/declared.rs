@@ -239,6 +239,10 @@ fn a_field_is_compared_by_what_its_type_means() {
         "abstract struct Base {\n    window: rolling<i64, 5>\n    sized: list<f64, 6>\n}\n",
         "struct Same : Base {\n    window: rolling<i64, 5, 5>\n    sized: list<f64, 2 * 3>\n}\n",
         "struct Other : Base { window: rolling<i64, 5, 2> }\n",
+        // A size this pass cannot evaluate is no difference: `N + 1`
+        // with 2 for `N` is left for the pass that evaluates constants.
+        "abstract struct Grown<const N: i64> { items: list<i64, N + 1> }\n",
+        "struct Three : Grown<2> { items: list<i64, 3> }\n",
         // And so is a minimum that a parent's argument makes its
         // maximum.
         "abstract struct Bounded<const N: i64> { window: rolling<i64, 5, N> }\n",
@@ -249,7 +253,7 @@ fn a_field_is_compared_by_what_its_type_means() {
         checked.summary(),
         [
             "m.hgl:10:23 local:type/field.conflict TYPE-4",
-            "m.hgl:13:31 local:type/field.conflict TYPE-4",
+            "m.hgl:15:31 local:type/field.conflict TYPE-4",
         ]
     );
     assert_eq!(
