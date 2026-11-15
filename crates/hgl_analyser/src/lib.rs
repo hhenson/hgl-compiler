@@ -12,8 +12,8 @@
 //!
 //! # What is built so far
 //!
-//! The program's modules, what each declares, and what each name in it
-//! is bound to.
+//! The program's modules, what each declares, what each name in it is
+//! bound to, and what each type written in it means.
 //!
 //! * `assemble` groups the files into modules by the `module` line of
 //!   each (UNIT-1);
@@ -28,9 +28,13 @@
 //!   binding that takes a name already there (UNIT-12);
 //! * `forms` rejects the forms of a declaration that the grammar admits
 //!   and a rule does not: a pack with a default, a hook a native
-//!   implementation cannot have (FN-8, NATIVE-3).
+//!   implementation cannot have (FN-8, NATIVE-3);
+//! * `read` turns every written type into a [`Type`], records each
+//!   declaration's signature or fields, and rejects a type made of what
+//!   its place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12,
+//!   TYPE-14, GEN-2).
 //!
-//! Types, phases and constants are not checked yet.
+//! What an expression is, phases and constants are not checked yet.
 //!
 //! # The prelude
 //!
@@ -48,11 +52,14 @@
 //! and the rest is analysed.
 
 mod assemble;
+mod constant;
 mod declare;
 mod forms;
 mod imports;
 mod program;
+mod read;
 mod resolve;
+mod types;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::SyntaxNode;
@@ -62,12 +69,19 @@ pub use program::{
     Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
     ModuleFile, NameUse, OperatorRef, PreludeName, Program, Role, Test,
 };
+pub use types::{
+    Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
+    Parameter, Scalar, Signature, StructType, Type, WrittenType,
+};
 
 /// The diagnostic codes this stage reports.
 ///
-/// Every one is a code of the specification's diagnostic catalogue, so an
-/// `expect-error` annotation can expect it (TST-12). The analyser's tests
-/// check each diagnostic's category and code against the catalogue.
+/// Those directly in this module are codes of the specification's
+/// diagnostic catalogue, so an `expect-error` annotation can expect them
+/// (TST-12). Those in [`codes::local`] are this compiler's own, for
+/// rejections the catalogue has no row for yet. The analyser's tests
+/// check each diagnostic's category and code against the catalogue, or
+/// against [`codes::local::ALL`].
 pub mod codes {
     /// A module has a second unnamed file (UNIT-1).
     pub const MODULE_DUPLICATE_UNNAMED: &str = "module.duplicate_unnamed";
@@ -134,6 +148,45 @@ pub mod codes {
     pub const NATIVE_DUPLICATE_HOOK: &str = "native.duplicate_hook";
     /// An `inject` names something that is not a capability (TIME-8).
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
+    /// A window's size is neither a tick count nor a duration, or its
+    /// two sizes are of different kinds (TYPE-11).
+    pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";
+    /// A window's size is out of bounds (TYPE-11).
+    pub const ROLLING_SIZE_BOUNDS: &str = "rolling.size_bounds";
+
+    /// Codes local to this compiler: the specification rejects what
+    /// they report and its catalogue has no row for it. Each is
+    /// proposed to the specification, and is replaced by the catalogued
+    /// code when one is agreed.
+    pub mod local {
+        /// A name in a type position is not a type (UNIT-10, GEN-2,
+        /// GEN-13).
+        pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
+        /// A `rolling`, `ref`, `atomic` or `signal` where only an
+        /// ordinary value type may stand, under a `?` included (TYPE-12,
+        /// TYPE-14 and the grammar's `value_type`).
+        pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
+        /// `signal` somewhere other than the whole type of an input
+        /// (TYPE-12).
+        pub const SIGNAL_POSITION: &str = "signal.position";
+        /// A generic type given the wrong number of arguments, or a
+        /// type that takes none given some (GEN-2, GEN-13).
+        pub const GENERIC_ARGUMENT_COUNT: &str = "generic.argument_count";
+        /// A list's size is not a nonnegative count (TYPE-10).
+        pub const LIST_SIZE: &str = "list.size";
+        /// A temporal parameter has a default (UNIT-8).
+        pub const DEFAULT_TEMPORAL_PARAMETER: &str = "default.temporal_parameter";
+
+        /// Every local code of this stage.
+        pub const ALL: [&str; 6] = [
+            TYPE_NOT_A_TYPE,
+            TYPE_NOT_ORDINARY,
+            SIGNAL_POSITION,
+            GENERIC_ARGUMENT_COUNT,
+            LIST_SIZE,
+            DEFAULT_TEMPORAL_PARAMETER,
+        ];
+    }
 }
 
 /// One parsed file: what the analyser is given for each source file.
@@ -179,11 +232,12 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     imports::resolve(&mut program, diagnostics);
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
+    read::read(&mut program, diagnostics);
     program
 }
 
-/// An error this stage reports: every one has a catalogued code and
-/// cites the rule that requires it.
+/// An error with a code of the specification's catalogue. It cites the
+/// rule that requires it.
 fn error(
     category: Category,
     code: &'static str,
@@ -192,6 +246,19 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// An error with one of this compiler's own codes ([`codes::local`]):
+/// the rule cited rejects the source, and the catalogue has no row for
+/// it.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

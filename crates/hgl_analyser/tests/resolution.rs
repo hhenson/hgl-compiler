@@ -559,7 +559,7 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         "struct Plain { value: i64 }\n",
         "const fn decide(a: i64, b: i64, c: i64) -> bool {\n",
         // Both readings parse. `Box` is a generic type: a constructor.
-        "    let made = Box<b>(c)\n",
+        "    let made = Box<Plain>(c)\n",
         // `a` is a parameter: comparisons.
         "    let compared = a<b>(c)\n",
         // `Plain` is a type with no generic parameters: comparisons.
@@ -610,14 +610,21 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
 #[test]
 fn an_imported_generic_type_is_not_ordered_either() {
     let checked = check(&[
-        ("lib.hgl", "module lib\nexport struct Box<T> { value: T }\n"),
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export struct Box<T> { value: T }\n",
+                "export struct Unit { value: i64 }\n",
+            ),
+        ),
         (
             "m.hgl",
             concat!(
                 "module m\n",
                 "use lib as l\n",
                 "const fn first(a: i64) -> bool => l::Box < a\n",
-                "const fn made(a: i64, b: i64) -> bool => l::Box<a>(b)\n",
+                "const fn made(b: i64) -> bool => l::Box<l::Unit>(b)\n",
             ),
         ),
         (

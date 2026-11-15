@@ -22,7 +22,9 @@ fn pack_parameters_are_accepted_in_their_forms() {
             "fn same<T>(first: T, rest: ...T{1:*}) {}\n",
             "fn each<...Ts>(rest: ...Ts) {}\n",
             "fn named<...Fields>(const size: i64, fields: ...{Fields}{2}) {}\n",
-            "fn both<T, ...Fields>(first: T = seed(), rest: ...T, fields: ...{Fields}) {}\n",
+            // UNIT-8: a `const` parameter may have a default; a temporal
+            // one may not.
+            "fn both<T, ...Fields>(const first: T = seed(), rest: ...T, fields: ...{Fields}) {}\n",
             "operator join<...Ts{2:8}>(parts: ...Ts) -> str\n",
             "native fn collect<T>(items: ...T) -> list<T>\n",
             "const fn seed() -> i64 => 1\n",
