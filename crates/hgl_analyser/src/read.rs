@@ -202,7 +202,7 @@ struct Reader<'a> {
 // ---- Reading the tree ----
 
 /// True for a node that is a type.
-fn is_type(kind: SyntaxKind) -> bool {
+pub(crate) fn is_type(kind: SyntaxKind) -> bool {
     matches!(
         kind,
         SyntaxKind::ScalarType
@@ -223,7 +223,7 @@ fn is_type(kind: SyntaxKind) -> bool {
 }
 
 /// The first child node of `node` of kind `kind`.
-fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
+pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
     node.children().find(|child| child.kind() == kind)
 }
 
@@ -233,14 +233,14 @@ fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
 }
 
 /// The tokens directly inside `node`, without whitespace and comments.
-fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|element| element.into_token())
         .filter(|token| !token.kind().is_trivia())
 }
 
 /// True when a token of `kind` is directly inside `node`.
-fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
+pub(crate) fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
     tokens(node).any(|token| token.kind() == kind)
 }
 
@@ -548,11 +548,22 @@ impl Reader<'_> {
             } else {
                 None
             };
+            // The default is the member's child that is no type.
+            let null_default = member
+                .children()
+                .find(|part| !is_type(part.kind()))
+                .is_some_and(|default| {
+                    default.kind() == SyntaxKind::Literal
+                        && tokens(&default)
+                            .next()
+                            .is_some_and(|token| token.kind() == SyntaxKind::KwNull)
+                });
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
                 ty,
                 has_default: has_token(&member, SyntaxKind::Eq),
+                null_default,
             });
         }
         StructType {

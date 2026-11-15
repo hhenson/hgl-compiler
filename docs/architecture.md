@@ -227,7 +227,8 @@ It is built in passes:
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
-| Declared types | Struct parents and fields, enum numbering, the kind of a plain generic parameter | TYPE-3, TYPE-4, TYPE-6, TYPE-7, GEN-13 | planned |
+| Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
+| Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | planned |
 | Value expressions | The type of every expression of a value function and of every constant | | planned |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
@@ -314,6 +315,49 @@ proposed in [hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
 | `generic.argument_count` | The wrong number of generic arguments |
 | `list.size` | A list size that is not a count |
 | `default.temporal_parameter` | A default on a temporal parameter |
+
+### Declared types
+
+The declarations are then read against one another:
+
+| Subject | Rule | What is done |
+| --- | --- | --- |
+| A parent | TYPE-3 | An abstract struct. A concrete struct, an enum, a native type or a generic parameter is rejected |
+| Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
+| A field of a struct and of a parent | TYPE-4 | The same type and optionality, the parent's generic arguments standing for its parameters. A null default makes a field optional |
+| A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
+| `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
+| A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
+| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps. Holding itself through a parent's field counts |
+| An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
+
+A struct holds another when a field's type names it anywhere, or it
+inherits from it. Structs that hold one another are found as the
+strongly connected groups of that graph, as modules that import one
+another are.
+
+An enum's number is folded as a size is. One this pass cannot fold is
+not known, and neither are those numbered from it; the pass that
+evaluates constants reads them.
+
+2^63 is an integer only as the operand of a minus, the least `i64`
+(LEX-7). The lexer admits the literal; the analyser rejects it anywhere
+else, under the catalogue's `number.integer_range`.
+
+The rejections of this pass have no catalogue row either:
+
+| Local code | Rejection |
+| --- | --- |
+| `struct.parent` | A parent that is not an abstract struct |
+| `struct.inheritance_cycle` | Structs that inherit from one another |
+| `field.conflict` | A field whose type or optionality differs between parents, or from a parent's |
+| `field.not_inherited` | `name = value` for a field no parent declares |
+| `field.duplicate` | Two members of a struct with one name |
+| `field.recursive` | A field that makes its struct hold itself and is not `atomic<...>` defaulted to null |
+| `enum.value` | A number that is not an integer |
+| `enum.duplicate_value` | Two members with one number |
+| `enum.overflow` | Numbering past the largest `i64` |
+| `enum.duplicate_member` | Two members of an enum with one name |
 
 ### Order
 
