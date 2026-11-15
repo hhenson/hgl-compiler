@@ -2847,19 +2847,14 @@ impl<'a> Typer<'a> {
         // type from the other branch, which is then read first.
         let told = expected.is_some_and(|expected| !open(expected));
         let from_other = |first: &Outcome, second: &SyntaxNode| match first {
-            Outcome::Value(ty) if !open(ty) && value_of_branch(second).is_some() => {
-                let null = value_of_branch(second).is_some_and(|value| is_null(&value));
-                Some(if null {
-                    nullable(ty.clone())
-                } else {
-                    ty.clone()
-                })
-            }
+            Outcome::Value(ty) if !open(ty) => Some(if branch_is_null(second) {
+                nullable(ty.clone())
+            } else {
+                ty.clone()
+            }),
             _ => None,
         };
-        let by_place = |branch: &SyntaxNode| {
-            value_of_branch(branch).is_some_and(|value| takes_its_type(&value))
-        };
+        let by_place = |branch: &SyntaxNode| branch_takes_its_type(branch);
         let (mut then, mut other) = match &otherwise {
             None => (
                 self.branch(&then, expected, used, &before, before_returned),
@@ -3285,6 +3280,44 @@ fn value_of_branch(branch: &SyntaxNode) -> Option<SyntaxNode> {
         .last()
         .filter(|last| last.kind() == SyntaxKind::ExprStmt)
         .and_then(|last| last.children().next())
+}
+
+/// True when a branch's value takes its type from its place: `null` or
+/// `.member`, as the value of a block, of a branch of the `if` of an
+/// `else if`, or in parentheses.
+fn branch_takes_its_type(branch: &SyntaxNode) -> bool {
+    match branch.kind() {
+        SyntaxKind::Block => {
+            value_of_branch(branch).is_some_and(|value| branch_takes_its_type(&value))
+        }
+        // The condition is first; the branches follow it.
+        SyntaxKind::IfExpr => branch
+            .children()
+            .skip(1)
+            .any(|inner| branch_takes_its_type(&inner)),
+        SyntaxKind::ParenExpr => branch
+            .children()
+            .next()
+            .is_some_and(|inner| branch_takes_its_type(&inner)),
+        _ => takes_its_type(branch),
+    }
+}
+
+/// True when a branch's value, found as [`branch_takes_its_type`] finds
+/// it, is `null`.
+fn branch_is_null(branch: &SyntaxNode) -> bool {
+    match branch.kind() {
+        SyntaxKind::Block => value_of_branch(branch).is_some_and(|value| branch_is_null(&value)),
+        SyntaxKind::IfExpr => branch
+            .children()
+            .skip(1)
+            .any(|inner| branch_is_null(&inner)),
+        SyntaxKind::ParenExpr => branch
+            .children()
+            .next()
+            .is_some_and(|inner| branch_is_null(&inner)),
+        _ => is_null(branch),
+    }
 }
 
 /// `T?` for a `T`; a type that is nullable already, or not known, as it
