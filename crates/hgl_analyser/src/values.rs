@@ -843,9 +843,26 @@ impl<'a> Typer<'a> {
         } else {
             Some(&Type::Unknown)
         };
+        // A block among the entries may assign what another reads
+        // (CTRL-10), and an entry that takes its type from its place is
+        // read after the others. With a block among them the others
+        // are read first only to learn their type, that reading taken
+        // back, and every entry is then read where it is written.
+        let ordered = items.iter().any(holds_block) && self.may_reread();
         let mut read: Vec<Option<Expr>> = items
             .iter()
-            .map(|item| (!takes_its_type(item)).then(|| self.expression(item, of_entry)))
+            .map(|item| {
+                if branch_takes_its_type(item) {
+                    return None;
+                }
+                if !ordered {
+                    return Some(self.expression(item, of_entry));
+                }
+                let mark = self.mark();
+                let entry = self.expression(item, of_entry);
+                self.take_back(mark, false);
+                Some(entry)
+            })
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
         // EXPR-9: "Entries of two types reject, and so do entries that
@@ -878,7 +895,7 @@ impl<'a> Typer<'a> {
         };
         // "`[1, null]` [is] a `list<i64?>`": a `null` among the values
         // makes their type nullable.
-        let of = if items.iter().any(is_null) && !matches!(of, Type::Nullable(_)) {
+        let of = if items.iter().any(branch_is_null) && !matches!(of, Type::Nullable(_)) {
             Type::Nullable(Box::new(of))
         } else {
             of
@@ -896,8 +913,8 @@ impl<'a> Typer<'a> {
                 .iter()
                 .enumerate()
                 .map(|(position, item)| match read[position].take() {
-                    Some(entry) => entry,
-                    None => self.expression(item, Some(&Type::Unknown)),
+                    Some(entry) if !ordered => entry,
+                    _ => self.expression(item, Some(&Type::Unknown)),
                 })
                 .collect();
             return (ExprKind::Sequence(elements), unjudged);
@@ -907,8 +924,8 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(position, item)| {
                 let entry = match read[position].take() {
-                    Some(entry) => entry,
-                    None => self.expression(item, Some(&of)),
+                    Some(entry) if !ordered => entry,
+                    _ => self.expression(item, Some(&of)),
                 };
                 self.fit(entry, &of, "an element, as the first is,")
             })
@@ -2612,6 +2629,18 @@ fn widens_an_entry(value: &Expr) -> bool {
         ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => {
             entries.iter().any(widens_an_entry)
         }
+        // The value of a block, and of each branch of an `if`.
+        ExprKind::Block {
+            value: Some(value), ..
+        } => widens_an_entry(value),
+        ExprKind::If {
+            then, otherwise, ..
+        } => {
+            widens_an_entry(then)
+                || otherwise
+                    .as_ref()
+                    .is_some_and(|otherwise| widens_an_entry(otherwise))
+        }
         _ => false,
     }
 }
@@ -2629,13 +2658,29 @@ fn typed_by_place(node: &SyntaxNode) -> bool {
             .next()
             .is_some_and(|inner| typed_by_place(&inner)),
         SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
-        SyntaxKind::Block => value_of_branch(node).is_some_and(|value| typed_by_place(&value)),
+        // An integer literal that is a block's value is an `f64` where
+        // one is expected (EXPR-5), as the block's place says.
+        SyntaxKind::Block => value_of_branch(node)
+            .is_some_and(|value| typed_by_place(&value) || is_integer_written(&value)),
         // The condition is first; the branches follow it.
         SyntaxKind::IfExpr => node
             .children()
             .skip(1)
             .any(|branch| typed_by_place(&branch)),
         _ => takes_its_type(node),
+    }
+}
+
+/// True when an expression is an integer literal as it is written,
+/// under a minus or in parentheses or not.
+fn is_integer_written(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::Int),
+        SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| is_integer_written(&inner)),
+        _ => false,
     }
 }
 
@@ -2736,6 +2781,12 @@ impl<'a> Typer<'a> {
         let at = self.at(node);
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
+            // CTRL-5: what follows a `return` is not reached. It is read
+            // for what it reports itself, and is not the block's value.
+            Some(last) if self.returned => {
+                let (value, _) = self.flow(&last, Some(&Type::Unknown), false);
+                (Some(Box::new(value)), Outcome::Returns)
+            }
             Some(last) => {
                 let (value, outcome) = self.flow(&last, expected, used);
                 match (outcome, expected) {
