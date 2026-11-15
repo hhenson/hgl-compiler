@@ -722,8 +722,8 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
         "    let positional = Quote(a, 2.5)\n",
         "    let short = Quote(ask: 1.0)\n",
         "    let extra = Quote(bid: 1.0, mid: 2.0)\n",
-        // A parent's fields come first.
-        "    let child = Child(1, extra: 2.5)\n",
+        // A parent's fields are given by name, as its own are.
+        "    let child = Child(extra: 2.5, id: 1)\n",
         "    let base = Base(id: 1)\n",
         "    let boxed = Box(value: a)\n",
         "    let typed = Box<f64>(value: a)\n",
@@ -744,11 +744,13 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
     assert_eq!(
         checked.summary(),
         [
-            // EXPR-5: `a` has a type, and is not converted.
-            "m.hgl:13:28 type/type.mismatch EXPR-5",
+            // TYPE-5: a constructor "takes no positional argument."
+            "m.hgl:13:28 type/argument.unexpected TYPE-5",
+            "m.hgl:13:31 type/argument.unexpected TYPE-5",
             "m.hgl:14:17 type/argument.missing EXPR-2",
             "m.hgl:15:33 name/argument.unknown EXPR-2",
             "m.hgl:17:16 type/struct.abstract TYPE-3",
+            // EXPR-5: `a` has a type, and is not converted.
             "m.hgl:19:33 type/type.mismatch EXPR-5",
             "m.hgl:20:41 type/type.mismatch EXPR-5",
             "m.hgl:24:25 name/member.unknown EXPR-7",
@@ -760,7 +762,8 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
     assert_eq!(
         messages(&checked),
         [
-            "this is `i64`, and the field `bid` is `f64`",
+            "a struct's fields are given by name: `Quote(field: value)`",
+            "a struct's fields are given by name: `Quote(field: value)`",
             "`Quote` is given no `bid`, a field with no default",
             "`Quote` has no field `mid`",
             "`Base` is an abstract struct and is not constructed",
@@ -810,28 +813,29 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "struct Pair<T> {\n    first: T\n    second: T\n}\n",
         "struct Box<T> { value: T }\n",
         "const fn pairs(a: i64) {\n",
-        "    let same = Pair(1, a)\n",
-        "    let mixed = Pair(1, \"x\")\n",
-        "    let widened = Pair(1.5, 1)\n",
+        "    let same = Pair(first: 1, second: a)\n",
+        "    let mixed = Pair(first: 1, second: \"x\")\n",
+        // The fields are read in the order written, not declared.
+        "    let widened = Pair(second: 1.5, first: 1)\n",
         "    let second = mixed.second\n",
         "    let empty: Box<i64?> = Box()\n",
         "    let typed = Box<i64?>()\n",
         "    let needed: Box<i64> = Box()\n",
         // `null` and `.member` take their type from the field, once the
         // other fields have said what `T` is.
-        "    let absent = Pair(1, null)\n",
-        "    let sides = Pair(Side.buy, .sell)\n",
-        "    let nullable: Pair<i64?> = Pair(1, null)\n",
+        "    let absent = Pair(second: null, first: 1)\n",
+        "    let sides = Pair(first: Side.buy, second: .sell)\n",
+        "    let nullable: Pair<i64?> = Pair(first: 1, second: null)\n",
         // A parameter is found inside a field's type too.
-        "    let listed = Bag([1, a])\n",
+        "    let listed = Bag(values: [1, a])\n",
         "    let element: str = listed.values[0]\n",
-        "    let both = Both(1.5, [1])\n",
-        "    let maybe = Maybe(a)\n",
+        "    let both = Both(first: 1.5, rest: [1])\n",
+        "    let maybe = Maybe(value: a)\n",
         "}\n",
         // A parameter of the function is a type like any other: a field
         // given it is of it.
-        "const fn kept<U>(value: U) -> Box<U> => Box<U>(value)\n",
-        "const fn lost<U>() -> Box<U> => Box<U>(1)\n",
+        "const fn kept<U>(value: U) -> Box<U> => Box<U>(value: value)\n",
+        "const fn lost<U>() -> Box<U> => Box<U>(value: 1)\n",
         "const fn read<U>(box: Box<U>) -> U => box.value\n",
         "enum Side { buy, sell }\n",
         "struct Bag<T> { values: list<T> }\n",
@@ -840,20 +844,20 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         // A value parameter is found in a size, as a type is.
         "struct Sized<const N: i64> { items: list<i64, N> }\n",
         "const fn sized(xs: list<i64, 2>) {\n",
-        "    let two = Sized(xs)\n",
-        "    let written = Sized<2>(xs)\n",
-        "    let wrong = Sized<3>(xs)\n",
+        "    let two = Sized(items: xs)\n",
+        "    let written = Sized<2>(items: xs)\n",
+        "    let wrong = Sized<3>(items: xs)\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:25 type/type.mismatch EXPR-5",
+            "m.hgl:9:40 type/type.mismatch EXPR-5",
             "m.hgl:14:28 type/argument.missing EXPR-2",
-            "m.hgl:15:26 type/type.mismatch TYPE-14",
+            "m.hgl:15:31 type/type.mismatch TYPE-14",
             "m.hgl:19:24 type/type.mismatch EXPR-5",
-            "m.hgl:24:40 type/type.mismatch EXPR-5",
-            "m.hgl:37:26 type/type.mismatch EXPR-5",
+            "m.hgl:24:47 type/type.mismatch EXPR-5",
+            "m.hgl:37:33 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -994,13 +998,12 @@ fn an_element_is_read_by_its_index_or_its_key() {
     );
 }
 
-// ---- What may be left out comes last ----
+// ---- A parameter that may be omitted comes last ----
 
 /// UNIT-8: "A parameter that may be omitted follows every parameter that
-/// may not." TYPE-5: a field that may be left out "follows every field
-/// that may not be left out", a parent's fields counted first.
+/// may not." TYPE-5: "Fields are declared in any order."
 #[test]
-fn what_may_be_left_out_follows_what_may_not() {
+fn a_parameter_that_may_be_omitted_follows_those_that_may_not() {
     let checked = module(concat!(
         "const fn fine(a: i64, b: i64 = 1, c: i64?) -> i64 => a\n",
         "const fn late(a: i64 = 1, b: i64) -> i64 => b\n",
@@ -1016,8 +1019,6 @@ fn what_may_be_left_out_follows_what_may_not() {
         [
             "m.hgl:3:27 type/default.order UNIT-8",
             "m.hgl:4:22 type/default.order UNIT-8",
-            "m.hgl:13:5 type/default.order TYPE-5",
-            "m.hgl:16:23 type/default.order TYPE-5",
         ]
     );
     assert_eq!(
@@ -1025,8 +1026,6 @@ fn what_may_be_left_out_follows_what_may_not() {
         [
             "parameter `b` may not be omitted, and follows `a`, which may",
             "parameter `b` may not be omitted, and follows `a`, which may",
-            "field `id` may not be left out, and follows `size`, which may",
-            "field `extra` may not be left out, and follows `id`, which may",
         ]
     );
 }

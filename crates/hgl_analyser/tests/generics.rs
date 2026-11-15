@@ -120,7 +120,7 @@ fn kinds_are_settled_across_structs() {
                 "use lib::{Outer}\n",
                 // Each names the other; one field settles both.
                 "struct Ping<N> { pong: atomic<Pong<N>?> = null }\n",
-                "struct Pong<N> {\n    items: list<f64, N>\n    ping: atomic<Ping<N>?> = null\n}\n",
+                "struct Pong<N> {\n    ping: atomic<Ping<N>?> = null\n    items: list<f64, N>\n}\n",
                 "struct Chain<A> { next: Middle<A> }\n",
                 "struct Middle<B> { last: Ping<B> }\n",
                 "fn uses<K>(outer: Outer<K>, chain: Chain<3>) {}\n",
@@ -194,7 +194,7 @@ fn a_parameter_that_is_only_handed_on_is_unresolved() {
         "struct Ping<T> { pong: atomic<Pong<T>?> = null }\n",
         "struct Pong<T> { ping: atomic<Ping<T>?> = null }\n",
         // One use elsewhere settles the whole ring.
-        "struct Tree<T> {\n    value: T\n    next: atomic<Tree<T>?> = null\n}\n",
+        "struct Tree<T> {\n    next: atomic<Tree<T>?> = null\n    value: T\n}\n",
         // A function given such a struct is not where the fault is.
         "fn uses<K>(node: Node<K>) {}\n",
         // A type nothing declares may yet say what its argument is.

@@ -92,7 +92,7 @@ fn a_declarations_types_are_recorded() {
     let checked = module(concat!(
         "abstract struct Base<T> { id: T }\n",
         "struct Quote<T> : Base<T> {\n",
-        "    bid: f64 = 1.0\n",
+        "    bid: f64\n",
         "    ask: f64 = 0.0\n",
         "    id = 7\n",
         "    time: datetime?\n",
@@ -143,7 +143,7 @@ fn a_declarations_types_are_recorded() {
     assert_eq!(
         fields,
         [
-            "bid: f64 = ...",
+            "bid: f64",
             "ask: f64 = ...",
             "id: - = ...",
             "time: datetime?"

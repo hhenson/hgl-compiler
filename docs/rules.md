@@ -105,7 +105,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
 | UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
 | UNIT-7 | analyser | partial | A default reads no parameter of its declaration and no field of its struct. Left: the closure an imported default keeps |
-| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. Left: defaults as required constants of the expected type; a temporal default as a constant of its type; a value function's call may omit a parameter written `T?`; a parameter that may be omitted follows every one that may not |
+| UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`. Left: defaults as required constants of the expected type; a temporal default as a constant of its type |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
@@ -124,7 +124,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-2 | transpiler | planned | Temporal scalar representations; zone names kept distinct |
 | TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments; a parent is an abstract struct, listed once. an abstract struct is not constructed in a value function. Left: constructions elsewhere |
 | TYPE-4 | analyser | partial | A field's type, and so its optionality, agrees between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name; a default of null only on an optional field. Left: a default's value against its field's type |
-| TYPE-5 | analyser | partial | A construction in a value function gives every field that has no default and is not optional; a field that may be left out follows every one that may not, a parent's counted first. Left: constructions elsewhere |
+| TYPE-5 | analyser | partial | A construction in a value function names each field it gives, in any order, and gives every field that has no default and is not optional; a positional argument is rejected. Left: constructions elsewhere |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
 | TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an optional field, `Node?`, `atomic<Node?>` or `atomic<Node>?`, whose null default the structs below keep; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
@@ -151,7 +151,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | EXPR-1 | parser | done | Precedence, associativity, grouping; a tuple has a comma |
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
-| EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call and of a struct's construction: positional before named; duplicate, unknown, missing, surplus and mistyped arguments rejected. Left: operators and their configuration; what a pack holds; a generic function's parameter types; temporal bodies |
+| EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected. Left: operators and their configuration; what a pack holds; a generic function's parameter types; temporal bodies |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
 | EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned. Left: assignment through control flow; values against connections; inner declarations |
 | EXPR-4 | analyser | planned | Values and connections kept distinct; reassigning a graph `var` rewires |

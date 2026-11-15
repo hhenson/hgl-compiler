@@ -1069,7 +1069,7 @@ impl<'a> Typer<'a> {
                 pack: parameter.pack,
             })
             .collect();
-        let arguments = self.bind(name, list, &slots, "parameter");
+        let arguments = self.bind(name, list, &slots, Takes::Parameters);
         let ty = signature.result.as_ref().map_or(Type::Unknown, known);
         (ExprKind::Call { callee, arguments }, ty)
     }
@@ -1183,8 +1183,8 @@ impl<'a> Typer<'a> {
         // With the arguments given, each field's type is known and the
         // values are read against it.
         let (arguments, arguments_of_type) = match given {
-            Some(given) => (self.bind(name, list, &slots, "field"), given),
-            None if !inferring => (self.bind(name, list, &slots, "field"), Vec::new()),
+            Some(given) => (self.bind(name, list, &slots, Takes::Fields), given),
+            None if !inferring => (self.bind(name, list, &slots, Takes::Fields), Vec::new()),
             // GEN-2: "infers them from constructor fields". The value
             // of a field whose type names a parameter not yet found
             // says what the parameter is: `1` for `first: T`, `[1]`
@@ -1193,7 +1193,7 @@ impl<'a> Typer<'a> {
             // `.member`, which take their type from the field and say
             // nothing of it.
             None => {
-                let assigned = self.assign(name, list, &slots, "field");
+                let assigned = self.assign(name, list, &slots, Takes::Fields);
                 let mut found: Vec<Option<Argument>> = vec![None; read.generics.len()];
                 let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
                 for (position, (slot, node)) in assigned.iter().enumerate() {
@@ -1229,7 +1229,7 @@ impl<'a> Typer<'a> {
                     .enumerate()
                     .map(|(position, (slot, node))| {
                         let Some(index) = *slot else {
-                            return self.argument(None, node, None, "field");
+                            return self.argument(None, node, None, Takes::Fields);
                         };
                         let ty = substitute_within(&read.members[index].ty, &map);
                         let slot = Slot {
@@ -1244,7 +1244,7 @@ impl<'a> Typer<'a> {
                                     value: self.fit(value, &slot.ty, &place),
                                 }
                             }
-                            None => self.argument(Some(index), node, Some(&slot), "field"),
+                            None => self.argument(Some(index), node, Some(&slot), Takes::Fields),
                         }
                     })
                     .collect();
@@ -1270,13 +1270,14 @@ impl<'a> Typer<'a> {
     }
 
     /// Gives each argument of `list` to one of `slots`: the parameters
-    /// of a function, or the fields of a struct. `what` is `parameter`
-    /// or `field`, for messages.
+    /// of a function, or the fields of a struct, as `takes` says.
     ///
     /// EXPR-2: "Positional arguments precede named ones; reject
     /// duplicates, unknown names, missing required arguments, and wrong
     /// types. Named arguments use the selected public callable's
-    /// parameter names."
+    /// parameter names." TYPE-5: a constructor's "arguments are named,
+    /// each for a field the struct has, a parent's included, in any
+    /// order; it takes no positional argument."
     ///
     /// The arguments come back in the order written, each with the slot
     /// it is given to: `None` for one given to a pack, or to nothing.
@@ -1286,17 +1287,37 @@ impl<'a> Typer<'a> {
         callee: &SyntaxToken,
         list: &SyntaxNode,
         slots: &[Slot],
-        what: &str,
+        takes: Takes,
     ) -> Vec<(Option<usize>, SyntaxNode)> {
+        let what = takes.noun();
         let callee_at = Location::new(self.file, callee.span());
         let has_pack = |pack: Pack| slots.iter().any(|slot| slot.pack == Some(pack));
         // Which slots have been given a value.
         let mut filled = vec![false; slots.len()];
         let mut named_seen = false;
+        // Whether a constructor was given an argument with no name. Which
+        // field it was meant for is not known, so no field is then
+        // reported as missing (ERR-9).
+        let mut unnamed_field = false;
         let mut arguments = Vec::new();
         for (name, value) in arguments_of(list) {
             let at = self.at(&value);
             let slot = match &name {
+                // TYPE-5: "it takes no positional argument."
+                None if takes == Takes::Fields => {
+                    unnamed_field = true;
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::ARGUMENT_UNEXPECTED,
+                        at,
+                        format!(
+                            "a struct's fields are given by name: `{}(field: value)`",
+                            callee.text()
+                        ),
+                        "TYPE-5",
+                    ));
+                    None
+                }
                 None => {
                     if named_seen {
                         self.diagnostics.emit(error(
@@ -1370,7 +1391,7 @@ impl<'a> Typer<'a> {
             arguments.push((slot, value));
         }
         for (index, slot) in slots.iter().enumerate() {
-            if slot.required && slot.pack.is_none() && !filled[index] {
+            if slot.required && slot.pack.is_none() && !filled[index] && !unnamed_field {
                 self.diagnostics.emit(error(
                     Category::Type,
                     codes::ARGUMENT_MISSING,
@@ -1394,13 +1415,13 @@ impl<'a> Typer<'a> {
         callee: &SyntaxToken,
         list: &SyntaxNode,
         slots: &[Slot],
-        what: &str,
+        takes: Takes,
     ) -> Vec<hir::Argument> {
-        self.assign(callee, list, slots, what)
+        self.assign(callee, list, slots, takes)
             .into_iter()
             .map(|(slot, value)| {
                 let expected = slot.map(|index| &slots[index]);
-                self.argument(slot, &value, expected, what)
+                self.argument(slot, &value, expected, takes)
             })
             .collect()
     }
@@ -1412,12 +1433,12 @@ impl<'a> Typer<'a> {
         parameter: Option<usize>,
         node: &SyntaxNode,
         slot: Option<&Slot>,
-        what: &str,
+        takes: Takes,
     ) -> hir::Argument {
         let value = match slot {
             Some(slot) => {
                 let value = self.expression(node, Some(&slot.ty));
-                let place = format!("the {what} `{}`", slot.name);
+                let place = format!("the {} `{}`", takes.noun(), slot.name);
                 self.fit(value, &slot.ty, &place)
             }
             None => self.expression(node, Some(&Type::Unknown)),
@@ -1874,6 +1895,29 @@ struct Slot<'a> {
     required: bool,
     /// The pack it is, when it is one (FN-8).
     pack: Option<Pack>,
+}
+
+/// What takes the arguments of a call.
+///
+/// `#[derive(Clone, Copy, PartialEq)]` asks the compiler to write the
+/// code that copies one of these and compares two of them.
+#[derive(Clone, Copy, PartialEq)]
+enum Takes {
+    /// The parameters of a function: positional arguments, then named
+    /// ones (EXPR-2).
+    Parameters,
+    /// The fields of a struct: named arguments only (TYPE-5).
+    Fields,
+}
+
+impl Takes {
+    /// The word a message uses for one of them.
+    fn noun(self) -> &'static str {
+        match self {
+            Takes::Parameters => "parameter",
+            Takes::Fields => "field",
+        }
+    }
 }
 
 /// The arguments of an argument list, in order: each with its name,

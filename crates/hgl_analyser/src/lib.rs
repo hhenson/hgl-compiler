@@ -231,8 +231,8 @@ pub mod codes {
     pub const BINDING_IMMUTABLE: &str = "binding.immutable";
     /// An argument with no name follows a named one (EXPR-2).
     pub const ARGUMENT_ORDER: &str = "argument.order";
-    /// A call or a constructor is given more positional arguments
-    /// than it has parameters or fields (EXPR-2).
+    /// A call is given more positional arguments than it has
+    /// parameters (EXPR-2), or a constructor is given one (TYPE-5).
     pub const ARGUMENT_UNEXPECTED: &str = "argument.unexpected";
     /// A named argument names no parameter or field (EXPR-2).
     pub const ARGUMENT_UNKNOWN: &str = "argument.unknown";
@@ -259,8 +259,8 @@ pub mod codes {
     /// admits (OPS-1, OPS-2).
     pub const OPERATOR_OPERAND: &str = "operator.operand";
 
-    /// A parameter or field that may not be left out follows one that
-    /// may (UNIT-8, TYPE-5).
+    /// A parameter that may not be omitted follows one that may
+    /// (UNIT-8).
     pub const DEFAULT_ORDER: &str = "default.order";
     /// A tuple's index is no constant, or is outside the tuple
     /// (EXPR-7).

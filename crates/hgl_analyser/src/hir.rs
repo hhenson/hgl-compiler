@@ -195,8 +195,9 @@ pub enum Callee {
 /// One argument of a call or a constructor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Argument {
-    /// The parameter or field it is given to, by position in the
-    /// callee's list; `None` when it is given to a pack, or to nothing.
+    /// The parameter or field it is given to: its index among the
+    /// function's parameters, or among the struct's fields, a parent's
+    /// first. `None` when it is given to a pack, or to nothing.
     pub parameter: Option<usize>,
     /// Its value.
     pub value: Expr,

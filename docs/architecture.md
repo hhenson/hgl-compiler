@@ -164,7 +164,7 @@ The parser therefore guesses and the analyser confirms (owner decision,
   generic reading is possible when `<` directly follows the name, generic
   arguments parse, and `(` directly follows their `>` (LEX-27). The
   comparison reading is possible when the same tokens parse as expressions. When only one is possible, that reading
-  is the result: `Box<i64>(7)` is a `TypedConstructor`; `a < b`, and
+  is the result: `Box<i64>(value: 7)` is a `TypedConstructor`; `a < b`, and
   `a < b > (c)` with its `(` apart from the `>`, are comparisons.
 - When both are, as in `f(a<b, c>(d))` and `a<b>(c)`, the parser records
   its guess, the generic reading, in an `UndecidedConstructor` node that
@@ -437,7 +437,7 @@ The pass is built form by form. So far it reads:
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
 | A call | EXPR-2, FN-4, UNIT-8 | Of the value function its name is bound to. Each argument is given to a parameter, by place and then by name; one given twice, to no parameter, or too many is rejected, and so is a parameter left with nothing that has no default and no `?`. A temporal function is not called from a value function |
-| A construction | TYPE-5, TYPE-3, GEN-2 | Its arguments are given to the struct's fields, a parent's first, as a call's are. A generic struct takes its arguments from `Name<...>`, from the type expected, or from the fields given. An abstract struct is not constructed |
+| A construction | TYPE-5, TYPE-3, GEN-2 | Its arguments are named, each for a field the struct has, a parent's included, in any order; one with no name is rejected. A generic struct takes its arguments from `Name<...>`, from the type expected, or from the fields given. An abstract struct is not constructed |
 | `Side.buy`, `.buy` | TYPE-7 | A member of the enum named, or of the enum the place expects: an annotation, a parameter, a field, a result, the other operand of a comparison |
 | `value.field` | EXPR-7 | A field the struct has, a parent's included, with the value's generic arguments in place |
 | `base[index]` | EXPR-7, ERR-6 | An element of a list by an `i64`, of a tuple by a constant within its length, or the value a dictionary has for a key |
@@ -476,11 +476,11 @@ candidate selected among that operator's implementations (GEN-4). When
 core declares them the table goes, and the typed body records the
 operator and the candidate selected.
 
-What may be left out comes last (UNIT-8, TYPE-5): a parameter with a
-default or a type written `T?` follows every parameter that has
-neither, and a field with a default or an optional type follows every
-field that has neither, a parent's fields counted first. The `forms`
-pass checks parameters and the `declared` pass fields.
+A parameter that may be omitted comes last (UNIT-8): one with a default
+or a type written `T?` follows every parameter that has neither. The
+`forms` pass checks it. Fields are declared in any order (TYPE-5): a
+constructor names each field it gives, so a struct that inherits fields
+places none of its own before or after them.
 
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`. The analyser has no
