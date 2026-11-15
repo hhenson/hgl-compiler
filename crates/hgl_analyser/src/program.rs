@@ -11,7 +11,7 @@ use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
 use crate::hir::Body;
-use crate::types::{Detail, WrittenType};
+use crate::types::{CallArguments, Detail, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
@@ -84,6 +84,9 @@ pub struct Module {
     /// order and then source order. A type inside another is part of
     /// that one and not listed again.
     pub written: Vec<WrittenType>,
+    /// The generic arguments each call writes after its callee's name,
+    /// `count<i64>(3)` (GEN-8), in the order the calls are read.
+    pub call_arguments: Vec<CallArguments>,
     /// The typed body of each value function: one entry for each of
     /// `declarations`, in the same order, `None` for a declaration that
     /// is no value function or has no body.
@@ -405,14 +408,15 @@ impl LocalKind {
 
 /// What a `name<...>(...)` that reads two ways was decided to be
 /// (GEN-14). The parser guesses a constructor; the analyser confirms the
-/// guess when `name` is a generic type.
+/// guess when `name` is a generic type, function or operator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     /// Where the node starts.
     pub at: Location,
-    /// `Some(true)`: a constructor of a generic type. `Some(false)`:
-    /// comparisons. `None`: `name` is left for the prelude, so it is not
-    /// known which.
+    /// `Some(true)`: generic arguments and a call's arguments, of a
+    /// generic type's constructor or of a generic function or operator
+    /// (GEN-8). `Some(false)`: comparisons. `None`: `name` is left for
+    /// the prelude, so it is not known which.
     pub constructor: Option<bool>,
 }
 

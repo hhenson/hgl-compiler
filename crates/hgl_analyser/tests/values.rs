@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Body, ExprKind, Stmt};
+use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt};
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -1627,5 +1627,254 @@ fn a_value_function_loops_and_switches() {
             "x: _",
             "y: _",
         ]
+    );
+}
+
+// ---- Calls of generic functions ----
+
+/// GEN-2: "Resolve every needed generic from actual inputs, requested
+/// output, or solvable equality." GEN-1: "Repeated parameters require
+/// equivalent types". What a generic parameter stands for is found at
+/// each call, and the call has the result's type with that in place.
+#[test]
+fn a_generic_function_is_resolved_at_each_call() {
+    let checked = module(concat!(
+        "struct Box<T> { value: T }\n",
+        "const fn same<T>(left: T, right: T) -> T => left\n",
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn first<T>(items: list<T>) -> T? => null\n",
+        "const fn pair<A, B>(a: A, b: B) -> tuple<A, B> => (a, b)\n",
+        "const fn uses(text: str) {\n",
+        // From the arguments.
+        "    let whole = same(1, 2)\n",
+        "    let texts = same(text, \"b\")\n",
+        "    let head = first([1.5, 2.5])\n",
+        "    let both = pair(text, 1)\n",
+        // From the type the place expects of the result.
+        "    let names: list<str> = repeat(3)\n",
+        "    let real: f64 = same(1, 2)\n",
+        "    let maybe: i64? = same(1, 2)\n",
+        // An argument that is itself a generic call, and a field.
+        "    let nested = same(same(1, 2), 3)\n",
+        "    let boxed = Box(value: first([text]))\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "text: str",
+            "whole: i64",
+            "texts: str",
+            "head: f64?",
+            "both: tuple<str, i64>",
+            "names: list<str>",
+            "real: f64",
+            "maybe: i64?",
+            "nested: i64",
+            "boxed: Box<str?>",
+        ]
+    );
+}
+
+/// GEN-1: "Repeated parameters require equivalent types". GEN-12: "A
+/// prior binding constrains every later occurrence in declared
+/// parameter order." The first argument that says what a parameter is
+/// decides it, and the others are checked against that (EXPR-5).
+#[test]
+fn a_repeated_generic_parameter_is_one_type() {
+    let checked = module(concat!(
+        "const fn same<T>(left: T, right: T) -> T => left\n",
+        "const fn uses(count: i64) {\n",
+        "    let a = same(\"a\", 1)\n",
+        // Only a literal is widened (EXPR-5): `count` is an `i64`.
+        "    let b: f64 = same(1, count)\n",
+        "    let c = same(right: 1, left: \"a\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:23 type/type.mismatch EXPR-5",
+            "m.hgl:5:26 type/type.mismatch EXPR-5",
+            "m.hgl:6:34 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `i64`, and the parameter `right` is `str`",
+            "this is `i64`, and the parameter `right` is `f64`",
+            "this is `str`, and the parameter `left` is `i64`",
+        ]
+    );
+}
+
+/// GEN-8: "A call may supply its generic arguments as a generic
+/// constructor does, `count<i64>(3)`. It may supply the first of them
+/// and leave the rest to be resolved under GEN-2". GEN-14: `<` after a
+/// name resolved to a generic function opens generic arguments.
+#[test]
+fn a_call_may_write_its_generic_arguments() {
+    let checked = module(concat!(
+        "const fn same<T>(left: T, right: T) -> T => left\n",
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn first<T>(items: list<T>) -> T? => null\n",
+        "const fn pair<A, B>(a: A, b: B) -> tuple<A, B> => (a, b)\n",
+        "const fn limit<const N: i64>() -> i64 => N\n",
+        "const fn uses() {\n",
+        "    let texts = repeat<str>(3)\n",
+        // What is written decides: the literals are widened.
+        "    let real = same<f64>(1, 2)\n",
+        // The first of them; the second is found from the argument.
+        "    let both = pair<str>(\"a\", 1)\n",
+        "    let top = limit<3>()\n",
+        "}\n",
+        // A lone name among the arguments: the parser could not tell
+        // these from comparisons (GEN-14).
+        "const fn outer<U>(items: list<U>) -> U? => first<U>(items)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "texts: list<str>",
+            "real: f64",
+            "both: tuple<str, i64>",
+            "top: i64",
+        ]
+    );
+    // The typed body records what each parameter was resolved to.
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body(&checked, "uses").statements[2]
+    else {
+        panic!("a declaration with a value");
+    };
+    let ExprKind::Call {
+        callee: Callee::Function { generics, .. },
+        ..
+    } = &value.kind
+    else {
+        panic!("a call of a function: {:?}", value.kind);
+    };
+    let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
+    assert_eq!(resolved, ["str", "i64"]);
+}
+
+/// GEN-8: "A call rejects when it leaves a generic parameter
+/// unresolved." The catalogue has no row for it, so the code is local.
+/// Nothing is said where the place is not known, or something else was
+/// reported (ERR-9).
+#[test]
+fn a_call_that_leaves_a_generic_parameter_unresolved_is_rejected() {
+    let checked = module(concat!(
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn pair<A, B>(a: A) -> tuple<A, B>? => null\n",
+        "const fn uses() {\n",
+        "    let a = repeat(3)\n",
+        "    let b = pair<str>(\"a\")\n",
+        "    repeat(3)\n",
+        // Reported for itself, and not again as unresolved.
+        "    let c = repeat(\"x\")\n",
+        // Resolved by what is written, or by the place.
+        "    let d = repeat<i64>(3)\n",
+        "    let e: list<i64> = repeat(3)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:13 local:type/generic.unresolved GEN-8",
+            "m.hgl:6:13 local:type/generic.unresolved GEN-8",
+            "m.hgl:7:5 local:type/generic.unresolved GEN-8",
+            "m.hgl:8:20 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[..2],
+        [
+            "this call of `repeat` leaves `T` unresolved: no argument and no expected type says \
+             what it is",
+            "this call of `pair` leaves `B` unresolved: no argument and no expected type says \
+             what it is",
+        ]
+    );
+}
+
+/// GEN-8: a call supplies "the first of them", so no more than the
+/// callee has. GEN-14: "Check each argument against the corresponding
+/// parameter kind." What is written then says nothing of the
+/// parameters, and nothing more is reported of the call (ERR-9).
+#[test]
+fn a_calls_generic_arguments_are_checked_against_its_callee() {
+    let checked = module(concat!(
+        "const fn same<T>(left: T, right: T) -> T => left\n",
+        "const fn helper() -> i64 => 1\n",
+        "const fn sized<T, const N: i64>(items: list<T, N>) -> i64 => N\n",
+        "const fn uses() {\n",
+        "    let a = same<i64, str>(1, 2)\n",
+        "    let b = helper<i64>()\n",
+        "    let c = same<3>(1, 2)\n",
+        "    let d = sized<i64, str>([1, 2])\n",
+        // What is written decides, and the arguments are held to it.
+        "    let e = same<str>(1, 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:13 type/generic.argument_count GEN-8",
+            "m.hgl:7:13 type/generic.argument_count GEN-8",
+            "m.hgl:8:18 type/generic.argument_kind GEN-14",
+            "m.hgl:9:24 type/generic.argument_kind GEN-14",
+            "m.hgl:10:23 type/type.mismatch EXPR-5",
+            "m.hgl:10:26 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[..4],
+        [
+            "`same` takes 1 generic argument and is given 2",
+            "`helper` takes no generic arguments and is given 1",
+            "`same` takes a type for `T`, and this is a value",
+            "`sized` takes a value for `N`, and `str` is a type",
+        ]
+    );
+}
+
+/// GEN-8: "with `operator convert<T, V>(value: V) -> T`,
+/// `convert<f64>(count)` supplies T". GEN-5: "Match candidates against
+/// the requested output before inputs". The generic arguments a call of
+/// an operator writes are the operator's, and where they settle its
+/// result that is the output requested of the candidates.
+#[test]
+fn an_operators_generic_arguments_request_its_output() {
+    let checked = module(concat!(
+        "operator convert<T, V>(value: V) -> T\n",
+        "impl const fn convert(value: i64) -> f64 => 1.0\n",
+        "impl const fn convert(value: i64) -> str => \"x\"\n",
+        "impl const fn convert(value: bool) -> f64 => 1.0\n",
+        "const fn uses(count: i64, flag: bool) {\n",
+        "    let real = convert<f64>(count)\n",
+        "    let text = convert<str>(count)\n",
+        "    let truth = convert<f64>(flag)\n",
+        // What is written wins over what the place expects.
+        "    let wrong: str = convert<f64>(count)\n",
+        "    let none = convert<bool>(count)\n",
+        "    let many = convert<f64, i64, str>(count)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:22 type/type.mismatch EXPR-5",
+            "m.hgl:11:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:12:16 type/generic.argument_count GEN-8",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[2..5],
+        ["real: f64", "text: str", "truth: f64"]
     );
 }

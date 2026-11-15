@@ -80,8 +80,9 @@ pub use program::{
     ModuleFile, NameUse, OperatorRef, PreludeName, Program, Role, Test,
 };
 pub use types::{
-    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, Field, GenericKind,
-    GenericParameter, Member, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
+    GenericKind, GenericParameter, Member, Pack, Parameter, Scalar, Signature, StructType, Type,
+    WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -283,10 +284,15 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
+        /// A call leaves a generic parameter of the function it calls
+        /// unresolved (GEN-8). Proposed as a catalogue row in
+        /// hgl_spec issue 44.
+        pub const GENERIC_UNRESOLVED: &str = "generic.unresolved";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 1] = [GENERIC_UNRESOLVED];
     }
 }
 
@@ -367,6 +373,18 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// [`error`], for one of [`codes::local`]: a condition the
+/// specification rejects and its catalogue has no row for.
+fn local_error(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

@@ -34,8 +34,8 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
 };
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
-    Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    Argument, CallArguments, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter,
+    Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
 use crate::{codes, error};
 
@@ -65,6 +65,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             reader.enter(module.files[*file].file);
             reader.scan(node);
         }
+        let calls = std::mem::take(&mut reader.calls);
         let mut written = reader.written;
 
         // File order, then source order.
@@ -78,6 +79,7 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         let module = &mut program.modules[index];
         module.details = details;
         module.written = written;
+        module.call_arguments = calls;
     }
 }
 
@@ -328,6 +330,9 @@ struct Reader<'a> {
     read: HashMap<u32, Type>,
     /// Every type read in the module so far.
     written: Vec<WrittenType>,
+    /// The generic arguments of every call read in the module so far
+    /// (GEN-8).
+    calls: Vec<CallArguments>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -367,6 +372,7 @@ impl<'a> Reader<'a> {
             unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
+            calls: Vec::new(),
             diagnostics,
         })
     }
@@ -2231,8 +2237,60 @@ impl Reader<'_> {
         if self.read.contains_key(&span.start) {
             return;
         }
+        // GEN-8: "A call may supply its generic arguments as a generic
+        // constructor does, `count<i64>(3)`." The name is then a
+        // function or an operator, and no type is written: the
+        // arguments are kept for the pass that reads the call, which
+        // knows what the callee's parameters are.
+        if self.names_callable(node)
+            && let Some(list) = child(node, SyntaxKind::GenericArgs)
+        {
+            let places: Vec<Location> = list
+                .children()
+                .filter(|argument| argument.kind() != SyntaxKind::Error)
+                .map(|argument| self.at(argument.span()))
+                .collect();
+            let arguments = self.arguments(&list, Position::ARGUMENT, None);
+            self.read.insert(span.start, Type::Unknown);
+            self.calls.push(CallArguments {
+                at: self.at(span),
+                arguments: places.into_iter().zip(arguments).collect(),
+            });
+            return;
+        }
         let ty = self.named(node, Position::PLAIN);
         self.record(span, ty);
+    }
+
+    /// True when the name `node` uses is bound to a function or an
+    /// operator, and to no type.
+    fn names_callable(&self, node: &SyntaxNode) -> bool {
+        let Some(name) = used_name(node) else {
+            return false;
+        };
+        let Some(Binding::Declarations {
+            module,
+            declarations,
+        }) = self.bindings.get(&(self.file, name.span().start)).copied()
+        else {
+            return false;
+        };
+        let kind = |index: &usize| self.program.modules[*module].declarations[*index].kind;
+        let is_type = declarations.iter().any(|index| {
+            matches!(
+                kind(index),
+                DeclarationKind::Struct | DeclarationKind::Enum | DeclarationKind::NativeType
+            )
+        });
+        let is_callable = declarations.iter().any(|index| {
+            matches!(
+                kind(index),
+                DeclarationKind::Function(_)
+                    | DeclarationKind::NativeFunction(_)
+                    | DeclarationKind::Operator
+            )
+        });
+        is_callable && !is_type
     }
 
     /// `delta<list<f64>>(added: values)`: the shape a delta is of.

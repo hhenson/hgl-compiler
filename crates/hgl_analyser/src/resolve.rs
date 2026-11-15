@@ -438,13 +438,15 @@ impl Resolver<'_> {
     /// `name<...>(...)` that reads two ways.
     #[inline(never)]
     fn undecided(&mut self, node: &SyntaxNode) {
-        // GEN-14: "directly following a name resolved to a generic type
-        // in an expression, `<` opens generic arguments rather than a
-        // comparison."
+        // GEN-14: "directly following (LEX-27) a name resolved to a
+        // generic type, function, or operator in an expression, `<`
+        // opens generic arguments rather than a comparison."
         let binding = self.name_of(node);
         self.decisions.push(Decision {
             at: Location::new(self.file_id, node.span()),
-            constructor: binding.map(|binding| self.is_generic_type(&binding)),
+            constructor: binding.map(|binding| {
+                self.is_generic_type(&binding) || self.is_generic_callable(&binding)
+            }),
         });
         // The names inside are the same names under either reading, so
         // they are resolved as they stand.
@@ -953,6 +955,27 @@ impl Resolver<'_> {
             let declaration = &self.program.modules[*module].declarations[index];
             declaration.kind == DeclarationKind::Struct
                 && child(&declaration.syntax, SyntaxKind::GenericParams).is_some()
+        })
+    }
+
+    /// True when `binding` is a function or an operator with generic
+    /// parameters: a call may write its generic arguments (GEN-8).
+    fn is_generic_callable(&self, binding: &Binding) -> bool {
+        let Binding::Declarations {
+            module,
+            declarations,
+        } = binding
+        else {
+            return false;
+        };
+        declarations.iter().any(|&index| {
+            let declaration = &self.program.modules[*module].declarations[index];
+            matches!(
+                declaration.kind,
+                DeclarationKind::Function(_)
+                    | DeclarationKind::NativeFunction(_)
+                    | DeclarationKind::Operator
+            ) && child(&declaration.syntax, SyntaxKind::GenericParams).is_some()
         })
     }
 
