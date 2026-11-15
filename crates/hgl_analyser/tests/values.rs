@@ -1059,7 +1059,24 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // TYPE-14: `null` is a value of the `i64?` and of no `i64`.
         "    let absent = pick(a, null)\n",
         "    let nothing = pick(null, a)\n",
+        // EXPR-5, EXPR-9: a sequence or a tuple written out is read as
+        // the parameter's type, as in a function's call.
+        "    let summed = total([1])\n",
+        "    let size = count([1])\n",
+        "    let couple = count((1, \"x\"))\n",
+        "    let unfit = count([1.5])\n",
+        // TYPE-7: `.member` is of the enum the parameter expects.
+        "    let bought = sign(.buy)\n",
+        "    let held = sign(.hold)\n",
         "}\n",
+        "operator total<T>(values: T) -> f64\n",
+        "impl const fn total(values: list<f64>) -> f64 => 0.0\n",
+        "operator count<T>(values: T) -> i64\n",
+        "impl const fn count(values: set<i64>) -> i64 => 0\n",
+        "impl const fn count(values: tuple<i64, str>) -> i64 => 0\n",
+        "enum Side { buy, sell }\n",
+        "operator sign<T>(side: T) -> i64\n",
+        "impl const fn sign(side: Side) -> i64 => 1\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1071,6 +1088,8 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:24:19 local:operator/operator.no_candidate GEN-5",
             "m.hgl:25:20 local:operator/operator.no_candidate GEN-5",
             "m.hgl:27:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:31:17 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:33:16 local:operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
@@ -1083,6 +1102,8 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `pick` takes `f64`",
             "operator `only` has no value candidate, and a value function selects among those",
             "no value candidate of operator `pick` takes `null`, `i64`",
+            "no value candidate of operator `count` takes `[1.5]`",
+            "no value candidate of operator `sign` takes `.hold`",
         ]
     );
     assert_eq!(
@@ -1106,6 +1127,12 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "temporal: _",
             "absent: i64",
             "nothing: _",
+            "summed: f64",
+            "size: i64",
+            "couple: i64",
+            "unfit: _",
+            "bought: i64",
+            "held: _",
         ]
     );
 }

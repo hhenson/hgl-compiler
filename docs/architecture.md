@@ -491,8 +491,11 @@ candidates (GEN-5, FN-3). The arguments are given to the operator's
 public parameters; a candidate is admitted when its result fits the type
 the place expects, each argument fits the parameter the candidate has in
 that place, and what the call leaves out has a default or a type written
-`T?`. A candidate that fits with no integer literal widened is taken
-before one that needs it. The typed body records the operator and the
+`T?`. An argument that is read as the type of its place, `null`,
+`.member`, or a sequence or tuple written out, is tried against each
+candidate's parameter, and what the trial reports is taken back. A
+candidate that fits with no integer literal widened is taken before one
+that needs it. The typed body records the operator and the
 candidate selected. No candidate, and a tie, are reported with the
 analyser's two local codes, `operator.no_candidate` and
 `operator.ambiguous`, proposed to the specification in hgl_spec issue 30.

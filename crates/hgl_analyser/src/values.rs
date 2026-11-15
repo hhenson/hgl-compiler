@@ -1166,100 +1166,59 @@ impl<'a> Typer<'a> {
             .collect();
         let reported = self.diagnostics.len();
         let assigned = self.assign(name, list, &slots, Takes::Parameters);
-        let misplaced = self.diagnostics.len() != reported;
-        // Each argument's value, read with nothing expected of it. One
-        // that takes its type from its place, `null` or `.member`, is
-        // read once the candidate is known.
-        let mut values: Vec<Option<Expr>> = assigned
-            .iter()
-            .map(|(_, node)| {
-                (!takes_its_type(node)).then(|| self.expression(node, Some(&Type::Unknown)))
+        // Each argument, read with nothing expected of it: what it
+        // reports itself is reported here, once.
+        let given: Vec<Given> = assigned
+            .into_iter()
+            .map(|(slot, node)| Given {
+                slot,
+                by_place: typed_by_place(&node),
+                value: self.expression(&node, Some(&Type::Unknown)),
+                node,
             })
             .collect();
-        // An argument given to no parameter has been reported, and one
-        // whose type is not known says nothing of the candidates: the
-        // call is then not judged (ERR-9).
-        let unknown = values.iter().flatten().any(|value| open(&value.ty));
-        if misplaced || unknown {
-            let arguments = self.unselected(&assigned, &mut values);
-            let kind = ExprKind::Call {
-                callee: Callee::Unread,
-                arguments,
-            };
-            return (kind, Type::Unknown);
+        // An argument given to no parameter, or rejected itself, has
+        // been reported, and one whose type is not known says nothing
+        // of the candidates: the call is then not judged (ERR-9).
+        let faulty = self.diagnostics.len() != reported;
+        let unknown = given
+            .iter()
+            .any(|given| !given.by_place && open(&given.value.ty));
+        if faulty || unknown {
+            return (unselected(given), Type::Unknown);
         }
 
-        // GEN-5: "the requested output before inputs".
+        // GEN-5: "the requested output before inputs". EXPR-5: an
+        // integer literal is an `f64` where one is expected; it selects
+        // as the `i64` it is where a candidate takes one.
         let wanted = expected.filter(|expected| !open(expected));
-        let admitted = |typer: &Self, signature: &Signature, widening: bool| {
-            let result_fits = match (wanted, &signature.result) {
-                (Some(wanted), Some(result)) => typer.admits(wanted, result),
-                (Some(_), None) => false,
-                (None, _) => true,
-            };
-            result_fits
-                && signature.parameters.len() == public.parameters.len()
-                && signature
-                    .parameters
-                    .iter()
-                    .enumerate()
-                    .all(|(index, parameter)| {
-                        let given = assigned.iter().position(|(slot, _)| *slot == Some(index));
-                        match given {
-                            // What the call leaves out has a default, the
-                            // candidate's or the operator's, or is written
-                            // `T?` (UNIT-8).
-                            None => {
-                                parameter.has_default
-                                    || public.parameters[index].has_default
-                                    || matches!(parameter.ty, Type::Nullable(_))
-                            }
-                            Some(position) => match &values[position] {
-                                // TYPE-14: `null` is a value of a type
-                                // written `T?` and of no other. `.member`
-                                // is judged once the candidate is selected.
-                                None => {
-                                    !is_null(&assigned[position].1)
-                                        || open(&parameter.ty)
-                                        || matches!(parameter.ty, Type::Nullable(_))
-                                }
-                                Some(value) => {
-                                    typer.admits(&parameter.ty, &value.ty)
-                                        || widening
-                                            && is_integer_literal(value)
-                                            && accepts_float(&parameter.ty)
-                                }
-                            },
-                        }
-                    })
-        };
-        // EXPR-5: an integer literal is an `f64` where one is expected.
-        // It selects as the `i64` it is where a candidate takes one.
-        let mut selected: Vec<&(usize, usize, &Signature)> = candidates
-            .iter()
-            .filter(|(_, _, signature)| admitted(self, signature, false))
-            .collect();
-        if selected.is_empty() {
-            selected = candidates
-                .iter()
-                .filter(|(_, _, signature)| admitted(self, signature, true))
-                .collect();
+        let mut selected: Vec<(usize, usize, &Signature)> = Vec::new();
+        for widening in [false, true] {
+            for &(module, declaration, signature) in &candidates {
+                if self.admits_call(signature, public, &given, wanted, widening) {
+                    selected.push((module, declaration, signature));
+                }
+            }
+            if !selected.is_empty() {
+                break;
+            }
         }
         let at = Location::new(self.file, name.span());
-        let &[&(module, declaration, signature)] = selected.as_slice() else {
-            let given: Vec<String> = values
+        let &[(module, declaration, signature)] = selected.as_slice() else {
+            let takes: Vec<String> = given
                 .iter()
-                .zip(&assigned)
-                .map(|(value, (_, node))| match value {
-                    Some(value) => format!("`{}`", value.ty),
-                    None if is_null(node) => "`null`".to_string(),
-                    None => "a member of an enum".to_string(),
+                .map(|given| {
+                    if given.by_place {
+                        format!("`{}`", given.node.text().to_string().trim())
+                    } else {
+                        format!("`{}`", given.value.ty)
+                    }
                 })
                 .collect();
-            let given = if given.is_empty() {
+            let takes = if takes.is_empty() {
                 "no argument".to_string()
             } else {
-                given.join(", ")
+                takes.join(", ")
             };
             let diagnostic = if selected.is_empty() {
                 let message = if candidates.is_empty() {
@@ -1270,7 +1229,7 @@ impl<'a> Typer<'a> {
                     )
                 } else {
                     format!(
-                        "no value candidate of operator `{}` takes {given}{}",
+                        "no value candidate of operator `{}` takes {takes}{}",
                         name.text(),
                         match wanted {
                             Some(wanted) => format!(" and gives `{wanted}`"),
@@ -1291,7 +1250,7 @@ impl<'a> Typer<'a> {
                     codes::local::OPERATOR_AMBIGUOUS,
                     at,
                     format!(
-                        "{} value candidates of operator `{}` take {given} equally",
+                        "{} value candidates of operator `{}` take {takes} equally",
                         selected.len(),
                         name.text()
                     ),
@@ -1304,39 +1263,33 @@ impl<'a> Typer<'a> {
                 diagnostic
             };
             self.diagnostics.emit(diagnostic);
-            let arguments = self.unselected(&assigned, &mut values);
-            let kind = ExprKind::Call {
-                callee: Callee::Unread,
-                arguments,
-            };
-            return (kind, Type::Unknown);
+            return (unselected(given), Type::Unknown);
         };
 
         // Each argument is of the type the selected candidate's
         // parameter has.
-        let arguments = assigned
-            .iter()
-            .enumerate()
-            .map(|(position, (slot, node))| {
-                let Some(index) = *slot else {
-                    return self.argument(None, node, None, Takes::Parameters);
+        let arguments = given
+            .into_iter()
+            .map(|given| {
+                let Some(index) = given.slot else {
+                    return hir::Argument {
+                        parameter: None,
+                        value: given.value,
+                    };
                 };
                 let parameter = &signature.parameters[index];
-                let slot = Slot {
-                    name: &parameter.name,
-                    ty: parameter.ty.clone(),
-                    required: false,
-                    pack: None,
+                let place = format!("the parameter `{}`", parameter.name);
+                let value = if given.by_place {
+                    // Read again, as the parameter's type: the
+                    // candidate was admitted because it fits.
+                    let value = self.expression(&given.node, Some(&parameter.ty));
+                    self.fit(value, &parameter.ty, &place)
+                } else {
+                    self.fit(given.value, &parameter.ty, &place)
                 };
-                match values[position].take() {
-                    Some(value) => {
-                        let place = format!("the parameter `{}`", slot.name);
-                        hir::Argument {
-                            parameter: Some(index),
-                            value: self.fit(value, &slot.ty, &place),
-                        }
-                    }
-                    None => self.argument(Some(index), node, Some(&slot), Takes::Parameters),
+                hir::Argument {
+                    parameter: Some(index),
+                    value,
                 }
             })
             .collect();
@@ -1351,25 +1304,65 @@ impl<'a> Typer<'a> {
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
-    /// The arguments of an operator's call for which no candidate is
-    /// selected: those read already as they are, and the others read
-    /// for what they report themselves.
-    fn unselected(
+    /// True when the candidate `signature`, of an operator whose public
+    /// signature is `public`, admits a call that gives it `given` and of
+    /// which `wanted` is expected (GEN-5). With `widening`, an integer
+    /// literal is admitted where an `f64` is taken (EXPR-5).
+    fn admits_call(
         &mut self,
-        assigned: &[(Option<usize>, SyntaxNode)],
-        values: &mut [Option<Expr>],
-    ) -> Vec<hir::Argument> {
-        assigned
-            .iter()
-            .enumerate()
-            .map(|(position, (_, node))| hir::Argument {
-                parameter: None,
-                value: match values[position].take() {
-                    Some(value) => value,
-                    None => self.expression(node, Some(&Type::Unknown)),
-                },
-            })
-            .collect()
+        signature: &Signature,
+        public: &Signature,
+        given: &[Given],
+        wanted: Option<&Type>,
+        widening: bool,
+    ) -> bool {
+        let result_fits = match (wanted, &signature.result) {
+            (Some(wanted), Some(result)) => self.admits(wanted, result),
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        if !result_fits || signature.parameters.len() != public.parameters.len() {
+            return false;
+        }
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            let admitted = match given.iter().find(|given| given.slot == Some(index)) {
+                // What the call leaves out has a default, the
+                // candidate's or the operator's, or is written `T?`
+                // (UNIT-8).
+                None => {
+                    parameter.has_default
+                        || public.parameters[index].has_default
+                        || matches!(parameter.ty, Type::Nullable(_))
+                }
+                Some(given) if given.by_place => self.fits_place(&given.node, &parameter.ty),
+                Some(given) => {
+                    self.admits(&parameter.ty, &given.value.ty)
+                        || widening
+                            && is_integer_literal(&given.value)
+                            && accepts_float(&parameter.ty)
+                }
+            };
+            if !admitted {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// True when the expression at `node`, which is read as the type of
+    /// its place, is a value of `ty`. It is read as one, and what that
+    /// reading reports is taken back: the caller asks, and reports for
+    /// itself.
+    ///
+    /// The expression has been read once already, with nothing expected
+    /// of it, so a reading here changes nothing but the diagnostics.
+    fn fits_place(&mut self, node: &SyntaxNode, ty: &Type) -> bool {
+        let reported = self.diagnostics.len();
+        let value = self.expression(node, Some(ty));
+        self.fit(value, ty, "its place");
+        let fits = self.diagnostics.len() == reported;
+        self.diagnostics.truncate(reported);
+        fits
     }
 
     /// `Name<arguments>(fields)`: the construction of a generic struct
@@ -2184,6 +2177,50 @@ fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Opt
         }
         // Equality and the connectives are not read from this table.
         Op::Equal | Op::NotEqual | Op::And | Op::Or => Some(BOOL),
+    }
+}
+
+/// One argument of an operator's call, before a candidate is selected.
+struct Given {
+    /// The public parameter it is given to, when it is given to one.
+    slot: Option<usize>,
+    /// Where it is written.
+    node: SyntaxNode,
+    /// True when it is read as the type of the parameter it is given
+    /// to: see [`typed_by_place`].
+    by_place: bool,
+    /// Its value, read with nothing expected of it.
+    value: Expr,
+}
+
+/// The call of an operator for which no candidate is selected: its
+/// arguments as they were read, and no callee.
+fn unselected(given: Vec<Given>) -> ExprKind {
+    ExprKind::Call {
+        callee: Callee::Unread,
+        arguments: given
+            .into_iter()
+            .map(|given| hir::Argument {
+                parameter: None,
+                value: given.value,
+            })
+            .collect(),
+    }
+}
+
+/// True when an argument is read as the type of the parameter it is
+/// given to: `null` and `.member`, which have no type of their own
+/// (TYPE-14, TYPE-7), and a sequence or a tuple written out, whose
+/// entries are read as the parameter's (EXPR-5, EXPR-9), so that `[1]`
+/// is a `list<f64>` or a `set<i64>` where a candidate takes one.
+fn typed_by_place(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| typed_by_place(&inner)),
+        SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
+        _ => takes_its_type(node),
     }
 }
 

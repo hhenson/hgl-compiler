@@ -260,6 +260,13 @@ impl Diagnostics {
         self.items.len()
     }
 
+    /// Drops every diagnostic after the first `len`. A stage that tries
+    /// a reading, to see whether it holds, takes back what the reading
+    /// reported.
+    pub fn truncate(&mut self, len: usize) {
+        self.items.truncate(len);
+    }
+
     /// The diagnostics in the order they were reported.
     pub fn as_slice(&self) -> &[Diagnostic] {
         &self.items
