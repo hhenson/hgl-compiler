@@ -1711,6 +1711,23 @@ fn a_repeated_generic_parameter_is_one_type() {
     );
 }
 
+/// GEN-2: a generic is resolved "from actual inputs". An argument whose
+/// type is not known all the way down, the `list<_>` of `[]`, decides
+/// nothing: a later argument that is known does, and every argument is
+/// then held to it (GEN-1).
+#[test]
+fn a_partly_known_argument_does_not_decide_a_generic_parameter() {
+    let checked = module(concat!(
+        "const fn same<T>(a: T, b: T, c: T) -> T => a\n",
+        "const fn uses() {\n",
+        "    let ok = same(([], 0), ([1], 0), ([2], 0))\n",
+        "    let bad = same(([], 0), ([1], 0), ([\"x\"], 0))\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:5:41 type/type.mismatch EXPR-5"]);
+    assert_eq!(locals(&checked, "uses")[0], "ok: tuple<list<i64>, i64>");
+}
+
 /// GEN-2 names the sources, "actual inputs, requested output, or
 /// solvable equality", and gives them no order. Where the type expected
 /// and an argument each say what a parameter is and differ, which

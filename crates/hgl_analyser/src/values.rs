@@ -4115,13 +4115,23 @@ fn infer_constant(
 }
 
 /// Records that the generic parameter declared at `at` stands for
-/// `argument`, unless something has been found for it already.
+/// `argument`, unless something has been found for it already or the
+/// argument is a type with a part that is not known.
 fn find(
     at: Location,
     argument: Argument,
     generics: &[GenericParameter],
     found: &mut [Option<Argument>],
 ) {
+    // A type that is not known all the way down decides nothing: the
+    // `tuple<list<_>, i64>` of `([], 0)` would let any list through in
+    // its unknown part. A later argument may say the whole of it, and
+    // this one is then read again as that.
+    if let Argument::Type(ty) = &argument
+        && !whole(ty)
+    {
+        return;
+    }
     let position = generics.iter().position(|generic| generic.at == at);
     if let Some(position) = position
         && found[position].is_none()
