@@ -533,8 +533,7 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:24:15 type/field.recursive TYPE-6",
         ]
     );
-    let recursive =
-        "a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type";
+    let recursive = "a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty";
     let collection = "through the elements of a collection outside an `atomic<...>`";
     assert_eq!(
         messages(&checked),
@@ -605,7 +604,7 @@ fn a_struct_holds_itself_through_what_it_gives_a_parent() {
     assert_eq!(
         messages(&checked),
         [
-            "`Child` holds itself through `next`, a field of `Base`: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
+            "`Child` holds itself through `next`, a field of `Base`: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty",
             "`Bag` holds itself through `all`, a field of `Items` through the elements of a \
              collection outside an `atomic<...>`",
         ]
@@ -642,7 +641,7 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
         [
             "`items` makes `Loose` hold itself through the elements of a collection outside an \
              `atomic<...>`",
-            "`inner` makes `Direct` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
+            "`inner` makes `Direct` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty",
         ]
     );
 }
@@ -707,7 +706,8 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
     assert_eq!(
         checked.findings[0].message,
         "`first` makes `Group` hold itself: a recursive field is optional, its type nullable or \
-         an `atomic<...>` of a nullable type"
+         an `atomic<...>` of a nullable type, or holds its struct only as elements of a \
+         collection that may be empty"
     );
 }
 
@@ -902,7 +902,7 @@ fn a_recursive_field_may_be_nullable() {
         [
             "`items` makes `Listed` hold itself through the elements of a collection outside an \
              `atomic<...>`",
-            "`items` makes `Inner` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
+            "`items` makes `Inner` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty",
         ]
     );
 }
@@ -919,7 +919,8 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         // Through a parent and not atomic.
         "abstract struct Held { inner: Holder }\n",
         "struct Holder : Held { value: i64 }\n",
-        // A nullable recursive field has no null default to keep.
+        // A nullable recursive field has no null default to keep, and
+        // its default is still one that ends the recursion.
         "abstract struct Chain { next: Chain? }\n",
         "struct Ended : Chain { next = make() }\n",
         // A generic parent's field is recursive in the struct that
@@ -941,6 +942,7 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         [
             "m.hgl:5:27 type/field.recursive TYPE-6",
             "m.hgl:6:24 type/field.recursive TYPE-6",
+            "m.hgl:9:24 type/field.recursive TYPE-6",
             "m.hgl:13:28 type/field.recursive TYPE-6",
             "m.hgl:15:16 type/field.recursive TYPE-6",
             "m.hgl:17:30 type/field.recursive TYPE-6",
@@ -950,7 +952,8 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         messages(&checked),
         [
             "`next` is a recursive field, and its default stays null",
-            "`inner` makes `Holder` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type",
+            "`inner` makes `Holder` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty",
+            "`next` is a recursive field, and its default is `null` or the empty collection `[]`",
             "`next` is a recursive field, and its default stays null",
             "`Below` holds itself through `next`, a field of `Base`: a struct between has \
              removed its null default",
@@ -1083,5 +1086,80 @@ fn two_to_the_sixty_third_is_an_integer_only_under_a_minus() {
     assert_eq!(
         numbering(&checked, "Range"),
         ["low=-9223372036854775808", "high=?"]
+    );
+}
+
+/// TYPE-6: "inside an `atomic<...>`, it holds the struct only as elements
+/// of a collection that may be empty, an unsized list, a list of size
+/// zero, a set, or a dictionary ... A list of any other size and a tuple
+/// do not end it. A recursive field's default, its own or a
+/// descendant's, is such a value: `null`, or the empty collection `[]`.
+/// Descendants cannot remove a null default it has, not for an empty
+/// collection either."
+#[test]
+fn a_recursive_field_may_end_in_an_empty_collection() {
+    let checked = module(concat!(
+        "struct Tree { children: atomic<list<Tree>> = [] }\n",
+        // The type lets the recursion end; the default is not needed.
+        "struct Bare { children: atomic<list<Bare>> }\n",
+        "struct Index { entries: atomic<dict<str, Index>> = [] }\n",
+        "struct Zero { none: atomic<list<Zero, 0>> }\n",
+        // A list of another size, and a tuple, always hold elements.
+        "struct Pair { both: atomic<list<Pair, 2>> }\n",
+        "struct Twin { pair: atomic<tuple<Twin, Twin>> }\n",
+        // Every way to the struct is through such a collection.
+        "struct Mixed { both: atomic<tuple<Mixed, list<Mixed>>> }\n",
+        // A default holds no struct of the cycle.
+        "struct Full { children: atomic<list<Full>> = [make()] }\n",
+        // Outside an `atomic<...>` the cycle still rejects.
+        "struct Loose { children: list<Loose> = [] }\n",
+        // A descendant gives the field an empty default, and no other.
+        "abstract struct Open { children: atomic<list<Open>> }\n",
+        "struct Filled : Open { children = [] }\n",
+        "struct Wrong : Open { children = make() }\n",
+        // A null default stays null, for an empty collection too.
+        "abstract struct Parent { children: atomic<list<Parent>?> = null }\n",
+        "struct Emptied : Parent { children = [] }\n",
+        // A field recursive only in a struct below has its default
+        // judged there, and reported where it is written.
+        "abstract struct Stem { leaves: atomic<list<Leaf>> = [make()] }\n",
+        "struct Leaf : Stem { }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:15 type/field.recursive TYPE-6",
+            "m.hgl:7:15 type/field.recursive TYPE-6",
+            "m.hgl:8:16 type/field.recursive TYPE-6",
+            "m.hgl:9:15 type/field.recursive TYPE-6",
+            "m.hgl:10:16 type/field.recursive TYPE-6",
+            "m.hgl:13:23 type/field.recursive TYPE-6",
+            "m.hgl:15:27 type/field.recursive TYPE-6",
+            "m.hgl:16:24 type/field.recursive TYPE-6",
+        ]
+    );
+    let ends = "a recursive field is optional, its type nullable or an `atomic<...>` of a \
+                nullable type, or holds its struct only as elements of a collection that \
+                may be empty";
+    assert_eq!(
+        messages(&checked),
+        [
+            format!("`both` makes `Pair` hold itself: {ends}"),
+            format!("`pair` makes `Twin` hold itself: {ends}"),
+            format!("`both` makes `Mixed` hold itself: {ends}"),
+            "`children` is a recursive field, and its default is `null` or the empty \
+             collection `[]`"
+                .to_string(),
+            "`children` makes `Loose` hold itself through the elements of a collection \
+             outside an `atomic<...>`"
+                .to_string(),
+            "`children` is a recursive field, and its default is `null` or the empty \
+             collection `[]`"
+                .to_string(),
+            "`children` is a recursive field, and its default stays null".to_string(),
+            "`leaves` is a recursive field, and its default is `null` or the empty \
+             collection `[]`"
+                .to_string(),
+        ]
     );
 }
