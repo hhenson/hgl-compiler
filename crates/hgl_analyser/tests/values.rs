@@ -619,6 +619,54 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
     );
 }
 
+/// GEN-2: a generic struct "infers them from constructor fields and
+/// expected type". Every field given is then of its type with the
+/// arguments in place. TYPE-4: a field is optional by its type, the
+/// arguments in place.
+#[test]
+fn a_generic_struct_is_checked_with_its_arguments_in_place() {
+    let checked = module(concat!(
+        "struct Pair<T> {\n    first: T\n    second: T\n}\n",
+        "struct Box<T> { value: T }\n",
+        "const fn pairs(a: i64) {\n",
+        "    let same = Pair(1, a)\n",
+        "    let mixed = Pair(1, \"x\")\n",
+        "    let widened = Pair(1.5, a)\n",
+        "    let second = mixed.second\n",
+        "    let empty: Box<i64?> = Box()\n",
+        "    let typed = Box<i64?>()\n",
+        "    let needed: Box<i64> = Box()\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:25 local:type/type.mismatch EXPR-5",
+            "m.hgl:14:28 local:type/argument.missing EXPR-2",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `str`, and the field `second` is `i64`",
+            "`Box` is given no `value`, a field with no default",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "pairs"),
+        [
+            "a: i64",
+            "same: Pair<i64>",
+            "mixed: Pair<i64>",
+            "widened: Pair<f64>",
+            "second: i64",
+            "empty: Box<i64?>",
+            "typed: Box<i64?>",
+            "needed: Box<i64>",
+        ]
+    );
+}
+
 /// ERR-6: "Ordinary/atomic dictionary brackets ... are strict
 /// point-in-time reads." A list is indexed by an `i64`, a dictionary by
 /// its key.

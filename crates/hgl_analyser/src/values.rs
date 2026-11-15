@@ -1014,6 +1014,9 @@ impl<'a> Typer<'a> {
             .as_ref()
             .is_some_and(|given| !applies(&read.generics, given));
         let given = given.filter(|_| !reported);
+        // With none given, a generic struct's arguments are found from
+        // the fields it is given.
+        let inferring = given.is_none() && !read.generics.is_empty();
         // Each field's type, with the generic arguments in place when
         // they are given. With none given, or where a pack's place is
         // not filled in, a field whose type names a parameter is not
@@ -1029,20 +1032,21 @@ impl<'a> Typer<'a> {
                 let ty = substitute_within(&member.ty, &map);
                 Slot {
                     name: &member.name,
+                    // TYPE-4: "A field is optional when its type is
+                    // nullable ... or an `atomic<...>` of a nullable
+                    // type", the generic arguments in place: the
+                    // `value: T` of a `Box<i64?>` is.
+                    required: !member.has_default && !is_optional(&ty),
                     ty: if names_parameter(&ty) {
                         Type::Unknown
                     } else {
                         ty
                     },
-                    // TYPE-4: "A field is optional when its type is
-                    // nullable ... or an `atomic<...>` of a nullable
-                    // type."
-                    required: !member.has_default && !is_optional(&member.ty),
                     pack: None,
                 }
             })
             .collect();
-        let arguments = self.bind(name, list, &slots, "field");
+        let mut arguments = self.bind(name, list, &slots, "field");
         // GEN-2: with no arguments given, a parameter that is a field's
         // whole type is what that field is given.
         let arguments_of_type = match given {
@@ -1060,6 +1064,34 @@ impl<'a> Typer<'a> {
                 })
                 .collect(),
         };
+        // With the arguments found, every field given is of its type
+        // with them in place: `Pair(1, "x")` gives `second: T` a `str`
+        // where `T` is `i64`. A field whose type names no parameter has
+        // been checked already.
+        if inferring {
+            let found: Vec<(Location, &Argument)> =
+                fixed(&read.generics).zip(&arguments_of_type).collect();
+            arguments = arguments
+                .into_iter()
+                .map(|argument| {
+                    let member = match argument.parameter {
+                        Some(index) if names_parameter(&read.members[index].ty) => {
+                            &read.members[index]
+                        }
+                        _ => return argument,
+                    };
+                    let ty = substitute_within(&member.ty, &found);
+                    if names_parameter(&ty) {
+                        return argument;
+                    }
+                    let place = format!("the field `{}`", member.name);
+                    hir::Argument {
+                        parameter: argument.parameter,
+                        value: self.fit(argument.value, &ty, &place),
+                    }
+                })
+                .collect();
+        }
         let ty = if reported {
             Type::Unknown
         } else {
