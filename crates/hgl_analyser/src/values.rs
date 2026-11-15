@@ -217,6 +217,17 @@ impl<'a> Typer<'a> {
                         "FN-7",
                     ));
                 }
+                // "`return value` [rejects] in a function that declares
+                // no result."
+                if let (Some(value), None) = (&value, &self.signature.result) {
+                    self.diagnostics.emit(local_error(
+                        Category::Type,
+                        codes::local::TYPE_MISMATCH,
+                        value.at,
+                        "this returns a value, and the function declares no result".to_string(),
+                        "FN-7",
+                    ));
+                }
                 Stmt::Return { value, at }
             }
             SyntaxKind::ExprStmt => match node.children().next() {
@@ -454,8 +465,22 @@ impl<'a> Typer<'a> {
                         ));
                         (ExprKind::Literal(Value::Null), Type::Unknown)
                     }
-                    // Nothing says which nullable type it is.
-                    _ => (ExprKind::Literal(Value::Null), Type::Unknown),
+                    // What the place expects is not known.
+                    Some(_) => (ExprKind::Literal(Value::Null), Type::Unknown),
+                    // "`null` has the nullable type its place expects,
+                    // and rejects where nothing gives it one."
+                    None => {
+                        self.diagnostics.emit(local_error(
+                            Category::Type,
+                            codes::local::NULL_CONTEXT,
+                            self.at(node),
+                            "`null` has the type its place expects, and nothing here gives \
+                             one: write the type"
+                                .to_string(),
+                            "TYPE-14",
+                        ));
+                        (ExprKind::Literal(Value::Null), Type::Unknown)
+                    }
                 };
             }
             _ => None,
@@ -585,6 +610,9 @@ impl<'a> Typer<'a> {
     /// Pairs and `_` are for the passes that read dictionaries and test
     /// traces.
     fn sequence(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+        // True when nothing is expected of the sequence, which is not
+        // the same as what is expected not being known.
+        let unexpected = expected.is_none();
         let items: Vec<SyntaxNode> = node.children().collect();
         if items
             .iter()
@@ -640,9 +668,20 @@ impl<'a> Typer<'a> {
             .map(|item| (!takes_its_type(item)).then(|| self.expression(item, None)))
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
-        // Nothing says what an empty sequence holds, or one of such
-        // entries alone.
+        // EXPR-9: "Entries of two types reject, and so do entries that
+        // give no type: `[]`, `[null]`." Where what the place expects
+        // is not known, neither is the sequence, and nothing is
+        // reported.
         let Some(&first) = known.first() else {
+            if unexpected {
+                self.diagnostics.emit(local_error(
+                    Category::Type,
+                    codes::local::SEQUENCE_CONTEXT,
+                    self.at(node),
+                    "nothing here says what this sequence holds: write its type".to_string(),
+                    "EXPR-9",
+                ));
+            }
             let elements = items
                 .iter()
                 .map(|item| self.expression(item, Some(&Type::Unknown)))
@@ -656,6 +695,13 @@ impl<'a> Typer<'a> {
             Type::Scalar(Scalar::F64)
         } else {
             first.clone()
+        };
+        // "`[1, null]` [is] a `list<i64?>`": a `null` among the values
+        // makes their type nullable.
+        let of = if items.iter().any(is_null) && !matches!(of, Type::Nullable(_)) {
+            Type::Nullable(Box::new(of))
+        } else {
+            of
         };
         let elements: Vec<Expr> = items
             .iter()
@@ -750,14 +796,19 @@ impl<'a> Typer<'a> {
             // position expects": beside an operand, that operand's.
             // "Parentheses select grouping" (EXPR-1): `(.buy)` is
             // `.buy`.
-            _ if is_implied_member(&right) => {
+            // A `null` beside an operand is of that operand's type when
+            // it is nullable; beside any other, what it is of is not
+            // known here.
+            _ if takes_its_type(&right) => {
                 let left = self.expression(&left, None);
-                let right = self.expression(&right, Some(&left.ty));
+                let expected = beside(&right, &left.ty);
+                let right = self.expression(&right, Some(&expected));
                 (left, right)
             }
-            _ if is_implied_member(&left) => {
+            _ if takes_its_type(&left) => {
                 let right = self.expression(&right, None);
-                let left = self.expression(&left, Some(&right.ty));
+                let expected = beside(&left, &right.ty);
+                let left = self.expression(&left, Some(&expected));
                 (left, right)
             }
             _ => (self.expression(&left, None), self.expression(&right, None)),
@@ -886,10 +937,9 @@ impl<'a> Typer<'a> {
             )
         });
         if temporal {
-            // FN-4: "A bad selected signature is an error, not fallback
-            // to the other role." A value function computes ordinary
-            // values (FN-1) and has no connection to give a temporal
-            // one.
+            // FN-3: "A runtime body calls only value functions, and so
+            // does a value function." FN-4: "A bad selected signature
+            // is an error, not fallback to the other role."
             self.diagnostics.emit(local_error(
                 Category::FunctionKind,
                 codes::local::CALL_ROLE,
@@ -898,7 +948,7 @@ impl<'a> Typer<'a> {
                     "`{}` is a temporal function, and a value function calls value functions",
                     name.text()
                 ),
-                "FN-4",
+                "FN-3",
             ));
         }
         self.unread_call(&list)
@@ -1507,7 +1557,7 @@ impl<'a> Typer<'a> {
     /// follows the admitted destination relationship"), and reported
     /// otherwise. `what` names the place: `the function's result`.
     fn fit(&mut self, value: Expr, expected: &Type, what: &str) -> Expr {
-        if is_integer(&value.ty) && accepts_float(expected) {
+        if is_integer_literal(&value) && accepts_float(expected) {
             let at = value.at;
             return Expr {
                 kind: ExprKind::Widen(Box::new(value)),
@@ -1843,10 +1893,6 @@ fn open(ty: &Type) -> bool {
     matches!(ty, Type::Unknown | Type::Scalar(Scalar::Any))
 }
 
-fn is_integer(ty: &Type) -> bool {
-    matches!(ty, Type::Scalar(Scalar::I64))
-}
-
 /// True when an `i64` is widened in a place that expects `expected`: an
 /// `f64`, or an `f64?`.
 fn accepts_float(expected: &Type) -> bool {
@@ -1899,6 +1945,35 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
             false
         }
+    }
+}
+
+/// What is expected of an expression that takes its type from its
+/// place, `node`, beside an operand of type `other`: for `.member`, the
+/// operand's type; for `null`, the operand's type when it is nullable.
+fn beside(node: &SyntaxNode, other: &Type) -> Type {
+    if is_implied_member(node) || matches!(other, Type::Nullable(_)) {
+        other.clone()
+    } else {
+        Type::Unknown
+    }
+}
+
+/// True when an expression is the literal `null`, in parentheses or not.
+fn is_null(node: &SyntaxNode) -> bool {
+    takes_its_type(node) && !is_implied_member(node)
+}
+
+/// EXPR-5: "An integer literal is an `f64` where one is expected." True
+/// when an expression is one, under a minus or not.
+fn is_integer_literal(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Literal(Value::Int(_)) => true,
+        ExprKind::Unary {
+            operator: UnaryOperator::Negate,
+            operand,
+        } => is_integer_literal(operand),
+        _ => false,
     }
 }
 

@@ -255,9 +255,14 @@ pub mod codes {
         pub const MEMBER_UNKNOWN: &str = "member.unknown";
         /// `.member` stands where no enum type is expected (TYPE-7).
         pub const ENUM_CONTEXT: &str = "enum.context_type";
+        /// `null` stands where nothing gives it a type (TYPE-14).
+        pub const NULL_CONTEXT: &str = "null.context_type";
+        /// A sequence's entries give no type, and nothing is expected
+        /// of it (EXPR-9).
+        pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 12] = [
+        pub const ALL: [&str; 14] = [
             TYPE_MISMATCH,
             BINDING_UNASSIGNED,
             BINDING_IMMUTABLE,
@@ -270,6 +275,8 @@ pub mod codes {
             STRUCT_ABSTRACT,
             MEMBER_UNKNOWN,
             ENUM_CONTEXT,
+            NULL_CONTEXT,
+            SEQUENCE_CONTEXT,
         ];
     }
 }

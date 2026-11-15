@@ -139,7 +139,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits; a `signal` input's default other than `null` |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. a literal `null` is no value of a type with no `?`. Left: null from other expressions |
+| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. a literal `null` is no value of a type with no `?`, and is rejected where nothing gives it a type. Left: null from other expressions |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 
@@ -155,13 +155,13 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
 | EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned. Left: assignment through control flow; values against connections; inner declarations |
 | EXPR-4 | analyser | planned | Values and connections kept distinct; reassigning a graph `var` rewires |
-| EXPR-5 | analyser | partial | A value fits the type its place expects; an `i64` is widened where an `f64` is expected; `null`, a tuple and a sequence take the expected type. Left: constructors; const expression restrictions |
+| EXPR-5 | analyser | partial | A value fits the type its place expects; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type. Left: const expression restrictions; temporal bodies |
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
 | EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place. Left: temporal projection; `ref` access; the payload of a nullable or a result |
 | EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
 | EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
-| EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type. Left: pairs; `_`; ordering and uniqueness |
+| EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected. Left: pairs; `_`; ordering and uniqueness |
 | EXPR-10 | parser | done | A named-entry brace directly after an operator is its configuration; an empty one rejected |
 | EXPR-10 | analyser | planned | Configuration bound to the operator's public parameters; unknown, duplicate and unsupported options rejected |
 | EXPR-11 | parser | done | `<=>` at the comparison tier |
@@ -179,13 +179,13 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded. Left: roles of `const fn` and a temporal `fn` in bodies |
 | FN-2 | analyser | planned | A body is classified composition or runtime before phase checking |
-| FN-3 | analyser | planned | Phase rules for iteration, conditionals and hooks |
+| FN-3 | analyser | partial | A value function calls only value functions (with FN-4). Left: phase rules for iteration, conditionals and hooks; what a runtime body and a composition body call |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. a call in a value function takes the value definition, and a temporal one alone is rejected. Left: selection in composition and eval |
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
-| FN-7 | analyser | partial | A value function's `return` and arrow body are of its result type. Left: return by phase; a function that ends without returning; an anonymous function's context |
+| FN-7 | analyser | partial | A value function's `return` and arrow body are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is. Left: return by phase; a function that ends without returning; an anonymous function's context |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |

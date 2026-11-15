@@ -182,25 +182,27 @@ fn a_boolean_connective_takes_bools() {
 
 // ---- What a place expects ----
 
-/// EXPR-5: "An expected type contextualizes literals and constructors
-/// ... Numeric widening follows the admitted destination relationship,
-/// not arbitrary native coercion." TYPE-14: "`T?` denotes an ordinary
-/// value that is either a T or null ... It does not make null an
-/// admitted value of unqualified T."
+/// EXPR-5: "An integer literal is an `f64` where one is expected ... A
+/// value that has a type is not converted by its place." TYPE-14: "A T
+/// is a value where a `T?` is expected. `null` has the nullable type its
+/// place expects, and rejects where nothing gives it one ... It does not
+/// make null an admitted value of unqualified T."
 #[test]
 fn a_value_is_of_the_type_its_place_expects() {
     let checked = module(concat!(
         "const fn places(a: i64, b: f64) {\n",
-        "    let widened: f64 = a\n",
+        "    let widened: f64 = 1\n",
         "    let narrowed: i64 = b\n",
         "    let text: str = 1\n",
         "    let absent: i64? = null\n",
         "    let present: i64? = a\n",
-        "    let widened_too: f64? = a\n",
+        "    let widened_too: f64? = -1\n",
         "    let never: i64 = null\n",
         "    let whatever: any = a\n",
         // Nothing says which nullable type this is.
         "    let unknown = null\n",
+        // A value that has a type is not converted.
+        "    let typed: f64 = a\n",
         "}\n",
     ));
     assert_eq!(
@@ -209,6 +211,8 @@ fn a_value_is_of_the_type_its_place_expects() {
             "m.hgl:4:25 local:type/type.mismatch EXPR-5",
             "m.hgl:5:21 local:type/type.mismatch EXPR-5",
             "m.hgl:9:22 local:type/type.mismatch TYPE-14",
+            "m.hgl:11:19 local:type/null.context_type TYPE-14",
+            "m.hgl:12:22 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -217,9 +221,12 @@ fn a_value_is_of_the_type_its_place_expects() {
             "this is `f64`, and the type written for it is `i64`",
             "this is `i64`, and the type written for it is `str`",
             "`null` is no value of `i64`: write `i64?`",
+            "`null` has the type its place expects, and nothing here gives one: write the type",
+            "this is `i64`, and the type written for it is `f64`",
         ]
     );
-    // The `i64` is written down as widened where an `f64` is wanted.
+    // The integer literal is written down as widened where an `f64` is
+    // wanted.
     let Stmt::Declare {
         value: Some(value), ..
     } = &body(&checked, "places").statements[0]
@@ -230,13 +237,14 @@ fn a_value_is_of_the_type_its_place_expects() {
     assert_eq!(value.ty.to_string(), "f64");
 }
 
-/// FN-7: "A value return yields an ordinary value", of the function's
-/// result type. An arrow body returns its value.
+/// FN-7: "A `const fn` that declares a result returns a value of that
+/// type: `return` with no value rejects there, as `return value` does in
+/// a function that declares no result." An arrow body returns its value.
 #[test]
 fn a_return_is_of_the_result_type() {
     let checked = module(concat!(
         "const fn whole(a: i64) -> i64 => a + 1\n",
-        "const fn real(a: i64) -> f64 => a\n",
+        "const fn real(a: i64) -> f64 => 1\n",
         "const fn maybe(a: i64) -> i64? => a\n",
         "const fn text(a: i64) -> str => a\n",
         "const fn block(a: i64) -> bool {\n    return a\n}\n",
@@ -247,6 +255,9 @@ fn a_return_is_of_the_result_type() {
         "const fn other<T>(value: T) -> T => 1\n",
         // A `return` with nothing written yields no value.
         "const fn bare() -> i64 {\n    return\n}\n",
+        // A function that declares no result returns none.
+        "const fn nothing(a: i64) {\n    return a\n}\n",
+        "const fn ends(a: i64) {\n    return\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -256,11 +267,16 @@ fn a_return_is_of_the_result_type() {
             "m.hgl:10:42 local:type/type.mismatch EXPR-5",
             "m.hgl:12:37 local:type/type.mismatch EXPR-5",
             "m.hgl:14:5 local:type/type.mismatch FN-7",
+            "m.hgl:17:12 local:type/type.mismatch FN-7",
         ]
     );
     assert_eq!(
         checked.findings[0].message,
         "this is `i64`, and the function's result is `str`"
+    );
+    assert_eq!(
+        checked.findings[5].message,
+        "this returns a value, and the function declares no result"
     );
     assert_eq!(
         checked.findings[4].message,
@@ -400,6 +416,7 @@ fn only_a_var_is_assigned_and_with_its_own_type() {
             "m.hgl:7:5 local:name/binding.immutable EXPR-3",
             "m.hgl:9:13 local:type/type.mismatch EXPR-5",
             "m.hgl:10:14 local:type/type.mismatch EXPR-5",
+            "m.hgl:11:12 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -409,15 +426,18 @@ fn only_a_var_is_assigned_and_with_its_own_type() {
             "`value` is a parameter and cannot be assigned: only a `var` can",
             "this is `f64`, and the type of the `var` is `i64`",
             "this is `f64`, and the type of the `var` is `i64`",
+            "this is `i64`, and the type of the `var` is `f64`",
         ]
     );
 }
 
 // ---- Tuples and sequences ----
 
-/// EXPR-9: "The use site and expected type constrain element types."
-/// With no expected type the values of a sequence are a list of the
-/// one type they have.
+/// EXPR-9: "The use site and expected type constrain element types ...
+/// With no expected type, value entries make a list of the one type
+/// they have: `[1, 2.5]` is a `list<f64>` ... and `[1, null]` a
+/// `list<i64?>`. Entries of two types reject, and so do entries that
+/// give no type: `[]`, `[null]`."
 #[test]
 fn a_sequence_takes_its_type_from_its_place_or_its_values() {
     let checked = module(concat!(
@@ -441,7 +461,7 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         // TYPE-10: "Size participates in identity."
         "    let sized: list<i64, 2> = [1, 2]\n",
         "    let short: list<i64, 2> = [1]\n",
-        // `null` takes its type from its place: among values, theirs.
+        // A `null` among values makes their type nullable.
         "    let holes = [1, null]\n",
         "    let maybe_holes: list<i64?> = [1, null]\n",
         "    let nothing = [null]\n",
@@ -453,17 +473,27 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         checked.summary(),
         [
             "m.hgl:5:21 local:type/type.mismatch EXPR-5",
+            // EXPR-5: `a` has a type, and is not converted.
+            "m.hgl:6:33 local:type/type.mismatch EXPR-5",
             "m.hgl:8:34 local:type/type.mismatch EXPR-5",
+            "m.hgl:9:17 local:type/sequence.context_type EXPR-9",
+            "m.hgl:11:41 local:type/type.mismatch EXPR-5",
             "m.hgl:12:43 local:type/type.mismatch EXPR-5",
+            "m.hgl:14:38 local:type/type.mismatch EXPR-5",
+            "m.hgl:15:41 local:type/type.mismatch EXPR-5",
             "m.hgl:16:36 local:type/type.mismatch EXPR-5",
             "m.hgl:18:31 local:type/type.mismatch TYPE-10",
-            "m.hgl:19:21 local:type/type.mismatch TYPE-14",
+            "m.hgl:21:19 local:type/sequence.context_type EXPR-9",
             "m.hgl:24:36 local:type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
-        checked.findings[4].message,
+        checked.findings[9].message,
         "this has 1 entry, and a `list<i64, 2>` has 2"
+    );
+    assert_eq!(
+        checked.findings[3].message,
+        "nothing here says what this sequence holds: write its type"
     );
     assert_eq!(
         locals(&checked, "sequences"),
@@ -485,7 +515,7 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "maybe_wrong: list<str>?",
             "sized: list<i64, 2>",
             "short: list<i64, 2>",
-            "holes: list<i64>",
+            "holes: list<i64?>",
             "maybe_holes: list<i64?>",
             "nothing: _",
         ]
@@ -529,7 +559,8 @@ fn a_form_not_read_yet_is_not_reported() {
 /// unknown names, missing required arguments, and wrong types." UNIT-8:
 /// "A parameter whose type is written `T?` needs no default to be
 /// omitted." FN-4: "runtime/value evaluation chooses the value
-/// definition."
+/// definition." FN-3: "A runtime body calls only value functions, and so
+/// does a value function."
 #[test]
 fn an_argument_is_given_to_its_parameter() {
     let checked = module(concat!(
@@ -537,7 +568,7 @@ fn an_argument_is_given_to_its_parameter() {
         "fn temporal(value: f64) -> f64 => value\n",
         "const fn calls(a: i64, text: str) -> f64 {\n",
         "    let plain = scale(1.5)\n",
-        "    let widened = scale(a, factor: a)\n",
+        "    let widened = scale(1, factor: 2)\n",
         "    let named = scale(value: 1.5, bias: 2.0)\n",
         "    let wrong = scale(text)\n",
         "    let missing = scale(factor: 2.0)\n",
@@ -561,7 +592,7 @@ fn an_argument_is_given_to_its_parameter() {
             "m.hgl:11:28 local:name/argument.duplicate EXPR-2",
             "m.hgl:12:35 local:type/argument.order EXPR-2",
             "m.hgl:13:42 local:type/argument.unexpected EXPR-2",
-            "m.hgl:14:16 local:function-kind/call.role FN-4",
+            "m.hgl:14:16 local:function-kind/call.role FN-3",
             "m.hgl:15:28 local:type/type.mismatch EXPR-5",
         ]
     );
@@ -639,9 +670,12 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
     assert_eq!(
         checked.summary(),
         [
+            // EXPR-5: `a` has a type, and is not converted.
+            "m.hgl:13:28 local:type/type.mismatch EXPR-5",
             "m.hgl:14:17 local:type/argument.missing EXPR-2",
             "m.hgl:15:33 local:name/argument.unknown EXPR-2",
             "m.hgl:17:16 local:type/struct.abstract TYPE-3",
+            "m.hgl:19:33 local:type/type.mismatch EXPR-5",
             "m.hgl:20:41 local:type/type.mismatch EXPR-5",
             "m.hgl:24:25 local:name/member.unknown EXPR-7",
             "m.hgl:26:21 local:name/member.unknown TYPE-7",
@@ -652,9 +686,11 @@ fn a_struct_is_made_from_its_fields_and_read_by_them() {
     assert_eq!(
         messages(&checked),
         [
+            "this is `i64`, and the field `bid` is `f64`",
             "`Quote` is given no `bid`, a field with no default",
             "`Quote` has no field `mid`",
             "`Base` is an abstract struct and is not constructed",
+            "this is `i64`, and the field `value` is `f64`",
             "this is `i64`, and the field `value` is `str`",
             "`Quote` has no field `mid`",
             "`Side` has no member `hold`",
@@ -702,7 +738,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "const fn pairs(a: i64) {\n",
         "    let same = Pair(1, a)\n",
         "    let mixed = Pair(1, \"x\")\n",
-        "    let widened = Pair(1.5, a)\n",
+        "    let widened = Pair(1.5, 1)\n",
         "    let second = mixed.second\n",
         "    let empty: Box<i64?> = Box()\n",
         "    let typed = Box<i64?>()\n",
