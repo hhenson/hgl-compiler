@@ -151,7 +151,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | EXPR-1 | parser | done | Precedence, associativity, grouping; a tuple has a comma |
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
-| EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected. Left: operators and their configuration; what a pack holds; a generic function's parameter types; temporal bodies |
+| EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected. A named operator call may name an option its candidates declare. Left: a symbol operator's configuration; what a pack holds; a generic function's parameter types; temporal bodies |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
 | EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned, through `if`, `switch` and loops (CTRL-11). Left: values against connections; temporal bodies |
 | EXPR-4 | analyser | planned | Values and connections kept distinct; reassigning a graph `var` rewires |
@@ -166,7 +166,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-10 | analyser | planned | Configuration bound as a call's named arguments are, to the operator's parameters and the options its candidates declare; a duplicate option and one no candidate for the operands declares rejected |
 | EXPR-11 | parser | done | `<=>` at the comparison tier |
 | EXPR-11 | analyser | planned | `<=>` yields a comparison outcome, not a bool |
-| EXPR-12 | analyser | planned | Configuration that selects a result type is resolved during checking |
+| EXPR-12 | analyser | partial | In a value function, an option of a named operator call that a candidate's `requires` reads selects the candidate, and so the result type. Left: an option given as no constant is not judged, the catalogue having no row for it; a symbol's configuration; temporal bodies |
 | EXPR-13 | transpiler | planned | Evaluation order of a configured operator |
 | EXPR-14 | analyser | planned | Configuration introduces no temporal input |
 | EXPR-14 | transpiler | planned | Configuration bound at graph construction in composition, per invocation elsewhere |
@@ -206,9 +206,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-1 | analyser | partial | Generic scope covers the whole declaration; a repeated type parameter is one type at a call of a value function. Left: equal constants; occurrence requirements; temporal bodies |
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type; a value function's generics resolved at a call from what the call writes, then the type its place expects, then its arguments in declared parameter order. Left: packs; solvable equalities; temporal bodies |
 | GEN-3 | analyser | partial | A parameter compared in a constraint is a const option or is rejected. Left: every other form `requires` admits; binding equalities solved to a fixed point |
-| GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. Left: operator identity in selection |
+| GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. An operator's requirement `O in {...}` on its bare result parameter limits its candidates' results. Left: operator identity in selection; every other requirement of an operator |
 | GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies |
-| GEN-6 | analyser | partial | A const option a candidate compares in `requires` is read as the option: marked `const`, or in a value candidate as its operator marks it or as the candidate's own. Left: a candidate's shape against its operator; a candidate with an option of its own admitted by a call, and one that names an option admitting only those that declare it; selection by the option's value; candidates that stay resolvable together |
+| GEN-6 | analyser | partial | A const option a candidate compares in `requires` is read as the option. In a value function a named call is matched against each value candidate's own signature: its options by name or position, an omitted one by its default, and its `requires` against the option's value. Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
 | GEN-8 | analyser | partial | A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected. Left: `instantiate`; packs; what an operator's generic arguments say of its operands; temporal bodies |
@@ -397,7 +397,7 @@ the same numeric rules the transpiler rows give.
 | NUM-8 | analyser | planned | Configuration selects the same operator; omitted options take its public defaults |
 | NUM-8 | optimiser | planned | Folding alters no default or outcome |
 | NUM-8 | transpiler | planned | Value and temporal execution give the same numbers |
-| NUM-9 | analyser | planned | The `zero` policy is resolved in checking and selects `f64` or `result<f64, error>` |
+| NUM-9 | analyser | partial | `div_(a, b, zero: ...)` by name through core's candidates in a value function: `f64`, or `result<f64, error>` under `.error`. Left: the symbol `/` and its configuration; temporal bodies |
 | NUM-9 | transpiler | planned | `zero: error` gives `err` with `numeric.division_by_zero` for a zero divisor |
 | NUM-10 | transpiler | planned | A checked-division `Err` is data; `?` propagation |
 | NUM-11 | analyser | planned | `abs` and `rel` are scalar f64 configuration |
@@ -406,14 +406,14 @@ the same numeric rules the transpiler rows give.
 | OPS-1 | transpiler | planned | The operators on strings, durations and instants |
 | OPS-2 | analyser | partial | In a value function, ordering between two of one ordered type and equality between two values of one type. Left: temporal bodies |
 | OPS-3 | analyser | planned | `<=>` returns a `CmpResult`; the enum is declared in no HGL source yet |
-| OPS-4 | analyser | planned | `convert<T>(value)` and the conversions it admits |
+| OPS-4 | analyser | partial | `convert<T>(value)` through core's candidates in a value function: the conversions core declares, and no other. Left: a list of structs to a list of their parent; temporal bodies |
 | OPS-4 | transpiler | planned | Each conversion |
 | OPS-5 | analyser | partial | The Boolean connectives and `!` take bools, in a value function. Left: temporal bodies |
 | OPS-6 | analyser | planned | The type each conversion yields; `convert<list<B>>(values)` for a list of structs that inherit from B |
 | OPS-6 | transpiler | planned | What each conversion yields |
 | OPS-7 | analyser | planned | A conversion's options, and the `result` its checked error policy returns |
 | OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
-| OPS-8 | analyser | planned | The options of `convert`: `rounding`, `nan`, and `invalid`, which selects the result type |
+| OPS-8 | analyser | partial | The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T, and an option is admitted only for the conversions that declare it. Left: temporal bodies |
 | OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |

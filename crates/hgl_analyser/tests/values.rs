@@ -2051,3 +2051,159 @@ fn an_operators_generic_arguments_request_its_output() {
         ["real: f64", "text: str", "truth: f64"]
     );
 }
+
+// ---- Options a candidate declares ----
+
+/// GEN-6: "An operator declares the parameters every candidate takes. A
+/// candidate's shape honors them ... and it may declare further const
+/// options of its own, each with a default or without. A call is
+/// matched against each candidate's own signature. One that names an
+/// option admits only the candidates that declare it. An option the
+/// call omits takes its candidate's default, and a candidate whose
+/// option has none is admitted only when the call gives it ... A call
+/// admits the candidate only where that holds for the option's value at
+/// the call, a default included."
+#[test]
+fn a_call_selects_by_the_options_its_candidates_declare() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, n: i64, text: str) {\n",
+        // The default fills `zero`, and the first candidate's
+        // condition holds for it.
+        "    let plain = ratio(a, b)\n",
+        "    let nan = ratio(a, b, zero: .nan)\n",
+        // Only the second is for `.error`; it has no default, and is
+        // admitted because the call gives the option.
+        "    let checked = ratio(a, b, zero: .error)\n",
+        // An argument with no name is given to the candidate's
+        // parameter in that position.
+        "    let placed = ratio(a, b, .error)\n",
+        // A candidate that declares no option.
+        "    let texts = ratio(text, n)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[4..],
+        [
+            "plain: f64",
+            "nan: f64",
+            "checked: result<f64, error>",
+            "placed: result<f64, error>",
+            "texts: str",
+        ]
+    );
+}
+
+/// GEN-6: a call "that names an option admits only the candidates that
+/// declare it". EXPR-2: a name that neither the operator nor any
+/// candidate declares is unknown.
+#[test]
+fn an_option_no_candidate_for_the_operands_declares_is_rejected() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, n: i64, text: str) {\n",
+        // The candidate for a `str` and an `i64` declares no `zero`.
+        "    let a1 = ratio(text, n, zero: .nan)\n",
+        // No candidate is for `.error` here.
+        "    let a2 = ratio(a, b, zero: .error)\n",
+        "    let a3 = ratio(a, b, zerro: .nan)\n",
+        "    let a4 = ratio(a, b, zero: .nan, zero: .ieee)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:14 operator/operator.no_candidate GEN-5",
+            "m.hgl:9:14 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:26 name/argument.unknown EXPR-2",
+            "m.hgl:11:38 name/argument.duplicate EXPR-2",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[..2],
+        [
+            "no value candidate of operator `ratio` takes `str`, `i64`, `zero: .nan`",
+            "no value candidate of operator `ratio` takes `f64`, `f64`, `zero: .error`",
+        ]
+    );
+}
+
+/// GEN-4: an operator "owns ... generic relationships, and
+/// requirements". Where its requirement says what its result may be, a
+/// candidate's result is one of those: with the call's generic
+/// arguments in place (GEN-8), that tells apart candidates the
+/// arguments alone do not.
+#[test]
+fn an_operators_requirement_says_what_its_result_may_be() {
+    let checked = module(concat!(
+        "enum Invalid { error, fail }\n",
+        "operator change<T, V, O>(value: V) -> O\n",
+        "    requires O in {T, result<T, error>}\n",
+        "impl const fn change(value: i64) -> f64 => 1.0\n",
+        "impl const fn change(value: i64) -> str => \"x\"\n",
+        "impl const fn change(value: str, invalid: Invalid = .error) -> result<i64, error>\n",
+        "    requires invalid == .error => ok(1)\n",
+        "impl const fn change(value: str, invalid: Invalid) -> i64\n",
+        "    requires invalid == .fail => 1\n",
+        "const fn uses(n: i64, text: str) {\n",
+        "    let real = change<f64>(n)\n",
+        "    let words = change<str>(n)\n",
+        "    let parsed = change<i64>(text)\n",
+        "    let forced = change<i64>(text, invalid: .fail)\n",
+        "    let none = change<bool>(n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:16:16 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "no value candidate of operator `change` takes `i64` and gives `bool` or \
+          `result<bool, error>`"
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[2..6],
+        [
+            "real: f64",
+            "words: str",
+            "parsed: result<i64, error>",
+            "forced: i64",
+        ]
+    );
+}
+
+/// EXPR-12: "Resolve configuration that selects an expression's source
+/// result type during source checking. A runtime-varying selector
+/// cannot change that type." An option a candidate's condition reads is
+/// given as no constant: which candidate is for it cannot be told. The
+/// catalogue has no row for it, so the call is not judged here.
+#[test]
+fn an_option_that_is_no_constant_is_not_judged() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero = .ieee) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "const fn uses(a: f64, b: f64, policy: Zero) {\n",
+        "    let untold = ratio(a, b, zero: policy)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(locals(&checked, "uses")[3], "untold: _");
+}

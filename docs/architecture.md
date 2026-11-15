@@ -564,11 +564,36 @@ T`, `convert<f64>(count)` selects the candidate that gives an `f64`.
 What they say of the operands is not read yet.
 
 A call of an operator by its name selects one of the operator's value
-candidates (GEN-5, FN-3). The arguments are given to the operator's
-public parameters; a candidate is admitted when its result fits the type
-the place expects, each argument fits the parameter the candidate has in
-that place, and what the call leaves out has a default or a type written
-`T?`. An argument that is read as the type of its place, `null`,
+candidates (GEN-5, FN-3). The call is matched against each candidate's
+own signature (GEN-6):
+
+| Part of a candidate | How a call gives it |
+| --- | --- |
+| Its first parameters, which are the operator's, place for place | In position, or by the name the operator gives the parameter |
+| The options it declares after them | By the option's name, or in position |
+
+A candidate is admitted when its result fits the type the place expects,
+each argument fits the parameter it is given to, what the call leaves
+out has a default or a type written `T?`, and its `requires` holds. A
+call that names an option admits only the candidates that declare it; a
+name neither the operator nor any candidate declares is
+`argument.unknown`. A candidate's `requires` compares an option with
+constants, `zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`,
+`||` and `!`: it is checked against what the call gives the option, or
+the option's default. So `ratio(a, b, zero: .error)` selects the
+candidate that is for `.error`, and has its result type (EXPR-12). Where
+the call gives such an option as no constant, a name say, which
+candidate is for it cannot be told and the call is not judged: the
+catalogue has no row for that rejection (hhenson/hgl_spec#48).
+
+An operator's own requirement may say what its result is: `operator
+convert<T, V, O>(value: V) -> O requires O in {T, result<T, error>}`.
+With the generic arguments a call writes in place (GEN-8), a candidate
+is admitted only when its result is one of those types, which tells
+`convert<f64>(count)` from `convert<str>(count)` where the arguments do
+not.
+
+An argument that is read as the type of its place, `null`,
 `.member`, or a sequence or tuple written out, is tried against each
 candidate's parameter, and what the trial reports is taken back. A
 candidate that fits with no integer literal widened is taken before one
