@@ -38,7 +38,7 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution; types, phases and constants planned |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types; expressions, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
 | formatter | Syntax tree to source text | planned |
@@ -169,7 +169,7 @@ The parser therefore guesses and the analyser confirms (owner decision,
 - When both are, as in `f(a<b, c>(d))` and `a<b>(c)`, the parser records
   its guess, the generic reading, in an `UndecidedConstructor` node that
   keeps its tokens.
-- The analyser (planned) resolves `name`. A generic type confirms the guess;
+- The analyser resolves `name`. A generic type confirms the guess;
   any other name re-reads the node as comparisons. A generic type followed
   by a `<` that cannot open its arguments is an invalid application,
   reported with no fallback to comparison (GEN-14).
@@ -214,7 +214,8 @@ The first stage that reads a program whole: every file of every module at
 once, because its answers cross files. It reads the tree through typed
 views (`hgl_parser::ast`): a function's name, a file's imports. It gives
 the *analysed program*: the modules, what each declares, what each
-import names, and what each name used in it is bound to.
+import names, what each name used in it is bound to, and what each type
+written in it means.
 
 It is built in passes:
 
@@ -225,10 +226,15 @@ It is built in passes:
 | Imports | The module and the declarations each `use` names; cycles; the operator of each `impl fn` | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
-| Types, phases, constants | The rest of the rules | | planned |
+| Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
+| Declared types | Struct parents and fields, enum numbering, the kind of a plain generic parameter | TYPE-3, TYPE-4, TYPE-6, TYPE-7, GEN-13 | planned |
+| Value expressions | The type of every expression of a value function and of every constant | | planned |
+| Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
+| Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
+| Tests and eval | Test blocks, `assert`, eval targets and traces | | planned |
 
-`hgl check` says which passes ran: names are resolved, and types, phases
-and constants are not checked yet.
+`hgl check` says which passes ran: names are resolved and written types
+are read, and what an expression is is not checked yet.
 
 ### Resolution
 
@@ -258,6 +264,54 @@ What the pass decides beyond finding a name:
 What a name *is* does not matter to this pass: a type, a function and a
 local are found alike. Whether what was found fits where it is used is
 for the passes that know types.
+
+### Written types
+
+Every type the source writes is read into one form, `Type`. Two types
+are the same type when their `Type` values are equal. A struct, enum or
+native type is known by the module and declaration that declare it
+(UNIT-4), whichever import or alias names it. What is read of each
+declaration is kept for the passes after: a callable's generic
+parameters, parameters and result; a struct's parents and members.
+`hgl check --modules` prints each signature as it was read.
+
+What the pass checks as it reads:
+
+| Subject | Rule | What is done |
+| --- | --- | --- |
+| A name in a type position | UNIT-10, GEN-2, GEN-13 | Names a struct, an enum, a native type or a generic parameter that is a type. A function, operator, local, generic value parameter, or a type pack where one type is needed, is rejected |
+| A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. A parent and a constructor are no different |
+| An ordinary value type | TYPE-12, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a parameter with a default, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
+| `signal` | TYPE-12 | The whole type of an input, or of each input of a positional pack |
+| `T?` | TYPE-14, TYPE-15 | Not applied to `ref<T>` or `signal` |
+| A list's size | TYPE-10 | A count that is not negative, or `unbounded` |
+| A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds |
+| A default | UNIT-8 | Not on a temporal parameter of a function or native function |
+
+A size is a constant expression, and no expression has a type yet. The
+pass folds what needs none: integer and duration literals, a minus
+before one (LEX-7), `+`, `-` and `*` between two, parentheses, and the
+name of a generic parameter. Any other size is kept as written for the
+pass that evaluates constants.
+
+A type the pass cannot know, because its name is left for the prelude or
+it has been reported, is `Unknown`. Nothing more is reported of it
+(ERR-9), and what holds it is still checked.
+
+The catalogue has rows for the window rejections only. The others carry
+codes local to this compiler (`hgl_analyser::codes::local`) until the
+specification gives them rows; they and the readings this pass takes are
+proposed in [hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
+
+| Local code | Rejection |
+| --- | --- |
+| `type.not_a_type` | A name in a type position that is no type |
+| `type.not_ordinary` | A `rolling`, `ref`, `atomic` or `signal` where an ordinary value type is required |
+| `signal.position` | `signal` other than as the whole type of an input |
+| `nullable.not_ordinary` | `?` applied to `ref<T>` or `signal` |
+| `generic.argument_count` | The wrong number of generic arguments |
+| `list.size` | A list size that is not a count |
+| `default.temporal_parameter` | A default on a temporal parameter |
 
 ### Order
 

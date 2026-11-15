@@ -10,6 +10,8 @@ use hgl_parser::SyntaxNode;
 use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
+use crate::types::{Detail, WrittenType};
+
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
@@ -62,6 +64,13 @@ pub struct Module {
     /// What each `name<...>(...)` the parser left undecided was decided
     /// to be (GEN-14).
     pub decisions: Vec<Decision>,
+    /// What the types of each declaration are: its signature, or its
+    /// fields. One for each of `declarations`, in the same order.
+    pub details: Vec<Detail>,
+    /// Every type written in the module, with what it means, in file
+    /// order and then source order. A type inside another is part of
+    /// that one and not listed again.
+    pub written: Vec<WrittenType>,
     /// The module's declaration scope: for each name, the positions in
     /// `declarations` of what it is bound to. One, or the two of a
     /// temporal and value pair (FN-4).

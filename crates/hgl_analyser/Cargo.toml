@@ -1,6 +1,6 @@
 [package]
 name = "hgl_analyser"
-description = "Stage 3: checks what a parsed HGL program means. So far: modules, declarations and imports."
+description = "Stage 3: checks what a parsed HGL program means. So far: modules, declarations, imports, names and written types."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,11 +10,9 @@ repository.workspace = true
 [dependencies]
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true
+hgl_lexer.workspace = true
 hgl_parser.workspace = true
 petgraph.workspace = true
-
-[dev-dependencies]
-hgl_lexer.workspace = true
 
 [lints]
 workspace = true

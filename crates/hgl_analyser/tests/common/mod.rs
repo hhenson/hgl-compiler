@@ -22,7 +22,8 @@ use hgl_source::{SourceMap, Span};
 pub struct Finding {
     /// Where it points, as `file:line:column`.
     pub at: String,
-    /// The category and code, for example `name/name.duplicate`.
+    /// The category and code, for example `name/name.duplicate`. A code
+    /// local to this compiler has `local:` before it.
     pub code: String,
     /// The rule cited, for example `UNIT-12`.
     pub rule: &'static str,
@@ -129,20 +130,32 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
                 "a diagnostic points inside its file"
             );
             // "A diagnostic uses the catalogued category and code when
-            // the specification has one."
-            assert!(
-                diagnostic.code.is_catalogued()
-                    && catalogue::contains(diagnostic.category, diagnostic.code.as_str()),
-                "{}/{} is a row of the diagnostic catalogue",
-                diagnostic.category.as_str(),
-                diagnostic.code.as_str()
-            );
+            // the specification has one, and is marked local when it has
+            // not."
+            let code = diagnostic.code.as_str();
+            let local = !diagnostic.code.is_catalogued();
+            if local {
+                assert!(
+                    hgl_analyser::codes::local::ALL.contains(&code),
+                    "`{code}` is one of the analyser's local codes"
+                );
+                assert!(
+                    catalogue::category_of(code).is_none(),
+                    "`{code}` is not marked local when the catalogue has it"
+                );
+            } else {
+                assert!(
+                    catalogue::contains(diagnostic.category, code),
+                    "{}/{code} is a row of the diagnostic catalogue",
+                    diagnostic.category.as_str()
+                );
+            }
             Finding {
                 at: format!("{}:{}", source.name(), source.line_col(span.start)),
                 code: format!(
-                    "{}/{}",
-                    diagnostic.category.as_str(),
-                    diagnostic.code.as_str()
+                    "{}{}/{code}",
+                    if local { "local:" } else { "" },
+                    diagnostic.category.as_str()
                 ),
                 rule: diagnostic
                     .rule

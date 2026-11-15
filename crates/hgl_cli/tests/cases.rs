@@ -271,12 +271,12 @@ fn other_commands_treat_an_annotation_as_a_comment() {
     assert_eq!(checked.status.code(), Some(0));
 }
 
-/// The specification's own rejection illustration (tests-and-eval.md).
-/// The runner reads its annotation and finds its owner. The error it
-/// expects is a type error, and the analyser has no types yet, so the
-/// case fails for now and says why.
+/// The specification's own rejection illustration (tests-and-eval.md):
+/// TYPE-11's mixed window sizes, expected as `rolling.size_kind`. The
+/// declaration is rejected with that code on that line, so the case
+/// passes; the test beside it cannot be run yet.
 #[test]
-fn the_specifications_illustration_is_read_and_its_type_error_is_not_reported_yet() {
+fn the_specifications_rejection_illustration_passes() {
     let root = scratch("illustration");
     let file = write(
         &root,
@@ -292,16 +292,61 @@ fn the_specifications_illustration_is_read_and_its_type_error_is_not_reported_ye
     );
     let output = hgl(&["test", &argument(&root)]);
     assert_eq!(text(&output.stderr), "");
+    // Status 2: a selected test could not be run.
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stdout),
+        format!(
+            concat!(
+                "passed   rejection   {file}:4 fn invalid\n",
+                "not run  executable  examples.rejection::survives\n",
+                "rejection cases: 1 passed, 0 failed\n",
+                "executable cases: 1 not run: this compiler has no target to run a test on yet\n",
+            ),
+            file = file
+        )
+    );
+
+    // TST-15: "A rejection-only run is valid."
+    let output = hgl(&["test", &argument(&root), "--rejections-only"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        format!(
+            concat!(
+                "passed   rejection   {file}:4 fn invalid\n",
+                "rejection cases: 1 passed, 0 failed\n",
+                "executable cases: none selected\n",
+            ),
+            file = file
+        )
+    );
+
+    // A rejection the catalogue has no row for cannot be a case
+    // (TST-12): the code is this compiler's own, and the output says so.
+    let local = scratch("illustration_local");
+    let file = write(
+        &local,
+        "local.hgl",
+        concat!(
+            "module examples.local\n",
+            "# expect-error(type, \"rolling.size_kind\")\n",
+            "fn invalid(value: list<f64, -1>) {}\n",
+        ),
+    );
+    let output = hgl(&["test", &argument(&local)]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         text(&output.stdout),
         format!(
             concat!(
-                "FAILED   rejection   {file}:4 fn invalid\n",
-                "    expected type/rolling.size_kind on line 4 of {file}: not reported\n",
-                "not run  executable  examples.rejection::survives\n",
+                "FAILED   rejection   {file}:3 fn invalid\n",
+                "    expected type/rolling.size_kind on line 3 of {file}: not reported\n",
+                "    reported type/list.size at {file}:3:29, not expected ",
+                "(a compiler-local code, which no annotation can expect): ",
+                "a list's size is not negative\n",
                 "rejection cases: 0 passed, 1 failed\n",
-                "executable cases: 1 not run: this compiler has no target to run a test on yet\n",
+                "executable cases: none selected\n",
             ),
             file = file
         )

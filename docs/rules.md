@@ -64,7 +64,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-5 | parser | done | A line break is ignored in a list, in an incomplete statement, and before a token that cannot begin one; two or more always separate |
 | LEX-6 | parser | done | Two statements on one line rejected; an inject list continues after a comma |
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
-| LEX-7 | analyser | planned | The literal 2^63 admitted only under a minus; enum numbering range |
+| LEX-7 | analyser | partial | A minus before 2^63 is the least integer in a size. Left: 2^63 without a minus rejected; enum numbering range |
 | LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
 | LEX-9 | parser | done | Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position |
 | LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor |
@@ -101,11 +101,11 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-1 | analyser | done | Assembles a module's files: one scope, one unnamed file, unique part names |
 | UNIT-2 | analyser | done | Imports precede declarations and bind in their file; they and `alias::name` reach public declarations only |
 | UNIT-3 | analyser | partial | Private unless exported; operators public; `impl fn` reached through its operator; import cycles rejected. Left: export closure |
-| UNIT-4 | analyser | planned | Module-qualified nominal identity; an alias adds none |
+| UNIT-4 | analyser | done | Module-qualified nominal identity; an alias adds none |
 | UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
 | UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
 | UNIT-7 | analyser | partial | A default reads no parameter of its declaration and no field of its struct. Left: the closure an imported default keeps |
-| UNIT-8 | analyser | planned | Defaults are required constants; which parameters may have one |
+| UNIT-8 | analyser | partial | A temporal parameter of a function or native function has no default. Left: defaults as required constants of the expected type |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | planned | The prelude is core's mandatory module, bound in every module |
@@ -117,12 +117,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| TYPE-1 | analyser | planned | Scalar type identities and capabilities |
+| TYPE-1 | analyser | partial | Scalar type identities. Left: capabilities |
 | TYPE-1 | transpiler | planned | Scalar representations; bytes as unsigned octets |
 | TYPE-2 | lexer | done | Literal dates keep years 1 to 9999; literal durations fit signed 64-bit microseconds |
-| TYPE-2 | analyser | planned | Temporal scalar types and their domains |
+| TYPE-2 | analyser | partial | Each temporal scalar a type of its own. Left: the domains of computed values |
 | TYPE-2 | transpiler | planned | Temporal scalar representations; zone names kept distinct |
-| TYPE-3 | analyser | planned | Nominal structs; only abstract parents; concrete structs final; invariant generic applications |
+| TYPE-3 | analyser | partial | Nominal identity by declaration and complete generic arguments. Left: only abstract parents; concrete structs final |
 | TYPE-4 | analyser | planned | Field type, optionality and defaults; parent conflicts rejected |
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
@@ -132,16 +132,16 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
 | TYPE-8 | analyser | planned | Typing of `any` |
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |
-| TYPE-9 | analyser | planned | Temporalization of composite types; `atomic` normalisation |
-| TYPE-10 | analyser | planned | List sizes as constants; `unbounded`; size in identity; tuples distinct from lists |
-| TYPE-11 | analyser | planned | Rolling size kind and bounds (`rolling.size_kind`, `rolling.size_bounds`) |
+| TYPE-9 | analyser | partial | An atomic payload is an ordinary value type. Left: temporalization of composite types; `atomic` normalisation |
+| TYPE-10 | analyser | partial | A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists. Left: sizes computed from other constants; an unsized pattern accepting a fixed size |
+| TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`). Left: sizes computed from other constants |
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
-| TYPE-12 | analyser | planned | Where `ref` and `signal` are admitted |
-| TYPE-13 | analyser | planned | Result and error envelopes as ordinary atomic values |
+| TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values and constant configuration; `signal` only as an input's whole type. Left: what a function's role and a body admit |
+| TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | planned | Where a nullable type is admitted; null is no value of plain T |
+| TYPE-14 | analyser | partial | `?` not applied to `ref` or `signal`. Left: null is no value of plain T; which positions admit a nullable type |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
-| TYPE-15 | analyser | planned | A present null is data, distinct from an invalid input |
+| TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 
 ## Expressions and bindings
 
@@ -177,7 +177,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| FN-1 | analyser | planned | Roles of `const fn`, a `const` parameter and a temporal `fn` |
+| FN-1 | analyser | partial | A `const` parameter is an ordinary value type; each signature recorded. Left: roles of `const fn` and a temporal `fn` in bodies |
 | FN-2 | analyser | planned | A body is classified composition or runtime before phase checking |
 | FN-3 | analyser | planned | Phase rules for iteration, conditionals and hooks |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. Left: role selection without fallback |
@@ -204,7 +204,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
-| GEN-2 | analyser | planned | Every generic resolved; no partial application or generic default |
+| GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
 | GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` binds an operator its module declares or its file imports. Left: the prelude; operator identity in selection |
 | GEN-5 | analyser | planned | Candidate selection: output first, exactly one most specific |
@@ -212,14 +212,14 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
 | GEN-8 | analyser | planned | `instantiate` requests candidates; no explicit type arguments on ordinary calls |
-| GEN-9 | analyser | planned | Property clauses apply to explicit concrete domains |
+| GEN-9 | analyser | partial | A property domain is an ordinary value type. Left: clauses applied to explicit concrete domains |
 | GEN-9 | optimiser | planned | A recorded law licenses no reassociation across overflow or float effects |
 | GEN-10 | parser | done | A cardinality after a pack parameter or a generic pack parameter |
-| GEN-10 | analyser | planned | Pack views, `each`, what a cardinality admits |
+| GEN-10 | analyser | partial | A cardinality bounds the arguments a generic type's pack takes. Left: pack views; `each`; the arity of a call |
 | GEN-10 | transpiler | planned | `schemas(pack)` as a runtime-only borrowed view |
 | GEN-11 | analyser | planned | Reference removal in inference |
 | GEN-12 | analyser | planned | Structural specificity |
-| GEN-13 | analyser | planned | Kind of a generic parameter |
+| GEN-13 | analyser | partial | Declared kinds: pack, `const` value, plain; a value parameter or a pack is not named as a type. Left: the kind of a plain parameter from its uses; conflicting and unresolved kinds |
 | GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
 | GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected. Left: each argument against its parameter's kind |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
@@ -309,7 +309,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-7 | analyser | planned | `capture` only in composition (`capture.phase`, `capture.output_field`) |
 | ERR-7 | transpiler | planned | Capture as a temporal error boundary |
 | ERR-8 | transpiler | planned | Capture ends the failed pass without rollback |
-| ERR-9 | analyser | planned | Required constant failures reject; no cascaded diagnostics |
+| ERR-9 | analyser | partial | A type that is not known is reported once, and nothing is reported of its uses. Left: required constant failures |
 | ERR-9 | optimiser | planned | Folding keeps the failure phase of an executed operation |
 | ERR-10 | parser | done | `@suppress_warning("...")` before a named function |
 | ERR-10 | analyser | planned | The string is checked against the warning catalogue |

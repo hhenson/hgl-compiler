@@ -1,8 +1,10 @@
 //! The analyser over the HGL of the pinned specification and core.
 //!
-//! The analyser reads modules, declarations and imports so far, so this
-//! checks that much of each example: its declarations do not clash and
-//! its parts assemble. It says nothing yet of what is inside a body.
+//! The analyser reads modules, declarations, imports, names and written
+//! types so far, so this checks that much of each example: its
+//! declarations do not clash, its parts assemble, and its types are
+//! formed as the rules require. It says nothing yet of what an
+//! expression is.
 
 mod common;
 
@@ -23,13 +25,39 @@ fn header(text: &str) -> (String, Option<String>) {
     (path, part)
 }
 
-/// Every complete module among the specification's examples is accepted.
+/// The rejections a sample says it has (TST-12): for each
+/// `# expect-error(category, "code")` line, the number of the line after
+/// it, counted from 1, and `category/code`.
+fn expected_rejections(text: &str) -> Vec<(usize, String)> {
+    let mut expected = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let Some(inside) = line
+            .trim()
+            .strip_prefix("# expect-error(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let (category, code) = inside.split_once(',').expect("a category, then a code");
+        // The annotation is line `index + 1`; it applies to the next.
+        expected.push((
+            index + 2,
+            format!("{}/{}", category.trim(), code.trim().trim_matches('"')),
+        ));
+    }
+    expected
+}
+
+/// Every complete module among the specification's examples is accepted,
+/// but for what the example itself says is rejected: the analyser
+/// reports each `expect-error` annotation's code on the line it applies
+/// to, and nothing else.
 ///
 /// An example is analysed on its own, as a program of one file. Where a
 /// document shows a module as several files, as the native chapter shows
 /// an interface and the part that implements it, they are one program.
 #[test]
-fn every_example_module_is_accepted() {
+fn every_example_module_is_accepted_but_for_its_stated_rejections() {
     let samples = example_modules();
     // The samples of each document's each module, together.
     let mut groups: BTreeMap<(String, String), Vec<&common::Sample>> = BTreeMap::new();
@@ -56,14 +84,39 @@ fn every_example_module_is_accepted() {
 
     let mut failures = Vec::new();
     let mut assembled = 0;
+    let mut rejections = 0;
     for program in &programs {
         let files: Vec<(&str, &str)> = program
             .iter()
             .map(|sample| (sample.origin.as_str(), sample.text.as_str()))
             .collect();
         let checked = check(&files);
-        if !checked.findings.is_empty() {
-            failures.push(format!("{}:\n{}", files[0].0, checked.report));
+        // What each file says is rejected, as `file:line category/code`.
+        let mut expected: Vec<String> = files
+            .iter()
+            .flat_map(|(name, text)| {
+                expected_rejections(text)
+                    .into_iter()
+                    .map(move |(line, code)| format!("{name}:{line} {code}"))
+            })
+            .collect();
+        // A finding is at `file:line:column`; the column is dropped.
+        let mut found: Vec<String> = checked
+            .findings
+            .iter()
+            .map(|finding| {
+                let (line, _column) = finding.at.rsplit_once(':').unwrap();
+                format!("{line} {}", finding.code)
+            })
+            .collect();
+        expected.sort();
+        found.sort();
+        rejections += expected.len();
+        if found != expected {
+            failures.push(format!(
+                "{}: expected {expected:?}, found {found:?}\n{}",
+                files[0].0, checked.report
+            ));
         }
         assert_eq!(
             checked.program.modules.len(),
@@ -75,12 +128,14 @@ fn every_example_module_is_accepted() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {} example programs rejected:\n{}",
+        "{} of {} example programs are not as they say:\n{}",
         failures.len(),
         programs.len(),
         failures.join("\n")
     );
     assert!(assembled > 0, "no example shows a module in several files");
+    // TYPE-11's `rolling.size_kind` illustration, for one.
+    assert!(rejections > 0, "no example states a rejection");
 }
 
 /// UNIT-1, CONF-3: core's conformance cases are the parts of one module,

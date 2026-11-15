@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use hgl_analyser::{DeclarationKind, ImportKind, ParsedFile, Program};
+use hgl_analyser::{DeclarationKind, Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::{Entry, Limits};
@@ -445,9 +445,9 @@ fn parse_program(
 /// checked 3 files in 2 modules: no errors
 /// ```
 ///
-/// The analyser reads modules, declarations and imports and resolves
-/// names so far. Types, phases and constants are not checked yet, and the
-/// output says so.
+/// The analyser reads modules, declarations and imports, resolves names
+/// and reads the types written so far. What an expression is, phases and
+/// constants are not checked yet, and the output says so.
 fn check(arguments: &CheckArgs) -> ExitCode {
     let (sources, parsed, mut diagnostics) =
         match parse_program(&arguments.roots, arguments.limits.limits()) {
@@ -473,7 +473,9 @@ fn check(arguments: &CheckArgs) -> ExitCode {
             errors => count(errors, "error"),
         }
     );
-    println!("modules, declarations, imports and names are checked; types are not yet");
+    println!(
+        "modules, declarations, imports, names and written types are checked; expressions are not yet"
+    );
     print!("{}", list_prelude_names(&sources, &program));
     report(&sources, diagnostics)
 }
@@ -636,14 +638,16 @@ fn count(number: usize, noun: &str) -> String {
 ///   file src/pricing.hgl
 ///   file src/curves.hgl part curves
 ///   use lib::{shared}
-///   export temporal function price
+///   export temporal function price(quote: Quote, const depth: i64 = ...) -> f64
 ///   test struct Fixture
 ///   test smoke
 /// ```
 ///
 /// A declaration is listed as what it is and its name, with `export`
 /// before one that is exported and `test` before one declared in a test
-/// context. A named test is listed as `test` and its name.
+/// context. A function, operator or native function has its signature
+/// after its name, with each type as the analyser read it: `_` is a type
+/// that is not known. A named test is listed as `test` and its name.
 fn list_modules(sources: &SourceMap, program: &Program) -> String {
     let mut out = String::new();
     for module in &program.modules {
@@ -665,7 +669,8 @@ fn list_modules(sources: &SourceMap, program: &Program) -> String {
                 }
             }
         }
-        for declaration in &module.declarations {
+        // `zip` pairs each declaration with what was read of its types.
+        for (declaration, detail) in module.declarations.iter().zip(&module.details) {
             let export = if declaration.exported { "export " } else { "" };
             let test = if declaration.test_only { "test " } else { "" };
             out.push_str(&format!(
@@ -673,6 +678,9 @@ fn list_modules(sources: &SourceMap, program: &Program) -> String {
                 declaration.kind.describe(),
                 declaration.name
             ));
+            if let Detail::Callable(signature) = detail {
+                out.push_str(&signature.to_string());
+            }
             // An implementation says which module's operator it found.
             if let DeclarationKind::Implementation(Some(operator)) = declaration.kind {
                 out.push_str(&format!(" of {}", program.modules[operator.module].path));
