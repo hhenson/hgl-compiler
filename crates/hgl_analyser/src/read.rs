@@ -422,6 +422,26 @@ fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
         .find_map(|element| element.into_node())
 }
 
+/// True when an expression is the literal `null`, in parentheses or
+/// not: "Parentheses select grouping" (EXPR-1), so `(null)` is `null`.
+fn is_null(expression: &SyntaxNode) -> bool {
+    let mut node = expression.clone();
+    // The parser bounds how deep parentheses nest; so does this.
+    for _ in 0..128 {
+        if node.kind() != SyntaxKind::ParenExpr {
+            break;
+        }
+        match node.children().next() {
+            Some(inner) => node = inner,
+            None => return false,
+        }
+    }
+    node.kind() == SyntaxKind::Literal
+        && tokens(&node)
+            .next()
+            .is_some_and(|token| token.kind() == SyntaxKind::KwNull)
+}
+
 /// The text of `node` with one space wherever whitespace or a comment
 /// stands between two of its tokens. Each token is kept as written, so
 /// the spaces inside a string literal are the literal's own.
@@ -731,12 +751,7 @@ impl Reader<'_> {
             let null_default = member
                 .children()
                 .find(|part| !is_type(part.kind()))
-                .is_some_and(|default| {
-                    default.kind() == SyntaxKind::Literal
-                        && tokens(&default)
-                            .next()
-                            .is_some_and(|token| token.kind() == SyntaxKind::KwNull)
-                });
+                .is_some_and(|default| is_null(&default));
             fields.push(Field {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
