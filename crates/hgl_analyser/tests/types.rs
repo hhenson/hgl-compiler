@@ -1140,6 +1140,100 @@ fn a_value_functions_signature_is_of_ordinary_values() {
     );
 }
 
+// ---- A const option in a constraint ----
+
+/// GEN-6: "A candidate states in `requires` the values of a const
+/// option it is for, by comparing the option with constants: `requires
+/// zero == .error`, `requires zero in {.ieee, .nan}` ... A temporal
+/// candidate marks the option `const` as its operator does. Every
+/// parameter of a value candidate is a value, so it writes the option
+/// with no marker."
+///
+/// The option is a value there: it is not read as a type, and nothing is
+/// reported.
+#[test]
+fn a_const_option_compared_in_a_constraint_is_no_type() {
+    let checked = module(concat!(
+        "export enum Zero { ieee, nan, error }\n",
+        "operator div_<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        // The specification's example: temporal candidates.
+        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan}\n",
+        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error\n",
+        // Value candidates, HGL and native: no marker.
+        "native impl const fn div_(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan}\n",
+        "impl const fn div_(lhs: str, rhs: str, zero: Zero) -> str requires zero == .nan => lhs\n",
+        // The constant may stand on either side of `==`.
+        "impl const fn div_(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
+        // A const parameter of a function that is no candidate.
+        "fn scaled(value: f64, const mode: Zero) -> f64 requires mode == .ieee => value\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    // No type was written where the option stands.
+    assert!(!written(&checked).iter().any(|ty| ty == "_"));
+}
+
+/// GEN-3: "`requires` ... cannot inspect temporal values". GEN-6 admits
+/// a const option, and no other parameter: a temporal input, a
+/// parameter of a value function that is no candidate, and a parameter
+/// its operator does not mark `const` are each still read as the type
+/// they are not. So is an option anywhere but as an operand of `==` or
+/// `in`, and one compared with a type: GEN-6 compares "the option with
+/// constants".
+#[test]
+fn another_parameter_in_a_constraint_is_rejected() {
+    let checked = module(concat!(
+        "export enum Zero { ieee, nan, error }\n",
+        "operator div_<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "operator plain<T>(value: T, mode: Zero) -> T\n",
+        // A temporal input: the specification's deliberate rejection.
+        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
+        "    requires rhs == 0.0\n",
+        // A parameter of a value candidate that is no option.
+        "native impl const fn div_(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        "    requires lhs == 0\n",
+        // A value function that is no candidate.
+        "const fn unmarked(value: f64, mode: Zero) -> f64 requires mode == .ieee => value\n",
+        // A candidate whose operator does not mark the parameter.
+        "impl const fn plain(value: i64, mode: Zero) -> i64 requires mode == .nan => value\n",
+        // `is` compares types, and a set holds the constants.
+        "native impl const fn div_(lhs: str, rhs: str, zero: Zero) -> f64\n",
+        "    requires zero is Zero\n",
+        "native impl const fn div_(lhs: bool, rhs: bool, zero: Zero) -> f64\n",
+        "    requires .ieee in {zero}\n",
+        // What an option is compared with is constants, not types.
+        "native impl const fn div_(lhs: date, rhs: date, zero: Zero) -> f64\n",
+        "    requires zero == i64\n",
+        "native impl const fn div_(lhs: time, rhs: time, zero: Zero) -> f64\n",
+        "    requires zero in {i64, f64}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:14 type/type.not_a_type UNIT-10",
+            "m.hgl:8:14 type/type.not_a_type UNIT-10",
+            "m.hgl:9:59 type/type.not_a_type UNIT-10",
+            "m.hgl:10:61 type/type.not_a_type UNIT-10",
+            "m.hgl:12:14 type/type.not_a_type UNIT-10",
+            "m.hgl:14:24 type/type.not_a_type UNIT-10",
+            "m.hgl:16:14 type/type.not_a_type UNIT-10",
+            "m.hgl:18:14 type/type.not_a_type UNIT-10",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`rhs` is a parameter, not a type"
+    );
+    // Each says what a constraint may name.
+    let noted = checked
+        .report
+        .matches("a constraint compares a `const` option with constants")
+        .count();
+    assert_eq!(noted, checked.findings.len(), "{}", checked.report);
+}
+
 // ---- What is not known ----
 
 /// ERR-9: "Do not demand cascaded diagnostics after an earlier error

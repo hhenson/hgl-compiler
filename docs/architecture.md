@@ -419,6 +419,24 @@ Each has a row of the catalogue:
 | `generic.kind_unresolved` | A struct's generic parameter that no field or constraint names |
 | `generic.argument_kind` | A generic argument of the other kind than its parameter |
 
+
+### A const option in a constraint
+
+A candidate says in `requires` which values of a const option it is for
+(GEN-6): `requires zero == .error`, `requires zero in {.ieee, .nan}`.
+The parser cannot tell that `zero` from a type, as in `T == i64`, and
+reads a lone name among a constraint's operands as a type. This pass
+knows what the name is bound to, and confirms or corrects the guess:
+
+| The name is | Read as |
+| --- | --- |
+| A parameter marked `const`, an operand of `==` or `in` whose other operand holds no type | The option: a value, and no type is recorded |
+| A parameter of a value candidate that its operator marks `const`, likewise | The option: a value candidate writes it with no marker |
+| Any other parameter, an option anywhere else in a constraint, or one compared with a type | `type.not_a_type`, with a note of what a constraint may name (GEN-3: it "cannot inspect temporal values") |
+
+Nothing is selected by the option yet: comparing its value at a call is
+for the pass that selects candidates.
+
 ### Value expressions
 
 The body of each value function, `const fn`, is read into a typed form,

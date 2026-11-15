@@ -205,10 +205,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
 | GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
-| GEN-3 | analyser | planned | Forms `requires` admits; binding equalities solved to a fixed point |
+| GEN-3 | analyser | partial | A parameter compared in a constraint is a const option or is rejected. Left: every other form `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. Left: operator identity in selection |
 | GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition and runtime bodies |
-| GEN-6 | analyser | planned | A candidate honours its operator's contract; its `requires` names the values of a const option it is for |
+| GEN-6 | analyser | partial | A const option a candidate compares in `requires` is read as the option, marked `const` or, in a value candidate, as its operator marks it. Left: a candidate's shape against its operator; selection by the option's value at a call; candidates that stay resolvable together |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
 | GEN-8 | analyser | planned | `instantiate` requests candidates; a call's generic arguments, and the rejection of a call that leaves a parameter unresolved |

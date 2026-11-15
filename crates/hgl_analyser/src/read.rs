@@ -30,7 +30,9 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::constant::fold;
-use crate::program::{Binding, Declaration, DeclarationKind, LocalKind, Module, Program, Role};
+use crate::program::{
+    Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
+};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter, Pack,
     Parameter, Scalar, Signature, StructType, Type, WrittenType,
@@ -314,6 +316,10 @@ struct Reader<'a> {
     /// True while a value function is read: a `const fn` or a native
     /// one (FN-1).
     value_function: bool,
+    /// The operator a value candidate being read names (GEN-4). The
+    /// candidate writes that operator's const options with no marker
+    /// (GEN-6).
+    option_owner: Option<OperatorRef>,
     /// True while a generic argument is read that is given to a
     /// parameter of a known struct whose kind is not settled.
     unsettled_target: bool,
@@ -357,6 +363,7 @@ impl<'a> Reader<'a> {
             in_signature: false,
             reading_struct: false,
             value_function: false,
+            option_owner: None,
             unsettled_target: false,
             read: HashMap::new(),
             written: Vec::new(),
@@ -511,6 +518,16 @@ fn is_const(parameter: &SyntaxNode) -> bool {
     names.len() > 1 && names[0].text() == "const"
 }
 
+/// The parameters a function, an operator or a native function
+/// declares, as written.
+fn parameters(declaration: &SyntaxNode) -> Vec<SyntaxNode> {
+    child(declaration, SyntaxKind::ParamList)
+        .into_iter()
+        .flat_map(|list| list.children())
+        .filter(|parameter| parameter.kind() == SyntaxKind::Param)
+        .collect()
+}
+
 /// What a generic parameter is written as.
 enum Form {
     /// `T`
@@ -598,6 +615,7 @@ impl Reader<'_> {
         self.in_signature = false;
         self.reading_struct = false;
         self.value_function = false;
+        self.option_owner = None;
         self.read.clear();
     }
 
@@ -609,6 +627,10 @@ impl Reader<'_> {
         // FN-1: a `const fn` of any form, a value candidate of an
         // operator included (GEN-4).
         self.value_function = declaration.kind.role() == Some(Role::Value);
+        self.option_owner = match declaration.kind.candidate() {
+            Some((Role::Value, operator)) => operator,
+            _ => None,
+        };
         self.generic_parameters(node);
         let mut detail = match node.kind() {
             SyntaxKind::FnDecl | SyntaxKind::OperatorDecl | SyntaxKind::NativeFnDecl => {
@@ -799,7 +821,9 @@ impl Reader<'_> {
                     let inside = node.parent().is_some_and(|parent| {
                         is_type(parent.kind()) || parent.kind() == SyntaxKind::GenericArgs
                     });
-                    if !inside {
+                    // A const option compared in a constraint is a
+                    // value: no type is written there.
+                    if !inside && !self.names_an_option(&node) {
                         self.outermost(&node);
                     }
                 }
@@ -822,6 +846,92 @@ impl Reader<'_> {
                 _ => {}
             }
         }
+    }
+
+    /// True when `node`, which the parser read as a type, names a const
+    /// option that a constraint compares with constants.
+    ///
+    /// GEN-6: "A candidate states in `requires` the values of a const
+    /// option it is for, by comparing the option with constants:
+    /// `requires zero == .error`, `requires zero in {.ieee, .nan}`." A
+    /// lone name among a constraint's operands may be a type or a
+    /// value, which the parser cannot tell, so it guesses a type. Here
+    /// the name is known: it is the option when it is a parameter
+    /// marked `const`, or a parameter of a value candidate that its
+    /// operator marks `const` ("Every parameter of a value candidate is
+    /// a value, so it writes the option with no marker").
+    ///
+    /// Any other parameter is left to be read as the type it is not,
+    /// and is reported: GEN-3, "It cannot inspect temporal values".
+    fn names_an_option(&self, node: &SyntaxNode) -> bool {
+        // `zero`, and neither `pc::zero` nor `zero<i64>`.
+        if node.kind() != SyntaxKind::NamedType
+            || child(node, SyntaxKind::GenericArgs).is_some()
+            || child(node, SyntaxKind::QualifiedName).is_some()
+        {
+            return false;
+        }
+        // An operand of `==` or `in`; `is` compares types. What it is
+        // compared with is constants: no type, and no set that holds
+        // one. `zero == i64` compares no option.
+        let compared = node.parent().is_some_and(|relation| {
+            relation.kind() == SyntaxKind::ConstraintRelation
+                && tokens(&relation).any(|token| {
+                    token.kind() == SyntaxKind::EqEq
+                        || (token.kind() == SyntaxKind::Ident && token.text() == "in")
+                })
+                && relation.children().filter(|operand| operand != node).all(
+                    |operand| match operand.kind() {
+                        SyntaxKind::ConstraintSet => {
+                            operand.children().all(|member| !is_type(member.kind()))
+                        }
+                        kind => !is_type(kind),
+                    },
+                )
+        });
+        if !compared {
+            return false;
+        }
+        let Some(name) = used_name(node) else {
+            return false;
+        };
+        let Some(Binding::Local {
+            at,
+            kind: LocalKind::Parameter,
+        }) = self.bindings.get(&(self.file, name.span().start)).copied()
+        else {
+            return false;
+        };
+        // The declaration the constraint belongs to, and the parameter
+        // of it the name is bound to.
+        let Some(declaration) = node.ancestors().find(|ancestor| {
+            matches!(
+                ancestor.kind(),
+                SyntaxKind::FnDecl | SyntaxKind::NativeFnDecl | SyntaxKind::OperatorDecl
+            )
+        }) else {
+            return false;
+        };
+        let marked = parameters(&declaration).iter().any(|parameter| {
+            is_const(parameter)
+                && names_before_colon(parameter)
+                    .last()
+                    .is_some_and(|declared| declared.span().start == at.span.start)
+        });
+        if marked {
+            return true;
+        }
+        // A value candidate: the mark is its operator's.
+        let Some(operator) = self.option_owner else {
+            return false;
+        };
+        let operator = &self.program.modules[operator.module].declarations[operator.declaration];
+        parameters(&operator.syntax).iter().any(|parameter| {
+            is_const(parameter)
+                && names_before_colon(parameter)
+                    .last()
+                    .is_some_and(|declared| declared.text() == name.text())
+        })
     }
 
     /// Reads a type that stands in no other type, once.
@@ -1374,7 +1484,17 @@ impl Reader<'_> {
                 self.generic(&name, *at, list.is_some() && !in_named_pack, position)
             }
             Binding::Local { at, kind } => {
-                self.not_a_type(&name, kind.describe(), *at);
+                // A parameter among a constraint's operands that is no
+                // const option (see `names_an_option`): the report says
+                // what a constraint may name.
+                let in_constraint = *kind == LocalKind::Parameter
+                    && node.parent().is_some_and(|parent| {
+                        matches!(
+                            parent.kind(),
+                            SyntaxKind::ConstraintRelation | SyntaxKind::ConstraintSet
+                        )
+                    });
+                self.not_a_type(&name, kind.describe(), *at, in_constraint);
                 Type::Unknown
             }
             Binding::Declarations {
@@ -1388,7 +1508,7 @@ impl Reader<'_> {
                         DeclarationKind::Operator => "an operator".to_string(),
                         kind => format!("a {}", kind.describe()),
                     };
-                    self.not_a_type(&name, &what, first.at);
+                    self.not_a_type(&name, &what, first.at, false);
                     return Type::Unknown;
                 };
                 let declaration = &declared[index];
@@ -1403,17 +1523,33 @@ impl Reader<'_> {
         }
     }
 
-    fn not_a_type(&mut self, name: &SyntaxToken, what: &str, declared: Location) {
-        self.diagnostics.emit(
-            error(
-                Category::Type,
-                codes::TYPE_NOT_A_TYPE,
-                self.at(name.span()),
-                format!("`{}` is {what}, not a type", name.text()),
-                "UNIT-10",
-            )
-            .with_related(declared, "declared here"),
-        );
+    /// Reports a name that stands where a type does and is none.
+    /// `in_constraint` is true for a parameter among a constraint's
+    /// operands, where a const option may stand and this one is none.
+    fn not_a_type(
+        &mut self,
+        name: &SyntaxToken,
+        what: &str,
+        declared: Location,
+        in_constraint: bool,
+    ) {
+        let mut report = error(
+            Category::Type,
+            codes::TYPE_NOT_A_TYPE,
+            self.at(name.span()),
+            format!("`{}` is {what}, not a type", name.text()),
+            "UNIT-10",
+        )
+        .with_related(declared, "declared here");
+        if in_constraint {
+            // GEN-3: "It cannot inspect temporal values". GEN-6: a
+            // candidate compares "a const option" with constants.
+            report = report.with_note(
+                "a constraint compares a `const` option with constants with `==` or `in`, \
+                 and reads no other parameter (GEN-3, GEN-6)",
+            );
+        }
+        self.diagnostics.emit(report);
     }
 
     /// A generic parameter named as a type (GEN-13): "A generic
