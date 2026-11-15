@@ -14,7 +14,7 @@
 use hgl_diagnostics::Location;
 
 use crate::program::LocalKind;
-use crate::types::Type;
+use crate::types::{Argument as GenericArgument, Type};
 
 /// The body of one function.
 #[derive(Debug, Clone, PartialEq)]
@@ -247,6 +247,12 @@ pub enum Callee {
         module: usize,
         /// Its position in that module's `declarations`.
         declaration: usize,
+        /// What each generic parameter of the function stands for at
+        /// this call (GEN-2), in the order declared; `Type::Unknown`
+        /// for one nothing resolved. Empty for a function with none,
+        /// and for one whose generic parameters this pass does not
+        /// resolve.
+        generics: Vec<GenericArgument>,
     },
     /// The value candidate selected for a call of an operator (GEN-5).
     Candidate {

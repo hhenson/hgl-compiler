@@ -203,15 +203,15 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| GEN-1 | analyser | partial | Generic scope covers the whole declaration. Left: repeated parameters agree; occurrence requirements |
-| GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type. Left: resolution of a callable's generics |
+| GEN-1 | analyser | partial | Generic scope covers the whole declaration; a repeated type parameter is one type at a call of a value function. Left: equal constants; occurrence requirements; temporal bodies |
+| GEN-2 | analyser | partial | A generic type in a type position or constructor is given all its arguments; a type pack is no single type; a value function's generics resolved at a call from what the call writes, the type its place expects and its arguments. Left: a call for which the expected type and the arguments differ, which is not judged until the specification orders them; packs; solvable equalities; temporal bodies |
 | GEN-3 | analyser | partial | A parameter compared in a constraint is a const option or is rejected. Left: every other form `requires` admits; binding equalities solved to a fixed point |
 | GEN-4 | analyser | partial | An `impl fn` is a temporal candidate and an `impl const fn` a value candidate; each binds an operator its module declares, its file imports, or the prelude binds, and a value candidate's body is read as a value function's. Left: operator identity in selection |
 | GEN-5 | analyser | partial | In a value function, a call of an operator by name selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened; no candidate and a tie rejected. Left: generic candidates and their specificity (GEN-12); an operator with a pack; an argument that is itself a call only its requested output selects; symbols, which wait on core's declarations; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies |
 | GEN-6 | analyser | partial | A const option a candidate compares in `requires` is read as the option: marked `const`, or in a value candidate as its operator marks it or as the candidate's own. Left: a candidate's shape against its operator; a candidate with an option of its own admitted by a call, and one that names an option admitting only those that declare it; selection by the option's value; candidates that stay resolvable together |
 | GEN-7 | analyser | planned | A generic body is checked under its stated requirements |
 | GEN-8 | parser | done | `_` as an `instantiate` argument |
-| GEN-8 | analyser | planned | `instantiate` requests candidates; a call's generic arguments, and the rejection of a call that leaves a parameter unresolved |
+| GEN-8 | analyser | partial | A call's generic arguments, all or the first of them, for a value function and for the output requested of an operator's candidates; a call that leaves a parameter unresolved rejected, with a local code. Left: `instantiate`; packs; what an operator's generic arguments say of its operands; temporal bodies |
 | GEN-9 | analyser | partial | A property domain is an ordinary value type. Left: clauses applied to explicit concrete domains |
 | GEN-9 | optimiser | planned | A recorded law licenses no reassociation across overflow or float effects |
 | GEN-10 | parser | done | A cardinality after a pack parameter or a generic pack parameter |
@@ -221,7 +221,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-12 | analyser | planned | Structural specificity |
 | GEN-13 | analyser | partial | A plain parameter is a type or a value by its uses in the signature; uses that disagree are rejected, and a struct's parameter nothing uses; a value parameter or a pack is not named as a type. Left: the kind a constraint gives; `type(N)`; a call that supplies no type for a function's parameter its signature does not settle |
 | GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
-| GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected; each argument against its parameter's kind. Left: `<` after the name of a generic function or operator |
+| GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind. Left: a generic function or operator before a comparison's `<` |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
 | GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
 | GEN-16 | analyser | planned | Predicate or operator requirement by the referenced declaration; arrow rejected on a predicate |

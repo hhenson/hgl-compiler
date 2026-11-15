@@ -379,6 +379,17 @@ pub struct WrittenType {
     pub ty: Type,
 }
 
+/// The generic arguments a call writes after its callee's name,
+/// `count<i64>(3)` (GEN-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallArguments {
+    /// Where the callee is written, from the start of its name to the
+    /// `>` that closes the arguments.
+    pub at: Location,
+    /// Each argument with where it is written, in order.
+    pub arguments: Vec<(Location, Argument)>,
+}
+
 /// What the types of one declaration are. `Module::details` has one for
 /// each of `Module::declarations`, in the same order.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -44,10 +44,10 @@ use crate::program::{
 };
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack, Scalar,
-    Signature, Type,
+    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack,
+    Scalar, Signature, Type,
 };
-use crate::{codes, error};
+use crate::{codes, error, local_error};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -66,6 +66,13 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .iter()
             .map(|written| ((written.at.file, written.at.span.start), &written.ty))
             .collect();
+        // The generic arguments each call writes, by where its callee
+        // starts (GEN-8).
+        let calls: HashMap<(FileId, u32), &CallArguments> = module
+            .call_arguments
+            .iter()
+            .map(|call| ((call.at.file, call.at.span.start), call))
+            .collect();
         let mut bodies = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
             let body = match (&declaration.kind, module.details.get(position)) {
@@ -80,8 +87,11 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     module,
                     declaration,
                     signature,
-                    &bindings,
-                    &written,
+                    Tables {
+                        bindings: &bindings,
+                        written: &written,
+                        calls: &calls,
+                    },
                     diagnostics,
                 )
                 .body(),
@@ -91,6 +101,17 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         program.modules[index].bodies = bodies;
     }
+}
+
+/// What the earlier passes found of a module, each by the file and
+/// offset it is written at.
+struct Tables<'a> {
+    /// What each name resolved to (UNIT-10).
+    bindings: &'a HashMap<(FileId, u32), &'a Binding>,
+    /// What each written type means.
+    written: &'a HashMap<(FileId, u32), &'a Type>,
+    /// The generic arguments each call writes (GEN-8).
+    calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
 }
 
 /// Reads one value function.
@@ -104,6 +125,9 @@ struct Typer<'a> {
     signature: &'a Signature,
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
     written: &'a HashMap<(FileId, u32), &'a Type>,
+    /// The generic arguments each call writes, by where its callee
+    /// starts (GEN-8).
+    calls: &'a HashMap<(FileId, u32), &'a CallArguments>,
     /// The parameters and locals found so far.
     locals: Vec<Local>,
     /// The local each declaration is, by where its name is declared.
@@ -137,8 +161,7 @@ impl<'a> Typer<'a> {
         module: &'a Module,
         declaration: &'a Declaration,
         signature: &'a Signature,
-        bindings: &'a HashMap<(FileId, u32), &'a Binding>,
-        written: &'a HashMap<(FileId, u32), &'a Type>,
+        tables: Tables<'a>,
         diagnostics: &'a mut Diagnostics,
     ) -> Typer<'a> {
         let mut typer = Typer {
@@ -147,8 +170,9 @@ impl<'a> Typer<'a> {
             file: module.files[declaration.file].file,
             declaration,
             signature,
-            bindings,
-            written,
+            bindings: tables.bindings,
+            written: tables.written,
+            calls: tables.calls,
             locals: Vec::new(),
             declared: HashMap::new(),
             assigned: Vec::new(),
@@ -493,7 +517,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::UnaryExpr => self.unary(node),
             SyntaxKind::BinaryExpr => self.binary(node),
             SyntaxKind::CallExpr => self.call(node, expected),
-            SyntaxKind::TypedConstructor => self.typed_constructor(node),
+            SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::UndecidedConstructor => {
                 // GEN-14: the resolver decided what the node is. One
                 // that is comparisons is for a later part.
@@ -503,7 +527,7 @@ impl<'a> Typer<'a> {
                     .iter()
                     .any(|decision| decision.at == at && decision.constructor == Some(true));
                 if constructor {
-                    self.typed_constructor(node)
+                    self.typed_constructor(node, expected)
                 } else {
                     (ExprKind::Unread, Type::Unknown)
                 }
@@ -1231,6 +1255,20 @@ impl<'a> Typer<'a> {
         let Some((name, (module, declarations))) = found else {
             return self.unread_call(&list);
         };
+        self.call_named(&name, &list, (module, declarations), expected, None)
+    }
+
+    /// A call of what `name` is bound to: `declarations` of a module.
+    /// `generics` is the generic arguments the call writes after the
+    /// name, when it writes them (GEN-8).
+    fn call_named(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        (module, declarations): (usize, &[usize]),
+        expected: Option<&Type>,
+        generics: Option<&CallArguments>,
+    ) -> (ExprKind, Type) {
         let program = self.program;
         let kind_of = |declaration: usize| program.modules[module].declarations[declaration].kind;
         let value_function = declarations.iter().copied().find(|&declaration| {
@@ -1241,7 +1279,7 @@ impl<'a> Typer<'a> {
             )
         });
         if let Some(declaration) = value_function {
-            return self.call_function(&name, &list, module, declaration);
+            return self.call_function(name, list, (module, declaration), expected, generics);
         }
         let structure = declarations
             .iter()
@@ -1261,7 +1299,8 @@ impl<'a> Typer<'a> {
                 }
                 _ => None,
             };
-            return self.construct(&name, &list, module, declaration, given);
+            let settled = !expected.is_some_and(open);
+            return self.construct(name, list, module, declaration, given, settled);
         }
         let operator = declarations
             .iter()
@@ -1272,7 +1311,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
             };
-            return self.call_operator(&name, &list, operator, expected);
+            return self.call_operator(name, list, operator, expected, generics);
         }
         let temporal = declarations.iter().any(|&declaration| {
             matches!(
@@ -1296,7 +1335,7 @@ impl<'a> Typer<'a> {
                 "FN-3",
             ));
         }
-        self.unread_call(&list)
+        self.unread_call(list)
     }
 
     /// A call this pass does not read: its arguments are read for what
@@ -1317,47 +1356,508 @@ impl<'a> Typer<'a> {
     }
 
     /// A call of the value function `declaration` of `module`.
+    /// `given` is the generic arguments the call writes, when it writes
+    /// them.
+    ///
+    /// GEN-2: "Resolve every needed generic from actual inputs,
+    /// requested output, or solvable equality." GEN-8: "A call may
+    /// supply its generic arguments as a generic constructor does,
+    /// `count<i64>(3)`. It may supply the first of them and leave the
+    /// rest to be resolved under GEN-2 ... A call rejects when it leaves
+    /// a generic parameter unresolved." GEN-1: "Repeated parameters
+    /// require equivalent types or equal constants."
+    ///
+    /// What the call writes decides first (GEN-8). What is left is
+    /// found from the type the call's place expects of the result and
+    /// from the arguments, in declared parameter order (GEN-12): the
+    /// first that says what a parameter is decides it, and every
+    /// argument is then checked against its parameter's type with that
+    /// in place.
+    ///
+    /// GEN-2 gives the expected type and the arguments no order. Where
+    /// both say what one parameter is and they differ, as in
+    /// `let real: f64 = same(1, 2)`, which of them decides is not
+    /// settled (hgl_spec issue 44): the call is then not judged. It has
+    /// no type and nothing is reported of it.
+    ///
+    /// Not read here: a function with a type pack or a pack parameter.
+    /// A type of it that names a generic parameter is then not known.
     fn call_function(
         &mut self,
         name: &SyntaxToken,
         list: &SyntaxNode,
-        module: usize,
-        declaration: usize,
+        (module, declaration): (usize, usize),
+        expected: Option<&Type>,
+        given: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
-        let callee = Callee::Function {
-            module,
-            declaration,
-        };
         let program = self.program;
         let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
         else {
             return self.unread_call(list);
         };
-        // What a generic function's parameters stand for is found by
-        // the pass that resolves generics: a type that names one is not
-        // known here.
-        let known = |ty: &Type| {
-            if names_parameter(ty) {
-                Type::Unknown
-            } else {
-                ty.clone()
-            }
+        let generics = &signature.generics;
+        let packed = generics
+            .iter()
+            .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+            || signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.pack.is_some());
+        // What the call writes of the generic parameters. Arguments
+        // that were rejected say nothing: the call is then read as one
+        // whose generic parameters are not known (ERR-9).
+        let explicit = if packed {
+            None
+        } else {
+            self.generic_arguments(name, generics, given)
         };
+        let required = |parameter: &crate::types::Parameter| {
+            // UNIT-8: "A parameter whose type is written `T?` needs no
+            // default to be omitted."
+            !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_))
+        };
+        let Some((mut found, faulty)) = explicit.filter(|_| !generics.is_empty()) else {
+            // No generic parameter, or none this pass resolves: a type
+            // that names one is not known.
+            let known = |ty: &Type| {
+                if names_parameter(ty) {
+                    Type::Unknown
+                } else {
+                    ty.clone()
+                }
+            };
+            let slots: Vec<Slot> = signature
+                .parameters
+                .iter()
+                .map(|parameter| Slot {
+                    name: &parameter.name,
+                    ty: known(&parameter.ty),
+                    required: required(parameter),
+                    pack: parameter.pack,
+                })
+                .collect();
+            let arguments = self.bind(name, list, &slots, Takes::Parameters);
+            let ty = signature.result.as_ref().map_or(Type::Unknown, known);
+            let callee = Callee::Function {
+                module,
+                declaration,
+                generics: Vec::new(),
+            };
+            return (ExprKind::Call { callee, arguments }, ty);
+        };
+
+        // The requested output: `let names: list<str> = repeat(3)` says
+        // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
+        // result given to a `T?` place is the `T`.
+        let written = found.clone();
+        if let (Some(result), Some(expected)) = (&signature.result, expected)
+            && !open(expected)
+        {
+            let wanted = match result {
+                Type::Nullable(_) => expected,
+                _ => not_null(Some(expected)).unwrap_or(expected),
+            };
+            infer(result, wanted, generics, &mut found);
+        }
+        // The inputs.
         let slots: Vec<Slot> = signature
             .parameters
             .iter()
             .map(|parameter| Slot {
                 name: &parameter.name,
-                ty: known(&parameter.ty),
-                // UNIT-8: "A parameter whose type is written `T?` needs
-                // no default to be omitted."
-                required: !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_)),
+                ty: Type::Unknown,
+                required: required(parameter),
                 pack: parameter.pack,
             })
             .collect();
-        let arguments = self.bind(name, list, &slots, Takes::Parameters);
-        let ty = signature.result.as_ref().map_or(Type::Unknown, known);
+        let places = Places {
+            slots: &slots,
+            patterns: signature
+                .parameters
+                .iter()
+                .map(|parameter| &parameter.ty)
+                .collect(),
+            generics,
+            settled: !expected.is_some_and(open),
+        };
+        // Where an argument says of a parameter something other than
+        // the expected type does, the call is not judged.
+        if self.sources_differ(name, list, &places, &written, &found) {
+            return self.unread_call(list);
+        }
+        let reported = self.diagnostics.len();
+        let Inferred {
+            arguments,
+            found,
+            unknown,
+        } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
+
+        // GEN-8: "A call rejects when it leaves a generic parameter
+        // unresolved." Not where something else was reported, or an
+        // argument is not known: what would have said what the
+        // parameter is may be what is missing (ERR-9).
+        //
+        // Where the call's place is not known, the type it expects may
+        // yet say what a parameter of the result is: the call then has
+        // no whole type and is read again once the place is known. A
+        // parameter the result does not name is never resolved that
+        // way, so it is reported here: the `N` of
+        // `tag<const N: i64>(x: i64) -> i64` in `same(tag(1), 2)`.
+        let place_unknown = expected.is_some_and(open);
+        let unresolved: Vec<&str> = generics
+            .iter()
+            .zip(&found)
+            .filter(|(_, found)| found.is_none())
+            .filter(|(generic, _)| {
+                !place_unknown
+                    || !signature
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| mentions(result, &[generic.at]))
+            })
+            .map(|(generic, _)| generic.name.as_str())
+            .collect();
+        let judged = !faulty && self.diagnostics.len() == reported && !unknown;
+        if judged && !unresolved.is_empty() {
+            let names: Vec<String> = unresolved.iter().map(|name| format!("`{name}`")).collect();
+            self.diagnostics.emit(
+                local_error(
+                    Category::Type,
+                    codes::local::GENERIC_UNRESOLVED,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "this call of `{}` leaves {} unresolved: no argument and no expected \
+                         type says what it is",
+                        name.text(),
+                        names.join(", ")
+                    ),
+                    "GEN-8",
+                )
+                .with_note(format!(
+                    "a call may write its generic arguments: `{}<...>(...)`",
+                    name.text()
+                )),
+            );
+        }
+
+        // The result, with what was found in place. One that still
+        // names a parameter nothing resolved is not known.
+        let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+        let resolved: Vec<Argument> = found
+            .into_iter()
+            .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+        let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
+            placed(substitute_within(result, &map), &own)
+        });
+        let callee = Callee::Function {
+            module,
+            declaration,
+            generics: resolved,
+        };
         (ExprKind::Call { callee, arguments }, ty)
+    }
+
+    /// True when the arguments of a call say of a generic parameter
+    /// something other than the type the call's place expects does.
+    /// `written` is what the call writes of each parameter, and `found`
+    /// that with what the expected type says added.
+    ///
+    /// GEN-2 names both sources and gives them no order, so a call for
+    /// which they differ is not judged here (hgl_spec issue 44). The
+    /// arguments are read to learn what they say, with nothing expected
+    /// of them, and the reading is taken back: nothing it reports or
+    /// assigns stays.
+    fn sources_differ(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        places: &Places,
+        written: &[Option<Argument>],
+        found: &[Option<Argument>],
+    ) -> bool {
+        // The parameters the expected type says something of.
+        let expected: Vec<Location> = places
+            .generics
+            .iter()
+            .zip(written.iter().zip(found))
+            .filter(|(_, (written, found))| written.is_none() && found.is_some())
+            .map(|(generic, _)| generic.at)
+            .collect();
+        if expected.is_empty() {
+            return false;
+        }
+        // Past the function's bound nothing more is tried, and the call
+        // is not judged.
+        if !self.may_reread() {
+            return true;
+        }
+        let mark = self.mark();
+        let assigned = self.assign(name, list, places.slots, Takes::Parameters);
+        let mut inputs = written.to_vec();
+        for position in declared_order(&assigned) {
+            let (slot, node) = &assigned[position];
+            let Some(index) = *slot else {
+                continue;
+            };
+            let pattern = places.patterns[index];
+            // `null` and `.member` take their type from the place and
+            // say nothing of it.
+            if takes_its_type(node) || !mentions(pattern, &expected) {
+                continue;
+            }
+            let value = self.expression(node, Some(&Type::Unknown));
+            infer(pattern, &value.ty, places.generics, &mut inputs);
+        }
+        self.take_back(mark, false);
+        inputs
+            .iter()
+            .zip(found)
+            .zip(written)
+            .any(|((input, found), written)| {
+                written.is_none() && input.is_some() && found.is_some() && input != found
+            })
+    }
+
+    /// What the generic arguments a call writes say of the callee's
+    /// generic parameters `generics`: an entry for each parameter,
+    /// `None` for one the call does not write, and whether an argument
+    /// was reported where it is written. `None` when the arguments are
+    /// rejected here.
+    ///
+    /// GEN-8: a call "may supply the first of them and leave the rest
+    /// to be resolved". GEN-14: "Check each argument against the
+    /// corresponding parameter kind."
+    fn generic_arguments(
+        &mut self,
+        name: &SyntaxToken,
+        generics: &[GenericParameter],
+        given: Option<&CallArguments>,
+    ) -> Option<(Vec<Option<Argument>>, bool)> {
+        let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
+        let Some(given) = given else {
+            return Some((found, false));
+        };
+        let callee = name.text();
+        if given.arguments.len() > generics.len() {
+            let takes = match generics.len() {
+                0 => "no generic arguments".to_string(),
+                1 => "1 generic argument".to_string(),
+                count => format!("{count} generic arguments"),
+            };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_ARGUMENT_COUNT,
+                Location::new(self.file, name.span()),
+                format!(
+                    "`{callee}` takes {takes} and is given {}",
+                    given.arguments.len()
+                ),
+                "GEN-8",
+            ));
+            return None;
+        }
+        let mut faulty = false;
+        let mut rejected = false;
+        for (position, (at, argument)) in given.arguments.iter().enumerate() {
+            let generic = &generics[position];
+            let mismatch = match (&generic.kind, argument) {
+                // Reported where it is written.
+                (_, Argument::Type(Type::Unknown)) => {
+                    faulty = true;
+                    None
+                }
+                (GenericKind::Value(_), Argument::Type(ty)) => Some(format!(
+                    "`{callee}` takes a value for `{}`, and `{ty}` is a type",
+                    generic.name
+                )),
+                (GenericKind::Type, Argument::Constant(_)) => Some(format!(
+                    "`{callee}` takes a type for `{}`, and this is a value",
+                    generic.name
+                )),
+                // A parameter whose kind its signature does not settle
+                // is what the call gives it (GEN-13).
+                _ => {
+                    found[position] = Some(argument.clone());
+                    None
+                }
+            };
+            if let Some(message) = mismatch {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_KIND,
+                    *at,
+                    message,
+                    "GEN-14",
+                ));
+                rejected = true;
+            }
+        }
+        (!rejected).then_some((found, faulty))
+    }
+
+    /// Reads the arguments of a call into places whose types name
+    /// generic parameters, finding what those stand for from the values
+    /// given (GEN-2). `found` is what is known of each parameter
+    /// before; what comes back is every argument, each fitted to its
+    /// place with what was found put in, and what is known after.
+    ///
+    /// The value of a place whose type names a parameter not yet found
+    /// says what the parameter is: `1` for `first: T`, `[1]` for
+    /// `values: list<T>`. Such values are read first, a call's in the
+    /// order its parameters are declared in (GEN-12) and a
+    /// construction's in the order written, with nothing expected of
+    /// them, but for `null` and `.member`, which take their type from
+    /// the place and say nothing of it.
+    fn infer_arguments(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        places: &Places,
+        mut found: Vec<Option<Argument>>,
+        takes: Takes,
+    ) -> Inferred {
+        let Places {
+            slots,
+            patterns,
+            generics,
+            settled,
+        } = places;
+        // The parameters being resolved. A place's type that still
+        // names one once what was found is in place is not known.
+        let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+        let assigned = self.assign(name, list, slots, takes);
+        let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
+        // True for a value kept from its first reading that is not
+        // then fitted to its place.
+        let mut unfitted: Vec<bool> = vec![false; assigned.len()];
+        // The values that say what a parameter is are read first, out
+        // of the order written. A block among the arguments may assign
+        // what another reads (CTRL-10), so with one such a reading is
+        // tried and taken back, and every argument is then read where
+        // it is written.
+        let ordered = assigned.iter().any(|(_, node)| holds_block(node));
+        // GEN-12: a call's parameters say what a generic is "in declared
+        // parameter order". A struct's fields have no order of their
+        // own (TYPE-5: named, "in any order"), so the first written
+        // decides (GEN-2).
+        let order = match takes {
+            Takes::Parameters => declared_order(&assigned),
+            Takes::Fields => (0..assigned.len()).collect(),
+        };
+        for position in order {
+            let (slot, node) = &assigned[position];
+            let Some(index) = *slot else {
+                continue;
+            };
+            let pattern = patterns[index];
+            let unfound: Vec<Location> = generics
+                .iter()
+                .zip(&found)
+                .filter(|(_, found)| found.is_none())
+                .map(|(generic, _)| generic.at)
+                .collect();
+            if takes_its_type(node) || !mentions(pattern, &unfound) {
+                continue;
+            }
+            if ordered {
+                if self.may_reread() {
+                    let mark = self.mark();
+                    let value = self.expression(node, Some(&Type::Unknown));
+                    infer(pattern, &value.ty, generics, &mut found);
+                    self.take_back(mark, false);
+                }
+                continue;
+            }
+            let reported = self.diagnostics.len();
+            let value = self.expression(node, Some(&Type::Unknown));
+            infer(pattern, &value.ty, generics, &mut found);
+            // A value with no whole type while nothing is known of its
+            // place, `[1, "x"]`, has not been judged. Neither has one
+            // that is read as the type of its place, a sequence or a
+            // tuple written out: its entries and a list's size are the
+            // place's to say (EXPR-5, EXPR-9, TYPE-10), so `[1, 2]` is
+            // a `list<i64>` here and a `list<i64, 2>` where one is
+            // expected. Each is read again below as the place's type,
+            // once the parameters are found. One that reported
+            // something is read once.
+            let by_place = typed_by_place(node);
+            let again = (by_place || !whole(&value.ty))
+                && self.diagnostics.len() == reported
+                && self.may_reread();
+            if !again {
+                values[position] = Some(value);
+                // Kept as it was read, with no place: it is not held to
+                // the place's type, which that reading did not know.
+                unfitted[position] = by_place;
+            }
+        }
+        // Every argument is of its place's type with what was found in
+        // place: `Pair(first: 1, second: "x")` gives `second: T` a `str`
+        // where `T` is `i64`.
+        let resolved: Vec<Argument> = found
+            .iter()
+            .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let map: Vec<(Location, &Argument)> = fixed(generics).zip(&resolved).collect();
+        // The parameters nothing resolved.
+        let unfound: Vec<Location> = generics
+            .iter()
+            .zip(&found)
+            .filter(|(_, found)| found.is_none())
+            .map(|(generic, _)| generic.at)
+            .collect();
+        let arguments: Vec<hir::Argument> = assigned
+            .iter()
+            .enumerate()
+            .map(|(position, (slot, node))| {
+                let Some(index) = *slot else {
+                    return self.argument(None, node, None, takes);
+                };
+                let ty = substitute_within(patterns[index], &map);
+                let slot = Slot {
+                    ty: placed(ty, &own),
+                    ..slots[index]
+                };
+                // A place whose type names a parameter nothing resolved
+                // is not known, and where the call is settled it never
+                // will be. Its argument is then read as one of which
+                // nothing is expected, so that what it leaves unresolved
+                // itself is reported: the `repeat(1)` of
+                // `same(repeat(1), repeat(2))`. `null` and `.member`
+                // have no reading of their own.
+                let placeless =
+                    *settled && !takes_its_type(node) && mentions(patterns[index], &unfound);
+                match values[position].take() {
+                    None if placeless => hir::Argument {
+                        parameter: Some(index),
+                        value: self.expression(node, None),
+                    },
+                    Some(value) if unfitted[position] => hir::Argument {
+                        parameter: Some(index),
+                        value,
+                    },
+                    Some(value) => {
+                        let place = format!("the {} `{}`", takes.noun(), slot.name);
+                        hir::Argument {
+                            parameter: Some(index),
+                            value: self.fit(value, &slot.ty, &place),
+                        }
+                    }
+                    None => self.argument(Some(index), node, Some(&slot), takes),
+                }
+            })
+            .collect();
+        let unknown = assigned
+            .iter()
+            .zip(&arguments)
+            .any(|((_, node), argument)| !takes_its_type(node) && !whole(&argument.value.ty));
+        Inferred {
+            arguments,
+            found,
+            unknown,
+        }
     }
 
     /// A call of the operator `operator` by its name.
@@ -1386,6 +1886,7 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         operator: OperatorRef,
         expected: Option<&Type>,
+        generics: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
         let program = self.program;
         let Some(Detail::Callable(public)) = program.modules[operator.module]
@@ -1393,6 +1894,34 @@ impl<'a> Typer<'a> {
             .get(operator.declaration)
         else {
             return self.unread_call(list);
+        };
+        // GEN-8: the generic arguments the call writes are the
+        // operator's: with `operator convert<T, V>(value: V) -> T`,
+        // "`convert<f64>(count)` supplies T". With them in place the
+        // operator's result is the output requested, when nothing of it
+        // is left to resolve: `convert<f64>(count)` asks for an `f64`.
+        // What they say of the operands is for the pass that resolves
+        // generic candidates.
+        let requested: Option<Type> = match generics {
+            None => None,
+            Some(_) => {
+                let Some((explicit, _)) = self.generic_arguments(name, &public.generics, generics)
+                else {
+                    return self.unread_call(list);
+                };
+                let own: Vec<Location> = public.generics.iter().map(|generic| generic.at).collect();
+                let resolved: Vec<Argument> = explicit
+                    .into_iter()
+                    .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
+                    .collect();
+                let map: Vec<(Location, &Argument)> =
+                    fixed(&public.generics).zip(&resolved).collect();
+                public
+                    .result
+                    .as_ref()
+                    .map(|result| placed(substitute_within(result, &map), &own))
+                    .filter(whole)
+            }
         };
         // The operator's value candidates, wherever they are declared.
         // GEN-5: "Library membership and registration order grant no
@@ -1475,7 +2004,9 @@ impl<'a> Typer<'a> {
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
-        let wanted = expected.filter(|expected| !open(expected));
+        let wanted = requested
+            .as_ref()
+            .or(expected.filter(|expected| !open(expected)));
         let mut selected: Vec<(usize, usize, &Signature)> = Vec::new();
         for widening in [false, true] {
             for &(module, declaration, signature) in &candidates {
@@ -1737,7 +2268,11 @@ impl<'a> Typer<'a> {
 
     /// `Name<arguments>(fields)`: the construction of a generic struct
     /// with its arguments written.
-    fn typed_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+    fn typed_constructor(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
         // `Name<...>(...)` or `alias.Name<...>(...)`: the name is the
         // last identifier, and the type is recorded where the whole of
         // it starts.
@@ -1761,11 +2296,27 @@ impl<'a> Typer<'a> {
             }) if self.program.modules[*module].declarations[*declaration].kind
                 == DeclarationKind::Struct =>
             {
-                self.construct(&name, &list, *module, *declaration, Some(arguments.clone()))
+                self.construct(
+                    &name,
+                    &list,
+                    *module,
+                    *declaration,
+                    Some(arguments.clone()),
+                    true,
+                )
             }
-            // A generic function given its arguments (GEN-8) is for a
-            // later part.
-            _ => self.unread_call(&list),
+            // GEN-8: "A call may supply its generic arguments as a
+            // generic constructor does, `count<i64>(3)`." The `read`
+            // pass kept them, the name being a function or an operator.
+            _ => {
+                let generics = self.calls.get(&(self.file, start)).copied();
+                match (generics, self.declarations(&name)) {
+                    (Some(generics), Some(found)) => {
+                        self.call_named(&name, &list, found, expected, Some(generics))
+                    }
+                    _ => self.unread_call(&list),
+                }
+            }
         }
     }
 
@@ -1781,6 +2332,7 @@ impl<'a> Typer<'a> {
         module: usize,
         declaration: usize,
         given: Option<Vec<Argument>>,
+        settled: bool,
     ) -> (ExprKind, Type) {
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
@@ -1846,94 +2398,21 @@ impl<'a> Typer<'a> {
         let (arguments, arguments_of_type) = match given {
             Some(given) => (self.bind(name, list, &slots, Takes::Fields), given),
             None if !inferring => (self.bind(name, list, &slots, Takes::Fields), Vec::new()),
-            // GEN-2: "infers them from constructor fields". The value
-            // of a field whose type names a parameter not yet found
-            // says what the parameter is: `1` for `first: T`, `[1]`
-            // for `values: list<T>`. Such values are read first, in
-            // order, with nothing expected of them, but for `null` and
-            // `.member`, which take their type from the field and say
-            // nothing of it.
+            // GEN-2: "infers them from constructor fields".
             None => {
-                let assigned = self.assign(name, list, &slots, Takes::Fields);
-                let mut found: Vec<Option<Argument>> = vec![None; read.generics.len()];
-                let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
-                // The values that say what a parameter is are read
-                // first, out of the order written. A block among the
-                // arguments may assign what another reads (CTRL-10), so
-                // with one such a reading is tried and taken back, and
-                // every argument is then read where it is written.
-                let ordered = assigned.iter().any(|(_, node)| holds_block(node));
-                for (position, (slot, node)) in assigned.iter().enumerate() {
-                    let Some(index) = *slot else {
-                        continue;
-                    };
-                    let pattern = &read.members[index].ty;
-                    let unfound: Vec<Location> = read
-                        .generics
-                        .iter()
-                        .zip(&found)
-                        .filter(|(_, found)| found.is_none())
-                        .map(|(generic, _)| generic.at)
-                        .collect();
-                    if takes_its_type(node) || !mentions(pattern, &unfound) {
-                        continue;
-                    }
-                    if ordered {
-                        if self.may_reread() {
-                            let mark = self.mark();
-                            let value = self.expression(node, Some(&Type::Unknown));
-                            infer(pattern, &value.ty, &read.generics, &mut found);
-                            self.take_back(mark, false);
-                        }
-                        continue;
-                    }
-                    let reported = self.diagnostics.len();
-                    let value = self.expression(node, Some(&Type::Unknown));
-                    infer(pattern, &value.ty, &read.generics, &mut found);
-                    // A value with no whole type while nothing is known
-                    // of its place, `[1, "x"]`, has not been judged. It
-                    // is read again below as the field's type, once the
-                    // arguments are found. One that reported something
-                    // is read once.
-                    let again = !whole(&value.ty)
-                        && self.diagnostics.len() == reported
-                        && self.may_reread();
-                    if !again {
-                        values[position] = Some(value);
-                    }
-                }
+                let places = Places {
+                    slots: &slots,
+                    patterns: read.members.iter().map(|member| &member.ty).collect(),
+                    generics: &read.generics,
+                    settled,
+                };
+                let found = vec![None; read.generics.len()];
+                let Inferred {
+                    arguments, found, ..
+                } = self.infer_arguments(name, list, &places, found, Takes::Fields);
                 let found: Vec<Argument> = found
                     .into_iter()
                     .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
-                    .collect();
-                // Every field given is of its type with the arguments
-                // found in place: `Pair(1, "x")` gives `second: T` a
-                // `str` where `T` is `i64`, and `Pair(1, null)` a
-                // `null`.
-                let map: Vec<(Location, &Argument)> = fixed(&read.generics).zip(&found).collect();
-                let arguments = assigned
-                    .iter()
-                    .enumerate()
-                    .map(|(position, (slot, node))| {
-                        let Some(index) = *slot else {
-                            return self.argument(None, node, None, Takes::Fields);
-                        };
-                        let ty = substitute_within(&read.members[index].ty, &map);
-                        let slot = Slot {
-                            ty: placed(ty, &own),
-                            ..slots[index]
-                        };
-                        match values[position].take() {
-                            Some(value) => {
-                                let place = format!("the field `{}`", slot.name);
-                                hir::Argument {
-                                    parameter: Some(index),
-                                    value: self.fit(value, &slot.ty, &place),
-                                }
-                            }
-                            None => self.argument(Some(index), node, Some(&slot), Takes::Fields),
-                        }
-                    })
                     .collect();
                 (arguments, found)
             }
@@ -3516,6 +3995,33 @@ struct Slot<'a> {
     pack: Option<Pack>,
 }
 
+/// The places a call's arguments are given to, where their types name
+/// generic parameters to be found from the arguments (GEN-2).
+struct Places<'s> {
+    /// Each place: its name, whether it must be given, the pack it is.
+    slots: &'s [Slot<'s>],
+    /// The type each place is declared with, generic parameters and
+    /// all. One for each of `slots`.
+    patterns: Vec<&'s Type>,
+    /// The generic parameters being found.
+    generics: &'s [GenericParameter],
+    /// True when nothing later says more of these places: the call's
+    /// own place is known, or it has none. False while the call is read
+    /// before its place is, which may yet say what a parameter is.
+    settled: bool,
+}
+
+/// What [`Typer::infer_arguments`] read.
+struct Inferred {
+    /// Every argument, each fitted to its place.
+    arguments: Vec<hir::Argument>,
+    /// What is known of each generic parameter.
+    found: Vec<Option<Argument>>,
+    /// True when an argument other than `null` and `.member`, which
+    /// have no type of their own, has no whole type.
+    unknown: bool,
+}
+
 /// What takes the arguments of a call.
 ///
 /// `#[derive(Clone, Copy, PartialEq)]` asks the compiler to write the
@@ -3537,6 +4043,20 @@ impl Takes {
             Takes::Fields => "field",
         }
     }
+}
+
+/// The positions of a call's arguments in the order their places are
+/// declared in, those given to no place last.
+///
+/// GEN-12: "A prior binding constrains every later occurrence in
+/// declared parameter order." So in `same(right: 1, left: 2.0)` it is
+/// `left` that says what `T` is.
+fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..assigned.len()).collect();
+    // A stable sort: two arguments of one place keep their written
+    // order.
+    order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
+    order
 }
 
 /// The arguments of an argument list, in order: each with its name,
@@ -3710,13 +4230,23 @@ fn infer_constant(
 }
 
 /// Records that the generic parameter declared at `at` stands for
-/// `argument`, unless something has been found for it already.
+/// `argument`, unless something has been found for it already or the
+/// argument is a type with a part that is not known.
 fn find(
     at: Location,
     argument: Argument,
     generics: &[GenericParameter],
     found: &mut [Option<Argument>],
 ) {
+    // A type that is not known all the way down decides nothing: the
+    // `tuple<list<_>, i64>` of `([], 0)` would let any list through in
+    // its unknown part. A later argument may say the whole of it, and
+    // this one is then read again as that.
+    if let Argument::Type(ty) = &argument
+        && !whole(ty)
+    {
+        return;
+    }
     let position = generics.iter().position(|generic| generic.at == at);
     if let Some(position) = position
         && found[position].is_none()
