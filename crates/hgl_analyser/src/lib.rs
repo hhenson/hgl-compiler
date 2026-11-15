@@ -221,56 +221,58 @@ pub mod codes {
     /// a value where it is a type (GEN-14).
     pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
 
+    /// A value's type is not the type its place requires (EXPR-5),
+    /// or `null` stands where the type is not nullable (TYPE-14).
+    pub const TYPE_MISMATCH: &str = "type.mismatch";
+    /// A `var` is read on a path that has given it no value
+    /// (EXPR-3).
+    pub const BINDING_UNASSIGNED: &str = "binding.unassigned";
+    /// A binding that is no `var` is assigned (EXPR-3).
+    pub const BINDING_IMMUTABLE: &str = "binding.immutable";
+    /// An argument with no name follows a named one (EXPR-2).
+    pub const ARGUMENT_ORDER: &str = "argument.order";
+    /// A call is given more positional arguments than it has
+    /// parameters (EXPR-2), or a constructor is given one (TYPE-5).
+    pub const ARGUMENT_UNEXPECTED: &str = "argument.unexpected";
+    /// A named argument names no parameter or field (EXPR-2).
+    pub const ARGUMENT_UNKNOWN: &str = "argument.unknown";
+    /// A parameter or field is given twice (EXPR-2).
+    pub const ARGUMENT_DUPLICATE: &str = "argument.duplicate";
+    /// A parameter or field with no default is given nothing
+    /// (EXPR-2, TYPE-5).
+    pub const ARGUMENT_MISSING: &str = "argument.missing";
+    /// A value function calls a temporal function (FN-4).
+    pub const CALL_ROLE: &str = "call.role";
+    /// An abstract struct is constructed (TYPE-3).
+    pub const STRUCT_ABSTRACT: &str = "struct.abstract";
+    /// A struct has no field, or an enum no member, of the name
+    /// (EXPR-7, TYPE-7).
+    pub const MEMBER_UNKNOWN: &str = "member.unknown";
+    /// `.member` stands where no enum type is expected (TYPE-7).
+    pub const ENUM_CONTEXT: &str = "enum.context_type";
+    /// `null` stands where nothing gives it a type (TYPE-14).
+    pub const NULL_CONTEXT: &str = "null.context_type";
+    /// A sequence's entries give no type, and nothing is expected
+    /// of it (EXPR-9).
+    pub const SEQUENCE_CONTEXT: &str = "sequence.context_type";
+    /// A value function's operands are not ones the operator's contract
+    /// admits (OPS-1, OPS-2).
+    pub const OPERATOR_OPERAND: &str = "operator.operand";
+
+    /// A parameter that may not be omitted follows one that may
+    /// (UNIT-8).
+    pub const DEFAULT_ORDER: &str = "default.order";
+    /// A tuple's index is no constant, or is outside the tuple
+    /// (EXPR-7).
+    pub const TUPLE_INDEX: &str = "tuple.index";
+
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed.
+    /// code when one is agreed. There is none at present.
     pub mod local {
-        /// A value's type is not the type its place requires (EXPR-5),
-        /// or `null` stands where the type is not nullable (TYPE-14).
-        pub const TYPE_MISMATCH: &str = "type.mismatch";
-        /// A `var` is read on a path that has given it no value
-        /// (EXPR-3).
-        pub const BINDING_UNASSIGNED: &str = "binding.unassigned";
-        /// A binding that is no `var` is assigned (EXPR-3).
-        pub const BINDING_IMMUTABLE: &str = "binding.immutable";
-        /// An argument with no name follows a named one (EXPR-2).
-        pub const ARGUMENT_ORDER: &str = "argument.order";
-        /// A call or a constructor is given more positional arguments
-        /// than it has parameters or fields (EXPR-2).
-        pub const ARGUMENT_UNEXPECTED: &str = "argument.unexpected";
-        /// A named argument names no parameter or field (EXPR-2).
-        pub const ARGUMENT_UNKNOWN: &str = "argument.unknown";
-        /// A parameter or field is given twice (EXPR-2).
-        pub const ARGUMENT_DUPLICATE: &str = "argument.duplicate";
-        /// A parameter or field with no default is given nothing
-        /// (EXPR-2, TYPE-5).
-        pub const ARGUMENT_MISSING: &str = "argument.missing";
-        /// A value function calls a temporal function (FN-4).
-        pub const CALL_ROLE: &str = "call.role";
-        /// An abstract struct is constructed (TYPE-3).
-        pub const STRUCT_ABSTRACT: &str = "struct.abstract";
-        /// A struct has no field, or an enum no member, of the name
-        /// (EXPR-7, TYPE-7).
-        pub const MEMBER_UNKNOWN: &str = "member.unknown";
-        /// `.member` stands where no enum type is expected (TYPE-7).
-        pub const ENUM_CONTEXT: &str = "enum.context_type";
-
         /// Every local code of this stage.
-        pub const ALL: [&str; 12] = [
-            TYPE_MISMATCH,
-            BINDING_UNASSIGNED,
-            BINDING_IMMUTABLE,
-            ARGUMENT_ORDER,
-            ARGUMENT_UNEXPECTED,
-            ARGUMENT_UNKNOWN,
-            ARGUMENT_DUPLICATE,
-            ARGUMENT_MISSING,
-            CALL_ROLE,
-            STRUCT_ABSTRACT,
-            MEMBER_UNKNOWN,
-            ENUM_CONTEXT,
-        ];
+        pub const ALL: [&str; 0] = [];
     }
 }
 
@@ -333,19 +335,6 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
-}
-
-/// An error with one of this compiler's own codes ([`codes::local`]):
-/// the rule cited rejects the source, and the catalogue has no row for
-/// it.
-fn local_error(
-    category: Category,
-    code: &'static str,
-    at: Location,
-    message: String,
-    rule: &'static str,
-) -> Diagnostic {
-    Diagnostic::error(category, Code::Local(code), at, message).with_rule(rule)
 }
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,

@@ -62,7 +62,7 @@ fn every_form_of_type_is_read() {
         "    n: zoned_time) {}\n",
         "fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
         "    e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>,\n",
-        "    i: result<f64, error>, j: error, k: delta<list<f64>>, l: f64?, m: T)\n",
+        "    i: result<f64, error>, j: error, k: delta<list<f64>>, l: T, m: f64?)\n",
         "    -> list<dict<str, Box<Quote>>> {}\n",
         "fn named(a: Quote, b: Box<i64>, c: Side, d: Handle) {}\n",
     ));
@@ -76,7 +76,7 @@ fn every_form_of_type_is_read() {
         signature(&checked, "shapes"),
         "<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>, \
          e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>, i: result<f64, error>, \
-         j: error, k: delta<list<f64>>, l: f64?, m: T) -> list<dict<str, Box<Quote>>>"
+         j: error, k: delta<list<f64>>, l: T, m: f64?) -> list<dict<str, Box<Quote>>>"
     );
     assert_eq!(
         signature(&checked, "named"),
@@ -712,7 +712,7 @@ fn signal_is_the_whole_type_of_an_input() {
 #[test]
 fn a_nullable_type_is_an_ordinary_value_or_null() {
     let checked = module(concat!(
-        "const fn good(a: f64?, b: list<f64?>, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
+        "const fn good(b: list<f64?>, a: f64?, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
         // On the whole type of an input `?` follows any type: the
         // argument may be omitted.
         "fn inputs(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
@@ -760,7 +760,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     // nullable list value." They are two types.
     assert_eq!(
         signature(&checked, "good"),
-        "(a: f64?, b: list<f64?>, c: list<f64>?, d: dict<str, f64?>?) -> f64?"
+        "(b: list<f64?>, a: f64?, c: list<f64>?, d: dict<str, f64?>?) -> f64?"
     );
 }
 
