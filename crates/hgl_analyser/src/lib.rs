@@ -170,14 +170,12 @@ pub mod codes {
         /// GEN-13).
         pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
         /// A `rolling`, `ref`, `atomic` or `signal` where only an
-        /// ordinary value type may stand (TYPE-12 and the grammar's
-        /// `value_type`).
+        /// ordinary value type may stand, under a `?` included (TYPE-12,
+        /// TYPE-14 and the grammar's `value_type`).
         pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
         /// `signal` somewhere other than the whole type of an input
         /// (TYPE-12).
         pub const SIGNAL_POSITION: &str = "signal.position";
-        /// `?` applied to `ref<T>` or `signal` (TYPE-14, TYPE-15).
-        pub const NULLABLE_NOT_ORDINARY: &str = "nullable.not_ordinary";
         /// A generic type given the wrong number of arguments, or a
         /// type that takes none given some (GEN-2, GEN-13).
         pub const GENERIC_ARGUMENT_COUNT: &str = "generic.argument_count";
@@ -210,11 +208,10 @@ pub mod codes {
         pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 17] = [
+        pub const ALL: [&str; 16] = [
             TYPE_NOT_A_TYPE,
             TYPE_NOT_ORDINARY,
             SIGNAL_POSITION,
-            NULLABLE_NOT_ORDINARY,
             GENERIC_ARGUMENT_COUNT,
             LIST_SIZE,
             DEFAULT_TEMPORAL_PARAMETER,

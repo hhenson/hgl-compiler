@@ -230,6 +230,26 @@ fn parents_agree_on_a_field() {
     );
 }
 
+/// TYPE-4 compares a field's type as TYPE-11 gives it: "Omitted minimum
+/// equals maximum", so a window with its minimum written as its maximum
+/// is the parent's window with none written.
+#[test]
+fn a_field_is_compared_by_what_its_type_means() {
+    let checked = module(concat!(
+        "abstract struct Base {\n    window: rolling<i64, 5>\n    sized: list<f64, 6>\n}\n",
+        "struct Same : Base {\n    window: rolling<i64, 5, 5>\n    sized: list<f64, 2 * 3>\n}\n",
+        "struct Other : Base { window: rolling<i64, 5, 2> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:10:22 local:type/field.conflict TYPE-4"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`window` is required `rolling<i64, 5, 2>` here and required `rolling<i64, 5>` in `Base`"
+    );
+}
+
 // ---- Structs that hold themselves ----
 
 /// TYPE-6: "Recursive struct edges stay within their defining module,
