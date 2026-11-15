@@ -535,7 +535,7 @@ the arguments:
 | --- | --- |
 | What the call writes after the name | `same<f64>(1, 2)` |
 | The type the call's place expects of the result | `let names: list<str> = repeat(3)` |
-| The arguments, in the order written | `same(1, 2)` |
+| The arguments, in declared parameter order (GEN-12) | `same(1, 2)`; in `same(right: 1, left: 2.0)` it is `left` that decides |
 
 The first argument that says what a parameter is decides it, and every
 argument is then checked against its parameter's type with that in
@@ -553,9 +553,13 @@ hhenson/hgl_spec#44.
 
 A parameter nothing resolves rejects the call (GEN-8) as
 `generic.unresolved`, the analyser's one local code: the catalogue has
-no row for it (proposed in hhenson/hgl_spec#44). It is not reported
-where the call's place is not known or something else was reported for
-the call. Not read yet: a function with a type pack or a pack parameter,
+no row for it (proposed in hhenson/hgl_spec#44). A call read
+before its place is known, as an argument is, puts the report off for a
+parameter its result names, which that place may yet resolve. Once the
+enclosing call is settled and the place stays unknown, the argument is
+read as one of which nothing is expected and the report is made: in
+`same(repeat(1), repeat(2))` with nothing expected, each `repeat`. It is
+not reported where something else was reported for the call. Not read yet: a function with a type pack or a pack parameter,
 whose generic types are then not known; whether a value argument is a
 constant; the type of a value argument against its parameter's.
 

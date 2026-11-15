@@ -1680,8 +1680,9 @@ fn a_generic_function_is_resolved_at_each_call() {
 
 /// GEN-1: "Repeated parameters require equivalent types". GEN-12: "A
 /// prior binding constrains every later occurrence in declared
-/// parameter order." The first argument that says what a parameter is
-/// decides it, and the others are checked against that (EXPR-5).
+/// parameter order." The first parameter whose argument says what a
+/// generic is decides it, whatever order the arguments are written in,
+/// and the others are checked against that (EXPR-5).
 #[test]
 fn a_repeated_generic_parameter_is_one_type() {
     let checked = module(concat!(
@@ -1690,7 +1691,11 @@ fn a_repeated_generic_parameter_is_one_type() {
         "    let a = same(\"a\", 1)\n",
         // Only a literal is widened (EXPR-5): `count` is an `i64`.
         "    let b: f64 = same(1.5, count)\n",
+        // `left` is declared first: it decides, and `right` is held to
+        // it.
         "    let c = same(right: 1, left: \"a\")\n",
+        // The `1` is widened to the `f64` that `left` says `T` is.
+        "    let d = same(right: 1, left: 2.0)\n",
         "}\n",
     ));
     assert_eq!(
@@ -1698,7 +1703,7 @@ fn a_repeated_generic_parameter_is_one_type() {
         [
             "m.hgl:4:23 type/type.mismatch EXPR-5",
             "m.hgl:5:28 type/type.mismatch EXPR-5",
-            "m.hgl:6:34 type/type.mismatch EXPR-5",
+            "m.hgl:6:25 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -1706,9 +1711,10 @@ fn a_repeated_generic_parameter_is_one_type() {
         [
             "this is `i64`, and the parameter `right` is `str`",
             "this is `i64`, and the parameter `right` is `f64`",
-            "this is `str`, and the parameter `left` is `i64`",
+            "this is `i64`, and the parameter `right` is `str`",
         ]
     );
+    assert_eq!(locals(&checked, "uses")[4], "d: f64");
 }
 
 /// GEN-2: a generic is resolved "from actual inputs". An argument whose
@@ -1905,6 +1911,47 @@ fn an_unresolved_parameter_of_a_call_that_is_an_argument_is_rejected() {
     assert_eq!(
         locals(&checked, "uses"),
         ["a: i64", "b: i64", "c: list<str>", "d: i64"]
+    );
+}
+
+/// GEN-8: "A call rejects when it leaves a generic parameter
+/// unresolved." A call read as an argument puts its report off while
+/// the place it is given to may yet say what its parameter is. Where
+/// the enclosing call is settled and that place stays unknown, nothing
+/// will, and each is reported: none is left unresolved in silence.
+#[test]
+fn an_unresolved_parameter_is_reported_once_nothing_can_resolve_it() {
+    let checked = module(concat!(
+        "struct Box<T> { value: T }\n",
+        "enum Colour { red, blue }\n",
+        "const fn same<T>(a: T, b: T) -> T => a\n",
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn uses() {\n",
+        // Neither argument says what `T` is, and nothing is expected.
+        "    let a = same(repeat(1), repeat(2))\n",
+        "    let b = Box(value: repeat(1))\n",
+        // `null` and `.member` have no type of their own.
+        "    let c = same(null, null)\n",
+        "    let d = same(.red, .blue)\n",
+        // Resolved by the place, at whatever depth.
+        "    let e: list<str> = same(repeat(1), repeat(2))\n",
+        "    let f = same(same(repeat(1), repeat(2)), [\"x\"])\n",
+        "    let g: Colour = same(.red, .blue)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:18 local:type/generic.unresolved GEN-8",
+            "m.hgl:7:29 local:type/generic.unresolved GEN-8",
+            "m.hgl:8:24 local:type/generic.unresolved GEN-8",
+            "m.hgl:9:13 local:type/generic.unresolved GEN-8",
+            "m.hgl:10:13 local:type/generic.unresolved GEN-8",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[4..],
+        ["e: list<str>", "f: list<str>", "g: Colour"]
     );
 }
 
