@@ -35,7 +35,7 @@ use hgl_lexer::literal::{
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
-use crate::declared::{agree, names_parameter, substitute_within};
+use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, Expr, ExprKind, Local, LocalId, Stmt, UnaryOperator, Value,
 };
@@ -1059,37 +1059,39 @@ impl<'a> Typer<'a> {
         let (arguments, arguments_of_type) = match given {
             Some(given) => (self.bind(name, list, &slots, "field"), given),
             None if !inferring => (self.bind(name, list, &slots, "field"), Vec::new()),
-            // GEN-2: "infers them from constructor fields". A parameter
-            // that is a field's whole type is what that field is
-            // given. So the values of such fields are read first, but
-            // for `null` and `.member`, which take their type from the
-            // field and say nothing of it.
+            // GEN-2: "infers them from constructor fields". The value
+            // of a field whose type names a parameter not yet found
+            // says what the parameter is: `1` for `first: T`, `[1]`
+            // for `values: list<T>`. Such values are read first, in
+            // order, with nothing expected of them, but for `null` and
+            // `.member`, which take their type from the field and say
+            // nothing of it.
             None => {
                 let assigned = self.assign(name, list, &slots, "field");
-                let whole = |slot: &Option<usize>| {
-                    slot.and_then(|index| match &read.members[index].ty {
-                        Type::Parameter { at, .. } => Some(*at),
-                        _ => None,
-                    })
-                };
-                let mut values: Vec<Option<Expr>> = assigned
-                    .iter()
-                    .map(|(slot, node)| {
-                        (whole(slot).is_some() && !takes_its_type(node))
-                            .then(|| self.expression(node, Some(&Type::Unknown)))
-                    })
-                    .collect();
-                let found: Vec<Argument> = read
-                    .generics
-                    .iter()
-                    .map(|generic| {
-                        let ty = assigned.iter().zip(&values).find_map(|((slot, _), value)| {
-                            (whole(slot) == Some(generic.at))
-                                .then(|| value.as_ref().map(|value| value.ty.clone()))
-                                .flatten()
-                        });
-                        Argument::Type(ty.unwrap_or(Type::Unknown))
-                    })
+                let mut found: Vec<Option<Type>> = vec![None; read.generics.len()];
+                let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
+                for (position, (slot, node)) in assigned.iter().enumerate() {
+                    let Some(index) = *slot else {
+                        continue;
+                    };
+                    let pattern = &read.members[index].ty;
+                    let unfound: Vec<Location> = read
+                        .generics
+                        .iter()
+                        .zip(&found)
+                        .filter(|(_, found)| found.is_none())
+                        .map(|(generic, _)| generic.at)
+                        .collect();
+                    if takes_its_type(node) || !names_one_of(pattern, &unfound) {
+                        continue;
+                    }
+                    let value = self.expression(node, Some(&Type::Unknown));
+                    infer(pattern, &value.ty, &read.generics, &mut found);
+                    values[position] = Some(value);
+                }
+                let found: Vec<Argument> = found
+                    .into_iter()
+                    .map(|found| Argument::Type(found.unwrap_or(Type::Unknown)))
                     .collect();
                 // Every field given is of its type with the arguments
                 // found in place: `Pair(1, "x")` gives `second: T` a
@@ -1650,6 +1652,86 @@ fn applies(generics: &[GenericParameter], given: &[Argument]) -> bool {
                 (GenericKind::Type | GenericKind::Plain, Argument::Constant(_)) => false,
                 _ => true,
             })
+}
+
+/// Finds what generic parameters stand for from a field's type,
+/// `pattern`, and the type of the value the field is given, `actual`:
+/// `T` is `i64` when `list<T>` is given a `list<i64>`. `found` has an
+/// entry for each of `generics`; one already found is left as it is,
+/// and a type that is not known finds nothing.
+fn infer(pattern: &Type, actual: &Type, generics: &[GenericParameter], found: &mut [Option<Type>]) {
+    let mut both = |pattern: &Type, actual: &Type| infer(pattern, actual, generics, found);
+    match (pattern, actual) {
+        (_, Type::Unknown) => {}
+        (Type::Parameter { at, .. }, actual) => {
+            let position = generics.iter().position(|generic| generic.at == *at);
+            if let Some(position) = position
+                && found[position].is_none()
+            {
+                found[position] = Some(actual.clone());
+            }
+        }
+        (Type::Nullable(pattern), Type::Nullable(actual)) => both(pattern, actual),
+        // A `T` given where a `T?` is expected (TYPE-14).
+        (Type::Nullable(pattern), actual) => both(pattern, actual),
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: actual_module,
+                declaration: actual_declaration,
+                arguments: actual_arguments,
+                ..
+            },
+        ) if (module, declaration) == (actual_module, actual_declaration) => {
+            for pair in arguments.iter().zip(actual_arguments) {
+                if let (Argument::Type(pattern), Argument::Type(actual)) = pair {
+                    both(pattern, actual);
+                }
+            }
+        }
+        (Type::Tuple(patterns), Type::Tuple(actuals)) if patterns.len() == actuals.len() => {
+            for (pattern, actual) in patterns.iter().zip(actuals) {
+                both(pattern, actual);
+            }
+        }
+        (
+            Type::List { element, .. },
+            Type::List {
+                element: actual, ..
+            },
+        ) => both(element, actual),
+        (Type::Set(pattern), Type::Set(actual))
+        | (Type::Ref(pattern), Type::Ref(actual))
+        | (Type::Atomic(pattern), Type::Atomic(actual))
+        | (Type::Delta(pattern), Type::Delta(actual)) => both(pattern, actual),
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: actual_key,
+                value: actual_value,
+            },
+        ) => {
+            both(key, actual_key);
+            both(value, actual_value);
+        }
+        (Type::Rolling { value, .. }, Type::Rolling { value: actual, .. }) => both(value, actual),
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: actual_value,
+                error: actual_error,
+            },
+        ) => {
+            both(value, actual_value);
+            both(error, actual_error);
+        }
+        _ => {}
+    }
 }
 
 /// True when an expression takes its type from its place and has none

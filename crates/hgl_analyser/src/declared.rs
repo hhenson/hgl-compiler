@@ -446,7 +446,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
 
 /// True when `ty` names one of the generic parameters declared at
 /// `declared`, itself or inside it.
-fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
+pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
     if declared.is_empty() {
         return false;
     }

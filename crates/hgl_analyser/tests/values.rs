@@ -671,8 +671,16 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "    let absent = Pair(1, null)\n",
         "    let sides = Pair(Side.buy, .sell)\n",
         "    let nullable: Pair<i64?> = Pair(1, null)\n",
+        // A parameter is found inside a field's type too.
+        "    let listed = Bag([1, a])\n",
+        "    let element: str = listed.values[0]\n",
+        "    let both = Both(1.5, [1])\n",
+        "    let maybe = Maybe(a)\n",
         "}\n",
         "enum Side { buy, sell }\n",
+        "struct Bag<T> { values: list<T> }\n",
+        "struct Both<T> {\n    first: T\n    rest: list<T>\n}\n",
+        "struct Maybe<T> { value: T? }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -680,6 +688,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "m.hgl:9:25 local:type/type.mismatch EXPR-5",
             "m.hgl:14:28 local:type/argument.missing EXPR-2",
             "m.hgl:15:26 local:type/type.mismatch TYPE-14",
+            "m.hgl:19:24 local:type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -688,6 +697,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "this is `str`, and the field `second` is `i64`",
             "`Box` is given no `value`, a field with no default",
             "`null` is no value of `i64`: write `i64?`",
+            "this is `i64`, and the type written for it is `str`",
         ]
     );
     assert_eq!(
@@ -704,6 +714,10 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "absent: Pair<i64>",
             "sides: Pair<Side>",
             "nullable: Pair<i64?>",
+            "listed: Bag<i64>",
+            "element: str",
+            "both: Both<f64>",
+            "maybe: Maybe<i64>",
         ]
     );
 }
