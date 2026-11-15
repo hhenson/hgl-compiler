@@ -726,6 +726,24 @@ impl<'a> Typer<'a> {
         } else {
             of
         };
+        // Where what the place expects is not known, it may be what
+        // gives entries of two types their one type: a `list<Base>` for
+        // an `A` and a `B` that inherit from it. Such entries are not
+        // judged here, and the sequence has no type.
+        let disagree = read.iter().flatten().any(|entry| {
+            !(self.admits(&of, &entry.ty) || is_integer_literal(entry) && accepts_float(&of))
+        });
+        if !unexpected && disagree {
+            let elements = items
+                .iter()
+                .enumerate()
+                .map(|(position, item)| match read[position].take() {
+                    Some(entry) => entry,
+                    None => self.expression(item, Some(&Type::Unknown)),
+                })
+                .collect();
+            return (ExprKind::Sequence(elements), Type::Unknown);
+        }
         let elements: Vec<Expr> = items
             .iter()
             .enumerate()

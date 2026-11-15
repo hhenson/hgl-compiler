@@ -632,6 +632,35 @@ fn a_form_not_read_yet_is_not_reported() {
     );
 }
 
+/// ERR-9: where what a place expects is not known, a sequence's entries
+/// of two types are not judged: the place may give them one type, as a
+/// `list<Shape>` does a `Round` and a `Square`. EXPR-9: with nothing
+/// expected, "Entries of two types reject".
+#[test]
+fn entries_of_two_types_are_judged_only_where_nothing_is_expected() {
+    let checked = module(concat!(
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "struct Square : Shape { side: f64 }\n",
+        "const fn shapes(a: Round, b: Square) {\n",
+        "    let passed = missing([a, b])\n",
+        "    let typed: list<Shape> = [a, b]\n",
+        "    let alone = [a, b]\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:8:21 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        locals(&checked, "shapes"),
+        [
+            "a: Round",
+            "b: Square",
+            "passed: _",
+            "typed: list<Shape>",
+            "alone: list<Round>",
+        ]
+    );
+}
+
 // ---- Calls and constructions ----
 
 /// EXPR-2: "Positional arguments precede named ones; reject duplicates,
