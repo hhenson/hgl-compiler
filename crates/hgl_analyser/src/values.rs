@@ -265,9 +265,22 @@ impl<'a> Typer<'a> {
                     at,
                 }
             }
+            // CTRL-10: an `if` with no `else` whose branch returns is
+            // null where its condition does not hold. That is a value
+            // of a result written `T?`, and is what the function then
+            // returns.
+            Outcome::Null if matches!(result, Type::Nullable(_)) => {
+                let mut value = value;
+                value.ty = result.clone();
+                self.returned = true;
+                Stmt::Return {
+                    value: Some(value),
+                    at,
+                }
+            }
             // Every path through it has returned, or it has no value
-            // and the function ends with none: an `if` with no `else`
-            // whose branch returns is one that ends with none.
+            // and the function ends with none. Null alone is no value
+            // of a result that is not nullable.
             Outcome::Returns | Outcome::Nothing | Outcome::Null => Stmt::Expr(value),
         }
     }

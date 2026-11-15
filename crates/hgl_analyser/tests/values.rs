@@ -1363,6 +1363,8 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
         "    let chain = if c { 1 } else if a > 1 { 2 } else { 3 }\n",
         "}\n",
         "const fn missing(a: i64) -> i64 {\n    if a > 0 { return a }\n}\n",
+        // The same body returns null where the result is written `T?`.
+        "const fn or_null(a: i64) -> i64? {\n    if a > 0 { return a }\n}\n",
         "const fn early(c: bool) -> i64 {\n    if c { return 1 } else { 2 }\n}\n",
         "const fn both(c: bool) -> i64 {\n    if c { return 1 } else { return 2 }\n}\n",
         // In a function that declares no result the expression is a
@@ -1384,7 +1386,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
             "m.hgl:17:17 type/type.mismatch CTRL-10",
             "m.hgl:25:19 type/null.context_type TYPE-14",
             "m.hgl:28:10 type/return.missing FN-7",
-            "m.hgl:45:23 type/type.mismatch EXPR-5",
+            "m.hgl:48:23 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
