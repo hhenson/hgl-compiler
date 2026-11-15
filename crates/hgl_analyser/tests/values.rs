@@ -287,6 +287,11 @@ fn a_struct_is_a_value_of_the_abstract_structs_it_inherits_from() {
         "const fn down(x: Base) -> Child => x\n",
         "const fn boxed(x: Whole) -> Boxed<i64> => x\n",
         "const fn unboxed(x: Whole) -> Boxed<str> => x\n",
+        // A type pack passed on to a parent is not put in place here:
+        // the parent may be the application expected.
+        "abstract struct Wide<...Ts> { width: i64 }\n",
+        "struct Narrow<...Ts> : Wide<Ts> { }\n",
+        "const fn packed(x: Narrow<i64>) -> Wide<i64> => x\n",
     ));
     assert_eq!(
         checked.summary(),

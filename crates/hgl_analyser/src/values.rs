@@ -1595,7 +1595,12 @@ impl<'a> Typer<'a> {
                 .collect();
             for parent in &read.parents {
                 let parent = substitute_within(parent, &map);
-                if agree(expected, &parent) {
+                // Where the struct passes a type pack on to its parent,
+                // the parent's arguments are not known here: it may be
+                // the application expected, and nothing is reported of
+                // it (ERR-9).
+                let may_be = names_parameter(&parent) && same_declaration(expected, &parent);
+                if may_be || agree(expected, &parent) {
                     return true;
                 }
                 if budget == 0 {
@@ -1803,6 +1808,26 @@ fn takes_its_type(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| takes_its_type(&inner)),
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
+        _ => false,
+    }
+}
+
+/// True when two types are applications of one struct, whatever their
+/// generic arguments.
+fn same_declaration(left: &Type, right: &Type) -> bool {
+    match (left, right) {
+        (
+            Type::Named {
+                module,
+                declaration,
+                ..
+            },
+            Type::Named {
+                module: other_module,
+                declaration: other_declaration,
+                ..
+            },
+        ) => (module, declaration) == (other_module, other_declaration),
         _ => false,
     }
 }
