@@ -111,8 +111,19 @@ struct Typer<'a> {
     /// For each local, whether every path to here has given it a value
     /// (EXPR-3).
     assigned: Vec<bool>,
+    /// How many more expressions of the function may be read a second
+    /// time: see [`REREADS`].
+    rereads: u32,
     diagnostics: &'a mut Diagnostics,
 }
+
+/// How many expressions of one function are read a second time: as the
+/// type their place turns out to have, or to try them as a candidate's
+/// parameter (GEN-5). An expression read again may hold others that
+/// are, so the count is for the whole function: past it an expression
+/// keeps its first reading, a call that needs a trial is not judged,
+/// and the pass ends whatever it is given.
+const REREADS: u32 = 1_000;
 
 impl<'a> Typer<'a> {
     fn new(
@@ -135,6 +146,7 @@ impl<'a> Typer<'a> {
             locals: Vec::new(),
             declared: HashMap::new(),
             assigned: Vec::new(),
+            rereads: REREADS,
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -1255,6 +1267,11 @@ impl<'a> Typer<'a> {
                 break;
             }
         }
+        // An argument could not be tried once the function's readings
+        // were used up (`REREADS`): the call is then not judged.
+        if self.rereads == 0 && given.iter().any(|given| given.by_place) {
+            return (unselected(given), Type::Unknown);
+        }
         let at = Location::new(self.file, name.span());
         let &[(module, declaration, signature)] = selected.as_slice() else {
             // GEN-5: "the requested output before inputs". Where what
@@ -1339,7 +1356,7 @@ impl<'a> Typer<'a> {
                 };
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let value = if given.by_place {
+                let value = if given.by_place && self.may_reread() {
                     // Read again, as the parameter's type: the
                     // candidate was admitted because it fits.
                     let value = self.expression(&given.node, Some(&parameter.ty));
@@ -1421,12 +1438,25 @@ impl<'a> Typer<'a> {
     /// The expression has been read once already, with nothing expected
     /// of it, so a reading here changes nothing but the diagnostics.
     fn fits_place(&mut self, node: &SyntaxNode, ty: &Type, widening: bool) -> bool {
+        // Past the function's bound nothing more is tried, and the
+        // caller leaves its call unjudged.
+        if !self.may_reread() {
+            return true;
+        }
         let reported = self.diagnostics.len();
         let value = self.expression(node, Some(ty));
         let value = self.fit(value, ty, "its place");
         let fits = self.diagnostics.len() == reported;
         self.diagnostics.truncate(reported);
         fits && (widening || !widens_an_entry(&value))
+    }
+
+    /// True when one more expression of the function may be read a
+    /// second time, which this counts.
+    fn may_reread(&mut self) -> bool {
+        let may = self.rereads > 0;
+        self.rereads = self.rereads.saturating_sub(1);
+        may
     }
 
     /// `Name<arguments>(fields)`: the construction of a generic struct
@@ -1566,9 +1596,20 @@ impl<'a> Typer<'a> {
                     if takes_its_type(node) || !mentions(pattern, &unfound) {
                         continue;
                     }
+                    let reported = self.diagnostics.len();
                     let value = self.expression(node, Some(&Type::Unknown));
                     infer(pattern, &value.ty, &read.generics, &mut found);
-                    values[position] = Some(value);
+                    // A value with no whole type while nothing is known
+                    // of its place, `[1, "x"]`, has not been judged. It
+                    // is read again below as the field's type, once the
+                    // arguments are found. One that reported something
+                    // is read once.
+                    let again = !whole(&value.ty)
+                        && self.diagnostics.len() == reported
+                        && self.may_reread();
+                    if !again {
+                        values[position] = Some(value);
+                    }
                 }
                 let found: Vec<Argument> = found
                     .into_iter()
@@ -2304,6 +2345,29 @@ fn typed_by_place(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| typed_by_place(&inner)),
         SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
         _ => takes_its_type(node),
+    }
+}
+
+/// True when a type is known all the way down: no part of it is
+/// `Type::Unknown`.
+fn whole(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => false,
+        Type::Named { arguments, .. } => arguments.iter().all(|argument| match argument {
+            Argument::Type(argument) => whole(argument),
+            Argument::Constant(_) => true,
+        }),
+        Type::Tuple(elements) => elements.iter().all(whole),
+        Type::List { element, .. } => whole(element),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => whole(inner),
+        Type::Dict { key, value } => whole(key) && whole(value),
+        Type::Rolling { value, .. } => whole(value),
+        Type::Result { value, error } => whole(value) && whole(error),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
     }
 }
 

@@ -903,6 +903,14 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "struct Both<T> {\n    first: T\n    rest: list<T>\n}\n",
         "struct Maybe<T> { value: T? }\n",
         // A value parameter is found in a size, as a type is.
+        // A sequence that gives no type while `T` is not found is
+        // judged once it is: its entries are a `T`'s.
+        "struct Batch<T> {\n    values: list<T>\n    sample: T\n}\n",
+        "const fn batches(a: i64) {\n",
+        "    let mixed = Batch(values: [1, \"x\"], sample: 1)\n",
+        "    let nested = Batch(values: [[1, \"x\"]], sample: [1])\n",
+        "    let fine = Batch(values: [], sample: a)\n",
+        "}\n",
         "struct Sized<const N: i64> { items: list<i64, N> }\n",
         "const fn sized(xs: list<i64, 2>) {\n",
         "    let two = Sized(items: xs)\n",
@@ -918,7 +926,9 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "m.hgl:15:31 type/type.mismatch TYPE-14",
             "m.hgl:19:24 type/type.mismatch EXPR-5",
             "m.hgl:24:47 type/type.mismatch EXPR-5",
-            "m.hgl:37:33 type/type.mismatch EXPR-5",
+            "m.hgl:38:35 type/type.mismatch EXPR-5",
+            "m.hgl:39:37 type/type.mismatch EXPR-5",
+            "m.hgl:46:33 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -929,7 +939,18 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "`null` is no value of `i64`: write `i64?`",
             "this is `i64`, and the type written for it is `str`",
             "this is `i64`, and the field `value` is `U`",
+            "this is `str`, and an element is `i64`",
+            "this is `str`, and an element is `i64`",
             "this is `list<i64, 2>`, and the field `items` is `list<i64, 3>`",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "batches"),
+        [
+            "a: i64",
+            "mixed: Batch<i64>",
+            "nested: Batch<list<i64>>",
+            "fine: Batch<i64>",
         ]
     );
     assert_eq!(

@@ -495,7 +495,9 @@ that place, and what the call leaves out has a default or a type written
 `.member`, or a sequence or tuple written out, is tried against each
 candidate's parameter, and what the trial reports is taken back. A
 candidate that fits with no integer literal widened is taken before one
-that needs it. The typed body records the operator and the
+that needs it. An argument tried may hold a call that tries its own, so
+the readings are counted for the whole function: past a thousand a call
+that needs a trial is not judged, and the pass ends whatever it is given. The typed body records the operator and the
 candidate selected. No candidate, and a tie, are reported with the
 analyser's two local codes, `operator.no_candidate` and
 `operator.ambiguous`, proposed to the specification in hgl_spec issue 30.
