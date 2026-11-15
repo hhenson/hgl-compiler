@@ -231,6 +231,11 @@ fn an_argument_is_of_its_parameters_kind() {
         "const fn made() -> Box<i64> => Box<7>(value: 1)\n",
         // A name nothing binds may yet be a constant (UNIT-11).
         "fn open(a: Sized<Missing>) {}\n",
+        // A type pack passes on types, however many.
+        "fn packs<...One{1}, ...Any>(a: Sized<One>, b: Sized<Any>) {}\n",
+        // A pack of a known length keeps the place of what follows it.
+        "struct Pair<T, const N: i64> { value: T }\n",
+        "fn placed<...One{1}, ...Two{2}>(a: Pair<One, i64>, b: Pair<One, 3>, c: Row<Two, 7>) {}\n",
         // A parameter settled as a type is a type in a body too.
         "const fn body<T>(value: T) -> i64 {\n    let sized: Sized<T> = make()\n    return 0\n}\n",
     ));
@@ -244,7 +249,11 @@ fn an_argument_is_of_its_parameters_kind() {
             "m.hgl:10:43 local:type/generic.argument_kind GEN-14",
             "m.hgl:10:59 local:type/generic.argument_kind GEN-14",
             "m.hgl:11:36 local:type/generic.argument_kind GEN-14",
-            "m.hgl:14:22 local:type/generic.argument_kind GEN-14",
+            "m.hgl:13:38 local:type/generic.argument_kind GEN-14",
+            "m.hgl:13:53 local:type/generic.argument_kind GEN-14",
+            "m.hgl:15:46 local:type/generic.argument_kind GEN-14",
+            "m.hgl:15:81 local:type/generic.argument_kind GEN-14",
+            "m.hgl:17:22 local:type/generic.argument_kind GEN-14",
         ]
     );
     assert_eq!(
@@ -257,6 +266,10 @@ fn an_argument_is_of_its_parameters_kind() {
             "`Sized` takes a value for `N`, and `Side` is a type",
             "`Count` takes a value for `N`, and `list<i64>` is a type",
             "`Box` takes a type for `T`, and `7` is a value",
+            "`Sized` takes a value for `N`, and `One` is a type",
+            "`Sized` takes a value for `N`, and `Any` is a type",
+            "`Pair` takes a value for `N`, and `i64` is a type",
+            "`Row` takes a type for `Ts`, and `7` is a value",
             "`Sized` takes a value for `N`, and `T` is a type",
         ]
     );

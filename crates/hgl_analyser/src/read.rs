@@ -1571,11 +1571,14 @@ impl Reader<'_> {
 
         let mut arguments = Vec::new();
         // The parameter the next argument is given to. A pack takes
-        // every argument from its place on. After an argument that
-        // passes a pack on, how many it stands for is not known, and
-        // neither is the place of those after it.
-        let mut next = 0;
+        // every argument from its place on. An argument that passes a
+        // pack on stands for as many as the pack holds: when that is
+        // one number the place of those after it is still known, and
+        // otherwise it is not.
+        let mut next: usize = 0;
         let mut placed = true;
+        // The place of the target's pack parameter, when it has one.
+        let pack_at = parameters.iter().position(|(_, kind)| *kind == Kind::Pack);
         for argument in list.children() {
             let kind = argument.kind();
             if kind == SyntaxKind::Error {
@@ -1583,11 +1586,25 @@ impl Reader<'_> {
             }
             let parameter = if placed { parameters.get(next) } else { None };
             let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
-            if want != Kind::Pack {
-                next += 1;
-            }
-            if self.pack_bounds(&argument).is_some() {
-                placed = false;
+            let stands_for = match self.pack_bounds(&argument) {
+                None => Some(1),
+                Some((minimum, Some(maximum))) if minimum == maximum => Some(minimum),
+                Some(_) => None,
+            };
+            match stands_for {
+                // A pack parameter takes them all and stays the place.
+                Some(_) if want == Kind::Pack => {}
+                // A count past what a `usize` holds is past every
+                // parameter.
+                Some(count) => {
+                    next = next.saturating_add(usize::try_from(count).unwrap_or(usize::MAX));
+                    // What runs past the fixed parameters is given to
+                    // the pack after them, when there is one.
+                    if let Some(pack) = pack_at {
+                        next = next.min(pack);
+                    }
+                }
+                None => placed = false,
             }
             // What to say when the argument is of the other kind.
             let mismatch = |wanted: &str, given: &str| {
@@ -1641,12 +1658,13 @@ impl Reader<'_> {
     }
 
     /// True when `ty` is a generic parameter of the declaration being
-    /// read that is settled as a type.
+    /// read that is known to stand for types: one settled as a type, or
+    /// a type pack.
     fn is_type_parameter(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Parameter { at, .. } if self
-            .generics
-            .iter()
-            .any(|generic| generic.at == *at && generic.kind == GenericKind::Type))
+        matches!(ty, Type::Parameter { at, .. } if self.generics.iter().any(|generic| {
+            generic.at == *at
+                && matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+        }))
     }
 
     fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {
