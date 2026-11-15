@@ -28,7 +28,7 @@ use crate::constant::fold;
 use crate::program::{Declaration, DeclarationKind, Program};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, StructType, Type,
+    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, GenericKind, StructType, Type,
 };
 use crate::{codes, local_error};
 
@@ -399,6 +399,33 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     }
 }
 
+/// True when `ty` names one of the generic parameters declared at
+/// `declared`, itself or inside it.
+fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
+    if declared.is_empty() {
+        return false;
+    }
+    let inside = |inner: &Type| names_one_of(inner, declared);
+    match ty {
+        Type::Parameter { at, .. } => declared.contains(at),
+        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
+            Argument::Type(argument) => inside(argument),
+            Argument::Constant(_) => false,
+        }),
+        Type::Tuple(elements) => elements.iter().any(inside),
+        Type::List { element, .. } => inside(element),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => inside(inner),
+        Type::Dict { key, value } => inside(key) || inside(value),
+        Type::Rolling { value, .. } => inside(value),
+        Type::Result { value, error } => inside(value) || inside(error),
+        Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => false,
+    }
+}
+
 /// The most a type may weigh once arguments stand for its parameters.
 /// A type weighs one for itself and for each type inside it.
 const WEIGHT: usize = 10_000;
@@ -689,19 +716,9 @@ impl Structs<'_> {
             // this struct gives it. `zip` stops at the shorter, so a
             // wrong count, which has been reported, leaves the rest as
             // they are.
-            let map: Vec<(Location, &Argument)> = self
-                .struct_type(parent.id)
-                .map(|read| {
-                    read.generics
-                        .iter()
-                        .map(|generic| generic.at)
-                        .zip(&parent.arguments)
-                        .collect()
-                })
-                .unwrap_or_default();
             for field in &fields.all {
                 let field = Introduced {
-                    ty: substitute_within(&field.ty, &map),
+                    ty: self.in_place(&field.ty, parent.id, &parent.arguments),
                     via,
                     ..field.clone()
                 };
@@ -733,6 +750,36 @@ impl Structs<'_> {
             }
         }
         Fields { inherited, all }
+    }
+
+    /// A field's type `ty`, of the generic struct `id`, with `arguments`
+    /// in place of that struct's parameters.
+    ///
+    /// Each parameter before a type pack takes the argument in its
+    /// place. A pack takes a sequence of them (GEN-2), which this pass
+    /// does not put in place: a type that names the pack is not known.
+    /// A wrong count of arguments has been reported, and leaves the
+    /// parameters past it as they are.
+    fn in_place(&self, ty: &Type, id: Id, arguments: &[Argument]) -> Type {
+        let Some(read) = self.struct_type(id) else {
+            return ty.clone();
+        };
+        let fixed = read
+            .generics
+            .iter()
+            .take_while(|generic| !matches!(generic.kind, GenericKind::Pack { .. }));
+        let map: Vec<(Location, &Argument)> =
+            fixed.map(|generic| generic.at).zip(arguments).collect();
+        let packs: Vec<Location> = read
+            .generics
+            .iter()
+            .filter(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|generic| generic.at)
+            .collect();
+        if names_one_of(ty, &packs) {
+            return Type::Unknown;
+        }
+        substitute_within(ty, &map)
     }
 
     /// The fields the struct `id` has from its parents.
@@ -957,16 +1004,6 @@ impl Structs<'_> {
                 if path.contains(&id) || path.len() >= DEPTH {
                     return;
                 }
-                let map: Vec<(Location, &Argument)> = self
-                    .struct_type(id)
-                    .map(|read| {
-                        read.generics
-                            .iter()
-                            .map(|generic| generic.at)
-                            .zip(arguments)
-                            .collect()
-                    })
-                    .unwrap_or_default();
                 path.push(id);
                 for field in &fields.all {
                     // A field that names no parameter holds the same
@@ -979,7 +1016,7 @@ impl Structs<'_> {
                         break;
                     }
                     *budget -= 1;
-                    let given = substitute_within(&field.ty, &map);
+                    let given = self.in_place(&field.ty, id, arguments);
                     self.walk(&given, in_collection, found, path, budget);
                 }
                 path.pop();

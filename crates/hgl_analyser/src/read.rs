@@ -1613,18 +1613,28 @@ impl Reader<'_> {
             if kind == SyntaxKind::Error {
                 continue;
             }
-            let parameter = if placed { parameters.get(next) } else { None };
-            let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
-            let stands_for = match self.pack_bounds(&argument) {
-                None => Some(1),
-                Some((minimum, Some(maximum))) if minimum == maximum => Some(minimum),
-                Some(_) => None,
+            // How many arguments this one stands for: one, or for the
+            // name of a type pack as many as the pack holds, which is
+            // at least a number and may be exactly one.
+            let (at_least, exactly) = match self.pack_bounds(&argument) {
+                None => (1, Some(1)),
+                Some((minimum, maximum)) => {
+                    (minimum, maximum.filter(|maximum| *maximum == minimum))
+                }
             };
-            // A pack of several types fills as many places as it holds.
-            // Each after the first is a type given to that parameter
-            // too, and a value parameter among them takes none
-            // (GEN-14).
-            let covered = usize::try_from(stands_for.unwrap_or(1)).unwrap_or(usize::MAX);
+            // A pack that may hold nothing is given to no parameter for
+            // certain.
+            let parameter = if placed && at_least > 0 {
+                parameters.get(next)
+            } else {
+                None
+            };
+            let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            // A pack of several types fills as many places as it holds
+            // at least. Each after the first is a type given to that
+            // parameter too, and a value parameter among them takes
+            // none (GEN-14).
+            let covered = usize::try_from(at_least).unwrap_or(usize::MAX);
             let value_slot = parameters
                 .iter()
                 .skip(next.saturating_add(1))
@@ -1639,7 +1649,7 @@ impl Reader<'_> {
                 );
                 self.argument_kind(&argument, Some(message));
             }
-            match stands_for {
+            match exactly {
                 // A pack parameter takes them all and stays the place.
                 Some(_) if want == Kind::Pack => {}
                 // A count past what a `usize` holds is past every
@@ -1652,6 +1662,8 @@ impl Reader<'_> {
                         next = next.min(pack);
                     }
                 }
+                // How many it holds is a range: the place of the
+                // arguments after it is not known.
                 None => placed = false,
             }
             // What to say when the argument is of the other kind.
