@@ -588,6 +588,9 @@ impl<'a> Typer<'a> {
     /// expected type.
     fn tuple(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let items: Vec<SyntaxNode> = node.children().collect();
+        // True when nothing is expected of the tuple, which is not the
+        // same as what is expected not being known.
+        let unexpected = expected.is_none();
         let expected = match not_null(expected) {
             Some(Type::Tuple(expected)) if expected.len() == items.len() => Some(expected),
             _ => None,
@@ -595,13 +598,19 @@ impl<'a> Typer<'a> {
         let elements: Vec<Expr> = items
             .iter()
             .enumerate()
-            .map(|(index, item)| {
-                let expected = expected.map(|expected| &expected[index]);
-                let element = self.expression(item, expected);
-                match expected {
-                    Some(expected) => self.fit(element, expected, "this element of the tuple"),
-                    None => element,
+            .map(|(index, item)| match expected {
+                Some(expected) => {
+                    let expected = &expected[index];
+                    let element = self.expression(item, Some(expected));
+                    self.fit(element, expected, "this element of the tuple")
                 }
+                // Nothing is expected of the tuple, and so of its
+                // elements: `(null, 1)` gives its `null` no type.
+                None if unexpected => self.expression(item, None),
+                // What the place expects is not known, or is no tuple
+                // of this length: what an element is expected to be is
+                // not known either, and nothing is reported of that.
+                None => self.expression(item, Some(&Type::Unknown)),
             })
             .collect();
         // An element that does not fit has been reported: the tuple is
@@ -675,9 +684,17 @@ impl<'a> Typer<'a> {
         // An entry that takes its type from its place, `null`, says
         // nothing of what the sequence holds: the others are read
         // first, and it is then read as an element of their type.
+        // Where what the place expects is not known, what an entry is
+        // expected to be is not known either: the `[]` of `[[]]` is
+        // then not reported.
+        let of_entry = if unexpected {
+            None
+        } else {
+            Some(&Type::Unknown)
+        };
         let mut read: Vec<Option<Expr>> = items
             .iter()
-            .map(|item| (!takes_its_type(item)).then(|| self.expression(item, None)))
+            .map(|item| (!takes_its_type(item)).then(|| self.expression(item, of_entry)))
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
         // EXPR-9: "Entries of two types reject, and so do entries that
@@ -1909,7 +1926,13 @@ impl<'a> Typer<'a> {
             Type::Tuple(elements) => {
                 let integer = Type::Scalar(Scalar::I64);
                 let index = self.expression(&index, Some(&integer));
+                // EXPR-7: "by an `i64` index". An index of another type,
+                // `pair[0 / 1]` or `pair[0 == 0]`, is reported as that,
+                // and is not evaluated.
+                let is_integer = self.admits(&integer, &index.ty);
+                let index = self.fit(index, &integer, "the index of a tuple");
                 let element = match constant_index(&index) {
+                    _ if !is_integer => Some(&Type::Unknown),
                     Index::Known(value) => usize::try_from(value)
                         .ok()
                         .and_then(|position| elements.get(position)),

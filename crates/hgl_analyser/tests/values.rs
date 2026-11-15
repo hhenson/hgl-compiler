@@ -605,6 +605,10 @@ fn a_form_not_read_yet_is_not_reported() {
     let checked = module(concat!(
         "const fn later(a: i64) -> str {\n",
         "    let prelude = missing(a)\n",
+        // What the call expects is not known, and so is what the
+        // entries of its arguments are expected to be: the `null` and
+        // the `[]` inside are not reported.
+        "    let nested = missing((null, 1), [[]], [(null, [])])\n",
         "    let configured = a /{zero: .ieee} 2\n",
         "    var total: i64\n",
         "    if (a > 1) {\n        total = 1\n    } else {\n        total = 2\n    }\n",
@@ -620,6 +624,7 @@ fn a_form_not_read_yet_is_not_reported() {
         [
             "a: i64",
             "prelude: _",
+            "nested: _",
             "configured: _",
             "total: i64",
             "after: str",
@@ -964,6 +969,9 @@ fn an_element_is_read_by_its_index_or_its_key() {
         "    let outside = pair[1 + 1]\n",
         "    let divided = pair[2 // 2]\n",
         "    let mixed = pair[a + 1]\n",
+        // EXPR-7: the index is an `i64`.
+        "    let real = pair[0 / 1]\n",
+        "    let truth = pair[0 == 0]\n",
         "    return first\n",
         "}\n",
     ));
@@ -976,6 +984,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "m.hgl:11:23 type/tuple.index EXPR-7",
             "m.hgl:14:24 type/tuple.index EXPR-7",
             "m.hgl:16:22 type/tuple.index EXPR-7",
+            "m.hgl:17:21 type/type.mismatch EXPR-5",
+            "m.hgl:18:22 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -987,6 +997,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
+            "this is `f64`, and the index of a tuple is `i64`",
+            "this is `bool`, and the index of a tuple is `i64`",
         ]
     );
     assert_eq!(
@@ -1010,6 +1022,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "outside: _",
             "divided: _",
             "mixed: _",
+            "real: _",
+            "truth: _",
         ]
     );
 }
