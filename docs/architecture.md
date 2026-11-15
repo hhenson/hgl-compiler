@@ -330,10 +330,19 @@ The declarations are then read against one another:
 | A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, and never through the elements of a list, set, dictionary or window, inside an `atomic<...>` or not. Holding itself through a parent's field counts |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
-A struct holds another when a field's type names it anywhere, or it
-inherits from it. Structs that hold one another are found as the
-strongly connected groups of that graph, as modules that import one
-another are.
+A struct holds the structs its fields hold: its own fields and those it
+has from its parents, with the arguments it gives each parent in place
+of the parent's parameters. A field holds every struct its type names,
+and what a generic struct among them holds once its arguments stand for
+its parameters: with `struct Boxed<T> { values: list<T> }`, a
+`Boxed<Node>` holds `Node`s as the elements of a list. Structs that hold
+one another are found as the strongly connected groups of that graph,
+as modules that import one another are.
+
+A fault in a struct's own field is reported at the field. One that is
+in what a struct gives a parent, as in `struct Child : Base<Child>`
+where `Base<T>` has a field of type `T`, is reported where the struct
+names the parent.
 
 The fields of each struct are worked out once, from those of its
 parents, and a field that reaches a struct by two paths is listed once.

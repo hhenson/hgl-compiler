@@ -1005,12 +1005,18 @@ fn a_temporal_parameter_has_no_default() {
         "native const fn native_value(first: f64 = 1.0) -> f64\n",
         "fn temporal(first: f64, second: f64 = 2.0) -> f64 {}\n",
         "native fn native_temporal(first: f64 = 1.0) -> f64\n",
+        // A native implementation is no way round the rule.
+        "native fn completed(first: f64) -> f64\n",
+        "native fn completed(first: f64 = 1.0) -> f64 { when; }\n",
+        "native const fn completed_value(first: f64) -> f64\n",
+        "native const fn completed_value(first: f64 = 1.0) -> f64 { }\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:5:25 local:function-kind/default.temporal_parameter UNIT-8",
             "m.hgl:6:27 local:function-kind/default.temporal_parameter UNIT-8",
+            "m.hgl:8:21 local:function-kind/default.temporal_parameter UNIT-8",
         ]
     );
     assert_eq!(

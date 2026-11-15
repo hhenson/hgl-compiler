@@ -644,10 +644,13 @@ impl Reader<'_> {
 
             // UNIT-8: "Value-function parameters and const configuration
             // may have defaults; ordinary temporal parameters may not."
+            // A native implementation states its signature again
+            // (NATIVE-2), and is held to the rule as its declaration is.
             let temporal = matches!(
                 kind,
                 DeclarationKind::Function(Role::Temporal)
                     | DeclarationKind::NativeFunction(Role::Temporal)
+                    | DeclarationKind::NativeImplementation(Role::Temporal)
             );
             if temporal && has_default && !constant && pack.is_none() {
                 self.diagnostics.emit(
