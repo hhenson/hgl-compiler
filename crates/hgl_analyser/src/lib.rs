@@ -270,6 +270,13 @@ pub mod codes {
     /// A tuple's index is no constant, or is outside the tuple
     /// (EXPR-7).
     pub const TUPLE_INDEX: &str = "tuple.index";
+    /// A value function that declares a result can reach its end with
+    /// no value (FN-7).
+    pub const RETURN_MISSING: &str = "return.missing";
+    /// A `switch` label has the value of an earlier label (CTRL-6).
+    pub const SWITCH_DUPLICATE_LABEL: &str = "switch.duplicate_label";
+    /// A `while` with no condition in a value function (CTRL-12).
+    pub const WHILE_CONDITION: &str = "while.condition";
 
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
@@ -308,6 +315,24 @@ impl ParsedFile {
             omit: Vec::new(),
         }
     }
+}
+
+/// A stack size, in bytes, on which analysing source parsed within
+/// `limits` does not overflow.
+///
+/// The analyser reads the tree by calling itself for what is nested: a
+/// block inside an `if` inside a block, a member of a member, the `if`
+/// of an `else if`. A chain of binary operators is read in a loop and
+/// costs none. Measured in an unoptimised build, a level of nesting
+/// costs about 12 KiB and a level of tree depth about 6 KiB. This
+/// allows near three times that, on top of 1 MiB.
+pub fn stack_size(limits: hgl_parser::Limits) -> usize {
+    const KIB: usize = 1024;
+    // `saturating_*` stops at the largest number instead of wrapping
+    // round to a small one when the limits are absurdly large.
+    (1024 * KIB)
+        .saturating_add(limits.nesting.saturating_mul(32 * KIB))
+        .saturating_add(limits.tree_depth.saturating_mul(16 * KIB))
 }
 
 /// Analyses a program: every file of every module it is made of.

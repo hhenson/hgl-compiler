@@ -189,12 +189,16 @@ fn main() -> ExitCode {
             // runs on another thread.
             on_stack_of(stack, move || tree(&arguments))
         }
+        // A command that analyses needs the analyser's stack too, which
+        // is the larger.
         Command::Check(arguments) => {
-            let stack = arguments.limits.limits().stack_size();
+            let limits = arguments.limits.limits();
+            let stack = limits.stack_size().max(hgl_analyser::stack_size(limits));
             on_stack_of(stack, move || check(&arguments))
         }
         Command::Test(arguments) => {
-            let stack = arguments.limits.limits().stack_size();
+            let limits = arguments.limits.limits();
+            let stack = limits.stack_size().max(hgl_analyser::stack_size(limits));
             on_stack_of(stack, move || test(&arguments))
         }
     }
@@ -203,11 +207,11 @@ fn main() -> ExitCode {
 /// Runs `work` on a thread of its own with `stack` bytes of stack, and
 /// gives the exit status it returns.
 ///
-/// Parsing uses the call stack in proportion to the nesting it is allowed
-/// to read. The stack of a program's first thread is fixed by the system,
-/// and small on some (1 MiB on Windows), so a command that parses runs on
-/// a thread whose stack is sized for the limits it was given. That is what
-/// lets the limits be raised.
+/// Parsing and analysing use the call stack in proportion to the nesting
+/// they are allowed to read. The stack of a program's first thread is
+/// fixed by the system, and small on some (1 MiB on Windows), so a
+/// command that parses runs on a thread whose stack is sized for the
+/// limits it was given. That is what lets the limits be raised.
 fn on_stack_of(stack: usize, work: impl FnOnce() -> ExitCode + Send + 'static) -> ExitCode {
     match std::thread::Builder::new().stack_size(stack).spawn(work) {
         // `join` waits for the thread. If the thread panicked, the panic

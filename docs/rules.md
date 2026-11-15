@@ -153,7 +153,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
 | EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected. Left: operators and their configuration; what a pack holds; a generic function's parameter types; temporal bodies |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
-| EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned. Left: assignment through control flow; values against connections; inner declarations |
+| EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned, through `if`, `switch` and loops (CTRL-11). Left: values against connections; temporal bodies |
 | EXPR-4 | analyser | planned | Values and connections kept distinct; reassigning a graph `var` rewires |
 | EXPR-5 | analyser | partial | A value fits the type its place expects; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type. Left: const expression restrictions; temporal bodies |
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
@@ -185,7 +185,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
-| FN-7 | analyser | partial | A value function's `return` and arrow body are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is. Left: return by phase; a function that ends without returning; an anonymous function's context |
+| FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). Left: return by phase; an anonymous function's context |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
@@ -259,14 +259,19 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-3 | analyser | planned | Type of a temporal `if` without `else` |
 | CTRL-3 | transpiler | planned | The never-ticking branch |
 | CTRL-4 | analyser | planned | Escaping assignments need an enclosing declaration; branch locals stay local |
-| CTRL-5 | analyser | planned | Return targets the enclosing function; definite assignment after an early return |
-| CTRL-6 | analyser | planned | Switch labels are typed constants; duplicates rejected; enum coverage |
+| CTRL-5 | analyser | partial | In a value function, a path that has returned takes no part in what is assigned or in the type of an `if`. Left: composition and runtime bodies |
+| CTRL-6 | analyser | partial | In a value function, a label is of the selector's type; a repeated literal or enum member is rejected (`switch.duplicate_label`); an enum's coverage stands for a `default`. Left: a label that is no constant; temporal bodies |
 | CTRL-6 | transpiler | planned | No fallthrough; an unmatched selector uses default or fails |
 | CTRL-7 | analyser | planned | What a composition loop receives |
 | CTRL-7 | transpiler | planned | One child per member; update keeps it, removal stops it |
 | CTRL-8 | analyser | planned | Traversal forms; no loop-carried accumulation in a dynamic composition loop |
 | CTRL-8 | transpiler | planned | Traversal over current values, lists in index order |
 | CTRL-9 | parser | done | The first `{` outside parentheses, brackets and configuration opens the body of an `if`, `for`, `switch`, `when` or `while` |
+| CTRL-10 | analyser | partial | In a value function: a block's value; a `bool` condition; the type of an `if` whose value is used, with an `else` and without. Left: temporal bodies |
+| CTRL-10 | transpiler | planned | A block and an `if` as values |
+| CTRL-11 | analyser | partial | In a value function: what is assigned after an `if`, a `switch` and a loop; a `var` written `T?` is null from its declaration. Left: temporal bodies |
+| CTRL-12 | analyser | partial | In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector. Left: a label that is no constant |
+| CTRL-12 | transpiler | planned | The loops and the `switch` of a value function |
 | SOURCE-1 | analyser | planned | What a body containing `yield` may hold |
 | SOURCE-2 | transpiler | planned | Yield evaluates its time, then its payload; target validation |
 | SOURCE-3 | transpiler | planned | Targets strictly increase; skip, publish or suspend |
@@ -312,7 +317,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-9 | analyser | partial | A type that is not known is reported once, and nothing is reported of its uses. Left: required constant failures |
 | ERR-9 | optimiser | planned | Folding keeps the failure phase of an executed operation |
 | ERR-10 | parser | done | `@suppress_warning("...")` before a named function |
-| ERR-10 | analyser | planned | The string is checked against the warning catalogue |
+| ERR-10 | analyser | planned | The string is checked against the warning catalogue; the warning `statement.no_effect` |
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
 | ERR-12 | analyser | planned | A null test refines an immutable nullable binding |
 

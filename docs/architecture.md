@@ -200,13 +200,15 @@ is never deeper than the second. An `else if` ladder and a chain such as
 These are the compiler's and the caller sets them (`hgl_parser::Limits`):
 configurable, starting from these defaults (owner decision, 2026-11-14).
 
-Each level costs stack: in an unoptimised build, about 1.5 KiB for a level
-of nesting and 0.4 KiB for a level of tree depth. `Limits::stack_size`
-allows ten times that, and `hgl` runs a command that parses on a thread
-with a stack of that size, so raising a limit needs nothing else. The
-defaults fit in half of the smallest stack the compiler meets, the 1 MiB of
-a Windows main thread. The analyser walks the tree the same way and is
-tested to fit that half at the default limits.
+Each level costs stack. In an unoptimised build the parser uses about
+1.5 KiB for a level of nesting and 0.4 KiB for a level of tree depth, and
+`Limits::stack_size` allows ten times that. The analyser reads the tree
+the same way and uses more: about 12 KiB for a level of nesting and 6 KiB
+for a level of tree depth, a chain of binary operators costing none since
+it is read in a loop; `hgl_analyser::stack_size` allows near three times
+that. `hgl` runs a command on a thread with the larger of the stacks its
+stages ask for, so raising a limit needs nothing else, and each stage is
+tested to fit what it asks for at the default limits.
 
 ## Analyser
 
@@ -450,8 +452,8 @@ widened (EXPR-5). A value that has a type is not converted: an `i64`
 binding where an `f64` is expected is rejected.
 
 What the pass does not read yet has no type, and nothing is reported of
-it or of what uses it (ERR-9): an operator given configuration, `if`,
-`switch`, `for`, a pair sequence, a call of a name left for the prelude
+it or of what uses it (ERR-9): an operator given configuration, a pair
+sequence, a call of a name left for the prelude
 or of an operator that has a pack or a generic value candidate, a generic
 function's parameter and result types, the payload of a nullable or a
 result. The arguments of a call that is not
@@ -485,6 +487,23 @@ places none of its own before or after them.
 
 Its rejection is `default.order`, and a tuple's index that is no
 constant or is outside the tuple is `tuple.index`.
+
+Control flow in a value function is read as it is written (CTRL-10 to
+CTRL-12, FN-7). A block has the value of its last statement when that is
+an expression, and so has the function's body, which returns it. An `if`
+has a `bool` condition and the one type its branches have: a null branch
+makes it `T?`, as does a missing `else`, and a branch that returns takes
+no part. `for` binds each element of a list or a set, or a dictionary's
+key and value; `while` has a `bool` condition; a `switch` selects on a
+`bool`, `i64`, `str` or enum value and its labels are of that type. What
+is assigned is followed along each path: after an `if` or a `switch`,
+what every branch that does not return assigns, an enum's coverage
+standing for a `default`; nothing a loop's body assigns; and a `var`
+written `T?` from its declaration, where it is null. A function that
+declares a result returns on every path, or is `return.missing`. The
+typed body keeps blocks, `if`, the loops and `switch` as they are
+written. Not read yet: whether a `switch` label is a constant, and the
+warning for a statement with no effect (ERR-10).
 
 A call of an operator by its name selects one of the operator's value
 candidates (GEN-5, FN-3). The arguments are given to the operator's
