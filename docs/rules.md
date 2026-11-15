@@ -139,7 +139,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
-| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout; a set's element and a dictionary's key take none. Left: null is no value of plain T |
+| TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input; a set's element and a dictionary's key take none. Left: null is no value of plain T; an input with `?` may be omitted by a call |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 

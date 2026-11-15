@@ -202,6 +202,10 @@ struct Position {
     value: Option<(&'static str, &'static str)>,
     /// True where `signal` may stand.
     signal: bool,
+    /// True where `?` may follow a type that is no ordinary value type:
+    /// the whole type of an input, whose argument may then be omitted
+    /// (TYPE-14).
+    omissible: bool,
     /// True where the name of a type pack may stand.
     pack: bool,
     /// True where the name of a generic value parameter may stand.
@@ -215,14 +219,17 @@ impl Position {
     const PLAIN: Position = Position {
         value: None,
         signal: false,
+        omissible: false,
         pack: false,
         constant: false,
         bare: false,
     };
 
-    /// The whole type of an input: `signal` may stand (TYPE-12).
+    /// The whole type of an input: `signal` may stand (TYPE-12), and so
+    /// may `?` after a type that is no ordinary value type (TYPE-14).
     const INPUT: Position = Position {
         signal: true,
+        omissible: true,
         ..Position::PLAIN
     };
 
@@ -247,6 +254,7 @@ impl Position {
     const OPEN: Position = Position {
         value: None,
         signal: true,
+        omissible: true,
         pack: true,
         constant: true,
         bare: true,
@@ -1014,20 +1022,26 @@ impl Reader<'_> {
     /// `T?` (TYPE-14, TYPE-15).
     ///
     /// TYPE-14: "`T?` denotes an ordinary value that is either a T or
-    /// null, where T is an admitted ordinary value type." TYPE-15:
-    /// "The suffix admits only ordinary value types; applying it to
-    /// `ref<T>` or `signal` rejects under TYPE-12/14 rather than
-    /// creating nullable endpoint handles."
+    /// null, where T is an admitted ordinary value type ... Where T is
+    /// no ordinary value type ... `T?` is admitted only as the whole
+    /// type of a function's temporal parameter: its argument may be
+    /// omitted ... It is no result type."
     fn nullable(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let Some(base) = type_child(node) else {
             return Type::Unknown;
         };
-        // The whole of what `?` is applied to is an ordinary value
-        // type: `list<ref<f64>>?` is no more one than `ref<f64>?`.
-        // Where the place around it asks for one already, that place is
-        // the one named.
         let base_position = match position.value {
+            // Where the place around it asks for an ordinary value
+            // type already, that place is the one named.
             Some(_) => position,
+            // The whole type of an input: any type the input may have.
+            None if position.omissible => Position {
+                omissible: false,
+                ..position
+            },
+            // Anywhere else the whole of what `?` is applied to is an
+            // ordinary value type: `list<ref<f64>>?` is no more one
+            // than `ref<f64>?`.
             None => Position::value("what `?` is applied to", "TYPE-14"),
         };
         Type::Nullable(Box::new(self.type_(&base, base_position)))

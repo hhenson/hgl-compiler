@@ -704,18 +704,24 @@ fn signal_is_the_whole_type_of_an_input() {
 }
 
 /// TYPE-14: "`T?` denotes an ordinary value that is either a T or null,
-/// where T is an admitted ordinary value type." TYPE-15: "The suffix
-/// applies to the complete preceding type ... applying it to `ref<T>` or
-/// `signal` rejects under TYPE-12/14 rather than creating nullable
-/// endpoint handles."
+/// where T is an admitted ordinary value type ... Where T is no ordinary
+/// value type ... `T?` is admitted only as the whole type of a
+/// function's temporal parameter: its argument may be omitted ... It is
+/// no result type."
 #[test]
 fn a_nullable_type_is_an_ordinary_value_or_null() {
     let checked = module(concat!(
         "const fn good(a: f64?, b: list<f64?>, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
-        "fn endpoints(a: ref<f64>?, b: signal?, c: list<ref<f64>?>) -> ref<f64>? {}\n",
-        // The whole of what `?` is applied to is an ordinary value.
-        "fn shapes(a: rolling<f64, 5>?, b: atomic<i64>?, c: list<ref<f64>>?,\n",
-        "    d: dict<str, tuple<i64, rolling<f64, 5>>>?) {}\n",
+        // On the whole type of an input `?` follows any type: the
+        // argument may be omitted.
+        "fn inputs(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
+        // Not in a result, a field, a part of another type, a value
+        // function's parameter or a `const` one.
+        "fn output() -> ref<f64>? {}\n",
+        "struct Field { next: atomic<i64>? }\n",
+        "fn parts(a: list<ref<f64>?>, b: dict<str, rolling<f64, 5>?>) {}\n",
+        "const fn values(a: rolling<f64, 5>?) -> i64 => 1\n",
+        "fn configured(const a: ref<f64>?) {}\n",
         // As what a set's element must be, and as a key that takes no
         // `?`.
         "fn once(a: set<ref<f64>?>) {}\n",
@@ -723,16 +729,14 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:17 type/type.not_ordinary TYPE-14",
-            "m.hgl:3:31 type/type.not_ordinary TYPE-14",
-            "m.hgl:3:48 type/type.not_ordinary TYPE-14",
-            "m.hgl:3:63 type/type.not_ordinary TYPE-14",
-            "m.hgl:4:14 type/type.not_ordinary TYPE-14",
-            "m.hgl:4:35 type/type.not_ordinary TYPE-14",
-            "m.hgl:4:57 type/type.not_ordinary TYPE-14",
-            "m.hgl:5:29 type/type.not_ordinary TYPE-14",
-            "m.hgl:6:16 type/nullable.key TYPE-14",
-            "m.hgl:6:16 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:16 type/type.not_ordinary TYPE-14",
+            "m.hgl:5:22 type/type.not_ordinary TYPE-14",
+            "m.hgl:6:18 type/type.not_ordinary TYPE-14",
+            "m.hgl:6:43 type/type.not_ordinary TYPE-14",
+            "m.hgl:7:20 type/type.not_ordinary FN-1",
+            "m.hgl:8:24 type/type.not_ordinary TYPE-12",
+            "m.hgl:9:16 type/nullable.key TYPE-14",
+            "m.hgl:9:16 type/type.not_ordinary TYPE-12",
         ]
     );
     assert_eq!(
@@ -741,7 +745,11 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     );
     assert_eq!(
         checked.findings[4].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and what `?` is applied to is one"
+        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is one"
+    );
+    assert_eq!(
+        signature(&checked, "inputs"),
+        "(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?)"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
