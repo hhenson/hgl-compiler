@@ -831,6 +831,23 @@ fn a_recursive_field_stays_within_its_module() {
     );
 }
 
+/// GEN-10: a pack a struct passes on to a parent between is placed
+/// there too, where only some of that parent's arguments are known.
+#[test]
+fn a_pack_is_placed_among_arguments_partly_known() {
+    let checked = module(concat!(
+        "abstract struct Base<T> { value: T }\n",
+        "abstract struct Middle<A, B, C, D> : Base<list<C>> { rest: tuple<A, B, D> }\n",
+        // The two types of `Us` are `A` and `B`, so `C` is `str`.
+        "struct Child<...Us{2}> : Middle<Us, str, i64> { next: Base<list<str>> }\n",
+        "struct Other<...Us{2}> : Middle<Us, i64, str> { next: Base<list<str>> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:49 type/field.recursive TYPE-6"]
+    );
+}
+
 /// TYPE-6: a struct that reaches an abstract struct by two lines of
 /// parents is a descendant of it by either, each with the arguments
 /// that line gives.

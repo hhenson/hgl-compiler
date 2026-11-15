@@ -1062,16 +1062,44 @@ impl Structs<'_> {
                     packs: &self.packs,
                     open: false,
                 };
-                // `collect` into an `Option` gives `None` when any
-                // item is `None`: what the parent is applied to is
-                // then not all known, and what is known is compared.
-                let fits = match given.iter().cloned().collect::<Option<Vec<Argument>>>() {
-                    Some(given) => arguments_may_be(&given, applied, &mut matching),
-                    None => given.iter().zip(applied).all(|(given, applied)| {
-                        given
-                            .as_ref()
-                            .is_none_or(|given| may_be(given, applied, &mut matching))
-                    }),
+                // What is known of the parent's arguments is in the
+                // places of what the child writes, but where the parent
+                // has a type pack of its own: one entry then stands
+                // for a run of arguments.
+                let unplaced = given.iter().any(Option::is_none)
+                    && self.struct_type(parent).is_some_and(|read| {
+                        read.generics
+                            .iter()
+                            .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+                    });
+                let packs = &self.packs;
+                let pack_of = |argument: &Argument| match argument {
+                    Argument::Type(ty) => pack_of(ty, packs),
+                    Argument::Constant(_) => None,
+                };
+                // An argument not known may be anything.
+                let mut each = |given: &Option<Argument>, applied: &Argument| {
+                    given
+                        .as_ref()
+                        .is_none_or(|given| may_be(given, applied, &mut matching))
+                };
+                let fits = if !unplaced {
+                    in_sequence(
+                        &given,
+                        applied,
+                        &|given| given.as_ref().is_some_and(|given| pack_of(given).is_some()),
+                        &pack_of,
+                        &mut each,
+                    )
+                } else if applied.iter().any(|applied| pack_of(applied).is_some()) {
+                    // A pack passed on to a parent that has one: the
+                    // places are not known.
+                    true
+                } else {
+                    given
+                        .iter()
+                        .zip(applied)
+                        .all(|(given, applied)| each(given, applied))
                 };
                 let bound = matching.bound;
                 if !fits {
@@ -1507,21 +1535,24 @@ fn pack_of(ty: &Type, packs: &Packs) -> Option<Cardinality> {
 /// [`may_be`], for the arguments one generic type is given.
 fn arguments_may_be(given: &[Argument], applied: &[Argument], found: &mut Matching<'_>) -> bool {
     let packs = found.packs;
+    let pack_of = |argument: &Argument| match argument {
+        Argument::Type(ty) => pack_of(ty, packs),
+        Argument::Constant(_) => None,
+    };
     in_sequence(
         given,
         applied,
-        &|argument| match argument {
-            Argument::Type(ty) => pack_of(ty, packs),
-            Argument::Constant(_) => None,
-        },
+        &|given| pack_of(given).is_some(),
+        &pack_of,
         &mut |given, applied| may_be(given, applied, found),
     )
 }
 
 /// True when the sequence a struct writes, `applied`, may be the
 /// sequence `given`: the arguments of a generic type, or the elements
-/// of a tuple. `pack_of` gives the cardinality of an item that passes
-/// on a type pack, and `each` matches one item with another.
+/// of a tuple. `passes_on` says whether an item of `given` passes on a
+/// type pack, `pack_of` gives the cardinality of one of `applied` that
+/// does, and `each` matches one item with another.
 ///
 /// A type pack passed on stands for a run of items (GEN-10), as many
 /// as the items before and after it leave, which is a number the pack
@@ -1530,13 +1561,14 @@ fn arguments_may_be(given: &[Argument], applied: &[Argument], found: &mut Matchi
 /// `f64`; a `Base<Row<str, f64>>` is none. Which types a pack holds is
 /// not recorded. Where `given` passes on a pack, or `applied` two, the
 /// places are not known and the sequences may be one.
-fn in_sequence<T>(
-    given: &[T],
-    applied: &[T],
-    pack_of: &dyn Fn(&T) -> Option<Cardinality>,
-    each: &mut dyn FnMut(&T, &T) -> bool,
+fn in_sequence<G, A>(
+    given: &[G],
+    applied: &[A],
+    passes_on: &dyn Fn(&G) -> bool,
+    pack_of: &dyn Fn(&A) -> Option<Cardinality>,
+    each: &mut dyn FnMut(&G, &A) -> bool,
 ) -> bool {
-    if given.iter().any(|item| pack_of(item).is_some()) {
+    if given.iter().any(passes_on) {
         return true;
     }
     let mut passed_on = applied
@@ -1604,6 +1636,7 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
             in_sequence(
                 given,
                 applied,
+                &|ty| pack_of(ty, packs).is_some(),
                 &|ty| pack_of(ty, packs),
                 &mut |given, applied| type_may_be(given, applied, found),
             )
