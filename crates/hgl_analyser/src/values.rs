@@ -3382,15 +3382,21 @@ fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
             .last()
             .map(|name| OptionValue::Member(name.text().to_string())),
         SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
-            match constant_of(&node.children().next()?)? {
-                OptionValue::Literal(Value::Int(value)) => {
-                    Some(OptionValue::Literal(Value::Int(value.checked_neg()?)))
-                }
-                OptionValue::Literal(Value::Float(value)) => {
-                    Some(OptionValue::Literal(Value::Float(-value)))
-                }
-                _ => None,
+            let operand = node.children().next()?;
+            // LEX-7: the least `i64` is written as a minus over 2^63,
+            // which is itself no `i64`.
+            if is_least_magnitude(&operand) {
+                return Some(OptionValue::Literal(Value::Int(i64::MIN)));
             }
+            let value = match constant_of(&operand)? {
+                OptionValue::Literal(Value::Int(value)) => Value::Int(value.checked_neg()?),
+                OptionValue::Literal(Value::Float(value)) => Value::Float(-value),
+                OptionValue::Literal(Value::Duration(value)) => {
+                    Value::Duration(value.checked_neg()?)
+                }
+                _ => return None,
+            };
+            Some(OptionValue::Literal(value))
         }
         SyntaxKind::Literal => {
             let token = tokens(node).next()?;

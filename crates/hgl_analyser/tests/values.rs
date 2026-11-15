@@ -2285,7 +2285,16 @@ fn an_options_value_is_compared_as_a_value() {
         "operator near<V>(value: V) -> i64\n",
         "impl const fn near(value: f64, within: f64 = 0.0) -> i64\n",
         "    requires within == 1.0 => 1\n",
+        // A number under a minus: the least `i64`, whose magnitude is
+        // no `i64` (LEX-7), and a duration.
+        "operator floor<V>(value: V) -> i64\n",
+        "impl const fn floor(value: i64, least: i64 = 0) -> i64\n",
+        "    requires least == -9223372036854775808 => 1\n",
+        "impl const fn floor(value: f64, offset: duration = 0s) -> i64\n",
+        "    requires offset == -1s => 2\n",
         "const fn uses(x: f64) {\n",
+        "    let least = floor(1, least: -9223372036854775808)\n",
+        "    let offset = floor(x, offset: -1s)\n",
         // Each is one candidate: were the two strings taken for one,
         // the second call would be ambiguous.
         "    let exact = mark(1)\n",
@@ -2302,13 +2311,15 @@ fn an_options_value_is_compared_as_a_value() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:22:17 operator/operator.no_candidate GEN-5",
-            "m.hgl:23:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:29:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:30:17 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
-        locals(&checked, "uses")[1..7],
+        locals(&checked, "uses")[1..9],
         [
+            "least: i64",
+            "offset: i64",
             "exact: str",
             "spaced: str",
             "default: i64",
