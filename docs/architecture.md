@@ -228,7 +228,7 @@ It is built in passes:
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
-| Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | planned |
+| Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
 | Value expressions | The type of every expression of a value function and of every constant | | planned |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
@@ -371,6 +371,47 @@ The rejections of this pass have no catalogue row either:
 | `enum.duplicate_value` | Two members with one number |
 | `enum.overflow` | Numbering past the largest `i64` |
 | `enum.duplicate_member` | Two members of an enum with one name |
+
+### Generic kinds
+
+A generic parameter is a type, a type pack or a value (GEN-13). `...Ts`
+and `const N: V` say which. A parameter written plain, `T`, is what its
+signature uses it as:
+
+| Use in the signature | Makes it |
+| --- | --- |
+| A type: of a parameter, a result, a field, a part of one, after `...` | A type |
+| In a size or a default | A value |
+| An argument of a generic type | What that type's parameter is, once that is settled |
+| In a `requires` clause | Nothing yet: the pass that reads constraints says |
+
+Uses that disagree are rejected, and so is a parameter that nothing in
+the signature or a constraint names. A use in a body does not count:
+the rule infers a kind "from signature positions and constraints".
+Neither does being handed on to a parameter that nothing settles: in
+`struct Node<T> { next: atomic<Node<T>> = null }` nothing says what `T`
+is. That is reported at the struct, and not again at each function
+that is given one.
+
+A use as an argument depends on another declaration, and structs name
+one another freely. So before any type is reported on, the structs are
+read again and again, each reading using the kinds the one before
+settled, until one settles nothing more. A kind once settled stays, so
+this ends after at most as many readings as there are plain parameters.
+What those readings report is thrown away; the pass proper reports it
+once, with every kind known.
+
+With the kinds known, each generic argument is read for the parameter
+it is given to (GEN-14): a value where a type goes, or a type where a
+value goes, is rejected. A lone name is read as a type by the parser;
+here it is a constant when it names a value parameter, or a plain one
+given where a value goes.
+
+| Local code | Rejection |
+| --- | --- |
+| `generic.kind_conflict` | A generic parameter used as a type and as a value |
+| `generic.kind_unresolved` | A generic parameter nothing in the signature or a constraint names |
+| `generic.argument_kind` | A generic argument of the other kind than its parameter |
 
 ### Order
 

@@ -30,9 +30,11 @@
 //!   and a rule does not: a pack with a default, a hook a native
 //!   implementation cannot have (FN-8, NATIVE-3);
 //! * `read` turns every written type into a [`Type`], records each
-//!   declaration's signature or fields, and rejects a type made of what
-//!   its place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12,
-//!   TYPE-14, GEN-2);
+//!   declaration's signature or fields, rejects a type made of what its
+//!   place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12, TYPE-14,
+//!   GEN-2), and settles whether each generic parameter is a type or a
+//!   value, checking each generic argument against that (GEN-13,
+//!   GEN-14);
 //! * `declared` reads the declarations against one another: a struct's
 //!   parents and fields, the structs that hold themselves, and an
 //!   enum's numbering (TYPE-3, TYPE-4, TYPE-6, TYPE-7).
@@ -181,6 +183,15 @@ pub mod codes {
         pub const GENERIC_ARGUMENT_COUNT: &str = "generic.argument_count";
         /// A list's size is not a nonnegative count (TYPE-10).
         pub const LIST_SIZE: &str = "list.size";
+        /// A generic parameter is used as a type and as a value
+        /// (GEN-13).
+        pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
+        /// Nothing in a signature says whether a generic parameter is a
+        /// type or a value (GEN-13).
+        pub const GENERIC_KIND_UNRESOLVED: &str = "generic.kind_unresolved";
+        /// A generic argument is a type where the parameter is a value,
+        /// or a value where it is a type (GEN-14).
+        pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
         /// A temporal parameter has a default (UNIT-8).
         pub const DEFAULT_TEMPORAL_PARAMETER: &str = "default.temporal_parameter";
         /// A struct's parent is not an abstract struct (TYPE-3).
@@ -208,12 +219,15 @@ pub mod codes {
         pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 16] = [
+        pub const ALL: [&str; 19] = [
             TYPE_NOT_A_TYPE,
             TYPE_NOT_ORDINARY,
             SIGNAL_POSITION,
             GENERIC_ARGUMENT_COUNT,
             LIST_SIZE,
+            GENERIC_KIND_CONFLICT,
+            GENERIC_KIND_UNRESOLVED,
+            GENERIC_ARGUMENT_KIND,
             DEFAULT_TEMPORAL_PARAMETER,
             STRUCT_PARENT,
             STRUCT_INHERITANCE_CYCLE,

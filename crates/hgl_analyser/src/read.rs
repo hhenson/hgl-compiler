@@ -40,34 +40,16 @@ use crate::{codes, error, local_error};
 /// Reads the types of every module, filling in [`Module::details`] and
 /// [`Module::written`].
 pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
+    // A generic argument is read for the parameter it is given to, so
+    // the kind of every struct's parameters is settled first (GEN-13).
+    let kinds = struct_kinds(program);
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
-        // A module is made from at least one file.
-        let Some(first) = module.files.first() else {
-            continue;
-        };
         // The reader reads the whole program and so cannot change it.
         // What it finds is taken out when it is done, and written back.
-        let mut reader = Reader {
-            program,
-            module,
-            file: first.file,
-            // What each name resolved to, by where it is used (UNIT-10).
-            bindings: module
-                .uses
-                .iter()
-                .map(|used| ((used.at.file, used.at.span.start), &used.binding))
-                .collect(),
-            constructors: module
-                .decisions
-                .iter()
-                .filter(|decision| decision.constructor == Some(true))
-                .map(|decision| (decision.at.file, decision.at.span.start))
-                .collect(),
-            generics: Vec::new(),
-            read: HashMap::new(),
-            written: Vec::new(),
-            diagnostics,
+        // A module is made from at least one file.
+        let Some(mut reader) = Reader::new(program, module, &kinds, diagnostics) else {
+            continue;
         };
         let mut details = Vec::with_capacity(module.declarations.len());
         for declaration in &module.declarations {
@@ -95,6 +77,118 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
         module.details = details;
         module.written = written;
     }
+}
+
+/// What a generic parameter is, as far as is known (GEN-13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A type.
+    Type,
+    /// A compile-time value.
+    Value,
+    /// A type pack.
+    Pack,
+    /// Not settled.
+    Unknown,
+}
+
+impl Kind {
+    fn of(kind: &GenericKind) -> Kind {
+        match kind {
+            GenericKind::Plain => Kind::Unknown,
+            GenericKind::Type => Kind::Type,
+            GenericKind::Pack { .. } => Kind::Pack,
+            GenericKind::Value(_) => Kind::Value,
+        }
+    }
+}
+
+/// A declaration, by the position of its module in `Program::modules`
+/// and its own in that module's `declarations`.
+type Id = (usize, usize);
+
+/// The kind of each generic parameter of every struct of the program.
+type Kinds = HashMap<Id, Vec<Kind>>;
+
+/// Settles the kind of each generic parameter of every struct.
+///
+/// A parameter written plain, `T`, is a type or a value by how the
+/// struct's parents and fields use it (GEN-13). One use is as an
+/// argument of another struct, `Grid<N>`, which says what `N` is only
+/// when the kind of `Grid`'s parameter is known. So the structs are read
+/// again and again, each time with what the time before settled, until a
+/// reading settles nothing more. What these readings report is thrown
+/// away: `read` reports it once, reading with every kind known.
+fn struct_kinds(program: &Program) -> Kinds {
+    let mut kinds = Kinds::new();
+    for (module, declared) in program.modules.iter().enumerate() {
+        for (index, declaration) in declared.declarations.iter().enumerate() {
+            if declaration.kind == DeclarationKind::Struct {
+                let written = generic_forms(&declaration.syntax)
+                    .iter()
+                    .map(|(_, _, form)| match form {
+                        Form::Plain => Kind::Unknown,
+                        Form::Pack(..) => Kind::Pack,
+                        Form::Value => Kind::Value,
+                    })
+                    .collect();
+                kinds.insert((module, index), written);
+            }
+        }
+    }
+    loop {
+        // What this reading settles: a parameter, by its struct and its
+        // position among the struct's parameters, and its kind.
+        let mut settled: Vec<(Id, usize, Kind)> = Vec::new();
+        for (module, declared) in program.modules.iter().enumerate() {
+            let mut unheard = Diagnostics::new();
+            let Some(mut reader) = Reader::new(program, declared, &kinds, &mut unheard) else {
+                continue;
+            };
+            for (index, declaration) in declared.declarations.iter().enumerate() {
+                let id = (module, index);
+                let open = kinds
+                    .get(&id)
+                    .is_some_and(|known| known.contains(&Kind::Unknown));
+                if !open {
+                    continue;
+                }
+                reader.declaration(declaration);
+                for (position, generic) in reader.generics.iter().enumerate() {
+                    let now = Kind::of(&generic.kind);
+                    // A kind once settled stays, so the readings end.
+                    if kinds[&id].get(position) == Some(&Kind::Unknown) && now != Kind::Unknown {
+                        settled.push((id, position, now));
+                    }
+                }
+            }
+        }
+        if settled.is_empty() {
+            return kinds;
+        }
+        for (id, position, kind) in settled {
+            if let Some(known) = kinds.get_mut(&id) {
+                known[position] = kind;
+            }
+        }
+    }
+}
+
+/// What the signature of a declaration says of one of its plain generic
+/// parameters (GEN-13).
+#[derive(Debug, Clone, Default)]
+struct Evidence {
+    /// Where it is first used as a type.
+    as_type: Option<Location>,
+    /// Where it is first used as a value.
+    as_value: Option<Location>,
+    /// True when something this pass does not read may yet say what
+    /// it is: a constraint names it, or it is given to a type whose
+    /// declaration is not known.
+    open: bool,
+    /// True when it is given to a generic parameter of a struct whose
+    /// own kind nothing settles. That says nothing of what it is.
+    dependent: bool,
 }
 
 /// What the place a type is written in admits.
@@ -189,14 +283,67 @@ struct Reader<'a> {
     /// Where the `name<...>(...)` nodes the resolver decided are
     /// constructors start (GEN-14).
     constructors: Vec<(FileId, u32)>,
+    /// The kind of each generic parameter of every struct, as far as
+    /// it is settled.
+    kinds: &'a Kinds,
     /// The generic parameters of the declaration being read.
     generics: Vec<GenericParameter>,
+    /// What the signature has said so far of each of `generics`.
+    evidence: Vec<Evidence>,
+    /// True while the signature of the declaration is read: its generic
+    /// parameters, parameters, result, parents and fields. Only there
+    /// does a use say what a generic parameter is (GEN-13).
+    in_signature: bool,
+    /// True while a struct is read.
+    reading_struct: bool,
+    /// True while a generic argument is read that is given to a
+    /// parameter of a known struct whose kind is not settled.
+    unsettled_target: bool,
     /// The types of the declaration being read, by the offset each
     /// starts at, so that none is read twice.
     read: HashMap<u32, Type>,
     /// Every type read in the module so far.
     written: Vec<WrittenType>,
     diagnostics: &'a mut Diagnostics,
+}
+
+impl<'a> Reader<'a> {
+    /// A reader for `module`; `None` for a module with no file, which
+    /// has nothing to read.
+    fn new(
+        program: &'a Program,
+        module: &'a Module,
+        kinds: &'a Kinds,
+        diagnostics: &'a mut Diagnostics,
+    ) -> Option<Reader<'a>> {
+        let first = module.files.first()?;
+        Some(Reader {
+            program,
+            module,
+            file: first.file,
+            // What each name resolved to, by where it is used (UNIT-10).
+            bindings: module
+                .uses
+                .iter()
+                .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+                .collect(),
+            constructors: module
+                .decisions
+                .iter()
+                .filter(|decision| decision.constructor == Some(true))
+                .map(|decision| (decision.at.file, decision.at.span.start))
+                .collect(),
+            kinds,
+            generics: Vec::new(),
+            evidence: Vec::new(),
+            in_signature: false,
+            reading_struct: false,
+            unsettled_target: false,
+            read: HashMap::new(),
+            written: Vec::new(),
+            diagnostics,
+        })
+    }
 }
 
 // ---- Reading the tree ----
@@ -265,6 +412,14 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
         Some(qualified) => identifiers(&qualified).into_iter().nth(1),
         None => identifiers(node).into_iter().next(),
     }
+}
+
+/// The default of a parameter or struct member: its first child node
+/// after the `=`.
+fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
+    node.children_with_tokens()
+        .skip_while(|element| element.kind() != SyntaxKind::Eq)
+        .find_map(|element| element.into_node())
 }
 
 /// True when an expression is the literal `null`, in parentheses or
@@ -403,20 +558,34 @@ impl Reader<'_> {
     fn enter(&mut self, file: FileId) {
         self.file = file;
         self.generics.clear();
+        self.evidence.clear();
+        self.in_signature = false;
         self.read.clear();
     }
 
     fn declaration(&mut self, declaration: &Declaration) -> Detail {
         self.enter(self.module.files[declaration.file].file);
         let node = &declaration.syntax;
+        self.in_signature = true;
+        self.reading_struct = declaration.kind == DeclarationKind::Struct;
         self.generic_parameters(node);
-        let detail = match node.kind() {
+        let mut detail = match node.kind() {
             SyntaxKind::FnDecl | SyntaxKind::OperatorDecl | SyntaxKind::NativeFnDecl => {
                 Detail::Callable(self.signature(node, declaration.kind))
             }
             SyntaxKind::StructDecl => Detail::Struct(self.structure(node)),
             _ => Detail::Plain,
         };
+        self.in_signature = false;
+        // GEN-13: what the signature and the constraints say each plain
+        // generic parameter is.
+        self.constrained(node);
+        self.settle_kinds(declaration);
+        match &mut detail {
+            Detail::Callable(signature) => signature.generics = self.generics.clone(),
+            Detail::Struct(read) => read.generics = self.generics.clone(),
+            _ => {}
+        }
         // Everything else the declaration writes: its constraints and
         // its body.
         self.scan(node);
@@ -445,6 +614,7 @@ impl Reader<'_> {
                 },
             })
             .collect();
+        self.evidence = vec![Evidence::default(); self.generics.len()];
 
         // The type of each value parameter. A size inside one may name
         // another, declared before it or after:
@@ -499,6 +669,9 @@ impl Reader<'_> {
                 .map_or(Type::Unknown, |written| self.outermost(&written));
             let constant = is_const(&parameter);
             let has_default = has_token(&parameter, SyntaxKind::Eq);
+            if let Some(default) = default_of(&parameter) {
+                self.note_values_in(&default);
+            }
 
             // UNIT-8: "Value-function parameters and const configuration
             // may have defaults; ordinary temporal parameters may not."
@@ -571,6 +744,9 @@ impl Reader<'_> {
             } else {
                 None
             };
+            if let Some(default) = default_of(&member) {
+                self.note_values_in(&default);
+            }
             // The default is the member's child that is no type.
             let null_default = member
                 .children()
@@ -623,7 +799,7 @@ impl Reader<'_> {
                     // arguments are checked against is for the pass that
                     // selects them.
                     if let Some(list) = child(&node, SyntaxKind::GenericArgs) {
-                        self.arguments(&list, Position::OPEN);
+                        self.arguments(&list, Position::OPEN, None);
                     }
                 }
                 _ => {}
@@ -1067,6 +1243,33 @@ impl Reader<'_> {
     /// `Quote`, `pc::Curve`, `Box<i64>`, or a generic parameter.
     fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let list = child(node, SyntaxKind::GenericArgs);
+        let name = used_name(node);
+        let binding = name
+            .as_ref()
+            .and_then(|name| self.bindings.get(&(self.file, name.span().start)).copied());
+        // The type the name is bound to, when it is one. A type is one
+        // declaration; only a pair of functions is two (FN-4).
+        let target: Option<Id> = match binding {
+            Some(Binding::Declarations {
+                module,
+                declarations,
+            }) => {
+                let declared = &self.program.modules[*module].declarations;
+                declarations
+                    .iter()
+                    .copied()
+                    .find(|&index| {
+                        matches!(
+                            declared[index].kind,
+                            DeclarationKind::Struct
+                                | DeclarationKind::Enum
+                                | DeclarationKind::NativeType
+                        )
+                    })
+                    .map(|index| (*module, index))
+            }
+            _ => None,
+        };
         // The arguments are read whatever the name is, so that what is
         // wrong inside them is reported.
         // Where an ordinary value type is required, the arguments of a
@@ -1079,14 +1282,12 @@ impl Reader<'_> {
                     value: position.value,
                     ..Position::ARGUMENT
                 },
+                target,
             )
         });
-        let Some(name) = used_name(node) else {
-            return Type::Unknown;
-        };
         // No binding: the name is left for the prelude, or the resolver
         // has reported it.
-        let Some(&binding) = self.bindings.get(&(self.file, name.span().start)) else {
+        let (Some(name), Some(binding)) = (name, binding) else {
             return Type::Unknown;
         };
         match binding {
@@ -1110,17 +1311,7 @@ impl Reader<'_> {
                 declarations,
             } => {
                 let declared = &self.program.modules[*module].declarations;
-                // A type is one declaration; only a pair of functions is
-                // two (FN-4).
-                let found = declarations.iter().copied().find(|&index| {
-                    matches!(
-                        declared[index].kind,
-                        DeclarationKind::Struct
-                            | DeclarationKind::Enum
-                            | DeclarationKind::NativeType
-                    )
-                });
-                let Some(index) = found else {
+                let Some((_, index)) = target else {
                     let first = &declared[declarations[0]];
                     let what = match first.kind {
                         DeclarationKind::Operator | DeclarationKind::Implementation(_) => {
@@ -1184,6 +1375,9 @@ impl Reader<'_> {
                 )
                 .with_related(declared, "declared here"),
             );
+            // It stands where a type does, which is what it is taken
+            // for: one report for one fault.
+            self.note_type(declared, self.at(name.span()));
             return parameter;
         }
         // One bound by `each T in ...` is not among the declaration's
@@ -1192,11 +1386,11 @@ impl Reader<'_> {
             .generics
             .iter()
             .find(|generic| generic.at == declared)
-            .map(|generic| &generic.kind);
+            .map(|generic| Kind::of(&generic.kind));
         match kind {
             // GEN-2: "A type pack is a sequence, not a singular source
             // type."
-            Some(GenericKind::Pack { .. }) if !position.pack => {
+            Some(Kind::Pack) if !position.pack => {
                 self.diagnostics.emit(
                     local_error(
                         Category::Type,
@@ -1212,7 +1406,7 @@ impl Reader<'_> {
                 );
                 Type::Unknown
             }
-            Some(GenericKind::Value(_)) if !position.constant => {
+            Some(Kind::Value) if !position.constant => {
                 self.diagnostics.emit(
                     local_error(
                         Category::Type,
@@ -1224,6 +1418,19 @@ impl Reader<'_> {
                     .with_related(declared, "declared here"),
                 );
                 Type::Unknown
+            }
+            // GEN-13: a plain parameter named where a type stands is
+            // used as a type. Where a value might stand as well, the
+            // use says nothing yet.
+            Some(Kind::Unknown) => {
+                if !position.constant {
+                    self.note_type(declared, self.at(name.span()));
+                } else if self.unsettled_target {
+                    self.note_dependent(declared);
+                } else {
+                    self.note_open(declared);
+                }
+                parameter
             }
             _ => parameter,
         }
@@ -1355,34 +1562,198 @@ impl Reader<'_> {
     }
 
     /// The arguments of `<...>`: each a type or a constant.
-    fn arguments(&mut self, list: &SyntaxNode, position: Position) -> Vec<Argument> {
+    ///
+    /// `target` is the generic type they are given to, when the name
+    /// before them is one. Each argument is then read for the parameter
+    /// it is given to (GEN-14): "Check each argument against the
+    /// corresponding parameter kind."
+    fn arguments(
+        &mut self,
+        list: &SyntaxNode,
+        position: Position,
+        target: Option<Id>,
+    ) -> Vec<Argument> {
+        // The name and kind of each generic parameter of the target.
+        let (target_name, parameters): (String, Vec<(String, Kind)>) = match target {
+            Some((module, index)) => {
+                let declaration = &self.program.modules[module].declarations[index];
+                let kinds = self.kinds.get(&(module, index));
+                let parameters = generic_forms(&declaration.syntax)
+                    .iter()
+                    .enumerate()
+                    .map(|(position, (_, name, _))| {
+                        let kind = kinds
+                            .and_then(|kinds| kinds.get(position))
+                            .copied()
+                            .unwrap_or(Kind::Unknown);
+                        (name.text().to_string(), kind)
+                    })
+                    .collect();
+                (declaration.name.clone(), parameters)
+            }
+            None => (String::new(), Vec::new()),
+        };
+
         let mut arguments = Vec::new();
+        // The parameter the next argument is given to. A pack takes
+        // every argument from its place on. An argument that passes a
+        // pack on stands for as many as the pack holds: when that is
+        // one number the place of those after it is still known, and
+        // otherwise it is not.
+        let mut next: usize = 0;
+        let mut placed = true;
+        // The place of the target's pack parameter, when it has one.
+        let pack_at = parameters.iter().position(|(_, kind)| *kind == Kind::Pack);
         for argument in list.children() {
             let kind = argument.kind();
-            if is_type(kind) {
-                // The parser reads a lone name as a type. One that names
-                // a value is a constant.
-                match self.value_name(&argument) {
-                    Some(constant) => arguments.push(Argument::Constant(constant)),
-                    None => arguments.push(Argument::Type(self.type_(&argument, position))),
+            if kind == SyntaxKind::Error {
+                continue;
+            }
+            // How many arguments this one stands for: one, or for the
+            // name of a type pack as many as the pack holds, which is
+            // at least a number and may be exactly one.
+            let (at_least, exactly) = match self.pack_bounds(&argument) {
+                None => (1, Some(1)),
+                Some((minimum, maximum)) => {
+                    (minimum, maximum.filter(|maximum| *maximum == minimum))
                 }
-            } else if kind == SyntaxKind::Hole {
+            };
+            // A pack that may hold nothing is given to no parameter for
+            // certain.
+            let parameter = if placed && at_least > 0 {
+                parameters.get(next)
+            } else {
+                None
+            };
+            let want = parameter.map_or(Kind::Unknown, |(_, kind)| *kind);
+            // A pack of several types fills as many places as it holds
+            // at least. Each after the first is a type given to that
+            // parameter too, and a value parameter among them takes
+            // none (GEN-14).
+            let covered = usize::try_from(at_least).unwrap_or(usize::MAX);
+            let value_slot = parameters
+                .iter()
+                .skip(next.saturating_add(1))
+                .take(covered.saturating_sub(1))
+                .take_while(|(_, kind)| *kind != Kind::Pack)
+                .find(|(_, kind)| *kind == Kind::Value)
+                .filter(|_| placed);
+            if let Some((name, _)) = value_slot {
+                let message = format!(
+                    "`{target_name}` takes a value for `{name}`, and `{}` passes on types",
+                    text_of(&argument)
+                );
+                self.argument_kind(&argument, Some(message));
+            }
+            match exactly {
+                // A pack parameter takes them all and stays the place.
+                Some(_) if want == Kind::Pack => {}
+                // A count past what a `usize` holds is past every
+                // parameter.
+                Some(count) => {
+                    next = next.saturating_add(usize::try_from(count).unwrap_or(usize::MAX));
+                    // What runs past the fixed parameters is given to
+                    // the pack after them, when there is one.
+                    if let Some(pack) = pack_at {
+                        next = next.min(pack);
+                    }
+                }
+                // How many it holds is a range: the place of the
+                // arguments after it is not known.
+                None => placed = false,
+            }
+            // What to say when the argument is of the other kind.
+            let mismatch = |wanted: &str, given: &str| {
+                parameter.map(|(name, _)| {
+                    format!(
+                        "`{target_name}` takes {wanted} for `{name}`, and `{}` is {given}",
+                        text_of(&argument)
+                    )
+                })
+            };
+
+            if kind == SyntaxKind::Hole {
                 // GEN-8: `_` in an `instantiate` keeps a parameter open.
                 arguments.push(Argument::Type(Type::Unknown));
-            } else if kind != SyntaxKind::Error {
+            } else if !is_type(kind) {
+                // An expression is a value.
+                if matches!(want, Kind::Type | Kind::Pack) {
+                    self.argument_kind(&argument, mismatch("a type", "a value"));
+                }
                 arguments.push(Argument::Constant(self.constant(&argument)));
+            } else if let Some(constant) = self.value_name(&argument, want) {
+                // The parser reads a lone name as a type. One that names
+                // a value is a constant.
+                arguments.push(Argument::Constant(constant));
+            } else {
+                let position = match want {
+                    // Where a type goes, a type pack may be passed on.
+                    // What the place around the type asks of an
+                    // ordinary value is asked of its arguments too.
+                    Kind::Type | Kind::Pack => Position {
+                        value: position.value,
+                        ..Position::PACK
+                    },
+                    Kind::Value | Kind::Unknown => position,
+                };
+                // A lone name given to a parameter of the target whose
+                // kind nothing has settled says nothing of what the
+                // name is (GEN-13).
+                let unsettled = parameter.is_some() && want == Kind::Unknown;
+                let before = std::mem::replace(&mut self.unsettled_target, unsettled);
+                let ty = self.type_(&argument, position);
+                self.unsettled_target = before;
+                // A name that is not known may yet be a constant; one
+                // known to be a type is not: a declared type, or a
+                // generic parameter settled as a type.
+                let is_type = kind != SyntaxKind::NamedType
+                    || matches!(ty, Type::Named { .. })
+                    || self.is_type_parameter(&ty);
+                if want == Kind::Value && is_type {
+                    self.argument_kind(&argument, mismatch("a value", "a type"));
+                }
+                arguments.push(Argument::Type(ty));
             }
         }
         arguments
     }
 
+    /// True when `ty` is a generic parameter of the declaration being
+    /// read that is known to stand for types: one settled as a type, or
+    /// a type pack.
+    fn is_type_parameter(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Parameter { at, .. } if self.generics.iter().any(|generic| {
+            generic.at == *at
+                && matches!(generic.kind, GenericKind::Type | GenericKind::Pack { .. })
+        }))
+    }
+
+    fn argument_kind(&mut self, argument: &SyntaxNode, message: Option<String>) {
+        if let Some(message) = message {
+            self.diagnostics.emit(local_error(
+                Category::Type,
+                codes::local::GENERIC_ARGUMENT_KIND,
+                self.at(argument.span()),
+                message,
+                "GEN-14",
+            ));
+        }
+    }
+
     /// The constant a lone name is, when it names a value: a generic
-    /// value parameter of the declaration being read, or a local, a
+    /// parameter declared `const N: V`; a plain one given where a value
+    /// goes, which that use makes a value (GEN-13); or a local, a
     /// parameter or another binding of a body. Whether such a binding
     /// may stand in a constant is for the pass that evaluates
     /// constants.
-    fn value_name(&self, node: &SyntaxNode) -> Option<Constant> {
-        if node.kind() != SyntaxKind::NamedType || child(node, SyntaxKind::GenericArgs).is_some() {
+    ///
+    /// `want` is the kind of the parameter the name is given to. Where
+    /// a type goes, a name is read as a type.
+    fn value_name(&mut self, node: &SyntaxNode, want: Kind) -> Option<Constant> {
+        if matches!(want, Kind::Type | Kind::Pack)
+            || node.kind() != SyntaxKind::NamedType
+            || child(node, SyntaxKind::GenericArgs).is_some()
+        {
             return None;
         }
         let name = used_name(node)?;
@@ -1393,9 +1764,20 @@ impl Reader<'_> {
                 kind: LocalKind::GenericParameter,
             } => {
                 // `?` on an `Option` leaves the function with `None`
-                // when there is nothing: here, for a generic parameter
-                // that is not a value.
-                self.value_type(*at)?;
+                // when there is nothing: here, for a parameter bound by
+                // `each ... in`, which is a type.
+                let kind = self
+                    .generics
+                    .iter()
+                    .find(|generic| generic.at == *at)
+                    .map(|generic| Kind::of(&generic.kind))?;
+                match kind {
+                    Kind::Value => {}
+                    Kind::Unknown if want == Kind::Value => {
+                        self.note_value(*at, self.at(name.span()));
+                    }
+                    _ => return None,
+                }
                 ConstantValue::Parameter {
                     name: name.text().to_string(),
                     at: *at,
@@ -1426,7 +1808,7 @@ impl Reader<'_> {
 
     /// The constant expression `node`, folded as far as it needs no
     /// types.
-    fn constant(&self, node: &SyntaxNode) -> Constant {
+    fn constant(&mut self, node: &SyntaxNode) -> Constant {
         // A closure: a function written in place, which may use what is
         // in scope around it; here, `self`.
         let name = |used: &SyntaxNode| {
@@ -1444,9 +1826,181 @@ impl Reader<'_> {
                 _ => ConstantValue::Unevaluated,
             }
         };
-        Constant {
+        let constant = Constant {
             text: text_of(node),
             value: fold(node, &name),
+        };
+        self.note_values_in(node);
+        constant
+    }
+
+    /// GEN-13: a generic parameter named in an expression of the
+    /// signature, a size or a default, is used as a value.
+    fn note_values_in(&mut self, expression: &SyntaxNode) {
+        let named: Vec<(Location, Location)> = expression
+            .descendants()
+            .filter(|used| used.kind() == SyntaxKind::NameExpr)
+            .filter_map(|used| {
+                let name = used_name(&used)?;
+                match self.bindings.get(&(self.file, name.span().start)) {
+                    Some(Binding::Local {
+                        at,
+                        kind: LocalKind::GenericParameter,
+                    }) => Some((*at, self.at(name.span()))),
+                    _ => None,
+                }
+            })
+            .collect();
+        for (declared, used) in named {
+            self.note_value(declared, used);
+        }
+    }
+
+    // ---- The kind of a generic parameter (GEN-13) ----
+
+    /// What the signature has said of the plain generic parameter
+    /// declared at `declared`; `None` for one that is not plain, or not
+    /// of the declaration being read.
+    fn evidence_of(&mut self, declared: Location) -> Option<&mut Evidence> {
+        let index = self
+            .generics
+            .iter()
+            .position(|generic| generic.at == declared && generic.kind == GenericKind::Plain)?;
+        self.evidence.get_mut(index)
+    }
+
+    /// Notes a use of a plain generic parameter as a type, at `used`.
+    /// Only a use in the signature says what a parameter is: "Infer its
+    /// kind from signature positions and constraints."
+    fn note_type(&mut self, declared: Location, used: Location) {
+        if self.in_signature
+            && let Some(evidence) = self.evidence_of(declared)
+        {
+            evidence.as_type.get_or_insert(used);
+        }
+    }
+
+    /// Notes a use of a plain generic parameter as a value, at `used`.
+    fn note_value(&mut self, declared: Location, used: Location) {
+        if self.in_signature
+            && let Some(evidence) = self.evidence_of(declared)
+        {
+            evidence.as_value.get_or_insert(used);
+        }
+    }
+
+    /// Notes a use of a plain generic parameter that may yet say what
+    /// it is: as an argument of a type whose declaration is not known.
+    fn note_open(&mut self, declared: Location) {
+        if self.in_signature
+            && let Some(evidence) = self.evidence_of(declared)
+        {
+            evidence.open = true;
+        }
+    }
+
+    /// Notes a use of a plain generic parameter as an argument of a
+    /// struct whose own parameter nothing settles.
+    fn note_dependent(&mut self, declared: Location) {
+        if self.in_signature
+            && let Some(evidence) = self.evidence_of(declared)
+        {
+            evidence.dependent = true;
+        }
+    }
+
+    /// Notes each generic parameter a constraint of `declaration`
+    /// names. Which kind a constraint makes it is for the pass that
+    /// reads constraints.
+    fn constrained(&mut self, declaration: &SyntaxNode) {
+        let Some(clause) = child(declaration, SyntaxKind::RequiresClause) else {
+            return;
+        };
+        let named: Vec<Location> = clause
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .filter_map(
+                |token| match self.bindings.get(&(self.file, token.span().start)) {
+                    Some(Binding::Local {
+                        at,
+                        kind: LocalKind::GenericParameter,
+                    }) => Some(*at),
+                    _ => None,
+                },
+            )
+            .collect();
+        for declared in named {
+            if let Some(evidence) = self.evidence_of(declared) {
+                evidence.open = true;
+            }
+        }
+    }
+
+    /// GEN-13: "Infer its kind from signature positions and
+    /// constraints ... Reject conflicting kinds or an unresolved kind
+    /// lacking a determining declaration/constraint."
+    fn settle_kinds(&mut self, declaration: &Declaration) {
+        for index in 0..self.generics.len() {
+            if self.generics[index].kind != GenericKind::Plain {
+                continue;
+            }
+            let evidence = self.evidence[index].clone();
+            let name = self.generics[index].name.clone();
+            // A second parameter of one name has been reported as a
+            // duplicate (UNIT-12), and no use can name it.
+            if self.generics[..index]
+                .iter()
+                .any(|earlier| earlier.name == name)
+            {
+                continue;
+            }
+            match (evidence.as_type, evidence.as_value) {
+                (Some(as_type), Some(as_value)) => {
+                    // Reported at the later use; the other is shown.
+                    let (at, other, other_is) = if as_type.span.start > as_value.span.start {
+                        (as_type, as_value, "used as a value here")
+                    } else {
+                        (as_value, as_type, "used as a type here")
+                    };
+                    self.diagnostics.emit(
+                        local_error(
+                            Category::Type,
+                            codes::local::GENERIC_KIND_CONFLICT,
+                            at,
+                            format!("`{name}` is used as a type and as a value"),
+                            "GEN-13",
+                        )
+                        .with_related(other, other_is),
+                    );
+                }
+                (Some(_), None) => self.generics[index].kind = GenericKind::Type,
+                (None, Some(_)) => self.generics[index].kind = GenericKind::Value(Type::Unknown),
+                // Something may yet say what it is.
+                (None, None) if evidence.open => {}
+                // A function given a struct whose parameter nothing
+                // settles: the struct is where that is reported.
+                (None, None) if evidence.dependent && !self.reading_struct => {}
+                (None, None) => {
+                    self.diagnostics.emit(
+                        local_error(
+                            Category::Type,
+                            codes::local::GENERIC_KIND_UNRESOLVED,
+                            self.generics[index].at,
+                            format!(
+                                "nothing in the signature of `{}` says whether `{name}` is a \
+                                 type or a value",
+                                declaration.name
+                            ),
+                            "GEN-13",
+                        )
+                        .with_note(
+                            "use it as a type or as a size in the signature, or declare a \
+                             value `const N: i64`",
+                        ),
+                    );
+                }
+            }
         }
     }
 

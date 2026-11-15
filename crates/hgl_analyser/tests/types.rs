@@ -392,7 +392,7 @@ fn a_generic_type_is_given_the_arguments_it_declares() {
         "struct Box<T> { value: T }\n",
         "struct Pair<A, B> { first: A\n second: B }\n",
         "struct Row<...Ts> { width: i64 }\n",
-        "struct Wide<T, ...Ts{1:2}> { width: i64 }\n",
+        "struct Wide<T, ...Ts{1:2}> { first: T }\n",
         // As many as declared; none where none are needed.
         "fn good(a: Box<i64>, b: Pair<i64, str>, c: Row, d: Row<i64, str, f64>,\n",
         "    e: Wide<i64, str>, f: Wide<i64, str, f64>) {}\n",

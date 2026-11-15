@@ -219,9 +219,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-10 | transpiler | planned | `schemas(pack)` as a runtime-only borrowed view |
 | GEN-11 | analyser | planned | Reference removal in inference |
 | GEN-12 | analyser | planned | Structural specificity |
-| GEN-13 | analyser | partial | Declared kinds: pack, `const` value, plain; a value parameter or a pack is not named as a type. Left: the kind of a plain parameter from its uses; conflicting and unresolved kinds |
+| GEN-13 | analyser | partial | A plain parameter is a type or a value by its uses in the signature; uses that disagree and a parameter nothing uses are rejected; a value parameter or a pack is not named as a type. Left: the kind a constraint gives; `type(N)` |
 | GEN-14 | parser | done | `<` after a name read as generic arguments or comparison; marked undecided when both parse |
-| GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected. Left: each argument against its parameter's kind |
+| GEN-14 | analyser | done | Decides an undecided constructor from what its name resolves to; a generic type before a comparison's `<` rejected; each argument against its parameter's kind |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
 | GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
 | GEN-16 | analyser | planned | Predicate or operator requirement by the referenced declaration; arrow rejected on a predicate |

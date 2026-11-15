@@ -178,7 +178,7 @@ fn a_binding_takes_no_name_already_in_scope() {
                 "const fn seed() -> i64 => 7\n",
                 // A parameter named for a declaration; one named twice;
                 // one named for a generic parameter.
-                "const fn a<T>(seed: i64, twice: i64, twice: i64, T: i64) -> i64 => 1\n",
+                "const fn a<T>(seed: i64, twice: i64, twice: i64, T: i64, last: T) -> i64 => 1\n",
                 "const fn b(base: i64) -> i64 {\n",
                 // A local named for a parameter, an import, an alias.
                 "    let base = 1\n",
@@ -194,7 +194,7 @@ fn a_binding_takes_no_name_already_in_scope() {
                 "    let outer = 6\n",
                 "    return base\n",
                 "}\n",
-                "fn c<U, U>() {}\n",
+                "fn c<U, U>(value: U) {}\n",
             ),
         ),
     ]);
