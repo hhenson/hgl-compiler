@@ -1152,6 +1152,10 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // The candidate's parameter gives entries of two types their
         // one type.
         "    let shapes = area([round, square])\n",
+        // The output a candidate's parameter requests selects among the
+        // candidates of a call inside the argument.
+        "    let made = each([make()])\n",
+        "    let tied = make()\n",
         "}\n",
         "operator total<T>(values: T) -> f64\n",
         "impl const fn total(values: list<f64>) -> f64 => 0.0\n",
@@ -1174,6 +1178,9 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         "struct Square : Shape { side: f64 }\n",
         "operator area<T>(shapes: T) -> f64\n",
         "impl const fn area(shapes: list<Shape>) -> f64 => 0.0\n",
+        "operator make<T>() -> T\n",
+        "impl const fn make() -> i64 => 1\n",
+        "impl const fn make() -> str => \"x\"\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1188,6 +1195,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:31:17 local:operator/operator.no_candidate GEN-5",
             "m.hgl:33:16 local:operator/operator.no_candidate GEN-5",
             "m.hgl:36:19 local:operator/operator.no_candidate GEN-5",
+            "m.hgl:43:16 local:operator/operator.ambiguous GEN-5",
         ]
     );
     assert_eq!(
@@ -1203,6 +1211,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "no value candidate of operator `count` takes `[1.5]`",
             "no value candidate of operator `sign` takes `.hold`",
             "no value candidate of operator `first` takes `(null, null)`",
+            "2 value candidates of operator `make` take no argument equally",
         ]
     );
     assert_eq!(
@@ -1242,6 +1251,8 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "whole_pair: tuple<i64, list<i64>>",
             "real_pair: tuple<f64, list<f64>>",
             "shapes: f64",
+            "made: list<i64>",
+            "tied: _",
         ]
     );
 }

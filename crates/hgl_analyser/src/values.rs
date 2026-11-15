@@ -1257,6 +1257,14 @@ impl<'a> Typer<'a> {
         }
         let at = Location::new(self.file, name.span());
         let &[(module, declaration, signature)] = selected.as_slice() else {
+            // GEN-5: "the requested output before inputs". Where what
+            // the place expects is not known, it may be what tells tied
+            // candidates apart: the `make()` of `[make()]` given to a
+            // `list<i64>`. The tie is then not reported, and the call
+            // has no type.
+            if selected.len() > 1 && expected.is_some_and(open) {
+                return (unselected(given), Type::Unknown);
+            }
             let takes: Vec<String> = given
                 .iter()
                 .map(|given| {
