@@ -843,9 +843,26 @@ impl<'a> Typer<'a> {
         } else {
             Some(&Type::Unknown)
         };
+        // A block among the entries may assign what another reads
+        // (CTRL-10), and an entry that takes its type from its place is
+        // read after the others. With a block among them the others
+        // are read first only to learn their type, that reading taken
+        // back, and every entry is then read where it is written.
+        let ordered = items.iter().any(holds_block) && self.may_reread();
         let mut read: Vec<Option<Expr>> = items
             .iter()
-            .map(|item| (!takes_its_type(item)).then(|| self.expression(item, of_entry)))
+            .map(|item| {
+                if branch_takes_its_type(item) {
+                    return None;
+                }
+                if !ordered {
+                    return Some(self.expression(item, of_entry));
+                }
+                let mark = self.mark();
+                let entry = self.expression(item, of_entry);
+                self.take_back(mark, false);
+                Some(entry)
+            })
             .collect();
         let known: Vec<&Type> = read.iter().flatten().map(|entry| &entry.ty).collect();
         // EXPR-9: "Entries of two types reject, and so do entries that
@@ -878,7 +895,7 @@ impl<'a> Typer<'a> {
         };
         // "`[1, null]` [is] a `list<i64?>`": a `null` among the values
         // makes their type nullable.
-        let of = if items.iter().any(is_null) && !matches!(of, Type::Nullable(_)) {
+        let of = if items.iter().any(branch_is_null) && !matches!(of, Type::Nullable(_)) {
             Type::Nullable(Box::new(of))
         } else {
             of
@@ -896,8 +913,8 @@ impl<'a> Typer<'a> {
                 .iter()
                 .enumerate()
                 .map(|(position, item)| match read[position].take() {
-                    Some(entry) => entry,
-                    None => self.expression(item, Some(&Type::Unknown)),
+                    Some(entry) if !ordered => entry,
+                    _ => self.expression(item, Some(&Type::Unknown)),
                 })
                 .collect();
             return (ExprKind::Sequence(elements), unjudged);
@@ -907,8 +924,8 @@ impl<'a> Typer<'a> {
             .enumerate()
             .map(|(position, item)| {
                 let entry = match read[position].take() {
-                    Some(entry) => entry,
-                    None => self.expression(item, Some(&of)),
+                    Some(entry) if !ordered => entry,
+                    _ => self.expression(item, Some(&of)),
                 };
                 self.fit(entry, &of, "an element, as the first is,")
             })
@@ -2611,6 +2628,18 @@ fn widens_an_entry(value: &Expr) -> bool {
         ExprKind::Widen(_) => true,
         ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => {
             entries.iter().any(widens_an_entry)
+        }
+        // The value of a block, and of each branch of an `if`.
+        ExprKind::Block {
+            value: Some(value), ..
+        } => widens_an_entry(value),
+        ExprKind::If {
+            then, otherwise, ..
+        } => {
+            widens_an_entry(then)
+                || otherwise
+                    .as_ref()
+                    .is_some_and(|otherwise| widens_an_entry(otherwise))
         }
         _ => false,
     }

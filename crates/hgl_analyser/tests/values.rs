@@ -538,6 +538,11 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
         // A `null` among values makes their type nullable.
         "    let holes = [1, null]\n",
         "    let maybe_holes: list<i64?> = [1, null]\n",
+        // A block whose value is `null` is a null entry too, and the
+        // entries are read in the order written (CTRL-10).
+        "    let in_block = [{ null }, 1]\n",
+        "    var late: i64\n",
+        "    let ordered = [{\n        late = 1\n        null\n    }, late]\n",
         "    let nothing = [null]\n",
         "}\n",
         "const fn member_set() -> set<i64>? => [1, 2]\n",
@@ -557,8 +562,8 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "m.hgl:15:41 type/type.mismatch EXPR-5",
             "m.hgl:16:36 type/type.mismatch EXPR-5",
             "m.hgl:18:31 type/type.mismatch TYPE-10",
-            "m.hgl:21:19 type/sequence.context_type EXPR-9",
-            "m.hgl:24:36 type/type.mismatch TYPE-10",
+            "m.hgl:27:19 type/sequence.context_type EXPR-9",
+            "m.hgl:30:36 type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
@@ -591,6 +596,9 @@ fn a_sequence_takes_its_type_from_its_place_or_its_values() {
             "short: list<i64, 2>",
             "holes: list<i64?>",
             "maybe_holes: list<i64?>",
+            "in_block: list<i64?>",
+            "late: i64",
+            "ordered: list<i64?>",
             "nothing: _",
         ]
     );
@@ -1174,6 +1182,8 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
         // An integer literal among the entries selects as the `i64` it
         // is, and is widened only where no candidate takes one.
         "    let whole_list = each([1])\n",
+        // The same inside a block.
+        "    let in_a_block = each({ [1] })\n",
         "    let real_list = each([1.5])\n",
         "    let whole_pair = each((1, [1]))\n",
         "    let real_pair = each((1.5, [1]))\n",
@@ -1224,7 +1234,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "m.hgl:33:16 operator/operator.no_candidate GEN-5",
             "m.hgl:36:21 operator/operator.no_candidate GEN-5",
             "m.hgl:39:19 operator/operator.no_candidate GEN-5",
-            "m.hgl:46:16 operator/operator.ambiguous GEN-5",
+            "m.hgl:47:16 operator/operator.ambiguous GEN-5",
         ]
     );
     assert_eq!(
@@ -1280,6 +1290,7 @@ fn a_call_of_an_operator_selects_a_value_candidate() {
             "inner: i64",
             "neither: _",
             "whole_list: list<i64>",
+            "in_a_block: list<i64>",
             "real_list: list<f64>",
             "whole_pair: tuple<i64, list<i64>>",
             "real_pair: tuple<f64, list<f64>>",
