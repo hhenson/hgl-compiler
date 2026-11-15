@@ -1050,6 +1050,7 @@ impl Structs<'_> {
                 let mut matching = Matching {
                     bound: Vec::new(),
                     packs: &self.packs,
+                    open: false,
                 };
                 // `collect` into an `Option` gives `None` when any
                 // item is `None`: what the parent is applied to is
@@ -1436,6 +1437,10 @@ struct Matching<'a> {
     bound: Bindings,
     /// The type packs of the program's structs.
     packs: &'a Packs,
+    /// True when both sides are written by the struct that has the
+    /// field: a parameter on either side may then be anything, and
+    /// nothing is bound.
+    open: bool,
 }
 
 /// True when a constant is one this pass cannot compare: it names a
@@ -1551,7 +1556,9 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
     match (given, applied) {
         // In what a struct gives its parent, a parameter is the
         // struct's own.
-        (_, Type::Parameter { at, .. }) => bind(*at, Argument::Type(given.clone()), found),
+        (_, Type::Parameter { at, .. }) => {
+            found.open || bind(*at, Argument::Type(given.clone()), found)
+        }
         (Type::Unknown | Type::Parameter { .. }, _) | (_, Type::Unknown) => true,
         (
             Type::Named {
@@ -1640,7 +1647,7 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
 /// [`may_be`], for a constant.
 fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_>) -> bool {
     if let ConstantValue::Parameter { at, .. } = &applied.value {
-        return bind(*at, Argument::Constant(given.clone()), found);
+        return found.open || bind(*at, Argument::Constant(given.clone()), found);
     }
     may_be_one(given, applied)
 }
@@ -1714,21 +1721,21 @@ fn bare_literal(text: &str) -> (bool, &str) {
 }
 
 /// Records that the parameter declared at `at` stands for `argument`.
-/// False when it already stands for something else.
+/// False when it already stands for something that cannot be the same.
 fn bind(at: Location, argument: Argument, found: &mut Matching<'_>) -> bool {
     let Some((_, earlier)) = found.bound.iter().find(|(known, _)| *known == at) else {
         found.bound.push((at, argument));
         return true;
     };
-    // Both are written by the struct that has the field: a parameter
-    // of that struct may be anything.
-    match (earlier, &argument) {
-        (Argument::Type(earlier), Argument::Type(later)) => {
-            names_parameter(earlier) || names_parameter(later) || agree(earlier, later)
-        }
-        (Argument::Constant(earlier), Argument::Constant(later)) => may_be_one(earlier, later),
-        _ => true,
-    }
+    // Both are written by the struct that has the field. They are
+    // matched as an argument is, a parameter of that struct on either
+    // side being anything.
+    let mut both = Matching {
+        bound: Vec::new(),
+        packs: found.packs,
+        open: true,
+    };
+    may_be(earlier, &argument, &mut both)
 }
 
 /// The first type inside `ty` that gives a struct of the group an

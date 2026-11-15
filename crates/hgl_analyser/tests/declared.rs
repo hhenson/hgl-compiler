@@ -768,6 +768,14 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "struct Ungrouped : Base<Flag<true>> { other: Base<Flag<(false)>> }\n",
         "struct Signed : Base<Mark<-1.0>> { signed: Base<Mark<-(1.00)>> }\n",
         "struct Unsigned : Base<Mark<-1.0>> { other: Base<Mark<1.0>> }\n",
+        // What a parameter given twice stands for is compared in the
+        // same way: by what the types come to (TYPE-11), a parameter
+        // of the struct that has the field being anything.
+        "struct Twice<U> : Pair<U, U> { twice: Pair<rolling<i64, 5>, rolling<i64, 5, 5>> }\n",
+        "struct Apiece<U> : Pair<U, U> { other: Pair<rolling<i64, 5>, rolling<i64, 5, 2>> }\n",
+        "abstract struct Duo<A, B> { both: tuple<A, B> }\n",
+        "struct Loose<U, V> : Duo<U, U> { loose: Duo<list<V>, list<i64>> }\n",
+        "struct Shut<U, V> : Duo<U, U> { other: Duo<list<V>, set<i64>> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -786,6 +794,8 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:33:35 type/field.recursive TYPE-6",
             "m.hgl:36:37 type/field.recursive TYPE-6",
             "m.hgl:38:36 type/field.recursive TYPE-6",
+            "m.hgl:40:32 type/field.recursive TYPE-6",
+            "m.hgl:43:34 type/field.recursive TYPE-6",
         ]
     );
 }
