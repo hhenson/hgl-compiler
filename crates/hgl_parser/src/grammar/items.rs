@@ -438,9 +438,8 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// parameter = IDENTIFIER, ":", type
+    /// parameter = IDENTIFIER, ":", type, [ "=", const_expression ]
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
-    ///           | IDENTIFIER, ":", value_type, "=", const_expression
     ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
     /// pack = "...", type, [ cardinality ]
     ///      | "...", "{", type, "}", [ cardinality ] ;

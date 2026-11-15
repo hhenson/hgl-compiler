@@ -289,12 +289,12 @@ fn a_name_in_a_type_position_is_a_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:14 local:type/type.not_a_type UNIT-10",
-            "m.hgl:6:14 local:type/type.not_a_type UNIT-10",
-            "m.hgl:9:21 local:type/type.not_a_type UNIT-10",
-            "m.hgl:12:28 local:type/type.not_a_type GEN-13",
-            "m.hgl:13:21 local:type/type.not_a_type GEN-2",
-            "m.hgl:13:36 local:type/type.not_a_type GEN-2",
+            "m.hgl:5:14 type/type.not_a_type UNIT-10",
+            "m.hgl:6:14 type/type.not_a_type UNIT-10",
+            "m.hgl:9:21 type/type.not_a_type UNIT-10",
+            "m.hgl:12:28 type/type.not_a_type GEN-13",
+            "m.hgl:13:21 type/type.not_a_type GEN-2",
+            "m.hgl:13:36 type/type.not_a_type GEN-2",
         ]
     );
     let messages: Vec<&str> = checked
@@ -335,7 +335,7 @@ fn a_value_name_among_generic_arguments_is_a_constant() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:23 local:type/type.not_a_type UNIT-10"]
+        ["m.hgl:10:23 type/type.not_a_type UNIT-10"]
     );
     let all = written(&checked);
     assert!(all.contains(&"Sized<n>".to_string()), "{all:?}");
@@ -411,17 +411,17 @@ fn a_generic_type_is_given_the_arguments_it_declares() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:11:12 local:type/generic.argument_count GEN-2",
-            "m.hgl:12:12 local:type/generic.argument_count GEN-2",
-            "m.hgl:13:11 local:type/generic.argument_count GEN-2",
-            "m.hgl:14:13 local:type/generic.argument_count GEN-2",
-            "m.hgl:14:28 local:type/generic.argument_count GEN-2",
-            "m.hgl:15:15 local:type/generic.argument_count GEN-2",
-            "m.hgl:15:29 local:type/generic.argument_count GEN-2",
-            "m.hgl:16:20 local:type/generic.argument_count GEN-13",
-            "m.hgl:18:16 local:type/generic.argument_count GEN-2",
-            "m.hgl:18:35 local:type/generic.argument_count GEN-2",
-            "m.hgl:19:32 local:type/generic.argument_count GEN-2",
+            "m.hgl:11:12 type/generic.argument_count GEN-2",
+            "m.hgl:12:12 type/generic.argument_count GEN-2",
+            "m.hgl:13:11 type/generic.argument_count GEN-2",
+            "m.hgl:14:13 type/generic.argument_count GEN-2",
+            "m.hgl:14:28 type/generic.argument_count GEN-2",
+            "m.hgl:15:15 type/generic.argument_count GEN-2",
+            "m.hgl:15:29 type/generic.argument_count GEN-2",
+            "m.hgl:16:20 type/generic.argument_count GEN-13",
+            "m.hgl:18:16 type/generic.argument_count GEN-2",
+            "m.hgl:18:35 type/generic.argument_count GEN-2",
+            "m.hgl:19:32 type/generic.argument_count GEN-2",
         ]
     );
     let messages: Vec<&str> = checked
@@ -470,10 +470,10 @@ fn a_forwarded_pack_counts_for_what_it_may_hold() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:27 local:type/generic.argument_count GEN-2",
-            "m.hgl:10:26 local:type/generic.argument_count GEN-2",
-            "m.hgl:11:27 local:type/generic.argument_count GEN-2",
-            "m.hgl:12:28 local:type/generic.argument_count GEN-2",
+            "m.hgl:9:27 type/generic.argument_count GEN-2",
+            "m.hgl:10:26 type/generic.argument_count GEN-2",
+            "m.hgl:11:27 type/generic.argument_count GEN-2",
+            "m.hgl:12:28 type/generic.argument_count GEN-2",
         ]
     );
     let messages: Vec<&str> = checked
@@ -508,7 +508,7 @@ fn forwarded_packs_too_long_to_sum_are_still_counted() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:4:43 local:type/generic.argument_count GEN-2"]
+        ["m.hgl:4:43 type/generic.argument_count GEN-2"]
     );
     assert_eq!(
         checked.findings[0].message,
@@ -597,21 +597,21 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:16 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:6:34 local:type/type.not_ordinary TYPE-9",
-            "m.hgl:6:59 local:type/type.not_ordinary TYPE-9",
-            "m.hgl:7:17 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:7:41 local:type/type.not_ordinary TYPE-9",
-            "m.hgl:8:23 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:8:48 local:type/type.not_ordinary TYPE-11",
-            "m.hgl:9:23 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:9:44 local:type/type.not_ordinary TYPE-9",
-            "m.hgl:10:22 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:10:55 local:type/type.not_ordinary TYPE-13",
-            "m.hgl:11:32 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:11:65 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:13:24 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:13:52 local:type/type.not_ordinary TYPE-9",
+            "m.hgl:6:16 type/type.not_ordinary TYPE-12",
+            "m.hgl:6:34 type/type.not_ordinary TYPE-9",
+            "m.hgl:6:59 type/type.not_ordinary TYPE-9",
+            "m.hgl:7:17 type/type.not_ordinary TYPE-12",
+            "m.hgl:7:41 type/type.not_ordinary TYPE-9",
+            "m.hgl:8:23 type/type.not_ordinary TYPE-12",
+            "m.hgl:8:48 type/type.not_ordinary TYPE-11",
+            "m.hgl:9:23 type/type.not_ordinary TYPE-12",
+            "m.hgl:9:44 type/type.not_ordinary TYPE-9",
+            "m.hgl:10:22 type/type.not_ordinary TYPE-12",
+            "m.hgl:10:55 type/type.not_ordinary TYPE-13",
+            "m.hgl:11:32 type/type.not_ordinary TYPE-12",
+            "m.hgl:11:65 type/type.not_ordinary TYPE-12",
+            "m.hgl:13:24 type/type.not_ordinary TYPE-12",
+            "m.hgl:13:52 type/type.not_ordinary TYPE-9",
         ]
     );
     assert_eq!(
@@ -646,12 +646,12 @@ fn constant_configuration_is_an_ordinary_value_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:58 local:type/type.not_ordinary FN-1",
-            "m.hgl:4:23 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:4:42 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:4:59 local:type/type.not_ordinary FN-1",
-            "m.hgl:5:21 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:7:21 local:type/type.not_ordinary GEN-9",
+            "m.hgl:3:58 type/type.not_ordinary FN-1",
+            "m.hgl:4:23 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:42 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:59 type/type.not_ordinary FN-1",
+            "m.hgl:5:21 type/type.not_ordinary TYPE-12",
+            "m.hgl:7:21 type/type.not_ordinary GEN-9",
         ]
     );
     assert_eq!(
@@ -687,14 +687,14 @@ fn signal_is_the_whole_type_of_an_input() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:16 local:type/signal.position TYPE-12",
-            "m.hgl:5:22 local:type/signal.position TYPE-12",
-            "m.hgl:6:19 local:type/signal.position TYPE-12",
-            "m.hgl:6:35 local:type/signal.position TYPE-12",
-            "m.hgl:6:58 local:type/signal.position TYPE-12",
-            "m.hgl:6:80 local:type/signal.position TYPE-12",
-            "m.hgl:9:15 local:type/signal.position TYPE-12",
-            "m.hgl:10:22 local:type/signal.position TYPE-12",
+            "m.hgl:4:16 type/signal.position TYPE-12",
+            "m.hgl:5:22 type/signal.position TYPE-12",
+            "m.hgl:6:19 type/signal.position TYPE-12",
+            "m.hgl:6:35 type/signal.position TYPE-12",
+            "m.hgl:6:58 type/signal.position TYPE-12",
+            "m.hgl:6:80 type/signal.position TYPE-12",
+            "m.hgl:9:15 type/signal.position TYPE-12",
+            "m.hgl:10:22 type/signal.position TYPE-12",
         ]
     );
     assert_eq!(
@@ -723,16 +723,16 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:17 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:3:31 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:3:48 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:3:63 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:4:14 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:4:35 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:4:57 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:5:29 local:type/type.not_ordinary TYPE-14",
-            "m.hgl:6:16 local:type/nullable.key TYPE-14",
-            "m.hgl:6:16 local:type/type.not_ordinary TYPE-12",
+            "m.hgl:3:17 type/type.not_ordinary TYPE-14",
+            "m.hgl:3:31 type/type.not_ordinary TYPE-14",
+            "m.hgl:3:48 type/type.not_ordinary TYPE-14",
+            "m.hgl:3:63 type/type.not_ordinary TYPE-14",
+            "m.hgl:4:14 type/type.not_ordinary TYPE-14",
+            "m.hgl:4:35 type/type.not_ordinary TYPE-14",
+            "m.hgl:4:57 type/type.not_ordinary TYPE-14",
+            "m.hgl:5:29 type/type.not_ordinary TYPE-14",
+            "m.hgl:6:16 type/nullable.key TYPE-14",
+            "m.hgl:6:16 type/type.not_ordinary TYPE-12",
         ]
     );
     assert_eq!(
@@ -763,10 +763,10 @@ fn a_key_is_never_null() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:16 local:type/nullable.key TYPE-14",
-            "m.hgl:3:31 local:type/nullable.key TYPE-14",
-            "m.hgl:3:55 local:type/nullable.key TYPE-14",
-            "m.hgl:3:71 local:type/nullable.key TYPE-14",
+            "m.hgl:3:16 type/nullable.key TYPE-14",
+            "m.hgl:3:31 type/nullable.key TYPE-14",
+            "m.hgl:3:55 type/nullable.key TYPE-14",
+            "m.hgl:3:71 type/nullable.key TYPE-14",
         ]
     );
     assert_eq!(
@@ -792,9 +792,9 @@ fn a_cardinalitys_upper_bound_is_at_least_its_lower() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:20 local:type/pack.cardinality GEN-10",
-            "m.hgl:4:30 local:type/pack.cardinality GEN-10",
-            "m.hgl:5:23 local:type/pack.cardinality GEN-10",
+            "m.hgl:3:20 type/pack.cardinality GEN-10",
+            "m.hgl:4:30 type/pack.cardinality GEN-10",
+            "m.hgl:5:23 type/pack.cardinality GEN-10",
         ]
     );
     assert_eq!(
@@ -822,14 +822,14 @@ fn a_lists_size_is_a_nonnegative_count() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:26 local:type/list.size TYPE-10",
-            "m.hgl:5:44 local:type/list.size TYPE-10",
-            "m.hgl:6:23 local:type/list.size TYPE-10",
-            "m.hgl:6:41 local:type/list.size TYPE-10",
-            "m.hgl:6:60 local:type/list.size TYPE-10",
-            "m.hgl:6:83 local:type/list.size TYPE-10",
-            "m.hgl:7:56 local:type/list.size TYPE-10",
-            "m.hgl:7:73 local:type/list.size TYPE-10",
+            "m.hgl:5:26 type/list.size TYPE-10",
+            "m.hgl:5:44 type/list.size TYPE-10",
+            "m.hgl:6:23 type/list.size TYPE-10",
+            "m.hgl:6:41 type/list.size TYPE-10",
+            "m.hgl:6:60 type/list.size TYPE-10",
+            "m.hgl:6:83 type/list.size TYPE-10",
+            "m.hgl:7:56 type/list.size TYPE-10",
+            "m.hgl:7:73 type/list.size TYPE-10",
         ]
     );
     let messages: Vec<&str> = checked
@@ -889,8 +889,8 @@ fn a_size_is_checked_against_a_parameter_declared_after_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:29 local:type/list.size TYPE-10",
-            "m.hgl:4:50 local:type/list.size TYPE-10",
+            "m.hgl:3:29 type/list.size TYPE-10",
+            "m.hgl:4:50 type/list.size TYPE-10",
         ]
     );
     assert_eq!(
@@ -1051,8 +1051,8 @@ fn a_minus_before_two_to_the_sixty_third_is_the_least_integer() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:23 local:type/list.size TYPE-10",
-            "m.hgl:2:59 local:type/list.size TYPE-10",
+            "m.hgl:2:23 type/list.size TYPE-10",
+            "m.hgl:2:59 type/list.size TYPE-10",
             "m.hgl:3:63 parse/number.integer_range LEX-7",
         ]
     );
@@ -1105,15 +1105,15 @@ fn a_value_functions_signature_is_of_ordinary_values() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:24 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:3:37 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:3:48 local:type/type.not_ordinary FN-1",
-            "m.hgl:3:68 local:type/type.not_ordinary FN-1",
-            "m.hgl:4:25 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:4:45 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:5:21 local:type/type.not_ordinary TYPE-12",
-            "m.hgl:6:33 local:type/type.not_ordinary FN-1",
-            "m.hgl:6:53 local:type/type.not_ordinary FN-1",
+            "m.hgl:3:24 type/type.not_ordinary TYPE-12",
+            "m.hgl:3:37 type/type.not_ordinary TYPE-12",
+            "m.hgl:3:48 type/type.not_ordinary FN-1",
+            "m.hgl:3:68 type/type.not_ordinary FN-1",
+            "m.hgl:4:25 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:45 type/type.not_ordinary TYPE-12",
+            "m.hgl:5:21 type/type.not_ordinary TYPE-12",
+            "m.hgl:6:33 type/type.not_ordinary FN-1",
+            "m.hgl:6:53 type/type.not_ordinary FN-1",
         ]
     );
     assert_eq!(
@@ -1141,10 +1141,10 @@ fn an_unknown_type_is_reported_once_and_its_surroundings_are_checked() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:13 local:type/type.not_a_type UNIT-10",
-            "m.hgl:3:33 local:type/type.not_a_type UNIT-10",
+            "m.hgl:3:13 type/type.not_a_type UNIT-10",
+            "m.hgl:3:33 type/type.not_a_type UNIT-10",
             "m.hgl:3:45 type/rolling.size_kind TYPE-11",
-            "m.hgl:3:66 local:type/list.size TYPE-10",
+            "m.hgl:3:66 type/list.size TYPE-10",
         ]
     );
     assert_eq!(

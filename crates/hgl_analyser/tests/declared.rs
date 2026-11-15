@@ -76,11 +76,11 @@ fn a_parent_is_an_abstract_struct() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:9:23 local:type/struct.parent TYPE-3",
-            "m.hgl:10:19 local:type/struct.parent TYPE-3",
-            "m.hgl:11:21 local:type/struct.parent TYPE-3",
-            "m.hgl:12:27 local:type/struct.parent TYPE-3",
-            "m.hgl:13:20 local:type/struct.parent TYPE-3",
+            "m.hgl:9:23 type/struct.parent TYPE-3",
+            "m.hgl:10:19 type/struct.parent TYPE-3",
+            "m.hgl:11:21 type/struct.parent TYPE-3",
+            "m.hgl:12:27 type/struct.parent TYPE-3",
+            "m.hgl:13:20 type/struct.parent TYPE-3",
         ]
     );
     assert_eq!(
@@ -110,8 +110,8 @@ fn a_parent_is_listed_once() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:22 local:type/struct.duplicate_parent TYPE-3",
-            "m.hgl:5:29 local:type/struct.duplicate_parent TYPE-3",
+            "m.hgl:4:22 type/struct.duplicate_parent TYPE-3",
+            "m.hgl:5:29 type/struct.duplicate_parent TYPE-3",
         ]
     );
     assert_eq!(
@@ -140,9 +140,9 @@ fn no_struct_inherits_from_itself() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:21 local:type/struct.inheritance_cycle TYPE-6",
-            "m.hgl:4:23 local:type/struct.inheritance_cycle TYPE-6",
-            "m.hgl:5:21 local:type/struct.inheritance_cycle TYPE-6",
+            "m.hgl:2:21 type/struct.inheritance_cycle TYPE-6",
+            "m.hgl:4:23 type/struct.inheritance_cycle TYPE-6",
+            "m.hgl:5:21 type/struct.inheritance_cycle TYPE-6",
         ]
     );
     assert_eq!(
@@ -182,13 +182,13 @@ fn a_struct_and_its_parent_agree_on_a_field() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:13:25 local:type/field.conflict TYPE-4",
-            "m.hgl:14:30 local:type/field.conflict TYPE-4",
-            "m.hgl:15:30 local:type/field.conflict TYPE-4",
-            "m.hgl:16:19 local:type/field.not_inherited TYPE-4",
-            "m.hgl:17:29 local:type/field.not_inherited TYPE-4",
-            "m.hgl:20:5 local:type/field.duplicate TYPE-4",
-            "m.hgl:24:5 local:type/field.duplicate TYPE-4",
+            "m.hgl:13:25 type/field.conflict TYPE-4",
+            "m.hgl:14:30 type/field.conflict TYPE-4",
+            "m.hgl:15:30 type/field.conflict TYPE-4",
+            "m.hgl:16:19 type/field.not_inherited TYPE-4",
+            "m.hgl:17:29 type/field.not_inherited TYPE-4",
+            "m.hgl:20:5 type/field.duplicate TYPE-4",
+            "m.hgl:24:5 type/field.duplicate TYPE-4",
         ]
     );
     assert_eq!(
@@ -240,10 +240,10 @@ fn parents_agree_on_a_field() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:21 local:type/field.conflict TYPE-4",
-            "m.hgl:7:22 local:type/field.conflict TYPE-4",
-            "m.hgl:16:23 local:type/field.conflict TYPE-4",
-            "m.hgl:20:31 local:type/field.conflict TYPE-4",
+            "m.hgl:6:21 type/field.conflict TYPE-4",
+            "m.hgl:7:22 type/field.conflict TYPE-4",
+            "m.hgl:16:23 type/field.conflict TYPE-4",
+            "m.hgl:20:31 type/field.conflict TYPE-4",
         ]
     );
     assert_eq!(
@@ -279,8 +279,8 @@ fn a_field_is_compared_by_what_its_type_means() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:10:23 local:type/field.conflict TYPE-4",
-            "m.hgl:15:31 local:type/field.conflict TYPE-4",
+            "m.hgl:10:23 type/field.conflict TYPE-4",
+            "m.hgl:15:31 type/field.conflict TYPE-4",
         ]
     );
     assert_eq!(
@@ -322,10 +322,7 @@ fn a_long_chain_of_parents_is_read_on_a_small_stack() {
         .expect("the analysis does not overflow its stack");
     assert_eq!(
         found.0,
-        [format!(
-            "m.hgl:{}:20 local:type/field.conflict TYPE-4",
-            LINKS + 3
-        )]
+        [format!("m.hgl:{}:20 type/field.conflict TYPE-4", LINKS + 3)]
     );
     assert_eq!(
         found.1,
@@ -352,7 +349,7 @@ fn a_type_that_grows_at_every_parent_is_not_built() {
     let checked = module(&text);
     assert_eq!(
         checked.summary(),
-        ["m.hgl:43:25 local:type/field.conflict TYPE-4"]
+        ["m.hgl:43:25 type/field.conflict TYPE-4"]
     );
     assert_eq!(
         checked.findings[0].message,
@@ -374,7 +371,7 @@ fn a_parents_pack_is_not_one_argument() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:11:33 local:type/field.conflict TYPE-4"]
+        ["m.hgl:11:33 type/field.conflict TYPE-4"]
     );
 }
 
@@ -394,7 +391,7 @@ fn what_is_not_worked_out_is_no_conflict() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:13:33 local:type/field.conflict TYPE-4"]
+        ["m.hgl:13:33 type/field.conflict TYPE-4"]
     );
 }
 
@@ -408,10 +405,7 @@ fn a_field_is_compared_with_every_parents() {
         "struct Child : Open, Known { value: str }\n",
         "struct Fine : Open, Known { value: i64 }\n",
     ));
-    assert_eq!(
-        checked.summary(),
-        ["m.hgl:4:30 local:type/field.conflict TYPE-4"]
-    );
+    assert_eq!(checked.summary(), ["m.hgl:4:30 type/field.conflict TYPE-4"]);
     assert_eq!(
         checked.findings[0].message,
         "`value` is required `str` here and required `i64` in `Known`"
@@ -432,9 +426,9 @@ fn an_unknown_part_of_a_type_is_no_conflict() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:17 local:type/type.not_a_type UNIT-10",
-            "m.hgl:5:17 local:type/type.not_a_type UNIT-10",
-            "m.hgl:11:23 local:type/field.conflict TYPE-4",
+            "m.hgl:4:17 type/type.not_a_type UNIT-10",
+            "m.hgl:5:17 type/type.not_a_type UNIT-10",
+            "m.hgl:11:23 type/field.conflict TYPE-4",
         ]
     );
     assert_eq!(
@@ -480,13 +474,13 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:15:17 local:type/field.recursive TYPE-6",
-            "m.hgl:16:15 local:type/field.recursive TYPE-6",
-            "m.hgl:17:16 local:type/field.recursive TYPE-6",
-            "m.hgl:18:16 local:type/field.recursive TYPE-6",
-            "m.hgl:22:19 local:type/field.recursive TYPE-6",
-            "m.hgl:23:17 local:type/field.recursive TYPE-6",
-            "m.hgl:24:15 local:type/field.recursive TYPE-6",
+            "m.hgl:15:17 type/field.recursive TYPE-6",
+            "m.hgl:16:15 type/field.recursive TYPE-6",
+            "m.hgl:17:16 type/field.recursive TYPE-6",
+            "m.hgl:18:16 type/field.recursive TYPE-6",
+            "m.hgl:22:19 type/field.recursive TYPE-6",
+            "m.hgl:23:17 type/field.recursive TYPE-6",
+            "m.hgl:24:15 type/field.recursive TYPE-6",
         ]
     );
     let recursive = "a recursive field is an `atomic<...>` with a default of null, or nullable";
@@ -526,7 +520,7 @@ fn a_ladder_of_diamonds_is_read_in_step() {
     let checked = module(&text);
     assert_eq!(
         checked.summary(),
-        ["m.hgl:126:25 local:type/field.conflict TYPE-4"]
+        ["m.hgl:126:25 type/field.conflict TYPE-4"]
     );
     assert_eq!(
         checked.findings[0].message,
@@ -553,8 +547,8 @@ fn a_struct_holds_itself_through_what_it_gives_a_parent() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:16 local:type/field.recursive TYPE-6",
-            "m.hgl:7:14 local:type/field.recursive TYPE-6",
+            "m.hgl:5:16 type/field.recursive TYPE-6",
+            "m.hgl:7:14 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -589,8 +583,8 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:8:16 local:type/field.recursive TYPE-6",
-            "m.hgl:9:17 local:type/field.recursive TYPE-6",
+            "m.hgl:8:16 type/field.recursive TYPE-6",
+            "m.hgl:9:17 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -622,8 +616,8 @@ fn a_recursive_field_passes_each_parameter_on_whole() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:16:5 local:type/field.recursive TYPE-6",
-            "m.hgl:20:5 local:type/field.recursive TYPE-6",
+            "m.hgl:16:5 type/field.recursive TYPE-6",
+            "m.hgl:20:5 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -656,9 +650,9 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:24 local:type/field.recursive TYPE-6",
-            "m.hgl:7:16 local:type/field.recursive TYPE-6",
-            "m.hgl:8:25 local:type/field.recursive TYPE-6",
+            "m.hgl:5:24 type/field.recursive TYPE-6",
+            "m.hgl:7:16 type/field.recursive TYPE-6",
+            "m.hgl:8:25 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -690,10 +684,10 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:27 local:type/field.recursive TYPE-6",
-            "m.hgl:5:28 local:type/field.recursive TYPE-6",
-            "m.hgl:8:27 local:type/field.recursive TYPE-6",
-            "m.hgl:11:26 local:type/field.recursive TYPE-6",
+            "m.hgl:4:27 type/field.recursive TYPE-6",
+            "m.hgl:5:28 type/field.recursive TYPE-6",
+            "m.hgl:8:27 type/field.recursive TYPE-6",
+            "m.hgl:11:26 type/field.recursive TYPE-6",
         ]
     );
 }
@@ -720,7 +714,7 @@ fn a_recursive_field_stays_within_its_module() {
     ]);
     assert_eq!(
         checked.summary(),
-        ["m.hgl:3:23 local:type/field.recursive TYPE-6"]
+        ["m.hgl:3:23 type/field.recursive TYPE-6"]
     );
     assert_eq!(
         checked.findings[0].message,
@@ -749,9 +743,9 @@ fn a_recursive_field_may_be_nullable() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:17 local:type/field.recursive TYPE-6",
-            "m.hgl:7:16 local:type/field.recursive TYPE-6",
-            "m.hgl:8:19 local:type/field.recursive TYPE-6",
+            "m.hgl:6:17 type/field.recursive TYPE-6",
+            "m.hgl:7:16 type/field.recursive TYPE-6",
+            "m.hgl:8:19 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -797,10 +791,10 @@ fn a_descendant_keeps_a_recursive_fields_null() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:27 local:type/field.recursive TYPE-6",
-            "m.hgl:6:24 local:type/field.recursive TYPE-6",
-            "m.hgl:13:28 local:type/field.recursive TYPE-6",
-            "m.hgl:15:16 local:type/field.recursive TYPE-6",
+            "m.hgl:5:27 type/field.recursive TYPE-6",
+            "m.hgl:6:24 type/field.recursive TYPE-6",
+            "m.hgl:13:28 type/field.recursive TYPE-6",
+            "m.hgl:15:16 type/field.recursive TYPE-6",
         ]
     );
     assert_eq!(
@@ -868,14 +862,14 @@ fn an_enums_numbers_are_integers_no_two_alike() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:2:20 local:type/enum.duplicate_value TYPE-7",
-            "m.hgl:3:31 local:type/enum.duplicate_value TYPE-7",
-            "m.hgl:4:40 local:type/enum.overflow TYPE-7",
-            "m.hgl:5:20 local:type/enum.duplicate_member TYPE-7",
-            "m.hgl:6:18 local:type/enum.value TYPE-7",
-            "m.hgl:6:27 local:type/enum.value TYPE-7",
-            "m.hgl:6:36 local:type/enum.value TYPE-7",
-            "m.hgl:6:44 local:type/enum.value TYPE-7",
+            "m.hgl:2:20 type/enum.duplicate_value TYPE-7",
+            "m.hgl:3:31 type/enum.duplicate_value TYPE-7",
+            "m.hgl:4:40 type/enum.overflow TYPE-7",
+            "m.hgl:5:20 type/enum.duplicate_member TYPE-7",
+            "m.hgl:6:18 type/enum.value TYPE-7",
+            "m.hgl:6:27 type/enum.value TYPE-7",
+            "m.hgl:6:36 type/enum.value TYPE-7",
+            "m.hgl:6:44 type/enum.value TYPE-7",
         ]
     );
     assert_eq!(

@@ -163,26 +163,57 @@ pub mod codes {
     /// minus before it (LEX-7).
     pub const NUMBER_INTEGER_RANGE: &str = "number.integer_range";
 
+    /// A name in a type position is not a type (UNIT-10, GEN-2,
+    /// GEN-13).
+    pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
+    /// A `rolling`, `ref`, `atomic` or `signal` where only an
+    /// ordinary value type may stand, under a `?` included (TYPE-12,
+    /// TYPE-14 and the grammar's `value_type`).
+    pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
+    /// `signal` somewhere other than the whole type of an input
+    /// (TYPE-12).
+    pub const SIGNAL_POSITION: &str = "signal.position";
+    /// A generic type given the wrong number of arguments, or a
+    /// type that takes none given some (GEN-2, GEN-13).
+    pub const GENERIC_ARGUMENT_COUNT: &str = "generic.argument_count";
+    /// A list's size is not a nonnegative count (TYPE-10).
+    pub const LIST_SIZE: &str = "list.size";
+    /// A set's element or a dictionary's key is nullable (TYPE-14).
+    pub const NULLABLE_KEY: &str = "nullable.key";
+    /// A cardinality's upper bound is below its lower (GEN-10).
+    pub const PACK_CARDINALITY: &str = "pack.cardinality";
+    /// A struct's parent is not an abstract struct (TYPE-3).
+    pub const STRUCT_PARENT: &str = "struct.parent";
+    /// A struct lists one parent twice (TYPE-3).
+    pub const STRUCT_DUPLICATE_PARENT: &str = "struct.duplicate_parent";
+    /// Structs inherit from one another (TYPE-6).
+    pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
+    /// A field's type or optionality differs between two parents, or
+    /// between a struct and a parent (TYPE-4).
+    pub const FIELD_CONFLICT: &str = "field.conflict";
+    /// `name = value` names no field a parent declares (TYPE-4).
+    pub const FIELD_NOT_INHERITED: &str = "field.not_inherited";
+    /// Two members of a struct have one name (TYPE-4).
+    pub const FIELD_DUPLICATE: &str = "field.duplicate";
+    /// A field makes its struct hold itself and is not an optional
+    /// `atomic<...>` defaulted to null, a descendant removes that
+    /// null, or the field gives a struct of its cycle a type built
+    /// from a generic parameter (TYPE-6).
+    pub const FIELD_RECURSIVE: &str = "field.recursive";
+    /// An enum member's number is not an integer (TYPE-7).
+    pub const ENUM_VALUE: &str = "enum.value";
+    /// Two members of an enum have one number (TYPE-7).
+    pub const ENUM_DUPLICATE_VALUE: &str = "enum.duplicate_value";
+    /// An enum's numbering passes the largest `i64` (TYPE-7).
+    pub const ENUM_OVERFLOW: &str = "enum.overflow";
+    /// Two members of an enum have one name (TYPE-7).
+    pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
+
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
     /// code when one is agreed.
     pub mod local {
-        /// A name in a type position is not a type (UNIT-10, GEN-2,
-        /// GEN-13).
-        pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
-        /// A `rolling`, `ref`, `atomic` or `signal` where only an
-        /// ordinary value type may stand, under a `?` included (TYPE-12,
-        /// TYPE-14 and the grammar's `value_type`).
-        pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
-        /// `signal` somewhere other than the whole type of an input
-        /// (TYPE-12).
-        pub const SIGNAL_POSITION: &str = "signal.position";
-        /// A generic type given the wrong number of arguments, or a
-        /// type that takes none given some (GEN-2, GEN-13).
-        pub const GENERIC_ARGUMENT_COUNT: &str = "generic.argument_count";
-        /// A list's size is not a nonnegative count (TYPE-10).
-        pub const LIST_SIZE: &str = "list.size";
         /// A generic parameter is used as a type and as a value
         /// (GEN-13).
         pub const GENERIC_KIND_CONFLICT: &str = "generic.kind_conflict";
@@ -192,60 +223,12 @@ pub mod codes {
         /// A generic argument is a type where the parameter is a value,
         /// or a value where it is a type (GEN-14).
         pub const GENERIC_ARGUMENT_KIND: &str = "generic.argument_kind";
-        /// A set's element or a dictionary's key is nullable (TYPE-14).
-        pub const NULLABLE_KEY: &str = "nullable.key";
-        /// A cardinality's upper bound is below its lower (GEN-10).
-        pub const PACK_CARDINALITY: &str = "pack.cardinality";
-        /// A struct's parent is not an abstract struct (TYPE-3).
-        pub const STRUCT_PARENT: &str = "struct.parent";
-        /// A struct lists one parent twice (TYPE-3).
-        pub const STRUCT_DUPLICATE_PARENT: &str = "struct.duplicate_parent";
-        /// Structs inherit from one another (TYPE-6).
-        pub const STRUCT_INHERITANCE_CYCLE: &str = "struct.inheritance_cycle";
-        /// A field's type or optionality differs between two parents, or
-        /// between a struct and a parent (TYPE-4).
-        pub const FIELD_CONFLICT: &str = "field.conflict";
-        /// `name = value` names no field a parent declares (TYPE-4).
-        pub const FIELD_NOT_INHERITED: &str = "field.not_inherited";
-        /// Two members of a struct have one name (TYPE-4).
-        pub const FIELD_DUPLICATE: &str = "field.duplicate";
-        /// A field makes its struct hold itself and is not an optional
-        /// `atomic<...>` defaulted to null, a descendant removes that
-        /// null, or the field gives a struct of its cycle a type built
-        /// from a generic parameter (TYPE-6).
-        pub const FIELD_RECURSIVE: &str = "field.recursive";
-        /// An enum member's number is not an integer (TYPE-7).
-        pub const ENUM_VALUE: &str = "enum.value";
-        /// Two members of an enum have one number (TYPE-7).
-        pub const ENUM_DUPLICATE_VALUE: &str = "enum.duplicate_value";
-        /// An enum's numbering passes the largest `i64` (TYPE-7).
-        pub const ENUM_OVERFLOW: &str = "enum.overflow";
-        /// Two members of an enum have one name (TYPE-7).
-        pub const ENUM_DUPLICATE_MEMBER: &str = "enum.duplicate_member";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 21] = [
-            TYPE_NOT_A_TYPE,
-            TYPE_NOT_ORDINARY,
-            SIGNAL_POSITION,
-            GENERIC_ARGUMENT_COUNT,
-            LIST_SIZE,
+        pub const ALL: [&str; 3] = [
             GENERIC_KIND_CONFLICT,
             GENERIC_KIND_UNRESOLVED,
             GENERIC_ARGUMENT_KIND,
-            NULLABLE_KEY,
-            PACK_CARDINALITY,
-            STRUCT_PARENT,
-            STRUCT_DUPLICATE_PARENT,
-            STRUCT_INHERITANCE_CYCLE,
-            FIELD_CONFLICT,
-            FIELD_NOT_INHERITED,
-            FIELD_DUPLICATE,
-            FIELD_RECURSIVE,
-            ENUM_VALUE,
-            ENUM_DUPLICATE_VALUE,
-            ENUM_OVERFLOW,
-            ENUM_DUPLICATE_MEMBER,
         ];
     }
 }

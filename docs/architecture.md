@@ -302,20 +302,8 @@ A type the pass cannot know, because its name is left for the prelude or
 it has been reported, is `Unknown`. Nothing more is reported of it
 (ERR-9), and what holds it is still checked.
 
-The catalogue has rows for the window rejections only. The others carry
-codes local to this compiler (`hgl_analyser::codes::local`) until the
-specification gives them rows; they and the readings this pass takes are
-proposed in [hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
-
-| Local code | Rejection |
-| --- | --- |
-| `type.not_a_type` | A name in a type position that is no type |
-| `type.not_ordinary` | A `rolling`, `ref`, `atomic` or `signal` where an ordinary value type is required, under a `?` included |
-| `signal.position` | `signal` other than as the whole type of an input |
-| `generic.argument_count` | The wrong number of generic arguments |
-| `list.size` | A list size that is not a count |
-| `nullable.key` | A set's element or a dictionary's key with a `?` |
-| `pack.cardinality` | A cardinality whose upper bound is below its lower |
+Each of these rejections has a row of the catalogue, and is reported
+under its code.
 
 ### Declared types
 
@@ -353,15 +341,6 @@ One that is in what a struct gives a parent, as in `struct Child :
 Base<Child>` where `Base<T>` has a field of type `T`, is reported where
 the struct names the parent.
 
-Several of these checks follow the owner's decisions of 2026-11-15 on
-[hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21),
-which hgl_spec pull request 22 writes into the chapters: a value
-function's signature, keys that take no `?`, a cardinality's bounds, a
-default on any parameter, where `signal` stands, a parent listed once,
-what an abstract-typed field holds, and what a recursive field may be:
-atomic or nullable, with a collection only inside an `atomic<...>`.
-The pin under `spec/` moves to them when that pull request is merged.
-
 The fields of each struct are worked out once, from those of its
 parents, and a field that reaches a struct by two paths is listed once.
 A ladder of structs that each inherit from the two before it would
@@ -375,21 +354,11 @@ evaluates constants reads them.
 (LEX-7). The lexer admits the literal; the analyser rejects it anywhere
 else, under the catalogue's `number.integer_range`.
 
-The rejections of this pass have no catalogue row either:
-
-| Local code | Rejection |
-| --- | --- |
-| `struct.parent` | A parent that is not an abstract struct |
-| `struct.duplicate_parent` | A parent listed twice |
-| `struct.inheritance_cycle` | Structs that inherit from one another |
-| `field.conflict` | A field whose type or optionality differs between parents, or from a parent's |
-| `field.not_inherited` | `name = value` for a field no parent declares |
-| `field.duplicate` | Two members of a struct with one name |
-| `field.recursive` | A field that makes its struct hold itself and is neither `atomic<...>` defaulted to null nor nullable, or gives a struct of its cycle a type built from a generic parameter |
-| `enum.value` | A number that is not an integer |
-| `enum.duplicate_value` | Two members with one number |
-| `enum.overflow` | Numbering past the largest `i64` |
-| `enum.duplicate_member` | Two members of an enum with one name |
+Each has a row of the catalogue: `struct.parent`,
+`struct.duplicate_parent`, `struct.inheritance_cycle`, `field.conflict`,
+`field.not_inherited`, `field.duplicate`, `field.recursive`,
+`enum.value`, `enum.duplicate_value`, `enum.overflow` and
+`enum.duplicate_member`.
 
 ### Generic kinds
 
@@ -429,6 +398,10 @@ it is given to (GEN-14): a value where a type goes, or a type where a
 value goes, is rejected. A lone name is read as a type by the parser;
 here it is a constant when it names a value parameter, or a plain one
 given where a value goes.
+
+These three have no catalogue row yet and carry codes local to this
+compiler (`hgl_analyser::codes::local`), proposed in
+[hgl_spec issue 21](https://github.com/hhenson/hgl_spec/issues/21):
 
 | Local code | Rejection |
 | --- | --- |

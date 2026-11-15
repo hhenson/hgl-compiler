@@ -958,9 +958,9 @@ impl Reader<'_> {
             place_rule
         };
         self.diagnostics.emit(
-            local_error(
+            error(
                 Category::Type,
-                codes::local::TYPE_NOT_ORDINARY,
+                codes::TYPE_NOT_ORDINARY,
                 self.at(node.span()),
                 format!(
                     "`{}` is not an ordinary value type, and {what} is one",
@@ -980,9 +980,9 @@ impl Reader<'_> {
             self.ordinary(node, position, true);
         } else if !position.signal {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::SIGNAL_POSITION,
+                    codes::SIGNAL_POSITION,
                     self.at(node.span()),
                     "`signal` is the whole type of an input, and nothing else".to_string(),
                     "TYPE-12",
@@ -997,9 +997,9 @@ impl Reader<'_> {
     fn key(&mut self, node: &SyntaxNode, what: &str) {
         if node.kind() == SyntaxKind::NullableType {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::NULLABLE_KEY,
+                    codes::NULLABLE_KEY,
                     self.at(node.span()),
                     format!("{what} is never null and takes no `?`"),
                     "TYPE-14",
@@ -1077,9 +1077,9 @@ impl Reader<'_> {
             _ => None,
         };
         if let Some(problem) = problem {
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Type,
-                codes::local::LIST_SIZE,
+                codes::LIST_SIZE,
                 self.at(node.span()),
                 problem,
                 "TYPE-10",
@@ -1365,9 +1365,9 @@ impl Reader<'_> {
 
     fn not_a_type(&mut self, name: &SyntaxToken, what: &str, declared: Location) {
         self.diagnostics.emit(
-            local_error(
+            error(
                 Category::Type,
-                codes::local::TYPE_NOT_A_TYPE,
+                codes::TYPE_NOT_A_TYPE,
                 self.at(name.span()),
                 format!("`{}` is {what}, not a type", name.text()),
                 "UNIT-10",
@@ -1392,9 +1392,9 @@ impl Reader<'_> {
         };
         if applied {
             self.diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::GENERIC_ARGUMENT_COUNT,
+                    codes::GENERIC_ARGUMENT_COUNT,
                     self.at(name.span()),
                     format!(
                         "`{}` is a generic parameter and takes no generic arguments",
@@ -1421,9 +1421,9 @@ impl Reader<'_> {
             // type."
             Some(Kind::Pack) if !position.pack => {
                 self.diagnostics.emit(
-                    local_error(
+                    error(
                         Category::Type,
-                        codes::local::TYPE_NOT_A_TYPE,
+                        codes::TYPE_NOT_A_TYPE,
                         self.at(name.span()),
                         format!(
                             "`{}` is a type pack: a sequence of types, not one type",
@@ -1437,9 +1437,9 @@ impl Reader<'_> {
             }
             Some(Kind::Value) if !position.constant => {
                 self.diagnostics.emit(
-                    local_error(
+                    error(
                         Category::Type,
-                        codes::local::TYPE_NOT_A_TYPE,
+                        codes::TYPE_NOT_A_TYPE,
                         self.at(name.span()),
                         format!("`{}` is a generic value parameter, not a type", name.text()),
                         "GEN-13",
@@ -1552,9 +1552,9 @@ impl Reader<'_> {
             }
         };
         self.diagnostics.emit(
-            local_error(
+            error(
                 Category::Type,
-                codes::local::GENERIC_ARGUMENT_COUNT,
+                codes::GENERIC_ARGUMENT_COUNT,
                 self.at(name.span()),
                 problem,
                 "GEN-2",
