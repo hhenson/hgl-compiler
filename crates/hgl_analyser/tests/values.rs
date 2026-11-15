@@ -636,13 +636,20 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         "    let empty: Box<i64?> = Box()\n",
         "    let typed = Box<i64?>()\n",
         "    let needed: Box<i64> = Box()\n",
+        // `null` and `.member` take their type from the field, once the
+        // other fields have said what `T` is.
+        "    let absent = Pair(1, null)\n",
+        "    let sides = Pair(Side.buy, .sell)\n",
+        "    let nullable: Pair<i64?> = Pair(1, null)\n",
         "}\n",
+        "enum Side { buy, sell }\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:9:25 local:type/type.mismatch EXPR-5",
             "m.hgl:14:28 local:type/argument.missing EXPR-2",
+            "m.hgl:15:26 local:type/type.mismatch TYPE-14",
         ]
     );
     assert_eq!(
@@ -650,6 +657,7 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
         [
             "this is `str`, and the field `second` is `i64`",
             "`Box` is given no `value`, a field with no default",
+            "`null` is no value of `i64`: write `i64?`",
         ]
     );
     assert_eq!(
@@ -663,6 +671,45 @@ fn a_generic_struct_is_checked_with_its_arguments_in_place() {
             "empty: Box<i64?>",
             "typed: Box<i64?>",
             "needed: Box<i64>",
+            "absent: Pair<i64>",
+            "sides: Pair<Side>",
+            "nullable: Pair<i64?>",
+        ]
+    );
+}
+
+/// UNIT-10: a struct named through an alias is the struct, with its
+/// generic arguments written or not.
+#[test]
+fn a_struct_named_through_an_alias_is_constructed() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export struct Box<T> { value: T }\n",
+                "export struct Plain { value: i64 }\n",
+            ),
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "use lib as l\n",
+                "const fn made() {\n",
+                "    let typed = l::Box<i64>(value: \"x\")\n",
+                "    let plain = l::Plain(value: \"x\")\n",
+                "    let short = l::Box<i64>()\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "app.hgl:4:36 local:type/type.mismatch EXPR-5",
+            "app.hgl:5:33 local:type/type.mismatch EXPR-5",
+            "app.hgl:6:20 local:type/argument.missing EXPR-2",
         ]
     );
 }

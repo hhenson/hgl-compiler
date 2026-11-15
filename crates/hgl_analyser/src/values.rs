@@ -951,12 +951,20 @@ impl<'a> Typer<'a> {
     /// `Name<arguments>(fields)`: the construction of a generic struct
     /// with its arguments written.
     fn typed_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
-        let name = tokens(node).find(|token| token.kind() == SyntaxKind::Ident);
-        let (Some(name), Some(list)) = (name, child(node, SyntaxKind::ArgList)) else {
+        // `Name<...>(...)` or `alias.Name<...>(...)`: the name is the
+        // last identifier, and the type is recorded where the whole of
+        // it starts.
+        let start = match child(node, SyntaxKind::QualifiedName) {
+            Some(qualified) => Some(qualified.span().start),
+            None => name_token(node).map(|name| name.span().start),
+        };
+        let (Some(name), Some(start), Some(list)) =
+            (name_token(node), start, child(node, SyntaxKind::ArgList))
+        else {
             return (ExprKind::Unread, Type::Unknown);
         };
         // The type the `read` pass gave `Name<arguments>`.
-        let written = self.written.get(&(self.file, name.span().start)).copied();
+        let written = self.written.get(&(self.file, start)).copied();
         match written {
             Some(Type::Named {
                 module,
@@ -1046,52 +1054,79 @@ impl<'a> Typer<'a> {
                 }
             })
             .collect();
-        let mut arguments = self.bind(name, list, &slots, "field");
-        // GEN-2: with no arguments given, a parameter that is a field's
-        // whole type is what that field is given.
-        let arguments_of_type = match given {
-            Some(given) => given,
-            None => read
-                .generics
-                .iter()
-                .map(|generic| {
-                    let found = arguments.iter().find_map(|argument| {
-                        let member = &read.members[argument.parameter?];
-                        matches!(&member.ty, Type::Parameter { at, .. } if *at == generic.at)
-                            .then(|| argument.value.ty.clone())
-                    });
-                    Argument::Type(found.unwrap_or(Type::Unknown))
-                })
-                .collect(),
-        };
-        // With the arguments found, every field given is of its type
-        // with them in place: `Pair(1, "x")` gives `second: T` a `str`
-        // where `T` is `i64`. A field whose type names no parameter has
-        // been checked already.
-        if inferring {
-            let found: Vec<(Location, &Argument)> =
-                fixed(&read.generics).zip(&arguments_of_type).collect();
-            arguments = arguments
-                .into_iter()
-                .map(|argument| {
-                    let member = match argument.parameter {
-                        Some(index) if names_parameter(&read.members[index].ty) => {
-                            &read.members[index]
+        // With the arguments given, each field's type is known and the
+        // values are read against it.
+        let (arguments, arguments_of_type) = match given {
+            Some(given) => (self.bind(name, list, &slots, "field"), given),
+            None if !inferring => (self.bind(name, list, &slots, "field"), Vec::new()),
+            // GEN-2: "infers them from constructor fields". A parameter
+            // that is a field's whole type is what that field is
+            // given. So the values of such fields are read first, but
+            // for `null` and `.member`, which take their type from the
+            // field and say nothing of it.
+            None => {
+                let assigned = self.assign(name, list, &slots, "field");
+                let whole = |slot: &Option<usize>| {
+                    slot.and_then(|index| match &read.members[index].ty {
+                        Type::Parameter { at, .. } => Some(*at),
+                        _ => None,
+                    })
+                };
+                let mut values: Vec<Option<Expr>> = assigned
+                    .iter()
+                    .map(|(slot, node)| {
+                        (whole(slot).is_some() && !takes_its_type(node))
+                            .then(|| self.expression(node, Some(&Type::Unknown)))
+                    })
+                    .collect();
+                let found: Vec<Argument> = read
+                    .generics
+                    .iter()
+                    .map(|generic| {
+                        let ty = assigned.iter().zip(&values).find_map(|((slot, _), value)| {
+                            (whole(slot) == Some(generic.at))
+                                .then(|| value.as_ref().map(|value| value.ty.clone()))
+                                .flatten()
+                        });
+                        Argument::Type(ty.unwrap_or(Type::Unknown))
+                    })
+                    .collect();
+                // Every field given is of its type with the arguments
+                // found in place: `Pair(1, "x")` gives `second: T` a
+                // `str` where `T` is `i64`, and `Pair(1, null)` a
+                // `null`.
+                let map: Vec<(Location, &Argument)> = fixed(&read.generics).zip(&found).collect();
+                let arguments = assigned
+                    .iter()
+                    .enumerate()
+                    .map(|(position, (slot, node))| {
+                        let Some(index) = *slot else {
+                            return self.argument(None, node, None, "field");
+                        };
+                        let ty = substitute_within(&read.members[index].ty, &map);
+                        let slot = Slot {
+                            ty: if names_parameter(&ty) {
+                                Type::Unknown
+                            } else {
+                                ty
+                            },
+                            ..slots[index]
+                        };
+                        match values[position].take() {
+                            Some(value) => {
+                                let place = format!("the field `{}`", slot.name);
+                                hir::Argument {
+                                    parameter: Some(index),
+                                    value: self.fit(value, &slot.ty, &place),
+                                }
+                            }
+                            None => self.argument(Some(index), node, Some(&slot), "field"),
                         }
-                        _ => return argument,
-                    };
-                    let ty = substitute_within(&member.ty, &found);
-                    if names_parameter(&ty) {
-                        return argument;
-                    }
-                    let place = format!("the field `{}`", member.name);
-                    hir::Argument {
-                        parameter: argument.parameter,
-                        value: self.fit(argument.value, &ty, &place),
-                    }
-                })
-                .collect();
-        }
+                    })
+                    .collect();
+                (arguments, found)
+            }
+        };
         let ty = if reported {
             Type::Unknown
         } else {
@@ -1118,13 +1153,17 @@ impl<'a> Typer<'a> {
     /// duplicates, unknown names, missing required arguments, and wrong
     /// types. Named arguments use the selected public callable's
     /// parameter names."
-    fn bind(
+    ///
+    /// The arguments come back in the order written, each with the slot
+    /// it is given to: `None` for one given to a pack, or to nothing.
+    /// Their values are not read here.
+    fn assign(
         &mut self,
         callee: &SyntaxToken,
         list: &SyntaxNode,
         slots: &[Slot],
         what: &str,
-    ) -> Vec<hir::Argument> {
+    ) -> Vec<(Option<usize>, SyntaxNode)> {
         let callee_at = Location::new(self.file, callee.span());
         let has_pack = |pack: Pack| slots.iter().any(|slot| slot.pack == Some(pack));
         // Which slots have been given a value.
@@ -1201,22 +1240,10 @@ impl<'a> Typer<'a> {
                     }
                 }
             };
-            let value = match slot {
-                Some(index) => {
-                    filled[index] = true;
-                    let expected = &slots[index].ty;
-                    let value = self.expression(&value, Some(expected));
-                    let place = format!("the {what} `{}`", slots[index].name);
-                    self.fit(value, expected, &place)
-                }
-                // Given to a pack, or to nothing: read for what it
-                // reports itself.
-                None => self.expression(&value, Some(&Type::Unknown)),
-            };
-            arguments.push(hir::Argument {
-                parameter: slot,
-                value,
-            });
+            if let Some(index) = slot {
+                filled[index] = true;
+            }
+            arguments.push((slot, value));
         }
         for (index, slot) in slots.iter().enumerate() {
             if slot.required && slot.pack.is_none() && !filled[index] {
@@ -1234,6 +1261,44 @@ impl<'a> Typer<'a> {
             }
         }
         arguments
+    }
+
+    /// Gives each argument of `list` to one of `slots` and reads its
+    /// value, which is of the slot's type.
+    fn bind(
+        &mut self,
+        callee: &SyntaxToken,
+        list: &SyntaxNode,
+        slots: &[Slot],
+        what: &str,
+    ) -> Vec<hir::Argument> {
+        self.assign(callee, list, slots, what)
+            .into_iter()
+            .map(|(slot, value)| {
+                let expected = slot.map(|index| &slots[index]);
+                self.argument(slot, &value, expected, what)
+            })
+            .collect()
+    }
+
+    /// The argument written at `node`, given to `slot`. One given to a
+    /// pack, or to nothing, is read for what it reports itself.
+    fn argument(
+        &mut self,
+        parameter: Option<usize>,
+        node: &SyntaxNode,
+        slot: Option<&Slot>,
+        what: &str,
+    ) -> hir::Argument {
+        let value = match slot {
+            Some(slot) => {
+                let value = self.expression(node, Some(&slot.ty));
+                let place = format!("the {what} `{}`", slot.name);
+                self.fit(value, &slot.ty, &place)
+            }
+            None => self.expression(node, Some(&Type::Unknown)),
+        };
+        hir::Argument { parameter, value }
     }
 
     // ---- Members and elements ----
@@ -1517,6 +1582,20 @@ fn applies(generics: &[GenericParameter], given: &[Argument]) -> bool {
                 (GenericKind::Type | GenericKind::Plain, Argument::Constant(_)) => false,
                 _ => true,
             })
+}
+
+/// True when an expression takes its type from its place and has none
+/// of its own: `null`, and `.member`, in parentheses or not.
+fn takes_its_type(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| takes_its_type(&inner)),
+        SyntaxKind::ImpliedMember => true,
+        SyntaxKind::Literal => has_token(node, SyntaxKind::KwNull),
+        _ => false,
+    }
 }
 
 /// TYPE-4: "A field is optional when its type is nullable, `T?`, or an

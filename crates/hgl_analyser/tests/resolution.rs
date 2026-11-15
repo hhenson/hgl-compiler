@@ -624,7 +624,7 @@ fn an_imported_generic_type_is_not_ordered_either() {
                 "module m\n",
                 "use lib as l\n",
                 "const fn first(a: i64) -> bool => l::Box < a\n",
-                "const fn made(b: i64) -> bool => l::Box<l::Unit>(b)\n",
+                "const fn made(b: i64) -> l::Box<l::Unit> => l::Box<l::Unit>(l::Unit(b))\n",
             ),
         ),
         (
