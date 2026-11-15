@@ -326,16 +326,41 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
         // The prelude: an operator of core's mandatory module (UNIT-11).
         if let Some(core) = program.core()
             && core != index
-            && let Some(declaration) = operator(&program.modules[core])
         {
-            found.push((
-                position,
-                OperatorRef {
-                    module: core,
-                    declaration,
-                },
-            ));
-            continue;
+            if let Some(declaration) = operator(&program.modules[core]) {
+                found.push((
+                    position,
+                    OperatorRef {
+                        module: core,
+                        declaration,
+                    },
+                ));
+                continue;
+            }
+            // A name the prelude binds to something else names no
+            // operator: "No matching operator is a declaration error."
+            let other = program.modules[core]
+                .lookup(name)
+                .find(|declaration| declaration.is_public());
+            if let Some(other) = other {
+                diagnostics.emit(
+                    error(
+                        Category::Operator,
+                        codes::IMPL_UNKNOWN_OPERATOR,
+                        implementation.at,
+                        format!("`{name}` is not an operator, so nothing can implement it"),
+                        "GEN-4",
+                    )
+                    .with_related(
+                        other.at,
+                        format!(
+                            "the prelude binds it: declared here, as a {}",
+                            other.kind.describe()
+                        ),
+                    ),
+                );
+                continue;
+            }
         }
 
         // Nothing binds it, or the program has no module `core`. See

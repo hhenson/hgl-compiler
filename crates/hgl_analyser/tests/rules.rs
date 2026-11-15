@@ -692,6 +692,11 @@ fn a_module_binds_cores_public_names_without_a_use() {
                 "const fn local(a: i64) -> i64 {\n    let sub_ = a\n    return a\n}\n",
             ),
         ),
+        (
+            "worse.hgl",
+            // GEN-4: what the prelude binds to an enum is no operator.
+            "module worse\nimpl const fn CmpResult() -> i64 => 1\n",
+        ),
     ]);
     assert_eq!(
         checked.summary(),
@@ -699,9 +704,11 @@ fn a_module_binds_cores_public_names_without_a_use() {
             "bad.hgl:2:12 name/name.duplicate UNIT-12",
             "bad.hgl:3:10 name/name.duplicate UNIT-12",
             "bad.hgl:5:9 name/name.duplicate UNIT-12",
+            "worse.hgl:2:15 operator/impl.unknown_operator GEN-4",
         ]
     );
     assert_eq!(checked.prelude_names("app"), ["hidden"]);
+    assert_eq!(checked.prelude_names("worse"), [] as [&str; 0]);
     let app = checked.program.module("app").unwrap();
     let core = checked.program.core().unwrap();
     // Each use of `add_` and of `CmpResult` in `app` is core's.
