@@ -79,7 +79,7 @@ pub use program::{
 };
 pub use types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, Field, GenericKind,
-    GenericParameter, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    GenericParameter, Member, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -234,9 +234,43 @@ pub mod codes {
         pub const BINDING_UNASSIGNED: &str = "binding.unassigned";
         /// A binding that is no `var` is assigned (EXPR-3).
         pub const BINDING_IMMUTABLE: &str = "binding.immutable";
+        /// An argument with no name follows a named one (EXPR-2).
+        pub const ARGUMENT_ORDER: &str = "argument.order";
+        /// A call or a constructor is given more positional arguments
+        /// than it has parameters or fields (EXPR-2).
+        pub const ARGUMENT_UNEXPECTED: &str = "argument.unexpected";
+        /// A named argument names no parameter or field (EXPR-2).
+        pub const ARGUMENT_UNKNOWN: &str = "argument.unknown";
+        /// A parameter or field is given twice (EXPR-2).
+        pub const ARGUMENT_DUPLICATE: &str = "argument.duplicate";
+        /// A parameter or field with no default is given nothing
+        /// (EXPR-2, TYPE-5).
+        pub const ARGUMENT_MISSING: &str = "argument.missing";
+        /// A value function calls a temporal function (FN-4).
+        pub const CALL_ROLE: &str = "call.role";
+        /// An abstract struct is constructed (TYPE-3).
+        pub const STRUCT_ABSTRACT: &str = "struct.abstract";
+        /// A struct has no field, or an enum no member, of the name
+        /// (EXPR-7, TYPE-7).
+        pub const MEMBER_UNKNOWN: &str = "member.unknown";
+        /// `.member` stands where no enum type is expected (TYPE-7).
+        pub const ENUM_CONTEXT: &str = "enum.context_type";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 3] = [TYPE_MISMATCH, BINDING_UNASSIGNED, BINDING_IMMUTABLE];
+        pub const ALL: [&str; 12] = [
+            TYPE_MISMATCH,
+            BINDING_UNASSIGNED,
+            BINDING_IMMUTABLE,
+            ARGUMENT_ORDER,
+            ARGUMENT_UNEXPECTED,
+            ARGUMENT_UNKNOWN,
+            ARGUMENT_DUPLICATE,
+            ARGUMENT_MISSING,
+            CALL_ROLE,
+            STRUCT_ABSTRACT,
+            MEMBER_UNKNOWN,
+            ENUM_CONTEXT,
+        ];
     }
 }
 
