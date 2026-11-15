@@ -290,6 +290,70 @@ fn a_field_is_compared_by_what_its_type_means() {
     );
 }
 
+/// A chain of parents is as long as the source makes it. The fields of
+/// each struct are worked out from its parents' without one call inside
+/// another for each link, so the chain's length does not grow the call
+/// stack: this one is read on a thread with a small stack.
+#[test]
+fn a_long_chain_of_parents_is_read_on_a_small_stack() {
+    const LINKS: usize = 20_000;
+    let mut text = String::new();
+    // Each parent is declared after the struct that names it.
+    for link in 0..LINKS {
+        text.push_str(&format!("abstract struct A{link} : A{} {{ }}\n", link + 1));
+    }
+    text.push_str(&format!("abstract struct A{LINKS} {{ id: i64 }}\n"));
+    // The field is there at the near end of the chain.
+    text.push_str("struct Near : A0 { id: str }\n");
+    // The syntax tree is not shared between threads, so the thread
+    // gives back only what is compared.
+    let found = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let checked = module(&text);
+            (checked.summary(), checked.findings[0].message.clone())
+        })
+        .expect("the thread starts")
+        .join()
+        .expect("the analysis does not overflow its stack");
+    assert_eq!(
+        found.0,
+        [format!(
+            "m.hgl:{}:20 local:type/field.conflict TYPE-4",
+            LINKS + 3
+        )]
+    );
+    assert_eq!(
+        found.1,
+        format!("`id` is required `str` here and required `i64` in `A{LINKS}`")
+    );
+}
+
+/// ERR-9: "Do not demand cascaded diagnostics after an earlier error
+/// prevents checking." A part of a field's type that is not known is no
+/// difference from a parent's; what is known beside it still is.
+#[test]
+fn an_unknown_part_of_a_type_is_no_conflict() {
+    let checked = module(concat!(
+        "const fn helper() -> i64 => 1\n",
+        "abstract struct Base {\n    items: list<helper>\n    pair: tuple<helper, i64>\n}\n",
+        "struct Child : Base {\n    items: list<i64>\n    pair: tuple<str, i64>\n}\n",
+        "struct Other : Base { pair: tuple<str, str> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:17 local:type/type.not_a_type UNIT-10",
+            "m.hgl:5:17 local:type/type.not_a_type UNIT-10",
+            "m.hgl:11:23 local:type/field.conflict TYPE-4",
+        ]
+    );
+    assert_eq!(
+        checked.findings[2].message,
+        "`pair` is required `tuple<str, str>` here and required `tuple<_, i64>` in `Base`"
+    );
+}
+
 // ---- Structs that hold themselves ----
 
 /// TYPE-6: "Recursive struct edges stay within their defining module,
