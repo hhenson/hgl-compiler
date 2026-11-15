@@ -1758,24 +1758,43 @@ fn an_argument_typed_by_its_place_is_read_as_the_resolved_parameter() {
     );
 }
 
-/// GEN-2 names the sources, "actual inputs, requested output, or
-/// solvable equality", and gives them no order. Where the type expected
-/// and an argument each say what a parameter is and differ, which
-/// decides is the specification's to say (hgl_spec issue 44), so the
-/// call is not judged: it has no type, and nothing is reported of it.
+/// GEN-2: "A call resolves a generic of its callee from what it writes
+/// after the name (GEN-8), then from the type its place expects of the
+/// result, then from its arguments in declared parameter order ... The
+/// first of these that says what a parameter is decides it, and what
+/// follows is checked against that: an integer literal is widened to an
+/// `f64` so decided (EXPR-5), and another argument of another type
+/// rejects."
 #[test]
-fn a_call_its_sources_differ_on_is_not_judged() {
+fn the_expected_type_decides_a_generic_before_the_arguments() {
     let checked = module(concat!(
         "const fn same<T>(left: T, right: T) -> T => left\n",
         "const fn uses(count: i64) {\n",
-        // The arguments say `i64`, and the place `f64`.
+        // The place says `f64`: each literal is widened.
         "    let real: f64 = same(1, 2)\n",
+        // `count` is no literal, and is held to the `f64`.
         "    let other: f64 = same(count, 2)\n",
-        // What the call writes decides (GEN-8): this one is judged.
+        // What the call writes decides before the place does.
         "    let written: f64 = same<f64>(1, 2)\n",
+        "    let wrong: str = same<f64>(1, 2)\n",
+        // With nothing expected, the arguments decide.
+        "    let whole = same(1, 2)\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:27 type/type.mismatch EXPR-5",
+            "m.hgl:7:22 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `i64`, and the parameter `left` is `f64`",
+            "this is `f64`, and the type written for it is `str`",
+        ]
+    );
     let types: Vec<String> = body(&checked, "uses")
         .statements
         .iter()
@@ -1786,7 +1805,9 @@ fn a_call_its_sources_differ_on_is_not_judged() {
             other => panic!("a declaration with a value: {other:?}"),
         })
         .collect();
-    assert_eq!(types, ["_", "_", "f64"]);
+    assert_eq!(types[0], "f64");
+    assert_eq!(types[2], "f64");
+    assert_eq!(types[4], "i64");
 }
 
 /// GEN-8: "A call may supply its generic arguments as a generic
@@ -1842,9 +1863,8 @@ fn a_call_may_write_its_generic_arguments() {
 }
 
 /// GEN-8: "A call rejects when it leaves a generic parameter
-/// unresolved." The catalogue has no row for it, so the code is local.
-/// Nothing is said where the place is not known, or something else was
-/// reported (ERR-9).
+/// unresolved." Nothing is said where the place is not known, or
+/// something else was reported (ERR-9).
 #[test]
 fn a_call_that_leaves_a_generic_parameter_unresolved_is_rejected() {
     let checked = module(concat!(
@@ -1864,9 +1884,9 @@ fn a_call_that_leaves_a_generic_parameter_unresolved_is_rejected() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:13 local:type/generic.unresolved GEN-8",
-            "m.hgl:6:13 local:type/generic.unresolved GEN-8",
-            "m.hgl:7:5 local:type/generic.unresolved GEN-8",
+            "m.hgl:5:13 type/generic.unresolved GEN-8",
+            "m.hgl:6:13 type/generic.unresolved GEN-8",
+            "m.hgl:7:5 type/generic.unresolved GEN-8",
             "m.hgl:8:20 type/type.mismatch EXPR-5",
         ]
     );
@@ -1904,8 +1924,8 @@ fn an_unresolved_parameter_of_a_call_that_is_an_argument_is_rejected() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:6:18 local:type/generic.unresolved GEN-8",
-            "m.hgl:7:21 local:type/generic.unresolved GEN-8",
+            "m.hgl:6:18 type/generic.unresolved GEN-8",
+            "m.hgl:7:21 type/generic.unresolved GEN-8",
         ]
     );
     assert_eq!(
@@ -1942,11 +1962,11 @@ fn an_unresolved_parameter_is_reported_once_nothing_can_resolve_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:7:18 local:type/generic.unresolved GEN-8",
-            "m.hgl:7:29 local:type/generic.unresolved GEN-8",
-            "m.hgl:8:24 local:type/generic.unresolved GEN-8",
-            "m.hgl:9:13 local:type/generic.unresolved GEN-8",
-            "m.hgl:10:13 local:type/generic.unresolved GEN-8",
+            "m.hgl:7:18 type/generic.unresolved GEN-8",
+            "m.hgl:7:29 type/generic.unresolved GEN-8",
+            "m.hgl:8:24 type/generic.unresolved GEN-8",
+            "m.hgl:9:13 type/generic.unresolved GEN-8",
+            "m.hgl:10:13 type/generic.unresolved GEN-8",
         ]
     );
     assert_eq!(
