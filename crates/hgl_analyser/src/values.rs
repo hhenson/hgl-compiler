@@ -1787,6 +1787,11 @@ fn scalar_of(ty: &Type) -> Option<Scalar> {
 /// What an arithmetic or ordering operator gives for two scalars, by
 /// core's contracts; `None` for a pairing they do not admit.
 ///
+/// This table stands in for core's operator declarations, which are in
+/// no HGL source yet. An operator is to be resolved as any call is, from
+/// the candidates its operator declares (GEN-4), and the table goes when
+/// core declares them (owner's note of 2026-11-16).
+///
 /// NUM-1 for numbers. OPS-1's table for the others: "An operation that
 /// commutes admits its operands in either order; one that does not
 /// admits the order shown." OPS-2: the ordered types are `str`, `bool`,

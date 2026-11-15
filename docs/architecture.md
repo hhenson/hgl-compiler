@@ -468,6 +468,14 @@ Each rejection has a row of the catalogue: `type.mismatch`,
 `binding.unassigned`, `binding.immutable`, the five `argument.` codes,
 `call.role`, `struct.abstract`, `member.unknown` and `operator.operand`.
 
+The operator table is built into the pass for now. It stands in for
+core's operator declarations, which are in no HGL source yet. The owner's
+direction (2026-11-16) is that an operator is resolved as any function
+is: a symbol names a core operator, and its type comes from the
+candidate selected among that operator's implementations (GEN-4). When
+core declares them the table goes, and the typed body records the
+operator and the candidate selected.
+
 What may be left out comes last (UNIT-8, TYPE-5): a parameter with a
 default or a type written `T?` follows every parameter that has
 neither, and a field with a default or an optional type follows every
