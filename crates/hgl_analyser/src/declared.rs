@@ -30,7 +30,7 @@ use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, GenericKind, StructType, Type,
 };
-use crate::{codes, local_error};
+use crate::{codes, error};
 
 /// A declaration, by the position of its module in `Program::modules`
 /// and its own in that module's `declarations`.
@@ -100,9 +100,9 @@ fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
         let at = Location::new(file, name.span());
         if let Some(first) = members.iter().find(|first| first.name == name.text()) {
             diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::ENUM_DUPLICATE_MEMBER,
+                    codes::ENUM_DUPLICATE_MEMBER,
                     at,
                     format!("this enum has two members named `{}`", name.text()),
                     "TYPE-7",
@@ -135,9 +135,9 @@ fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
                 Some(Some(before)) => {
                     let next = before.checked_add(1);
                     if next.is_none() {
-                        diagnostics.emit(local_error(
+                        diagnostics.emit(error(
                             Category::Type,
-                            codes::local::ENUM_OVERFLOW,
+                            codes::ENUM_OVERFLOW,
                             at,
                             format!(
                                 "`{}` would be numbered one more than the largest i64",
@@ -154,9 +154,9 @@ fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
             && let Some(first) = members.iter().find(|first| first.value == Some(number))
         {
             diagnostics.emit(
-                local_error(
+                error(
                     Category::Type,
-                    codes::local::ENUM_DUPLICATE_VALUE,
+                    codes::ENUM_DUPLICATE_VALUE,
                     at,
                     format!(
                         "`{}` has the number {number}, which `{}` has",
@@ -179,9 +179,9 @@ fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
 }
 
 fn not_an_integer(number: &SyntaxNode, file: FileId, what: &str, diagnostics: &mut Diagnostics) {
-    diagnostics.emit(local_error(
+    diagnostics.emit(error(
         Category::Type,
-        codes::local::ENUM_VALUE,
+        codes::ENUM_VALUE,
         Location::new(file, number.span()),
         format!("an enum member's number is an integer, and this is {what}"),
         "TYPE-7",
@@ -566,7 +566,7 @@ impl Structs<'_> {
                                 parents.iter().find(|listed: &&Parent| listed.id == parent);
                             if let Some(first) = listed {
                                 problems.push((
-                                    codes::local::STRUCT_DUPLICATE_PARENT,
+                                    codes::STRUCT_DUPLICATE_PARENT,
                                     at,
                                     format!("`{name}` is listed twice among the parents"),
                                     Some((first.at, "first listed here")),
@@ -593,7 +593,7 @@ impl Structs<'_> {
                         kind => format!("a {}", kind.describe()),
                     };
                     problems.push((
-                        codes::local::STRUCT_PARENT,
+                        codes::STRUCT_PARENT,
                         at,
                         format!(
                             "`{name}` is {what} and cannot be a parent: only an abstract \
@@ -603,7 +603,7 @@ impl Structs<'_> {
                     ));
                 }
                 other => problems.push((
-                    codes::local::STRUCT_PARENT,
+                    codes::STRUCT_PARENT,
                     at,
                     format!("`{other}` cannot be a parent: only an abstract struct may be"),
                     None,
@@ -611,7 +611,7 @@ impl Structs<'_> {
             }
         }
         for (code, at, message, related) in problems {
-            let mut diagnostic = local_error(Category::Type, code, at, message, "TYPE-3");
+            let mut diagnostic = error(Category::Type, code, at, message, "TYPE-3");
             if let Some((place, note)) = related {
                 diagnostic = diagnostic.with_related(place, note);
             }
@@ -654,9 +654,9 @@ impl Structs<'_> {
             } else {
                 format!("{} inherit from one another", names.join(" and "))
             };
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Type,
-                codes::local::STRUCT_INHERITANCE_CYCLE,
+                codes::STRUCT_INHERITANCE_CYCLE,
                 parent.at,
                 message,
                 "TYPE-6",
@@ -859,7 +859,7 @@ impl Structs<'_> {
             });
             if let Some(earlier) = conflict {
                 problems.push((
-                    codes::local::FIELD_CONFLICT,
+                    codes::FIELD_CONFLICT,
                     self.parents[&id][later.via].at,
                     format!(
                         "`{name}` has `{}` from two parents: {} `{}` and {} `{}`",
@@ -880,7 +880,7 @@ impl Structs<'_> {
                 .find(|first| first.name == field.name)
             {
                 problems.push((
-                    codes::local::FIELD_DUPLICATE,
+                    codes::FIELD_DUPLICATE,
                     field.at,
                     format!("`{name}` has two members named `{}`", field.name),
                     first.at,
@@ -904,7 +904,7 @@ impl Structs<'_> {
                         from_parents.find(|parent| differs(parent, ty, field.null_default));
                     if let Some(parent) = conflict {
                         problems.push((
-                            codes::local::FIELD_CONFLICT,
+                            codes::FIELD_CONFLICT,
                             field.at,
                             format!(
                                 "`{}` is {} `{ty}` here and {} `{}` in `{}`",
@@ -920,7 +920,7 @@ impl Structs<'_> {
                 }
                 (None, true) => {}
                 (None, false) => problems.push((
-                    codes::local::FIELD_NOT_INHERITED,
+                    codes::FIELD_NOT_INHERITED,
                     field.at,
                     format!(
                         "`{} = ...` overrides the default of a parent's field, and `{name}` \
@@ -934,13 +934,12 @@ impl Structs<'_> {
 
         for (code, at, message, related) in problems {
             let note = match code {
-                codes::local::FIELD_NOT_INHERITED => "the struct",
-                codes::local::FIELD_DUPLICATE => "first declared here",
+                codes::FIELD_NOT_INHERITED => "the struct",
+                codes::FIELD_DUPLICATE => "first declared here",
                 _ => "the other declaration",
             };
             self.diagnostics.emit(
-                local_error(Category::Type, code, at, message, "TYPE-4")
-                    .with_related(related, note),
+                error(Category::Type, code, at, message, "TYPE-4").with_related(related, note),
             );
         }
     }
@@ -1345,9 +1344,9 @@ impl Structs<'_> {
         reports.sort_by_key(|(at, _)| (at.file.index(), at.span.start));
         reports.dedup();
         for (at, message) in reports {
-            self.diagnostics.emit(local_error(
+            self.diagnostics.emit(error(
                 Category::Type,
-                codes::local::FIELD_RECURSIVE,
+                codes::FIELD_RECURSIVE,
                 at,
                 message,
                 "TYPE-6",

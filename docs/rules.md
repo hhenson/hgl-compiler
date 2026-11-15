@@ -412,6 +412,6 @@ the same numeric rules the transpiler rows give.
 | CEVAL-1 | runner | planned | Eval uses core's designated replay and record |
 | CEVAL-2 | runner | planned | Typed replay entries for present publications; a dense placeholder adds no entry and no run bound |
 | CEVAL-3 | transpiler | planned | Replay publishes present entries; silence publishes nothing |
-| CEVAL-4 | transpiler | planned | The recorder retains each publication and its time |
-| CEVAL-5 | runner | planned | A fresh run and recording for each eval; dense results built from the recording by TST-6 |
-| CEVAL-6 | runner | planned | Failure or a missing recording is an error, never an empty result |
+| CEVAL-4 | transpiler | planned | Record starts with an empty recording and retains each publication and its time |
+| CEVAL-5 | runner | planned | A fresh run, with its own node state and recording, for each eval; dense results built by TST-6 |
+| CEVAL-6 | runner | planned | A failed run or a missing required recording fails the eval; neither is an empty result |

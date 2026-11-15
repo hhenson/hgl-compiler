@@ -322,8 +322,34 @@ fn the_specifications_rejection_illustration_passes() {
         )
     );
 
-    // A rejection the catalogue has no row for cannot be a case
-    // (TST-12): the code is this compiler's own, and the output says so.
+    // A rejection the catalogue has a row for can be a case (TST-12):
+    // `list.size` is one since the type-formation rows were agreed.
+    let listed = scratch("illustration_listed");
+    let file = write(
+        &listed,
+        "listed.hgl",
+        concat!(
+            "module examples.listed\n",
+            "# expect-error(type, \"list.size\")\n",
+            "fn invalid(value: list<f64, -1>) {}\n",
+        ),
+    );
+    let output = hgl(&["test", &argument(&listed)]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        format!(
+            concat!(
+                "passed   rejection   {file}:3 fn invalid\n",
+                "rejection cases: 1 passed, 0 failed\n",
+                "executable cases: none selected\n",
+            ),
+            file = file
+        )
+    );
+
+    // One it has no row for cannot: the code is this compiler's own,
+    // and the output says so.
     let local = scratch("illustration_local");
     let file = write(
         &local,
@@ -331,7 +357,7 @@ fn the_specifications_rejection_illustration_passes() {
         concat!(
             "module examples.local\n",
             "# expect-error(type, \"rolling.size_kind\")\n",
-            "fn invalid(value: list<f64, -1>) {}\n",
+            "fn invalid<T>(value: T, items: list<f64, T>) {}\n",
         ),
     );
     let output = hgl(&["test", &argument(&local)]);
@@ -342,9 +368,9 @@ fn the_specifications_rejection_illustration_passes() {
             concat!(
                 "FAILED   rejection   {file}:3 fn invalid\n",
                 "    expected type/rolling.size_kind on line 3 of {file}: not reported\n",
-                "    reported type/list.size at {file}:3:29, not expected ",
+                "    reported type/generic.kind_conflict at {file}:3:42, not expected ",
                 "(a compiler-local code, which no annotation can expect): ",
-                "a list's size is not negative\n",
+                "`T` is used as a type and as a value\n",
                 "rejection cases: 0 passed, 1 failed\n",
                 "executable cases: none selected\n",
             ),

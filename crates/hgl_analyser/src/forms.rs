@@ -16,7 +16,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::program::{DeclarationKind, Program, Role};
-use crate::{codes, error, local_error};
+use crate::{codes, error};
 
 /// Checks every declaration of the program.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
@@ -64,9 +64,9 @@ fn cardinalities(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagn
         if let [(_, lower), (upper_token, upper)] = bounds.as_slice()
             && upper < lower
         {
-            diagnostics.emit(local_error(
+            diagnostics.emit(error(
                 Category::Type,
-                codes::local::PACK_CARDINALITY,
+                codes::PACK_CARDINALITY,
                 Location::new(file, upper_token.span()),
                 format!("a pack holds from {lower} to {upper}: the upper bound is below the lower"),
                 "GEN-10",
