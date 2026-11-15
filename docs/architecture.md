@@ -598,6 +598,27 @@ is admitted only when its result is one of those types, which tells
 `convert<f64>(count)` from `convert<str>(count)` where the arguments do
 not.
 
+A candidate with generic parameters is admitted with each resolved from
+the call (GEN-2): from the type the place expects of the result, then
+from the arguments in declared parameter order (GEN-12). Its `requires`
+may say what a parameter is, `T in {i64, f64, str}` or `T == str`, which
+is checked against what the parameter stands for. Among the candidates
+a call admits the most specific is selected (GEN-5, GEN-12). Each of the
+operator's parameters is compared with the other candidate's, part for
+part:
+
+| One candidate has | The other has | More specific |
+| --- | --- | --- |
+| A concrete type or a structure, `i64`, `list<T>` | A bare variable, `T` | The first |
+| A structure, `tuple<i64, T>` | The same structure, `tuple<U, V>` | Whichever is in its parts: here the first |
+| `tuple<i64, T>` | `tuple<T, str>` | Neither: each is more specific in one part |
+| A concrete type, `i64` | A nullable variable, `T?`, which also takes an `i64` (TYPE-14) | The first: they are compared as the types under the `?` |
+
+A candidate outranks another when it is as specific in every parameter
+and more specific in one. One that nothing outranks is selected; two
+are `operator.ambiguous`. Not read yet: a candidate with a generic value
+parameter or a type pack, which leaves the whole call unread.
+
 An argument that is read as the type of its place, `null`,
 `.member`, or a sequence or tuple written out, is tried against each
 candidate's parameter, and what the trial reports is taken back. A

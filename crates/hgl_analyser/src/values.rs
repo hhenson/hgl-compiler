@@ -1873,13 +1873,25 @@ impl<'a> Typer<'a> {
                 }
             }
         }
-        let unread = public
-            .parameters
-            .iter()
-            .any(|parameter| parameter.pack.is_some())
-            || candidates
+        // Not read: an operator or a candidate with a pack, and a
+        // candidate with a generic parameter that is a value or a type
+        // pack. Such a call has no type.
+        let packed = |signature: &Signature| {
+            signature
+                .parameters
                 .iter()
-                .any(|(_, _, signature)| !signature.generics.is_empty());
+                .any(|parameter| parameter.pack.is_some())
+        };
+        let unread = packed(public)
+            || candidates.iter().any(|(_, _, signature)| {
+                packed(signature)
+                    || signature.generics.iter().any(|generic| {
+                        matches!(
+                            generic.kind,
+                            GenericKind::Value(_) | GenericKind::Pack { .. }
+                        )
+                    })
+            });
         if unread {
             return self.unread_call(list);
         }
@@ -1946,20 +1958,31 @@ impl<'a> Typer<'a> {
                 .or(expected.filter(|expected| !open(expected))),
             among,
         };
-        let mut selected: Vec<(usize, usize, &Signature)> = Vec::new();
+        let mut selected: Vec<Chosen> = Vec::new();
         let mut untold = false;
         for widening in [false, true] {
             for &(module, declaration, signature) in &candidates {
                 let candidate = &program.modules[module].declarations[declaration];
+                // The candidate as this call takes it: its generic
+                // parameters resolved (GEN-2).
+                let Some((taken, generics)) = instance(signature, public, &given, &wanted) else {
+                    continue;
+                };
                 let admits = self.admits_call(
-                    (candidate, signature),
+                    (candidate, &taken),
                     (operator_declaration, public),
-                    &given,
-                    &wanted,
+                    (module, &generics),
+                    (&given, &wanted),
                     widening,
                 );
                 match admits {
-                    Admits::Yes => selected.push((module, declaration, signature)),
+                    Admits::Yes => selected.push(Chosen {
+                        module,
+                        declaration,
+                        declared: signature,
+                        taken,
+                        generics,
+                    }),
                     Admits::No => {}
                     Admits::Unknown => untold = true,
                 }
@@ -1968,6 +1991,10 @@ impl<'a> Typer<'a> {
                 break;
             }
         }
+        // GEN-5: "Select exactly one most-specific admitted candidate.
+        // Concrete types outrank variables; structurally constrained
+        // variables outrank unconstrained ones."
+        most_specific(&mut selected, public.parameters.len());
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
@@ -1982,7 +2009,7 @@ impl<'a> Typer<'a> {
             return (self.unselected(given), Type::Unknown);
         }
         let at = Location::new(self.file, name.span());
-        let &[(module, declaration, signature)] = selected.as_slice() else {
+        if selected.len() != 1 {
             // GEN-5: "the requested output before inputs". Where what
             // the place expects is not known, it may be what tells tied
             // candidates apart: the `make()` of `[make()]` given to a
@@ -2055,15 +2082,27 @@ impl<'a> Typer<'a> {
                     ),
                     "GEN-5",
                 );
-                for (module, declaration, _) in &selected {
-                    let candidate = &program.modules[*module].declarations[*declaration];
+                for chosen in &selected {
+                    let candidate =
+                        &program.modules[chosen.module].declarations[chosen.declaration];
                     diagnostic = diagnostic.with_related(candidate.at, "this candidate");
                 }
                 diagnostic
             };
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given), Type::Unknown);
+        }
+        let Some(Chosen {
+            module,
+            declaration,
+            taken,
+            generics,
+            ..
+        }) = selected.pop()
+        else {
+            return (self.unselected(given), Type::Unknown);
         };
+        let signature: &Signature = &taken;
 
         // Each argument is of the type the selected candidate's
         // parameter has. The candidate was admitted, so each is given
@@ -2100,6 +2139,7 @@ impl<'a> Typer<'a> {
                 operator: (operator.module, operator.declaration),
                 module,
                 declaration,
+                generics,
             },
             arguments,
         };
@@ -2278,8 +2318,8 @@ impl<'a> Typer<'a> {
         &mut self,
         (candidate, signature): (&Declaration, &Signature),
         (operator, public): (&Declaration, &Signature),
-        given: &[Given],
-        wanted: &Wanted,
+        (module, generics): (usize, &[Argument]),
+        (given, wanted): (&[Given], &Wanted),
         widening: bool,
     ) -> Admits {
         let result_fits = match (wanted.place, &signature.result) {
@@ -2368,7 +2408,43 @@ impl<'a> Typer<'a> {
                 None => Some(OptionValue::Literal(Value::Null)),
             }
         };
-        match holds(&condition, &value_of) {
+        // GEN-3: "`requires` may use type/category membership,
+        // equalities ...". What a generic parameter of the candidate
+        // stands for at this call, and what a type written in the
+        // condition means with those in place.
+        let own: Vec<Location> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
+        let type_of = |name: &str| -> Option<Type> {
+            let index = signature
+                .generics
+                .iter()
+                .position(|generic| generic.name == name)?;
+            match generics.get(index)? {
+                Argument::Type(ty) => Some(ty.clone()),
+                Argument::Constant(_) => None,
+            }
+        };
+        let declared_in = &self.program.modules[module];
+        let file = declared_in.files[candidate.file].file;
+        let written = |node: &SyntaxNode| -> Option<Type> {
+            let start = node.span().start;
+            let read = declared_in
+                .written
+                .iter()
+                .find(|written| written.at.file == file && written.at.span.start == start)?;
+            let ty = placed(substitute_within(&read.ty, &map), &own);
+            whole(&ty).then_some(ty)
+        };
+        let condition_of = Condition {
+            value_of: &value_of,
+            type_of: &type_of,
+            written: &written,
+        };
+        match holds(&condition, &condition_of) {
             Some(true) => Admits::Yes,
             Some(false) => Admits::No,
             None => Admits::Unknown,
@@ -3461,22 +3537,251 @@ fn default_at(declaration: &SyntaxNode, parameter: &crate::types::Parameter) -> 
     default_of(&written)
 }
 
-/// Whether a candidate's condition holds, where `value_of` gives the
-/// value an option has at the call. `None` when it cannot be told: the
-/// condition is of a form this pass does not read, or an option's value
-/// is no constant.
+/// What a candidate's condition is checked against at a call.
+struct Condition<'c> {
+    /// The value an option has at the call: what the call gives it, or
+    /// its default. `None` when it is no constant this pass reads.
+    value_of: &'c dyn Fn(&str) -> Option<OptionValue>,
+    /// What a generic parameter of the candidate stands for at the
+    /// call. `None` for a name that is no generic parameter of it.
+    type_of: &'c dyn Fn(&str) -> Option<Type>,
+    /// What a type written in the condition means, the candidate's
+    /// generic parameters in place. `None` for what is no type, or is
+    /// not known.
+    written: &'c dyn Fn(&SyntaxNode) -> Option<Type>,
+}
+
+/// A candidate a call admits.
+struct Chosen<'s> {
+    /// The position of its module in `Program::modules`.
+    module: usize,
+    /// Its position in that module's `declarations`.
+    declaration: usize,
+    /// Its signature as it is declared, generic parameters and all.
+    declared: &'s Signature,
+    /// Its signature as this call takes it: what its generic
+    /// parameters stand for put in place.
+    taken: std::borrow::Cow<'s, Signature>,
+    /// What each of its generic parameters stands for at this call.
+    generics: Vec<Argument>,
+}
+
+/// A candidate as a call takes it: itself where it has no generic
+/// parameter, and otherwise with each resolved (GEN-2) and put in
+/// place. `None` when the call does not say what one of them is, or
+/// does not fit the candidate's parameters at all.
+///
+/// GEN-5: "Match candidates against the requested output before
+/// inputs". GEN-12: "A prior binding constrains every later occurrence
+/// in declared parameter order." An argument whose type is not known
+/// all the way down, `null`, `.member` or `[]`, says nothing.
+fn instance<'s>(
+    signature: &'s Signature,
+    public: &Signature,
+    given: &[Given],
+    wanted: &Wanted,
+) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>)> {
+    let generics = &signature.generics;
+    if generics.is_empty() {
+        return Some((std::borrow::Cow::Borrowed(signature), Vec::new()));
+    }
+    let bound = bound(signature, public, given)?;
+    let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
+    if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
+        let place = match result {
+            Type::Nullable(_) => place,
+            _ => not_null(Some(place)).unwrap_or(place),
+        };
+        infer(result, place, generics, &mut found);
+    }
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+        if let Some(position) = bound.iter().position(|&place| place == index) {
+            infer(
+                &parameter.ty,
+                &given[position].value.ty,
+                generics,
+                &mut found,
+            );
+        }
+    }
+    let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
+    let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+    let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+    let mut taken = signature.clone();
+    for parameter in &mut taken.parameters {
+        parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+    }
+    taken.result = taken
+        .result
+        .as_ref()
+        .map(|result| placed(substitute_within(result, &map), &own));
+    Some((std::borrow::Cow::Owned(taken), resolved))
+}
+
+/// How specific one type of a candidate's signature is beside another's
+/// in the same place.
+#[derive(Clone, Copy, PartialEq)]
+enum Specific {
+    /// As specific: the same shape, variables where the other has them.
+    Same,
+    /// More: concrete, or structured, where the other has a variable.
+    More,
+    /// Less.
+    Less,
+    /// Neither: more specific in one part and less in another, or of
+    /// another shape altogether.
+    Neither,
+}
+
+impl Specific {
+    /// The two together: what holds of a whole whose parts are these.
+    fn and(self, other: Specific) -> Specific {
+        match (self, other) {
+            (Specific::Same, other) | (other, Specific::Same) => other,
+            (Specific::More, Specific::More) => Specific::More,
+            (Specific::Less, Specific::Less) => Specific::Less,
+            _ => Specific::Neither,
+        }
+    }
+}
+
+/// How specific `left` is beside `right`, each a type of a candidate's
+/// signature as it is declared, so that a `Type::Parameter` in it is
+/// one of that candidate's generic parameters.
+///
+/// GEN-5: "Concrete types outrank variables; structurally constrained
+/// variables outrank unconstrained ones." GEN-12: "Compare structural
+/// specificity component by component". So `tuple<i64, T>` is more
+/// specific than `tuple<U, V>`, and `list<T>` than `T`.
+fn specificity(left: &Type, right: &Type) -> Specific {
+    let all = |pairs: &mut dyn Iterator<Item = Specific>| pairs.fold(Specific::Same, Specific::and);
+    match (left, right) {
+        (Type::Parameter { .. }, Type::Parameter { .. }) => Specific::Same,
+        (Type::Parameter { .. }, _) => Specific::Less,
+        (_, Type::Parameter { .. }) => Specific::More,
+        // TYPE-14: a `T` is given where a `T?` is expected, so one
+        // candidate may take `i64` where another takes `T?`. They are
+        // compared as the types under the `?`.
+        (Type::Nullable(left), right) if !matches!(right, Type::Nullable(_)) => {
+            specificity(left, right)
+        }
+        (left, Type::Nullable(right)) if !matches!(left, Type::Nullable(_)) => {
+            specificity(left, right)
+        }
+        (Type::Nullable(left), Type::Nullable(right))
+        | (Type::Set(left), Type::Set(right))
+        | (Type::Ref(left), Type::Ref(right))
+        | (Type::Atomic(left), Type::Atomic(right))
+        | (Type::Delta(left), Type::Delta(right))
+        | (Type::List { element: left, .. }, Type::List { element: right, .. })
+        | (Type::Rolling { value: left, .. }, Type::Rolling { value: right, .. }) => {
+            specificity(left, right)
+        }
+        (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => all(&mut left
+            .iter()
+            .zip(right)
+            .map(|(left, right)| specificity(left, right))),
+        (
+            Type::Dict { key, value },
+            Type::Dict {
+                key: other_key,
+                value: other_value,
+            },
+        ) => specificity(key, other_key).and(specificity(value, other_value)),
+        (
+            Type::Result { value, error },
+            Type::Result {
+                value: other_value,
+                error: other_error,
+            },
+        ) => specificity(value, other_value).and(specificity(error, other_error)),
+        (
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            },
+            Type::Named {
+                module: other_module,
+                declaration: other_declaration,
+                arguments: other_arguments,
+                ..
+            },
+        ) if (module, declaration) == (other_module, other_declaration)
+            && arguments.len() == other_arguments.len() =>
+        {
+            all(&mut arguments
+                .iter()
+                .zip(other_arguments)
+                .map(|pair| match pair {
+                    (Argument::Type(left), Argument::Type(right)) => specificity(left, right),
+                    // A constant is as specific as a constant.
+                    _ => Specific::Same,
+                }))
+        }
+        // Two types with no variable in them: one type, where both
+        // candidates admit the call.
+        (left, right) if left == right => Specific::Same,
+        // Of another shape. GEN-5: "Concrete types outrank variables".
+        (left, right) => match (names_parameter(left), names_parameter(right)) {
+            (false, true) => Specific::More,
+            (true, false) => Specific::Less,
+            _ => Specific::Neither,
+        },
+    }
+}
+
+/// Keeps of the candidates a call admits the most specific: those no
+/// other outranks. One is left where the call selects; more are a tie.
+///
+/// GEN-5: "Select exactly one most-specific admitted candidate." The
+/// operator's own parameters, `own` of them, are compared place for
+/// place ([`specificity`]). A candidate outranks another when it is as
+/// specific in every one and more specific in one.
+fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
+    if selected.len() < 2 {
+        return;
+    }
+    let outranks = |better: &Chosen, worse: &Chosen| {
+        let whole = better
+            .declared
+            .parameters
+            .iter()
+            .zip(&worse.declared.parameters)
+            .take(own)
+            .map(|(better, worse)| specificity(&better.ty, &worse.ty))
+            .fold(Specific::Same, Specific::and);
+        whole == Specific::More
+    };
+    let outranked: Vec<bool> = selected
+        .iter()
+        .map(|chosen| selected.iter().any(|other| outranks(other, chosen)))
+        .collect();
+    let mut position = 0;
+    selected.retain(|_| {
+        position += 1;
+        !outranked[position - 1]
+    });
+}
+
+/// Whether a candidate's condition holds at a call. `None` when it
+/// cannot be told: the condition is of a form this pass does not read,
+/// an option's value is no constant, or a type in it is not known.
 ///
 /// GEN-6: a candidate compares "the option with constants: `requires
-/// zero == .error`, `requires zero in {.ieee, .nan}`". GEN-15:
+/// zero == .error`, `requires zero in {.ieee, .nan}`". GEN-3: a
+/// condition "may use type/category membership, equalities": of a
+/// generic parameter, `T == i64` or `T in {i64, f64}`. GEN-15:
 /// "negation binds before conjunction, which binds before disjunction".
-fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<OptionValue>) -> Option<bool> {
+fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
     match node.kind() {
-        SyntaxKind::ConstraintParen => holds(&node.children().next()?, value_of),
-        SyntaxKind::ConstraintNot => holds(&node.children().next()?, value_of).map(|held| !held),
+        SyntaxKind::ConstraintParen => holds(&node.children().next()?, of),
+        SyntaxKind::ConstraintNot => holds(&node.children().next()?, of).map(|held| !held),
         SyntaxKind::ConstraintBinary => {
             let mut sides = node.children();
-            let left = holds(&sides.next()?, value_of);
-            let right = holds(&sides.next()?, value_of);
+            let left = holds(&sides.next()?, of);
+            let right = holds(&sides.next()?, of);
             let both = has_token(node, SyntaxKind::AmpAmp);
             match (left, right) {
                 (Some(left), Some(right)) if both => Some(left && right),
@@ -3498,19 +3803,35 @@ fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<OptionValue>) -> O
                 (operand.kind() == SyntaxKind::NamedType)
                     .then(|| operand.text().to_string().trim().to_string())
             };
+            let within = tokens(node).any(|token| token.text() == "in");
+            // A generic parameter of the candidate: the condition is of
+            // the type it stands for. `T == i64`, `T in {i64, f64}`.
+            if let Some(ty) = option(left).and_then(|name| (of.type_of)(&name)) {
+                return if has_token(node, SyntaxKind::EqEq) {
+                    Some((of.written)(right)? == ty)
+                } else if within && right.kind() == SyntaxKind::ConstraintSet {
+                    let mut found = false;
+                    for member in right.children() {
+                        found |= (of.written)(&member)? == ty;
+                    }
+                    Some(found)
+                } else {
+                    None
+                };
+            }
             if has_token(node, SyntaxKind::EqEq) {
                 let (name, constant) = match (option(left), option(right)) {
                     (Some(name), None) => (name, right),
                     (None, Some(name)) => (name, left),
                     _ => return None,
                 };
-                Some(value_of(&name)?.same(&constant_of(constant)?))
-            } else if tokens(node).any(|token| token.text() == "in") {
+                Some((of.value_of)(&name)?.same(&constant_of(constant)?))
+            } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
                     return None;
                 }
-                let value = value_of(&name)?;
+                let value = (of.value_of)(&name)?;
                 let mut found = false;
                 for member in right.children() {
                     found |= constant_of(&member)?.same(&value);

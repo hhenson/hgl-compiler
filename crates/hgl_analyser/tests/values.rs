@@ -2355,3 +2355,170 @@ fn an_options_value_is_compared_as_a_value() {
         ]
     );
 }
+
+// ---- Generic candidates ----
+
+/// GEN-5: "Select exactly one most-specific admitted candidate. Concrete
+/// types outrank variables; structurally constrained variables outrank
+/// unconstrained ones." GEN-12: "Compare structural specificity
+/// component by component". A generic candidate is admitted with its
+/// parameters resolved from the call (GEN-2), and the call has its
+/// result's type with them in place.
+#[test]
+fn the_most_specific_admitted_candidate_is_selected() {
+    let checked = module(concat!(
+        "operator shape<V, O>(value: V) -> O\n",
+        "impl const fn shape<T>(value: T) -> str => \"any\"\n",
+        "impl const fn shape<T>(value: list<T>) -> T? => null\n",
+        "impl const fn shape(value: list<bool>) -> bool => true\n",
+        "impl const fn shape(value: i64) -> i64 => value\n",
+        "const fn uses(text: str, flags: list<bool>, names: list<str>) {\n",
+        // Only the bare variable takes a `str`.
+        "    let plain = shape(text)\n",
+        // A variable inside a structure outranks a bare one.
+        "    let inner = shape(names)\n",
+        // A concrete type outranks both.
+        "    let exact = shape(flags)\n",
+        "    let whole = shape(1)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        ["plain: str", "inner: str?", "exact: bool", "whole: i64"]
+    );
+}
+
+/// GEN-12: "Compare structural specificity component by component".
+/// Two candidates whose parameters are both structures with variables
+/// in them are compared part for part: a concrete part outranks a
+/// variable in the same place, and one more specific in one part and
+/// less in another outranks nothing.
+#[test]
+fn specificity_is_compared_inside_a_structure() {
+    let checked = module(concat!(
+        "operator pair<V>(value: V) -> i64\n",
+        "impl const fn pair<T>(value: tuple<i64, T>) -> i64 => 1\n",
+        "impl const fn pair<U, V>(value: tuple<U, V>) -> i64 => 2\n",
+        "operator cross<V>(value: V) -> i64\n",
+        "impl const fn cross<T>(value: tuple<i64, T>) -> i64 => 1\n",
+        "impl const fn cross<T>(value: tuple<T, str>) -> i64 => 2\n",
+        "operator deep<V>(value: V) -> i64\n",
+        "impl const fn deep<T>(value: list<tuple<T, bool>>) -> i64 => 1\n",
+        "impl const fn deep<T>(value: list<T>) -> i64 => 2\n",
+        // TYPE-14: a `T` is given where a `T?` is expected, so both of
+        // these take an `i64`. The concrete one outranks.
+        "operator maybe<V>(value: V) -> i64\n",
+        "impl const fn maybe(value: i64) -> i64 => 1\n",
+        "impl const fn maybe<T>(value: T?) -> i64 => 2\n",
+        "const fn uses(a: tuple<i64, str>, b: tuple<bool, str>, c: list<tuple<i64, bool>>) {\n",
+        // The first candidate's first part is concrete.
+        "    let first = pair(a)\n",
+        "    let second = pair(b)\n",
+        "    let nested = deep(c)\n",
+        "    let whole = maybe(1)\n",
+        "    let text = maybe(\"x\")\n",
+        // Each is more specific in one part: a tie.
+        "    let tie = cross(a)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:20:15 operator/operator.ambiguous GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[3..8],
+        [
+            "first: i64",
+            "second: i64",
+            "nested: i64",
+            "whole: i64",
+            "text: i64",
+        ]
+    );
+    // Which candidate each call selected: the first declared of `pair`
+    // for `a`, the second for `b`, and the first of `deep`.
+    let selected: Vec<usize> = body(&checked, "uses")
+        .statements
+        .iter()
+        .take(5)
+        .map(|statement| match statement {
+            Stmt::Declare {
+                value: Some(value), ..
+            } => match &value.kind {
+                ExprKind::Call {
+                    callee: Callee::Candidate { declaration, .. },
+                    ..
+                } => *declaration,
+                other => panic!("a call of a candidate: {other:?}"),
+            },
+            other => panic!("a declaration with a value: {other:?}"),
+        })
+        .collect();
+    // Declarations of module `m`, in order: `pair` is 0, its
+    // candidates 1 and 2; `cross` 3, 4, 5; `deep` 6, 7, 8; `maybe` 9,
+    // 10, 11.
+    assert_eq!(selected, [1, 2, 7, 10, 11]);
+}
+
+/// GEN-3: "`requires` may use type/category membership, equalities".
+/// A generic candidate is admitted only where its condition holds for
+/// what its parameter stands for at the call. GEN-1: a repeated
+/// parameter is one type.
+#[test]
+fn a_generic_candidates_condition_is_checked_at_the_call() {
+    let checked = module(concat!(
+        "struct Quote { bid: f64 }\n",
+        "operator below<L, R>(lhs: L, rhs: R) -> bool\n",
+        "impl const fn below<T>(lhs: T, rhs: T) -> bool\n",
+        "    requires T in {i64, f64, str} => true\n",
+        "impl const fn below(lhs: i64, rhs: f64) -> bool => true\n",
+        "operator alike<L, R>(lhs: L, rhs: R) -> bool\n",
+        "impl const fn alike<T>(lhs: T, rhs: T) -> bool requires T == str => true\n",
+        "const fn uses(n: i64, x: f64, text: str, q: Quote) {\n",
+        "    let a = below(n, n)\n",
+        "    let b = below(text, text)\n",
+        "    let c = below(n, x)\n",
+        "    let d = alike(text, text)\n",
+        // A `Quote` is not among the types the condition names.
+        "    let e = below(q, q)\n",
+        // Two types for the one `T`, and no other candidate takes them.
+        "    let f = below(text, n)\n",
+        "    let g = alike(n, n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:13 operator/operator.no_candidate GEN-5",
+            "m.hgl:15:13 operator/operator.no_candidate GEN-5",
+            "m.hgl:16:13 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[4..8],
+        ["a: bool", "b: bool", "c: bool", "d: bool"]
+    );
+}
+
+/// GEN-5: "tied most-specific candidates are ambiguous". Two candidates
+/// that are as specific as one another in every parameter, or each more
+/// specific in a different one, are a tie.
+#[test]
+fn equally_specific_generic_candidates_are_ambiguous() {
+    let checked = module(concat!(
+        "operator join<L, R>(lhs: L, rhs: R) -> i64\n",
+        "impl const fn join<T>(lhs: T, rhs: i64) -> i64 => 1\n",
+        "impl const fn join<T>(lhs: i64, rhs: T) -> i64 => 2\n",
+        "const fn uses(n: i64, text: str) {\n",
+        "    let one = join(text, n)\n",
+        "    let two = join(n, text)\n",
+        "    let tie = join(n, n)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:8:15 operator/operator.ambiguous GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
+}

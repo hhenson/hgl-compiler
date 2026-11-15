@@ -265,6 +265,10 @@ pub enum Callee {
         module: usize,
         /// The candidate's position in that module's `declarations`.
         declaration: usize,
+        /// What each generic parameter of the candidate stands for at
+        /// this call (GEN-2), in the order declared. Empty for a
+        /// candidate with none.
+        generics: Vec<GenericArgument>,
     },
     /// What no pass reads yet: a name left for the prelude, an
     /// operator whose candidates are generic, a function that is
