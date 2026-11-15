@@ -329,7 +329,7 @@ The declarations are then read against one another:
 | A field two parents give | TYPE-4 | The same type and optionality. One field reached by two paths is one field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
-| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps. Inside the `atomic<...>` a collection is part of one snapshot; a path through a collection outside it is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
+| A struct that holds itself | TYPE-6 | Through a field that is `atomic<...>` with a default of null, which a descendant's override keeps, or through a nullable field. Inside an `atomic<...>` a collection is part of one snapshot; a path through a collection outside one is rejected. The field gives a struct of its cycle each generic parameter whole, not a type built from one |
 | An enum's numbers | TYPE-7, LEX-7 | From zero, or the number written, then one more for each member. Each is an `i64` no other member has |
 
 A struct holds the structs its fields hold: its own fields and those it
@@ -354,7 +354,8 @@ Several of these checks follow the owner's decisions of 2026-11-15 on
 which hgl_spec pull request 22 writes into the chapters: a value
 function's signature, keys that take no `?`, a cardinality's bounds, a
 default on any parameter, where `signal` stands, a parent listed once,
-what an abstract-typed field holds, and what a recursive field may be.
+what an abstract-typed field holds, and what a recursive field may be:
+atomic or nullable, with a collection only inside an `atomic<...>`.
 The pin under `spec/` moves to them when that pull request is merged.
 
 The fields of each struct are worked out once, from those of its
@@ -380,7 +381,7 @@ The rejections of this pass have no catalogue row either:
 | `field.conflict` | A field whose type or optionality differs between parents, or from a parent's |
 | `field.not_inherited` | `name = value` for a field no parent declares |
 | `field.duplicate` | Two members of a struct with one name |
-| `field.recursive` | A field that makes its struct hold itself and is not `atomic<...>` defaulted to null, or gives a struct of its cycle a type built from a generic parameter |
+| `field.recursive` | A field that makes its struct hold itself and is neither `atomic<...>` defaulted to null nor nullable, or gives a struct of its cycle a type built from a generic parameter |
 | `enum.value` | A number that is not an integer |
 | `enum.duplicate_value` | Two members with one number |
 | `enum.overflow` | Numbering past the largest `i64` |

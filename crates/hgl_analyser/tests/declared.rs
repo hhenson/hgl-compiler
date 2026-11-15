@@ -400,7 +400,7 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:24:15 local:type/field.recursive TYPE-6",
         ]
     );
-    let recursive = "a recursive field is an `atomic<...>` with a default of null";
+    let recursive = "a recursive field is an `atomic<...>` with a default of null, or nullable";
     let collection = "through the elements of a collection outside an `atomic<...>`";
     assert_eq!(
         messages(&checked),
@@ -472,7 +472,7 @@ fn a_struct_holds_itself_through_what_it_gives_a_parent() {
         messages(&checked),
         [
             "`Child` holds itself through `next`, a field of `Base`: a recursive field is an \
-             `atomic<...>` with a default of null",
+             `atomic<...>` with a default of null, or nullable",
             "`Bag` holds itself through `all`, a field of `Items` through the elements of a \
              collection outside an `atomic<...>`",
         ]
@@ -510,7 +510,7 @@ fn a_generic_structs_fields_are_followed_with_its_arguments() {
             "`items` makes `Loose` hold itself through the elements of a collection outside an \
              `atomic<...>`",
             "`inner` makes `Direct` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null",
+             default of null, or nullable",
         ]
     );
 }
@@ -575,7 +575,45 @@ fn a_field_of_an_abstract_type_holds_each_descendant() {
     assert_eq!(
         checked.findings[0].message,
         "`first` makes `Group` hold itself: a recursive field is an `atomic<...>` with a default \
-         of null"
+         of null, or nullable"
+    );
+}
+
+/// TYPE-6, by the owner's statement of 2026-11-15 on hgl_spec issue 21:
+/// "a recursive field must either be atomic or nullable to ensure the
+/// recursion can be broken". A nullable field ends the recursion as an
+/// `atomic<...>` defaulted to null does.
+#[test]
+fn a_recursive_field_may_be_nullable() {
+    let checked = module(concat!(
+        "struct Link { next: Link? }\n",
+        "struct Paired { other: tuple<Paired, i64>? }\n",
+        "struct Left { right: Right? }\n",
+        "struct Right { left: atomic<Left> = null }\n",
+        // A collection outside an `atomic<...>` is on the path still.
+        "struct Listed { items: list<Listed>? }\n",
+        // Nullable inside the field's type is not the field's type.
+        "struct Inner { items: tuple<Inner?, i64> }\n",
+        "struct Snapshot { next: atomic<Snapshot?> }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:17 local:type/field.recursive TYPE-6",
+            "m.hgl:7:16 local:type/field.recursive TYPE-6",
+            "m.hgl:8:19 local:type/field.recursive TYPE-6",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "`items` makes `Listed` hold itself through the elements of a collection outside an \
+             `atomic<...>`",
+            "`items` makes `Inner` hold itself: a recursive field is an `atomic<...>` with a \
+             default of null, or nullable",
+            "`next` makes `Snapshot` hold itself: a recursive field is an `atomic<...>` with a \
+             default of null, or nullable",
+        ]
     );
 }
 
@@ -604,7 +642,7 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         [
             "`next` is a recursive field, and its default stays null",
             "`inner` makes `Holder` hold itself: a recursive field is an `atomic<...>` with a \
-             default of null",
+             default of null, or nullable",
         ]
     );
 }

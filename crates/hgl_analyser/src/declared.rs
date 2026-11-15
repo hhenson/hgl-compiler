@@ -860,8 +860,15 @@ impl Structs<'_> {
                 self.walk(value, true, found, path, budget);
             }
             Type::Rolling { value, .. } => self.walk(value, true, found, path, budget),
-            Type::Ref(inner) | Type::Atomic(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
-                self.walk(inner, in_collection, found, path, budget)
+            // Inside an `atomic<...>` a collection is part of one
+            // snapshot. Only a collection outside it is on the path.
+            Type::Atomic(inner) => {
+                let mut inside = Vec::new();
+                self.walk(inner, false, &mut inside, path, budget);
+                found.extend(inside.into_iter().map(|(id, _)| (id, in_collection)));
+            }
+            Type::Ref(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
+                self.walk(inner, in_collection, found, path, budget);
             }
             Type::Result { value, error } => {
                 self.walk(value, in_collection, found, path, budget);
@@ -915,7 +922,11 @@ impl Structs<'_> {
                         at: field.at,
                         via: field.via,
                         ty: field.ty.clone(),
-                        in_form: matches!(field.ty, Type::Atomic(_)) && field.optional,
+                        // TYPE-6: an `atomic<...>` defaulted to null,
+                        // or a nullable type, so that the recursion can
+                        // end.
+                        in_form: (matches!(field.ty, Type::Atomic(_)) && field.optional)
+                            || matches!(field.ty, Type::Nullable(_)),
                         named,
                     });
                 }
@@ -947,18 +958,20 @@ impl Structs<'_> {
                 continue;
             }
             recursive.push(edge.origin);
-            if !edge.in_form {
-                // "Cycles through ... collection elements outside the
-                // `atomic<...>`" are rejected; inside it a collection is
-                // part of one snapshot.
-                let through_collection = back.any(|(_, in_collection)| *in_collection);
+            // "Cycles through ... collection elements outside the
+            // `atomic<...>`" are rejected; inside it a collection is
+            // part of one snapshot.
+            let through_collection = back.any(|(_, in_collection)| *in_collection);
+            if through_collection {
                 faulty.push((
                     edge,
-                    if through_collection {
-                        " through the elements of a collection outside an `atomic<...>`".to_string()
-                    } else {
-                        ": a recursive field is an `atomic<...>` with a default of null".to_string()
-                    },
+                    " through the elements of a collection outside an `atomic<...>`".to_string(),
+                ));
+            } else if !edge.in_form {
+                faulty.push((
+                    edge,
+                    ": a recursive field is an `atomic<...>` with a default of null, or nullable"
+                        .to_string(),
                 ));
             } else if let Some(grown) = grown(&edge.ty, &|id| group_of.get(&id) == Some(&group)) {
                 // "Such a field gives a struct of its cycle each

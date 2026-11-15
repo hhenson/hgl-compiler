@@ -126,7 +126,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-4 | analyser | partial | A field's type and optionality agree between a struct and its parents, and between parents; `name = value` overrides a parent's field; one member to a name. Left: a default's value against its field's type |
 | TYPE-5 | analyser | planned | A constructor supplies every required field |
 | TYPE-5 | transpiler | planned | Arguments evaluated once in order; defaults only when omitted; retained results own their data |
-| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an `atomic<...>` field defaulted to null, which a descendant keeps and which passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside the `atomic<...>` only. Left: a constant argument built from a parameter |
+| TYPE-6 | analyser | partial | No struct inherits from itself; a struct holds itself only through an `atomic<...>` field defaulted to null, which a descendant keeps, or a nullable one; the field passes each generic parameter on whole; an abstract-typed field holds each descendant; a collection is admitted inside an `atomic<...>` only. Left: a constant argument built from a parameter |
 | TYPE-7 | parser | done | `.member` read as an expression where an operand is due |
 | TYPE-7 | analyser | partial | Numbering from zero or the number written; numbers are integers no two members share; overflow rejected. Left: members as typed constants; `.member` given its enum by the type its position expects, a `switch` label by its selector; checked construction |
 | TYPE-7 | transpiler | planned | Enum string and numeric conversion |
