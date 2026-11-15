@@ -1886,48 +1886,23 @@ impl<'a> Typer<'a> {
 
         // EXPR-2: "Named arguments use the selected public callable's
         // parameter names; a call of an operator may also name an
-        // option its candidates declare (GEN-6)." So the places of the
-        // call are the operator's parameters and then each option some
-        // candidate declares beyond them, once. What a call may leave
-        // out is the candidate's to say (GEN-6: "A candidate may give
-        // any of its inputs a default"), so nothing is required here.
+        // option its candidates declare (GEN-6)." Which parameter of a
+        // candidate an argument is given to, and what a call may leave
+        // out, is each candidate's to say (GEN-6: "A call is matched
+        // against each candidate's own signature").
         let own = public.parameters.len();
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let options: Vec<&str> = candidates
+        let options: std::collections::HashSet<&str> = candidates
             .iter()
             .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
             .map(|parameter| parameter.name.as_str())
-            .filter(|name| seen.insert(name))
-            .collect();
-        let slots: Vec<Slot> = public
-            .parameters
-            .iter()
-            .map(|parameter| parameter.name.as_str())
-            .chain(options)
-            .map(|name| Slot {
-                name,
-                ty: Type::Unknown,
-                required: false,
-                pack: None,
-            })
             .collect();
         let reported = self.diagnostics.len();
-        let assigned = self.assign(name, list, &slots, Takes::Parameters);
-        // How each argument is written, in the same order.
-        let mut position = 0;
-        let keys = arguments_of(list).into_iter().map(|(name, _)| match name {
-            Some(name) => Key::Name(name.text().to_string()),
-            None => {
-                position += 1;
-                Key::Position(position - 1)
-            }
-        });
+        let written = self.operator_arguments(name, list, public, &options);
         // Each argument, read with nothing expected of it: what it
         // reports itself is reported here, once.
-        let given: Vec<Given> = assigned
+        let given: Vec<Given> = written
             .into_iter()
-            .zip(keys)
-            .map(|((_, node), key)| {
+            .map(|(key, node)| {
                 let by_place = typed_by_place(&node);
                 let mark = self.mark();
                 let value = self.expression(&node, Some(&Type::Unknown));
@@ -1963,6 +1938,8 @@ impl<'a> Typer<'a> {
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
+        let operator_declaration =
+            &program.modules[operator.module].declarations[operator.declaration];
         let wanted = Wanted {
             place: requested
                 .as_ref()
@@ -1974,7 +1951,14 @@ impl<'a> Typer<'a> {
         for widening in [false, true] {
             for &(module, declaration, signature) in &candidates {
                 let candidate = &program.modules[module].declarations[declaration];
-                match self.admits_call((candidate, signature), public, &given, &wanted, widening) {
+                let admits = self.admits_call(
+                    (candidate, signature),
+                    (operator_declaration, public),
+                    &given,
+                    &wanted,
+                    widening,
+                );
+                match admits {
                     Admits::Yes => selected.push((module, declaration, signature)),
                     Admits::No => {}
                     Admits::Unknown => untold = true,
@@ -2122,6 +2106,81 @@ impl<'a> Typer<'a> {
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
+    /// The arguments of an operator's call as they are written, each
+    /// with its position or its name. What is wrong with the call
+    /// whichever candidate takes it is reported here (EXPR-2): an
+    /// argument with no name after a named one; a name that neither the
+    /// operator nor any candidate declares; a name given twice, or a
+    /// parameter of the operator given in position and by name.
+    ///
+    /// Which parameter an option's argument is given to differs from
+    /// candidate to candidate, so that is not judged here: a candidate
+    /// the arguments do not fit is not admitted (GEN-6).
+    fn operator_arguments(
+        &mut self,
+        callee: &SyntaxToken,
+        list: &SyntaxNode,
+        public: &Signature,
+        options: &std::collections::HashSet<&str>,
+    ) -> Vec<(Key, SyntaxNode)> {
+        let mut named_seen = false;
+        let mut position = 0;
+        let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut arguments = Vec::new();
+        for (name, value) in arguments_of(list) {
+            let key = match name {
+                None => {
+                    if named_seen {
+                        self.diagnostics.emit(error(
+                            Category::Type,
+                            codes::ARGUMENT_ORDER,
+                            self.at(&value),
+                            "an argument with no name follows a named one: positional \
+                             arguments come first"
+                                .to_string(),
+                            "EXPR-2",
+                        ));
+                    }
+                    position += 1;
+                    Key::Position(position - 1)
+                }
+                Some(name) => {
+                    named_seen = true;
+                    let text = name.text();
+                    let at = Location::new(self.file, name.span());
+                    // The operator's parameters are the same places in
+                    // every candidate, the first of each.
+                    let own = public
+                        .parameters
+                        .iter()
+                        .position(|parameter| parameter.name == text);
+                    if own.is_none() && !options.contains(text) {
+                        self.diagnostics.emit(error(
+                            Category::Name,
+                            codes::ARGUMENT_UNKNOWN,
+                            at,
+                            format!("`{}` has no parameter `{text}`", callee.text()),
+                            "EXPR-2",
+                        ));
+                    } else if !names.insert(text.to_string())
+                        || own.is_some_and(|index| index < position)
+                    {
+                        self.diagnostics.emit(error(
+                            Category::Name,
+                            codes::ARGUMENT_DUPLICATE,
+                            at,
+                            format!("`{text}` is given twice"),
+                            "EXPR-2",
+                        ));
+                    }
+                    Key::Name(text.to_string())
+                }
+            };
+            arguments.push((key, value));
+        }
+        arguments
+    }
+
     /// The types an operator's requirement admits for its result, with
     /// the call's generic arguments `map` in place: for `operator
     /// convert<T, V, O>(value: V) -> O requires O in {T, result<T,
@@ -2194,7 +2253,7 @@ impl<'a> Typer<'a> {
     fn admits_call(
         &mut self,
         (candidate, signature): (&Declaration, &Signature),
-        public: &Signature,
+        (operator, public): (&Declaration, &Signature),
         given: &[Given],
         wanted: &Wanted,
         widening: bool,
@@ -2260,31 +2319,29 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
-        let written = parameters(&candidate.syntax);
-        // The value an option has at this call, as text: what the call
-        // gives it, or its default. `None` when it is no constant this
-        // pass reads.
-        let value_of = |name: &str| -> Option<String> {
+        // The value an option has at this call: what the call gives
+        // it, or its default, the candidate's and then, for one of the
+        // operator's own parameters, the operator's. `None` when it is
+        // no constant this pass reads.
+        let value_of = |name: &str| -> Option<OptionValue> {
             let index = signature
                 .parameters
                 .iter()
                 .position(|parameter| parameter.name == name)?;
-            let argument = bound.iter().position(|&place| place == index);
-            match argument {
-                Some(position) => constant_text(&given[position].node),
-                None => {
-                    let parameter = &signature.parameters[index];
-                    let declared = written.iter().find(|written| {
-                        tokens(written)
-                            .take_while(|token| token.kind() != SyntaxKind::Colon)
-                            .any(|token| token.span().start == parameter.at.span.start)
-                    })?;
-                    match default_of(declared) {
-                        Some(default) => constant_text(&default),
-                        // Written `T?` and left out: it is null.
-                        None => Some("null".to_string()),
-                    }
-                }
+            if let Some(position) = bound.iter().position(|&place| place == index) {
+                return constant_of(&given[position].node);
+            }
+            let default =
+                default_at(&candidate.syntax, &signature.parameters[index]).or_else(|| {
+                    public
+                        .parameters
+                        .get(index)
+                        .and_then(|parameter| default_at(&operator.syntax, parameter))
+                });
+            match default {
+                Some(default) => constant_of(&default),
+                // Written `T?` and left out: it is null.
+                None => Some(OptionValue::Literal(Value::Null)),
             }
         };
         match holds(&condition, &value_of) {
@@ -3285,26 +3342,84 @@ fn result_set(node: &SyntaxNode, name: &str) -> Option<SyntaxNode> {
     }
 }
 
-/// A constant as it is written, spaces apart: `.error`, `null`, `3`.
-/// `None` for an expression that is no literal and no `.member`.
-///
-/// It is what a candidate's condition compares an option with (GEN-6),
-/// so two of them are the same constant when they are written the same.
-fn constant_text(node: &SyntaxNode) -> Option<String> {
+/// A constant a candidate's condition compares an option with, or the
+/// value a call gives an option (GEN-6).
+#[derive(Debug, PartialEq)]
+enum OptionValue {
+    /// `.member`: the member's name. The enum it is of is the option's
+    /// type, the same for what the call gives and what it is compared
+    /// with.
+    Member(String),
+    /// A literal, as the value it denotes: `1_000` is `1000`, and a
+    /// string is its contents.
+    Literal(Value),
+}
+
+impl OptionValue {
+    /// True when two constants are one value. An integer and a float
+    /// are compared as numbers: an option of type `f64` may be given
+    /// `1` (EXPR-5).
+    fn same(&self, other: &OptionValue) -> bool {
+        match (self, other) {
+            (OptionValue::Literal(Value::Int(whole)), OptionValue::Literal(Value::Float(real)))
+            | (OptionValue::Literal(Value::Float(real)), OptionValue::Literal(Value::Int(whole))) =>
+            {
+                // `as` here converts an integer to the nearest float.
+                *whole as f64 == *real
+            }
+            _ => self == other,
+        }
+    }
+}
+
+/// The constant an expression is, when it is a literal, a number under
+/// a minus, or a `.member`; `None` for any other expression.
+fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
     match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .and_then(|inner| constant_text(&inner)),
-        SyntaxKind::Literal | SyntaxKind::ImpliedMember => Some(
-            node.text()
-                .to_string()
-                .chars()
-                .filter(|character| !character.is_whitespace())
-                .collect(),
-        ),
+        SyntaxKind::ParenExpr => constant_of(&node.children().next()?),
+        // `.member`: the name is the last token, any word (LEX-9).
+        SyntaxKind::ImpliedMember => tokens(node)
+            .last()
+            .map(|name| OptionValue::Member(name.text().to_string())),
+        SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
+            match constant_of(&node.children().next()?)? {
+                OptionValue::Literal(Value::Int(value)) => {
+                    Some(OptionValue::Literal(Value::Int(value.checked_neg()?)))
+                }
+                OptionValue::Literal(Value::Float(value)) => {
+                    Some(OptionValue::Literal(Value::Float(-value)))
+                }
+                _ => None,
+            }
+        }
+        SyntaxKind::Literal => {
+            let token = tokens(node).next()?;
+            let text = token.text();
+            let value = match token.kind() {
+                SyntaxKind::Int => Value::Int(i64::try_from(decode_integer(text).ok()?).ok()?),
+                SyntaxKind::Float => Value::Float(decode_float(text).ok()?),
+                SyntaxKind::Str => Value::Str(decode_string(text).ok()?),
+                SyntaxKind::KwTrue => Value::Bool(true),
+                SyntaxKind::KwFalse => Value::Bool(false),
+                SyntaxKind::KwNull => Value::Null,
+                SyntaxKind::Duration => Value::Duration(decode_duration(text).ok()?),
+                SyntaxKind::Temporal => Value::Temporal(text.to_string()),
+                _ => return None,
+            };
+            Some(OptionValue::Literal(value))
+        }
         _ => None,
     }
+}
+
+/// The default a declaration writes for `parameter`, one of its own.
+fn default_at(declaration: &SyntaxNode, parameter: &crate::types::Parameter) -> Option<SyntaxNode> {
+    let written = parameters(declaration).into_iter().find(|written| {
+        tokens(written)
+            .take_while(|token| token.kind() != SyntaxKind::Colon)
+            .any(|token| token.span().start == parameter.at.span.start)
+    })?;
+    default_of(&written)
 }
 
 /// Whether a candidate's condition holds, where `value_of` gives the
@@ -3315,7 +3430,7 @@ fn constant_text(node: &SyntaxNode) -> Option<String> {
 /// GEN-6: a candidate compares "the option with constants: `requires
 /// zero == .error`, `requires zero in {.ieee, .nan}`". GEN-15:
 /// "negation binds before conjunction, which binds before disjunction".
-fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<String>) -> Option<bool> {
+fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<OptionValue>) -> Option<bool> {
     match node.kind() {
         SyntaxKind::ConstraintParen => holds(&node.children().next()?, value_of),
         SyntaxKind::ConstraintNot => holds(&node.children().next()?, value_of).map(|held| !held),
@@ -3350,7 +3465,7 @@ fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<String>) -> Option
                     (None, Some(name)) => (name, left),
                     _ => return None,
                 };
-                Some(value_of(&name)? == constant_text(constant)?)
+                Some(value_of(&name)?.same(&constant_of(constant)?))
             } else if tokens(node).any(|token| token.text() == "in") {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
@@ -3359,7 +3474,7 @@ fn holds(node: &SyntaxNode, value_of: &dyn Fn(&str) -> Option<String>) -> Option
                 let value = value_of(&name)?;
                 let mut found = false;
                 for member in right.children() {
-                    found |= constant_text(&member)? == value;
+                    found |= constant_of(&member)?.same(&value);
                 }
                 Some(found)
             } else {

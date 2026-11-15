@@ -2207,3 +2207,114 @@ fn an_option_that_is_no_constant_is_not_judged() {
     assert_eq!(checked.summary(), NONE);
     assert_eq!(locals(&checked, "uses")[3], "untold: _");
 }
+
+/// GEN-6: "The operator owns the defaults of the parameters it
+/// declares." A candidate that takes such a parameter with no default
+/// of its own is admitted for a call that leaves it out, and its
+/// condition is checked against the operator's default.
+#[test]
+fn an_operators_default_is_the_options_value_for_a_candidates_condition() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: f64, rhs: f64, zero: Zero) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "const fn uses(a: f64, b: f64) {\n",
+        "    let plain = ratio(a, b)\n",
+        "    let checked = ratio(a, b, zero: .error)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[2..],
+        ["plain: f64", "checked: result<f64, error>"]
+    );
+}
+
+/// GEN-6: "A call is matched against each candidate's own signature."
+/// Candidates may declare their options in different orders, so which
+/// option an argument with no name is given to is each candidate's to
+/// say: one given in position for one candidate and named for another
+/// is given twice only to a candidate that has both in one place.
+#[test]
+fn an_option_given_in_position_is_each_candidates_own() {
+    let checked = module(concat!(
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick(value: str, a: i64 = 0) -> i64 => a\n",
+        "impl const fn pick(value: i64, b: i64 = 0, a: i64 = 0) -> i64 => a + b\n",
+        "const fn uses() {\n",
+        // For the second candidate `2` is `b`, and `a` is given once.
+        "    let fine = pick(1, 2, a: 3)\n",
+        // For the first, `2` is `a`, which is then given twice: it is
+        // not admitted, and nothing else takes a `str`.
+        "    let twice = pick(\"x\", 2, a: 3)\n",
+        // A parameter of the operator is the same place in every
+        // candidate.
+        "    let again = pick(1, value: 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:8:25 name/argument.duplicate EXPR-2",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[0], "fine: i64");
+}
+
+/// GEN-6: a candidate compares "the option with constants". They are
+/// compared as the values they denote, not as they are written: a
+/// string by its contents, a number by its value, an integer given to
+/// an `f64` option as that number.
+#[test]
+fn an_options_value_is_compared_as_a_value() {
+    let checked = module(concat!(
+        "operator mark<V>(value: V) -> str\n",
+        "impl const fn mark(value: i64, mode: str = \"ab\") -> str\n",
+        "    requires mode == \"ab\" => \"exact\"\n",
+        "impl const fn mark(value: i64, mode: str) -> str\n",
+        "    requires mode == \"a b\" => \"spaced\"\n",
+        "operator sized<V>(value: V) -> i64\n",
+        "impl const fn sized(value: i64, limit: i64 = 1000) -> i64\n",
+        "    requires limit == 1_000 => 1\n",
+        "impl const fn sized(value: i64, limit: i64) -> i64\n",
+        "    requires limit in {-1, 2} => 2\n",
+        "operator near<V>(value: V) -> i64\n",
+        "impl const fn near(value: f64, within: f64 = 0.0) -> i64\n",
+        "    requires within == 1.0 => 1\n",
+        "const fn uses(x: f64) {\n",
+        // Each is one candidate: were the two strings taken for one,
+        // the second call would be ambiguous.
+        "    let exact = mark(1)\n",
+        "    let spaced = mark(1, mode: \"a b\")\n",
+        "    let default = sized(1)\n",
+        "    let written = sized(1, limit: 1000)\n",
+        "    let negative = sized(1, limit: -1)\n",
+        "    let widened = near(x, within: 1)\n",
+        // No candidate is for these values.
+        "    let other = sized(1, limit: 3)\n",
+        "    let unset = near(x)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:22:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:23:17 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[1..7],
+        [
+            "exact: str",
+            "spaced: str",
+            "default: i64",
+            "written: i64",
+            "negative: i64",
+            "widened: i64",
+        ]
+    );
+}

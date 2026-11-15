@@ -577,10 +577,15 @@ each argument fits the parameter it is given to, what the call leaves
 out has a default or a type written `T?`, and its `requires` holds. A
 call that names an option admits only the candidates that declare it; a
 name neither the operator nor any candidate declares is
-`argument.unknown`. A candidate's `requires` compares an option with
+`argument.unknown`. Candidates may order their options differently, so
+which option an argument in position is given to is judged candidate by
+candidate; only what is wrong for every candidate is reported of the
+call itself. A candidate's `requires` compares an option with
 constants, `zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`,
 `||` and `!`: it is checked against what the call gives the option, or
-the option's default. So `ratio(a, b, zero: .error)` selects the
+the option's default, the candidate's and then the operator's for a
+parameter the operator declares. Constants are compared as the values
+they denote: `1_000` is `1000`, and a string is its contents. So `ratio(a, b, zero: .error)` selects the
 candidate that is for `.error`, and has its result type (EXPR-12). Where
 the call gives such an option as no constant, a name say, which
 candidate is for it cannot be told and the call is not judged: the
