@@ -372,6 +372,56 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     }
 }
 
+/// The most a type may weigh once arguments stand for its parameters.
+/// A type weighs one for itself and for each type inside it.
+const WEIGHT: usize = 10_000;
+
+/// How much a type weighs: one for itself and for each type inside it.
+fn weight(ty: &Type) -> usize {
+    1 + match ty {
+        Type::Named { arguments, .. } => arguments
+            .iter()
+            .map(|argument| match argument {
+                Argument::Type(argument) => weight(argument),
+                Argument::Constant(_) => 1,
+            })
+            .sum(),
+        Type::Tuple(elements) => elements.iter().map(weight).sum(),
+        Type::List { element, .. } => weight(element),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => weight(inner),
+        Type::Dict { key, value } => weight(key) + weight(value),
+        Type::Rolling { value, .. } => weight(value),
+        Type::Result { value, error } => weight(value) + weight(error),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => 0,
+    }
+}
+
+/// [`substitute`], unless the result could weigh more than [`WEIGHT`]:
+/// then the type is not known.
+///
+/// Each argument may stand in a type many times, and a chain of generic
+/// parents that each give the next `tuple<T, T>` doubles a field's type
+/// at every link. The weight is bounded before anything is built: no
+/// more than the type's own, times the heaviest argument's.
+fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Type {
+    let heaviest = map
+        .iter()
+        .map(|(_, argument)| match argument {
+            Argument::Type(argument) => weight(argument),
+            Argument::Constant(_) => 1,
+        })
+        .max()
+        .unwrap_or(1);
+    if weight(ty).saturating_mul(heaviest) > WEIGHT {
+        return Type::Unknown;
+    }
+    substitute(ty, map)
+}
+
 /// `required` or `optional`.
 fn optionality(optional: bool) -> &'static str {
     if optional { "optional" } else { "required" }
@@ -616,7 +666,7 @@ impl Structs<'_> {
                 .unwrap_or_default();
             for field in &fields.all {
                 let field = Introduced {
-                    ty: substitute(&field.ty, &map),
+                    ty: substitute_within(&field.ty, &map),
                     via,
                     ..field.clone()
                 };
@@ -708,12 +758,22 @@ impl Structs<'_> {
                 ));
                 continue;
             }
-            let from_parent = inherited.iter().find(|parent| parent.name == field.name);
-            match (&field.ty, from_parent) {
+            // Every field of this name the struct has from a parent: two
+            // parents may each give one.
+            let mut from_parents = inherited
+                .iter()
+                .filter(|parent| parent.name == field.name)
+                .peekable();
+            let inherits = from_parents.peek().is_some();
+            match (&field.ty, inherits) {
                 // A field of its own.
-                (Some(_), None) => {}
-                (Some(ty), Some(parent)) => {
-                    if differs(parent, ty, field.null_default) {
+                (Some(_), false) => {}
+                (Some(ty), true) => {
+                    // The first of them this one is not. One whose type
+                    // is not known is passed over: another may be.
+                    let conflict =
+                        from_parents.find(|parent| differs(parent, ty, field.null_default));
+                    if let Some(parent) = conflict {
                         problems.push((
                             codes::local::FIELD_CONFLICT,
                             field.at,
@@ -729,8 +789,8 @@ impl Structs<'_> {
                         ));
                     }
                 }
-                (None, Some(_)) => {}
-                (None, None) => problems.push((
+                (None, true) => {}
+                (None, false) => problems.push((
                     codes::local::FIELD_NOT_INHERITED,
                     field.at,
                     format!(
@@ -832,7 +892,7 @@ impl Structs<'_> {
                         break;
                     }
                     *budget -= 1;
-                    let given = substitute(&field.ty, &map);
+                    let given = substitute_within(&field.ty, &map);
                     self.walk(&given, in_collection, found, path, budget);
                 }
                 path.pop();
