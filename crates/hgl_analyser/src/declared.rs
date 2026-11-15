@@ -247,6 +247,11 @@ struct Introduced {
     /// is declared with, or the last a struct on the way down gives it
     /// (TYPE-4).
     null_default: bool,
+    /// True when that default is the empty collection `[]` (TYPE-6).
+    empty_default: bool,
+    /// Where the field that gives that default is written: the
+    /// declaration, or the last `name = value` on the way down.
+    default_from: Option<Location>,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
     origin: (Id, usize),
@@ -816,6 +821,8 @@ impl Structs<'_> {
                 for inherited in all.iter_mut().filter(|parent| parent.name == field.name) {
                     inherited.has_default = true;
                     inherited.null_default = field.null_default;
+                    inherited.empty_default = field.empty_default;
+                    inherited.default_from = Some(field.at);
                 }
             }
         }
@@ -829,6 +836,8 @@ impl Structs<'_> {
                         has_default: field.has_default,
                         declared_null: field.null_default,
                         null_default: field.null_default,
+                        empty_default: field.empty_default,
+                        default_from: field.has_default.then_some(field.at),
                         origin: (id, index),
                         at: field.at,
                         via: 0,
@@ -1504,7 +1513,7 @@ impl Structs<'_> {
                     .iter()
                     .any(|(owner, declared)| *declared == origin && line.contains(owner))
             };
-            for (index, field) in read.fields.iter().enumerate() {
+            for field in &read.fields {
                 if !field.has_default || field.null_default {
                     continue;
                 }
@@ -1514,12 +1523,6 @@ impl Structs<'_> {
                     .iter()
                     .filter(|parent| parent.name == field.name && is_recursive(parent.origin))
                     .collect();
-                // The field as this struct declares it. One reported
-                // above for its type is not reported for its default
-                // as well.
-                let own = field.ty.is_some()
-                    && is_recursive((id, index))
-                    && !faulty_fields.contains(&(id, index));
                 if from_parents.iter().any(|parent| parent.declared_null) {
                     // Only a field declared with a null default has one
                     // to keep.
@@ -1530,9 +1533,37 @@ impl Structs<'_> {
                             field.name
                         ),
                     ));
-                } else if (own || !from_parents.is_empty()) && !field.empty_default {
+                }
+            }
+        }
+        // The default each struct has for a field that is recursive in
+        // it: the one the field is declared with, or the last a struct
+        // on the way down gave it. A field may be recursive only in a
+        // struct below the one that writes its default, so the default
+        // is judged where the field is recursive and reported where it
+        // is written. One reported above for its type is not reported
+        // for its default as well.
+        for (owner, origin) in &recursive {
+            if faulty_fields.contains(origin) {
+                continue;
+            }
+            let Some(fields) = self.fields.get(owner) else {
+                continue;
+            };
+            for field in fields.all.iter().filter(|field| field.origin == *origin) {
+                // A null default that a struct below has replaced is
+                // reported as that.
+                let ends = !field.has_default || field.null_default || field.empty_default;
+                if ends || field.declared_null {
+                    continue;
+                }
+                // A place reported already, for a null default removed
+                // there, is not reported again.
+                if let Some(at) = field.default_from
+                    && !reports.iter().any(|(reported, _)| *reported == at)
+                {
                     reports.push((
-                        field.at,
+                        at,
                         format!(
                             "`{}` is a recursive field, and its default is `null` or the \
                              empty collection `[]`",

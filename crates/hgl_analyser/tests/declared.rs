@@ -1120,6 +1120,10 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
         // A null default stays null, for an empty collection too.
         "abstract struct Parent { children: atomic<list<Parent>?> = null }\n",
         "struct Emptied : Parent { children = [] }\n",
+        // A field recursive only in a struct below has its default
+        // judged there, and reported where it is written.
+        "abstract struct Stem { leaves: atomic<list<Leaf>> = [make()] }\n",
+        "struct Leaf : Stem { }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1131,6 +1135,7 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
             "m.hgl:10:16 type/field.recursive TYPE-6",
             "m.hgl:13:23 type/field.recursive TYPE-6",
             "m.hgl:15:27 type/field.recursive TYPE-6",
+            "m.hgl:16:24 type/field.recursive TYPE-6",
         ]
     );
     let ends = "a recursive field is optional, its type nullable or an `atomic<...>` of a \
@@ -1152,6 +1157,9 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
              collection `[]`"
                 .to_string(),
             "`children` is a recursive field, and its default stays null".to_string(),
+            "`leaves` is a recursive field, and its default is `null` or the empty \
+             collection `[]`"
+                .to_string(),
         ]
     );
 }
