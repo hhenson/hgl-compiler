@@ -369,12 +369,62 @@ pub enum ExprKind {
         /// The index or key.
         index: Box<Expr>,
     },
+    /// `ok(value)` or `err(value)`: a result that owns the payload
+    /// (ERR-2). Its type is the result its place expects.
+    Tagged {
+        /// True for `ok`, a success; false for `err`, a failure.
+        success: bool,
+        /// The payload: the T of a success, the E of a failure.
+        payload: Box<Expr>,
+    },
+    /// `is_ok(value)` or `is_err(value)`: a bool (ERR-3).
+    TagTest {
+        /// True for `is_ok`; false for `is_err`.
+        success: bool,
+        /// The result tested.
+        value: Box<Expr>,
+    },
+    /// `binding.value` or `binding.error`: the payload of a result that
+    /// a guard has proved a success, or a failure (ERR-3).
+    Payload {
+        /// True for `.value`, the T; false for `.error`, the E.
+        success: bool,
+        /// The result read.
+        result: Box<Expr>,
+    },
+    /// `error(message: text, code: optional_code)` (ERR-4).
+    Error {
+        /// The message, a `str`.
+        message: Box<Expr>,
+        /// The code, a `str?`; `None` when it is not written, which is
+        /// null.
+        code: Option<Box<Expr>>,
+    },
+    /// `.message` or `.code` of an error (ERR-4).
+    ErrorPart {
+        /// The error read.
+        base: Box<Expr>,
+        /// Which of its parts.
+        part: ErrorPart,
+    },
+    /// `value?`: the T of a success; a failure leaves the function or
+    /// fails the node (ERR-5).
+    Propagate(Box<Expr>),
     /// `(a, b)`.
     Tuple(Vec<Expr>),
     /// `[a, b]`: a sequence of values. Its type says what it makes.
     Sequence(Vec<Expr>),
     /// An expression no pass reads yet, or one that has been reported.
     Unread,
+}
+
+/// A part of an error that source reads (ERR-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorPart {
+    /// `.message`, a `str`.
+    Message,
+    /// `.code`, a `str?`.
+    Code,
 }
 
 /// What a call calls.

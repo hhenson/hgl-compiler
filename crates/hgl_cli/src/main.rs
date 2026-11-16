@@ -550,7 +550,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         }
     );
     println!(
-        "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; sources, result forms, tests and eval are not yet"
+        "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; sources, captures, tests and eval are not yet"
     );
     print!("{}", list_prelude_names(&sources, &program));
     report(&sources, diagnostics)

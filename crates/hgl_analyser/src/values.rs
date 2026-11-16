@@ -37,8 +37,8 @@ use hgl_source::FileId;
 
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
-    self, BinaryOperator, Body, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local,
-    LocalId, Stmt, UnaryOperator, Value, ValueCategory,
+    self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
+    Local, LocalId, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
@@ -48,7 +48,7 @@ use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack,
     Scalar, Signature, Type,
 };
-use crate::{codes, error};
+use crate::{RESULT_FORMS, codes, error};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -1298,6 +1298,8 @@ impl<'a> Typer<'a> {
                 }
             }
             SyntaxKind::MemberExpr => self.member(node),
+            SyntaxKind::TypeCall => self.type_call(node),
+            SyntaxKind::TryExpr => self.propagation(node),
             // An anonymous function's body is for a later part. What it
             // captures of a capability is reported here.
             SyntaxKind::FnExpr => {
@@ -1422,6 +1424,19 @@ impl<'a> Typer<'a> {
             ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
             ExprKind::Widen(inner) => self.category(inner),
             ExprKind::Field { base, .. } => self.category(base),
+            // A result form over a connection is lifted, as a value
+            // function's call is (FN-6, ERR-3): what it gives is what it
+            // is given.
+            ExprKind::Tagged { payload, .. } => self.category(payload),
+            ExprKind::TagTest { value, .. } => self.category(value),
+            ExprKind::Payload { result, .. } => self.category(result),
+            ExprKind::ErrorPart { base, .. } => self.category(base),
+            ExprKind::Propagate(operand) => self.category(operand),
+            ExprKind::Error { message, code } => {
+                code.iter().fold(self.category(message), |given, code| {
+                    join(given, self.category(code))
+                })
+            }
             ExprKind::Index { base, index } => join(self.category(base), self.category(index)),
             ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => all(&mut entries.iter()),
             ExprKind::Block {
@@ -1900,13 +1915,43 @@ impl<'a> Typer<'a> {
     /// directly against null." A `var` may be given a null after its
     /// test, and so is proved nothing of.
     fn null_tests(&self, condition: &Expr) -> (Vec<Fact>, Vec<Fact>) {
-        let refinable = |local: LocalId| {
+        // ERR-12, ERR-3: "An immutable ... binding, a `let`, a
+        // parameter, or an iteration binding".
+        let immutable = |local: LocalId| {
             matches!(
                 self.locals[local].kind,
                 LocalKind::Parameter | LocalKind::Let | LocalKind::Iteration
-            ) && matches!(self.locals[local].ty, Type::Nullable(_))
+            )
         };
-        null_tests(condition, &refinable, &|| self.temporal_inputs())
+        let refinable =
+            |local: LocalId| immutable(local) && matches!(self.locals[local].ty, Type::Nullable(_));
+        // ERR-3: "In composition a test of a connection is an ordinary
+        // lifted call (FN-6): it gives a connection of `bool` and no
+        // fact."
+        // A binding written `result<T, E>?` that a null test has proved
+        // present is read as its result (ERR-12), and is tested as one.
+        // The proof may stand before the condition, or be the left
+        // operand of the connective the test is the right operand of:
+        // `outcome != null && is_ok(outcome)`.
+        let tagged = |local: LocalId, known: &[Fact]| {
+            let present = Fact::Present(local);
+            let result = match &self.locals[local].ty {
+                Type::Result { .. } => true,
+                Type::Nullable(inner) => {
+                    matches!(**inner, Type::Result { .. })
+                        && (self.present.contains(&present) || known.contains(&present))
+                }
+                _ => false,
+            };
+            immutable(local) && result && self.locals[local].category == ValueCategory::Value
+        };
+        null_tests(
+            condition,
+            &refinable,
+            &tagged,
+            &|| self.temporal_inputs(),
+            &[],
+        )
     }
 
     /// The temporal inputs of the function being read: its parameters
@@ -2930,6 +2975,15 @@ impl<'a> Typer<'a> {
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        // ERR-13: "as the callee of a call each is the form this
+        // chapter defines, whatever else is in scope."
+        if callee.kind() == SyntaxKind::NameExpr
+            && child(&callee, SyntaxKind::QualifiedName).is_none()
+            && let Some(name) = name_token(&callee)
+            && let Some(form) = self.result_form(&name, &list, expected)
+        {
+            return form;
+        }
         let found = match callee.kind() {
             SyntaxKind::NameExpr => name_token(&callee)
                 .and_then(|name| self.declarations(&name).map(|found| (name, found))),
@@ -3048,6 +3102,471 @@ impl<'a> Typer<'a> {
             ));
         }
         self.unread_call(list)
+    }
+
+    // ---- Result forms (ERR-2 to ERR-5) ----
+
+    /// The call of `name` as the result form it names, when it names
+    /// one (ERR-13): `ok`, `err`, `is_ok`, `is_err` or `capture`.
+    fn result_form(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> Option<(ExprKind, Type)> {
+        Some(match name.text() {
+            "ok" => self.tagged(true, name, list, expected),
+            "err" => self.tagged(false, name, list, expected),
+            "is_ok" => self.tag_test(true, name, list),
+            "is_err" => self.tag_test(false, name, list),
+            // ERR-7: a capture is for a later part.
+            "capture" => self.unread_call(list),
+            _ => return None,
+        })
+    }
+
+    /// The one argument a result form takes, "by position" (ERR-2,
+    /// ERR-3). One with a name, a second, and none at all are each
+    /// reported; any other than the first is read for what it reports
+    /// itself.
+    fn one_argument(
+        &mut self,
+        form: &SyntaxToken,
+        list: &SyntaxNode,
+        rule: &'static str,
+    ) -> Option<SyntaxNode> {
+        let mut arguments = arguments_of(list).into_iter();
+        let Some((label, first)) = arguments.next() else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                Location::new(self.file, form.span()),
+                format!("`{}` is given nothing: it takes one value", form.text()),
+                rule,
+            ));
+            return None;
+        };
+        if let Some(label) = label {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::ARGUMENT_UNKNOWN,
+                Location::new(self.file, label.span()),
+                format!(
+                    "`{}` takes its value by position, and `{}` names no parameter of it",
+                    form.text(),
+                    label.text()
+                ),
+                rule,
+            ));
+        }
+        for (_, surplus) in arguments {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(&surplus),
+                format!("`{}` takes one value, and this is one more", form.text()),
+                rule,
+            ));
+            self.expression(&surplus, Some(&Type::Unknown));
+        }
+        Some(first)
+    }
+
+    /// `ok(value)` or `err(value)` (ERR-2): "`ok(value)` constructs a
+    /// success and `err(value)` a failure. Each takes one argument by
+    /// position and no generic argument ... Both type arguments come
+    /// from the complete `result<T,E>` its place expects: `value` is
+    /// read as that T for `ok` and as that E for `err`. Where the place
+    /// expects no complete result type the constructor rejects
+    /// (`result.context_type`), and a payload that is not of its side's
+    /// type rejects as any value does (EXPR-5)."
+    fn tagged(
+        &mut self,
+        success: bool,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> (ExprKind, Type) {
+        let argument = self.one_argument(name, list, "ERR-2");
+        // The result the place expects: of `result<T, E>?`, the result.
+        let sides = match not_null(expected) {
+            Some(result @ Type::Result { value, error }) if whole(result) => {
+                Some((result.clone(), (**value).clone(), (**error).clone()))
+            }
+            _ => None,
+        };
+        let Some((result, value, failure)) = sides else {
+            // A place whose type is not known has been reported, or is
+            // for a later part: nothing is said of what it expects
+            // (ERR-9).
+            if !expected.is_some_and(|expected| !whole(expected) || open(expected)) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::RESULT_CONTEXT_TYPE,
+                        Location::new(self.file, name.span()),
+                        format!(
+                            "`{}` takes both its types from the `result<T, E>` its place \
+                             expects, and this place expects none",
+                            name.text()
+                        ),
+                        "ERR-2",
+                    )
+                    .with_note("write the type: `let outcome: result<i64, error> = ok(1)`"),
+                );
+            }
+            if let Some(argument) = argument {
+                self.expression(&argument, Some(&Type::Unknown));
+            }
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        let Some(argument) = argument else {
+            return (ExprKind::Unread, result);
+        };
+        let side = if success { &value } else { &failure };
+        let payload = self.expression(&argument, Some(side));
+        let what = if success {
+            "the type of a success"
+        } else {
+            "the type of a failure"
+        };
+        let payload = self.fit(payload, side, what);
+        let kind = ExprKind::Tagged {
+            success,
+            payload: Box::new(payload),
+        };
+        (kind, result)
+    }
+
+    /// `is_ok(value)` or `is_err(value)` (ERR-3): they "take one
+    /// `result<T,E>` by position and give a `bool`; any other type
+    /// rejects."
+    fn tag_test(
+        &mut self,
+        success: bool,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+    ) -> (ExprKind, Type) {
+        let Some(argument) = self.one_argument(name, list, "ERR-3") else {
+            return (ExprKind::Unread, BOOL);
+        };
+        let value = self.expression(&argument, None);
+        if !matches!(value.ty, Type::Result { .. }) && whole(&value.ty) && !open(&value.ty) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                value.at,
+                format!(
+                    "`{}` tests a `result<T, E>`, and this is `{}`",
+                    name.text(),
+                    value.ty
+                ),
+                "ERR-3",
+            ));
+        }
+        let kind = ExprKind::TagTest {
+            success,
+            value: Box::new(value),
+        };
+        (kind, BOOL)
+    }
+
+    /// `binding.value` or `binding.error` (ERR-3): "`binding.value` is
+    /// the T and `binding.error` the E; `.value`/`.error` requires the
+    /// matching fact, and without it, or on what is no such binding,
+    /// rejects (`result.required_variant`)."
+    fn payload(
+        &mut self,
+        base: Expr,
+        name: &SyntaxToken,
+        (value, failure): (Type, Type),
+    ) -> (ExprKind, Type) {
+        let at = Location::new(self.file, name.span());
+        let success = match name.text() {
+            "value" => true,
+            "error" => false,
+            other => {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    at,
+                    format!(
+                        "`{}` has no `{other}`: a result has `.value` and `.error`",
+                        base.ty
+                    ),
+                    "ERR-3",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            }
+        };
+        let fact = match base.kind {
+            ExprKind::Local(local) if success => Some(Fact::Success(local)),
+            ExprKind::Local(local) => Some(Fact::Failure(local)),
+            _ => None,
+        };
+        if !fact.is_some_and(|fact| self.present.contains(&fact)) {
+            let (test, tag) = if success {
+                ("is_ok", "a success")
+            } else {
+                ("is_err", "a failure")
+            };
+            let message = match &base.kind {
+                ExprKind::Local(local) => format!(
+                    "`.{}` is read where `{}` is {tag}, and nothing here proves it one",
+                    name.text(),
+                    self.locals[*local].name
+                ),
+                _ => format!(
+                    "`.{}` is read of a binding a guard has proved {tag}, and this is no \
+                     binding",
+                    name.text()
+                ),
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::RESULT_REQUIRED_VARIANT,
+                    at,
+                    message,
+                    "ERR-3",
+                )
+                .with_note(format!(
+                    "bind the result with `let` and guard the read: `if {test}(outcome) {{ ... }}`"
+                )),
+            );
+        }
+        let ty = if success { value } else { failure };
+        let kind = ExprKind::Payload {
+            success,
+            result: Box::new(base),
+        };
+        (kind, ty)
+    }
+
+    /// `.message`, `.code` or `.context` of an error (ERR-4):
+    /// "`.message` is the `str` and `.code` the `str?`."
+    fn error_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
+        let (part, ty) = match name.text() {
+            "message" => (ErrorPart::Message, Type::Scalar(Scalar::Str)),
+            "code" => (ErrorPart::Code, nullable(Type::Scalar(Scalar::Str))),
+            // "`.context` is a read-only nullable record": what it is
+            // read as is for a later part.
+            "context" => return (ExprKind::Unread, Type::Unknown),
+            other => {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "an `error` has no `{other}`: it has `.message`, `.code` and `.context`"
+                    ),
+                    "ERR-4",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            }
+        };
+        let kind = ExprKind::ErrorPart {
+            base: Box::new(base),
+            part,
+        };
+        (kind, ty)
+    }
+
+    /// `error(message: text, code: optional_code)` (ERR-4): it "owns a
+    /// required string message and optional string code, each given by
+    /// its name: `message` is a `str`, and `code` a `str?` that is null
+    /// when omitted."
+    ///
+    /// The other calls of a type's name, `str(value)`, `bytes(value)`
+    /// and `any(value)`, are conversions, and are for a later part.
+    fn type_call(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let word = tokens(node).next();
+        let list = child(node, SyntaxKind::ArgList);
+        let (Some(word), Some(list)) = (word, list) else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        if word.kind() != SyntaxKind::KwError {
+            return self.unread_call(&list);
+        }
+        let text = Type::Scalar(Scalar::Str);
+        let optional = nullable(Type::Scalar(Scalar::Str));
+        let mut message: Option<Expr> = None;
+        let mut code: Option<Expr> = None;
+        for (label, value) in arguments_of(&list) {
+            let Some(label) = label else {
+                // "Each given by its name".
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::ARGUMENT_UNEXPECTED,
+                    self.at(&value),
+                    "`error` takes `message` and `code`, each by its name".to_string(),
+                    "ERR-4",
+                ));
+                self.expression(&value, Some(&Type::Unknown));
+                continue;
+            };
+            let (slot, ty, what) = match label.text() {
+                "message" => (&mut message, &text, "the message of an error"),
+                "code" => (&mut code, &optional, "the code of an error"),
+                other => {
+                    self.diagnostics.emit(error(
+                        Category::Name,
+                        codes::ARGUMENT_UNKNOWN,
+                        Location::new(self.file, label.span()),
+                        format!("`error` takes `message` and `code`, and no `{other}`"),
+                        "ERR-4",
+                    ));
+                    self.expression(&value, Some(&Type::Unknown));
+                    continue;
+                }
+            };
+            if slot.is_some() {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    Location::new(self.file, label.span()),
+                    format!("`{}` is given twice", label.text()),
+                    "ERR-4",
+                ));
+                self.expression(&value, Some(&Type::Unknown));
+                continue;
+            }
+            // A second `&mut self` use: the slot is filled after the
+            // value is read.
+            let filled = label.text() == "message";
+            let value = self.expression(&value, Some(ty));
+            let value = self.fit(value, ty, what);
+            if filled {
+                message = Some(value);
+            } else {
+                code = Some(value);
+            }
+        }
+        let Some(message) = message else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                Location::new(self.file, word.span()),
+                "`error` is given no `message`: an error owns one".to_string(),
+                "ERR-4",
+            ));
+            return (ExprKind::Unread, Type::Error);
+        };
+        let kind = ExprKind::Error {
+            message: Box::new(message),
+            code: code.map(Box::new),
+        };
+        (kind, Type::Error)
+    }
+
+    /// `value?` (ERR-5): "Success yields T. In a value function
+    /// returning `result<U,E>`, failure returns the same E as Err. In
+    /// when, only `result<T,error>` may propagate to node failure ...
+    /// Composition, lifecycle, and generator uses reject
+    /// (`result.propagation_phase`), and an operand or an enclosing
+    /// result of another type rejects (`result.propagation_type`) ...
+    /// It does not unwrap null (ERR-12)."
+    fn propagation(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let Some(operand) = node.children().next() else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        // The primary location is the `?`.
+        let at = tokens(node)
+            .filter(|token| token.kind() == SyntaxKind::Question)
+            .last()
+            .map_or(self.at(node), |mark| Location::new(self.file, mark.span()));
+        let operand = self.expression(&operand, None);
+        let value_function = self.declaration.kind.role() == Some(Role::Value);
+        // Where it stands, when that is a place nothing propagates from.
+        let forbidden = if value_function {
+            None
+        } else if self.graph {
+            Some("in composition: a graph wires its failures, and has none to leave by")
+        } else {
+            match self.hook {
+                Some(Hook::When) => None,
+                Some(Hook::Start) => Some("in `start`"),
+                Some(Hook::Stop) => Some("in `stop`"),
+                None => Some("outside a `when`"),
+            }
+        };
+        if let Some(place) = forbidden {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::RESULT_PROPAGATION_PHASE,
+                    at,
+                    format!("`?` does not propagate {place}"),
+                    "ERR-5",
+                )
+                .with_note(
+                    "`?` stands in a value function that returns a `result`, and in a `when`",
+                ),
+            );
+        }
+        let (value, failure) = match &operand.ty {
+            Type::Result { value, error } => ((**value).clone(), (**error).clone()),
+            other => {
+                // What is not known has been reported, or is for a
+                // later part (ERR-9).
+                if whole(other) && !open(other) {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::RESULT_PROPAGATION_TYPE,
+                        at,
+                        format!("`?` propagates a `result<T, E>`, and this is `{other}`"),
+                        "ERR-5",
+                    ));
+                }
+                return (ExprKind::Propagate(Box::new(operand)), Type::Unknown);
+            }
+        };
+        if forbidden.is_none() && whole(&failure) {
+            if value_function {
+                // "Failure returns the same E as Err."
+                match &self.signature.result {
+                    Some(Type::Result { error, .. }) if **error == failure => {}
+                    Some(result) if !whole(result) || open(result) => {}
+                    enclosing => {
+                        let returns = match enclosing {
+                            Some(result) => format!("returns `{result}`"),
+                            None => "returns nothing".to_string(),
+                        };
+                        self.diagnostics.emit(
+                            error(
+                                Category::Type,
+                                codes::RESULT_PROPAGATION_TYPE,
+                                at,
+                                format!(
+                                    "`?` returns a failure of `{failure}` from `{}`, which \
+                                     {returns}",
+                                    self.declaration.name
+                                ),
+                                "ERR-5",
+                            )
+                            .with_note(format!(
+                                "the function's result is a `result<U, {failure}>` for `?` to \
+                                 return its failure"
+                            )),
+                        );
+                    }
+                }
+            } else if failure != Type::Error {
+                // "In when, only `result<T,error>` may propagate to node
+                // failure."
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::RESULT_PROPAGATION_TYPE,
+                    at,
+                    format!(
+                        "in a `when`, `?` fails the node with an `error`, and this failure is \
+                         `{failure}`"
+                    ),
+                    "ERR-5",
+                ));
+            }
+        }
+        (ExprKind::Propagate(Box::new(operand)), value)
     }
 
     /// A call this pass does not read: its arguments are read for what
@@ -5661,6 +6180,24 @@ impl<'a> Typer<'a> {
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        // ERR-2: `ok` and `err` each take "no generic argument", and
+        // no other result form has one to take. The form is read as it
+        // would be without them.
+        if child(node, SyntaxKind::QualifiedName).is_none() && RESULT_FORMS.contains(&name.text()) {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_COUNT,
+                    Location::new(self.file, name.span()),
+                    format!("`{}` takes no generic argument", name.text()),
+                    "ERR-2",
+                )
+                .with_note("a result's types come from the `result<T, E>` its place expects"),
+            );
+            if let Some(form) = self.result_form(&name, &list, expected) {
+                return form;
+            }
+        }
         // The type the `read` pass gave `Name<arguments>`.
         let written = self.written.get(&(self.file, start)).copied();
         match written {
@@ -6047,6 +6584,16 @@ impl<'a> Typer<'a> {
             return self.enum_member(&name, module, declaration);
         }
         let base = self.expression(&base, None);
+        // ERR-3 and ERR-4: the payload of a result, and a part of an
+        // error.
+        match &base.ty {
+            Type::Result { value, error } => {
+                let sides = ((**value).clone(), (**error).clone());
+                return self.payload(base, &name, sides);
+            }
+            Type::Error => return self.error_part(base, &name),
+            _ => {}
+        }
         let Type::Named {
             module,
             declaration,
@@ -6506,6 +7053,10 @@ enum Fact {
     /// It is valid: a temporal input whose payload may be read
     /// (TIME-4).
     Valid(LocalId),
+    /// It is a success: a result whose `.value` may be read (ERR-3).
+    Success(LocalId),
+    /// It is a failure: a result whose `.error` may be read (ERR-3).
+    Failure(LocalId),
 }
 
 /// What a condition proves: where it holds, and where it does not.
@@ -6521,7 +7072,9 @@ enum Fact {
 fn null_tests(
     condition: &Expr,
     refinable: &dyn Fn(LocalId) -> bool,
+    tagged: &dyn Fn(LocalId, &[Fact]) -> bool,
     inputs: &dyn Fn() -> Vec<LocalId>,
+    assumed: &[Fact],
 ) -> (Vec<Fact>, Vec<Fact>) {
     let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first
@@ -6547,11 +7100,28 @@ fn null_tests(
             };
             (valid.into_iter().map(Fact::Valid).collect(), Vec::new())
         }
+        // ERR-3: a binding "gains its tag fact from a direct
+        // `is_ok`/`is_err` guard on it by its name: where `is_ok` holds
+        // it is a success and where it does not a failure, and `is_err`
+        // the reverse."
+        ExprKind::TagTest { success, value } => {
+            let local = match value.kind {
+                ExprKind::Local(local) if tagged(local, assumed) => local,
+                _ => return (Vec::new(), Vec::new()),
+            };
+            let (success_where, failure_where) =
+                (vec![Fact::Success(local)], vec![Fact::Failure(local)]);
+            if *success {
+                (success_where, failure_where)
+            } else {
+                (failure_where, success_where)
+            }
+        }
         ExprKind::Unary {
             operator: UnaryOperator::Not,
             operand,
         } => {
-            let (when_true, when_false) = null_tests(operand, refinable, inputs);
+            let (when_true, when_false) = null_tests(operand, refinable, tagged, inputs, assumed);
             (when_false, when_true)
         }
         ExprKind::Binary {
@@ -6576,13 +7146,21 @@ fn null_tests(
             // Both hold where `&&` does; one or other fails where it
             // does not.
             BinaryOperator::And => {
-                let (left_true, left_false) = null_tests(left, refinable, inputs);
-                let (right_true, right_false) = null_tests(right, refinable, inputs);
+                // The right operand is evaluated where the left
+                // holds: what the left proves is known there.
+                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let known = [assumed, left_true.as_slice()].concat();
+                let (right_true, right_false) =
+                    null_tests(right, refinable, tagged, inputs, &known);
                 (either(left_true, right_true), both(left_false, right_false))
             }
             BinaryOperator::Or => {
-                let (left_true, left_false) = null_tests(left, refinable, inputs);
-                let (right_true, right_false) = null_tests(right, refinable, inputs);
+                // The right operand is evaluated where the left does
+                // not hold.
+                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let known = [assumed, left_false.as_slice()].concat();
+                let (right_true, right_false) =
+                    null_tests(right, refinable, tagged, inputs, &known);
                 (both(left_true, right_true), either(left_false, right_false))
             }
             _ => (Vec::new(), Vec::new()),
@@ -9125,7 +9703,9 @@ fn is_implied_member(node: &SyntaxNode) -> bool {
 }
 
 /// True when an expression takes its type from its place and has none
-/// of its own: `null`, and `.member`, in parentheses or not.
+/// of its own: `null`, `.member`, and `ok(value)` or `err(value)`,
+/// whose "type arguments come from the complete `result<T,E>` its place
+/// expects" (ERR-2), in parentheses or not.
 fn takes_its_type(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ParenExpr => node
@@ -9134,6 +9714,17 @@ fn takes_its_type(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| takes_its_type(&inner)),
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
+        // ERR-13: the callee `ok` or `err` is the constructor, whatever
+        // else is in scope.
+        SyntaxKind::CallExpr => node
+            .children()
+            .next()
+            .filter(|callee| {
+                callee.kind() == SyntaxKind::NameExpr
+                    && child(callee, SyntaxKind::QualifiedName).is_none()
+            })
+            .and_then(|callee| name_token(&callee))
+            .is_some_and(|name| matches!(name.text(), "ok" | "err")),
         _ => false,
     }
 }

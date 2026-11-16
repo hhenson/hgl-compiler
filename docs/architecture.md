@@ -653,6 +653,11 @@ The pass is built form by form. So far it reads:
 | `Side.buy`, `.buy` | TYPE-7 | A member of the enum named, or of the enum the place expects: an annotation, a parameter, a field, a result, the other operand of a comparison |
 | `value.field` | EXPR-7 | A field the struct has, a parent's included, with the value's generic arguments in place |
 | `base[index]` | EXPR-7, ERR-6 | An element of a list by an `i64`, of a tuple by a constant within its length, or the value a dictionary has for a key |
+| `ok(value)`, `err(value)` | ERR-2, ERR-13 | A result of the complete `result<T, E>` the place expects, with the value read as its side's type. With no such place it is `result.context_type` |
+| `is_ok(value)`, `is_err(value)` | ERR-3 | A `bool`, of one result. A direct guard on an immutable result binding proves its tag as a test against null proves presence, over the same paths |
+| `binding.value`, `binding.error` | ERR-3 | The T, or the E, of a binding proved a success, or a failure. With no such proof, or on what is no binding, it is `result.required_variant` |
+| `error(message: text, code: optional_code)`, `.message`, `.code` | ERR-4 | An `error`, each part given by its name; the message a `str` and the code a `str?` |
+| `value?` | ERR-5 | The T of a `result<T, E>`. It stands in a value function whose result is a `result<U, E>` of the same E, and in a `when` on a `result<T, error>`; elsewhere it is `result.propagation_phase`, and on another type `result.propagation_type` |
 
 A value fits its place when its type is the one expected, when it is a
 `T` where a `T?` is expected, or when it is a struct where an abstract
@@ -667,7 +672,8 @@ What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
 pair sequence, a call of a name left for the prelude or of an operator
 that has a pack, a generic function's parameter and result types, the
-payload of a nullable or a result. The arguments of a call that is not
+payload of a nullable, a `capture`, an error's `.context`, and a
+conversion written `str(value)`. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
 taken to be assigned. An operand that is nullable is not judged: its
 guard says what it admits. One that is a generic parameter has the
@@ -968,6 +974,19 @@ The typed body records the operator and the candidate selected. No
 candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
 analyser has no local code.
 A symbol selects as a call by name does: see "Symbols" above.
+
+The five names `ok`, `err`, `is_ok`, `is_err` and `capture` are
+contextual (ERR-13). As the callee of a call each is its form: the
+resolver looks the name up nowhere, so it is no name the prelude is
+waited on for, and the value pass reads the form before it asks what a
+name is bound to. A declaration, import alias, parameter or local that
+takes one of them is `name.duplicate`; a member may have the name.
+
+What a guard proves is one list of facts (`Fact`): a binding is not
+null, an input is valid, a result is a success or a failure. A
+condition gives the facts that hold where it does and where it does
+not, and a branch, the right operand of a connective and what follows a
+branch that returns each read under theirs.
 
 ### Order
 

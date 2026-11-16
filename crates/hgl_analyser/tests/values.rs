@@ -1492,7 +1492,7 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
         "const fn paths(c: bool, side: Side, items: list<i64>) -> i64 {\n",
         "    var a: i64\n",
         "    if c { a = 1 } else { a = 2 }\n",
-        "    let ok = a\n",
+        "    let got = a\n",
         "    var b: i64\n",
         "    if c { b = 1 }\n",
         "    let unset = b\n",
@@ -1751,12 +1751,12 @@ fn a_partly_known_argument_does_not_decide_a_generic_parameter() {
     let checked = module(concat!(
         "const fn same<T>(a: T, b: T, c: T) -> T => a\n",
         "const fn uses() {\n",
-        "    let ok = same(([], 0), ([1], 0), ([2], 0))\n",
+        "    let fine = same(([], 0), ([1], 0), ([2], 0))\n",
         "    let bad = same(([], 0), ([1], 0), ([\"x\"], 0))\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:5:41 type/type.mismatch EXPR-5"]);
-    assert_eq!(locals(&checked, "uses")[0], "ok: tuple<list<i64>, i64>");
+    assert_eq!(locals(&checked, "uses")[0], "fine: tuple<list<i64>, i64>");
 }
 
 /// EXPR-5, EXPR-9, TYPE-10: a sequence or a tuple written out is read as
