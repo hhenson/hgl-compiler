@@ -1260,7 +1260,7 @@ its `0.9.x` branch, not approximated in generated code.
 `hgl_hgraph` writes every file under one Python package, `_hgl`, so
 that a program's modules are in a namespace of their own: a module named
 `hgraph`, or as a module of Python's library is, takes the place of
-nothing Python or hgraph imports. Each module but core is a package
+nothing Python or hgraph imports. Each module is a package
 under it, each part of its path with `_m_` before it: `examples.tests`
 is `_hgl/_m_examples/_m_tests/__init__.py`. A package holds a module's
 declarations and the packages of the modules under it side by side, and
@@ -1269,6 +1269,12 @@ beside `module demo.util`. Beside the modules are the support files a
 generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 A name that starts with `_` is the target's own: no module's or
 declaration's Python name does.
+
+Core is a module as any other, `_hgl/_m_core/__init__.py`, written when
+a module of the program imports it. It holds the functions and the
+candidates core has an HGL body for; core's native ones are the
+provider's. What core holds that the target does not write is reported
+only where the program reaches it, at core's source.
 
 | HGL | Python |
 | --- | --- |
@@ -1290,6 +1296,8 @@ declaration's Python name does.
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
+| `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
+| `operator` | Nothing: its candidates are the functions |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
@@ -1307,15 +1315,16 @@ for each input through hgraph's own `eval_node` and ends the result at
 its last publication (TST-6).
 
 Reported as not written yet (`target.unsupported`): a type other than
-the four scalars above, a nullable among them; structs, enums, operators
-and their candidates declared in a program; generic temporal functions;
+the four scalars above, a nullable among them; structs and enums; a
+temporal candidate of an operator, a native declaration of a program,
+and a candidate with the parameter types of another of its module;
+generic temporal functions;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` or an input read in `start` or `stop`, which hgraph gives neither;
 `cache`, the `inject` of a capability, and sources; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
-call; a function or a candidate of core that has an HGL body and no
-native one; a temporal function called in a test outside an `eval`;
+call; a temporal function called in a test outside an `eval`;
 loops and `switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.

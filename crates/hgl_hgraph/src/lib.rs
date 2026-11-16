@@ -21,6 +21,7 @@
 //! | `state name: T = value` | A field of the node's `STATE`, set in its `start` |
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
+//! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | A value function given a connection in a graph | A node of its own that calls it (FN-6) |
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
@@ -64,7 +65,8 @@ pub struct File {
 /// What the target wrote for a program.
 #[derive(Debug, Clone)]
 pub struct Output {
-    /// The files: the root package's, one for each module but core,
+    /// The files: the root package's, one for each module, core's
+    /// when a module imports it,
     /// and the support files those import.
     pub files: Vec<File>,
     /// The named tests of the program, in the order of its modules and
@@ -157,9 +159,11 @@ pub const CORE_NATIVE_FILE: &str = "_hgl/_core_native.py";
 /// The support file that holds the eval harness.
 pub const HARNESS_FILE: &str = "_hgl/_harness.py";
 
-/// Writes `program` for hgraph: a file for each of its modules but
-/// core, whose native functions the target provides itself, and the
-/// support files those modules import.
+/// Writes `program` for hgraph: a file for each of its modules, and
+/// the support files those modules import. Core is a module as any
+/// other, for what it has an HGL body for; its native functions the
+/// target provides itself, and its file is written when a module of
+/// the program imports it.
 ///
 /// `program` is one the analyser accepted. A form this target does not
 /// write yet is reported to `diagnostics`, and the declaration or the
@@ -173,11 +177,22 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
     let mut natives = false;
     let mut harness = false;
     // What was written for each module, at the module's position in
-    // the program: nothing for core.
+    // the program.
     let mut modules: Vec<Option<emit::Written>> = Vec::new();
+    // Core is written as any module is, for the functions and the
+    // candidates it has an HGL body for; its native ones are the
+    // provider's. What core holds that the target does not write is
+    // the program's to report only where the program reaches it.
+    let mut core_file = None;
+    let mut unwritten_in_core = Diagnostics::new();
     for (index, module) in program.modules.iter().enumerate() {
         if module.path == Program::CORE {
-            modules.push(None);
+            let mut written = emit::module(program, index, &mut unwritten_in_core);
+            core_file = Some(File {
+                path: file_path(&module.path),
+                text: std::mem::take(&mut written.text),
+            });
+            modules.push(Some(written));
             continue;
         }
         let mut written = emit::module(program, index, diagnostics);
@@ -189,9 +204,47 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
         });
         modules.push(Some(written));
     }
+    // Core's file is written when a module of the program imports it.
+    let core = program
+        .modules
+        .iter()
+        .position(|module| module.path == Program::CORE);
+    let imported = modules.iter().enumerate().any(|(index, written)| {
+        Some(index) != core
+            && written
+                .as_ref()
+                .is_some_and(|written| written.imports.contains(Program::CORE))
+    });
+    if let (true, Some(file), Some(core)) = (imported, core_file, core) {
+        files.push(file);
+        if let Some(written) = &modules[core] {
+            natives |= written.natives;
+            harness |= written.harness;
+        }
+    }
+    // A piece of the program that was written, and reaches one of
+    // core's that was not, is reported with what core's piece lacks.
+    let mut reached: Vec<Diagnostic> = Vec::new();
+    for (index, written) in modules.iter().enumerate() {
+        let Some(written) = written.as_ref().filter(|_| Some(index) != core) else {
+            continue;
+        };
+        for piece in written.declarations.iter().chain(&written.tests) {
+            if piece.broken.is_some() {
+                continue;
+            }
+            if let Some(diagnostic) = blocked(&modules, piece)
+                && unwritten_in_core.as_slice().contains(&diagnostic)
+                && !reached.contains(&diagnostic)
+            {
+                diagnostics.emit(diagnostic.clone());
+                reached.push(diagnostic);
+            }
+        }
+    }
     let mut tests = Vec::new();
     for (index, module) in program.modules.iter().enumerate() {
-        let Some(written) = &modules[index] else {
+        let Some(written) = modules[index].as_ref().filter(|_| Some(index) != core) else {
             continue;
         };
         for (test, piece) in module.tests.iter().zip(&written.tests) {
@@ -238,8 +291,6 @@ fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diag
             .get(module)
             .and_then(Option::as_ref)
             .and_then(|written| written.declarations.get(declaration));
-        // A function of core is named by no piece: a call of one that
-        // the provider has no function for is reported where it is.
         let Some(piece) = piece else {
             continue;
         };
