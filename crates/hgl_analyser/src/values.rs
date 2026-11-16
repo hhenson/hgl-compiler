@@ -3464,6 +3464,22 @@ impl<'a> Typer<'a> {
 
     // ---- Calls and constructions ----
 
+    /// What the name that starts at `start` of `file` resolved to
+    /// (UNIT-10), in whichever module the file is of: a candidate's
+    /// default is written in its own module's file, which need not be
+    /// the one being read.
+    fn binding_at(&self, file: FileId, start: u32) -> Option<&'a Binding> {
+        if let Some(found) = self.bindings.get(&(file, start)) {
+            return Some(found);
+        }
+        self.program
+            .modules
+            .iter()
+            .flat_map(|module| module.uses.iter())
+            .find(|used| used.at.file == file && used.at.span.start == start)
+            .map(|used| &used.binding)
+    }
+
     /// The declarations a name is bound to, when it names declarations
     /// of a module and not a local.
     fn declarations(&self, name: &SyntaxToken) -> Option<(usize, &'a [usize])> {
@@ -5861,9 +5877,14 @@ impl<'a> Typer<'a> {
     /// member written in full, `Zero.ieee`, is known for one by the
     /// option's type being an enum: a member of any other would not be
     /// a value of it.
-    fn default_value(&self, node: &SyntaxNode, ty: Option<&Type>) -> Option<OptionValue> {
+    fn default_value(
+        &self,
+        file: FileId,
+        node: &SyntaxNode,
+        ty: Option<&Type>,
+    ) -> Option<OptionValue> {
         if node.kind() == SyntaxKind::ParenExpr {
-            return self.default_value(&node.children().next()?, ty);
+            return self.default_value(file, &node.children().next()?, ty);
         }
         // TYPE-14: a `Zero?` is "either a T or null", and a member of
         // `Zero` is a value of it.
@@ -5885,12 +5906,28 @@ impl<'a> Typer<'a> {
                 .last()
                 .map(|name| OptionValue::Member(name.text().to_string()));
         }
-        // `Zero(0)`, `Zero("nan")` (TYPE-7): a construction is known
-        // for one of the option's enum as a member written in full is,
-        // by the option's type, and is the member it names.
+        // `Zero(0)`, `Zero("nan")` (TYPE-7): a construction of the
+        // option's enum is the member it names. The callee is looked
+        // up in `file`, where the default is written: a call of
+        // anything else, `choose(0)`, is no constant read here.
         if let Some((module, declaration)) = of_enum
             && node.kind() == SyntaxKind::CallExpr
         {
+            let callee = node
+                .children()
+                .next()
+                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+            let name = name_token(&callee)?;
+            let constructs = matches!(
+                self.binding_at(file, name.span().start),
+                Some(Binding::Declarations {
+                    module: found,
+                    declarations,
+                }) if *found == module && declarations.contains(&declaration)
+            );
+            if !constructs {
+                return None;
+            }
             return self
                 .member_name(module, declaration, &one_by_position(node)?)
                 .map(OptionValue::Member);
@@ -7178,7 +7215,7 @@ impl<'a> Typer<'a> {
                     GenericKind::Value(ty) => Some(ty),
                     _ => None,
                 };
-                return this.default_value(&default, ty);
+                return this.default_value(candidate.at.file, &default, ty);
             }
             let index = signature
                 .parameters
@@ -7190,16 +7227,20 @@ impl<'a> Typer<'a> {
             if let Some(position) = argument {
                 return this.option_value(&given[position].node);
             }
-            let default =
-                default_at(&candidate.syntax, &signature.parameters[index]).or_else(|| {
+            // A default and the file it is written in: the candidate's,
+            // or else the operator's.
+            let default = default_at(&candidate.syntax, &signature.parameters[index])
+                .map(|default| (candidate.at.file, default))
+                .or_else(|| {
                     public
                         .parameters
                         .get(index)
                         .and_then(|parameter| default_at(&operator.syntax, parameter))
+                        .map(|default| (operator.at.file, default))
                 });
             match default {
-                Some(default) => {
-                    this.default_value(&default, Some(&signature.parameters[index].ty))
+                Some((file, default)) => {
+                    this.default_value(file, &default, Some(&signature.parameters[index].ty))
                 }
                 // Written `T?` and left out: it is null.
                 None => Some(OptionValue::Literal(Value::Null)),
