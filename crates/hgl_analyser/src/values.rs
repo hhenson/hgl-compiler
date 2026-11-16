@@ -1296,6 +1296,12 @@ impl<'a> Typer<'a> {
             SyntaxKind::MemberExpr => self.member(node),
             SyntaxKind::TypeCall => self.type_call(node),
             SyntaxKind::TryExpr => self.propagation(node),
+            // An anonymous function's body is for a later part. What it
+            // captures of a capability is reported here.
+            SyntaxKind::FnExpr => {
+                self.captured_capabilities(node);
+                (ExprKind::Unread, Type::Unknown)
+            }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
             SyntaxKind::IndexExpr => self.index(node),
             // A block or an `if` whose value is used.
@@ -1681,6 +1687,41 @@ impl<'a> Typer<'a> {
                     .and_then(|otherwise| self.capability_of(otherwise))
             }),
             _ => None,
+        }
+    }
+
+    /// TIME-8: a capability is not "a capture of an anonymous function
+    /// (FN-14)". FN-14 has the resolver reject the use of an injected
+    /// capability by its own name (`name.captured`); a `let` it is
+    /// bound to, and a parameter of a capability's type, may be used
+    /// there as any `let` or parameter is, and are reported here.
+    fn captured_capabilities(&mut self, function: &SyntaxNode) {
+        let captured: Vec<(LocalId, Location)> = function
+            .descendants()
+            .filter(|name| name.kind() == SyntaxKind::NameExpr)
+            .filter_map(|name| {
+                // A name of the function's own is no local of this
+                // body, and is found by none.
+                let local = self.local_of(&name)?;
+                (self.locals[local].kind != LocalKind::Inject && self.is_capability(local))
+                    .then(|| (local, self.at(&name)))
+            })
+            .collect();
+        for (local, at) in captured {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{}` is a capability, and is not retained: this is a capture of an \
+                         anonymous function",
+                        self.locals[local].name
+                    ),
+                    "TIME-8",
+                )
+                .with_note("give the function what it needs of the capability as an argument"),
+            );
         }
     }
 
@@ -2840,53 +2881,47 @@ impl<'a> Typer<'a> {
     /// read, and the call has no type.
     fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let read = self.call_read(node, expected);
-        if self.hook == Some(Hook::Start) && !self.driven {
-            self.driven = self.wakes(node, &read.0);
+        let callee = node
+            .children()
+            .next()
+            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+            .and_then(|callee| name_token(&callee));
+        if let Some(callee) = callee {
+            self.note_wake(&callee, &read.0);
         }
         read
     }
 
-    /// True when the call at `node`, read as `kind`, asks for a wake on
-    /// the node's scheduler or alarm (TIME-3: the node "schedules a wake
-    /// on it in `start`").
+    /// Notes a call in `start` that asks for a wake on the node's
+    /// scheduler or alarm (TIME-3: the node "schedules a wake on it in
+    /// `start`").
     ///
-    /// That is `schedule(scheduler, ...)`, the capability given first:
-    /// as it is written, by a local it is bound to, or as the value of
-    /// a block (TIME-8, CTRL-10). Core does not declare `schedule` yet,
-    /// so the call is known by its name. A function the program
-    /// declares that is given the capability may ask for the wake
-    /// itself: what it does is not followed, and it is taken to.
-    fn wakes(&self, node: &SyntaxNode, kind: &ExprKind) -> bool {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return false;
+    /// That is `schedule(scheduler, ...)`, written in `start` itself,
+    /// the capability given first: by its name, by a local it is bound
+    /// to, or as the value of a block (TIME-8, CTRL-10). Core does not
+    /// declare `schedule` yet, so the call is known by its name. What a
+    /// function given the capability does with it is not followed: a
+    /// wake asked for only there is not one this finds.
+    fn note_wake(&mut self, callee: &SyntaxToken, kind: &ExprKind) {
+        if self.hook != Some(Hook::Start) || self.driven || callee.text() != "schedule" {
+            return;
+        }
+        let ExprKind::Call { arguments, .. } = kind else {
+            return;
         };
-        let wakes_node = |value: &Expr| {
-            self.capability_of(value).is_some_and(|capability| {
+        // The first argument: the one given to the first parameter, or
+        // where the call is not read, the first written.
+        let first = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0))
+            .or_else(|| arguments.first());
+        self.driven = first
+            .and_then(|argument| self.capability_of(&argument.value))
+            .is_some_and(|capability| {
                 let local = &self.locals[capability];
                 local.kind == LocalKind::Inject
                     && matches!(local.name.as_str(), "scheduler" | "alarm")
-            })
-        };
-        let schedule = node
-            .children()
-            .next()
-            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| name.text() == "schedule");
-        if schedule {
-            // The first argument: the one given to the first parameter,
-            // or where the call is not read, the first written.
-            let first = arguments
-                .iter()
-                .find(|argument| argument.parameter == Some(0))
-                .or_else(|| arguments.first());
-            return first.is_some_and(|argument| wakes_node(&argument.value));
-        }
-        !matches!(callee, Callee::Unread)
-            && arguments.iter().any(|argument| wakes_node(&argument.value))
+            });
     }
 
     /// A call, as the form or the function its callee names.
@@ -6140,12 +6175,16 @@ impl<'a> Typer<'a> {
             // pass kept them, the name being a function or an operator.
             _ => {
                 let generics = self.calls.get(&(self.file, start)).copied();
-                match (generics, self.declarations(&name)) {
+                let read = match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {
                         self.call_named(&name, &list, found, expected, Some(generics))
                     }
                     _ => self.unread_call(&list),
-                }
+                };
+                // `schedule<duration>(scheduler, delay)` asks for a wake
+                // as the call without its generic arguments does.
+                self.note_wake(&name, &read.0);
+                read
             }
         }
     }
