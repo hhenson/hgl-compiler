@@ -673,7 +673,8 @@ fn an_imported_generic_type_is_not_ordered_either() {
 #[test]
 fn every_binding_form_binds_in_its_scope() {
     let checked = module(concat!(
-        "fn node(value: i64, items: list<i64>) -> i64 {\n",
+        // CTRL-12: two names iterate a dictionary's keys and values.
+        "fn node(value: i64, items: dict<i64, i64>) -> i64 {\n",
         "    state kept: i64 = 0\n",
         "    cache seen = kept\n",
         "    inject out, clock\n",

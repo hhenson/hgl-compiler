@@ -179,13 +179,13 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `start`, `when` or `stop`. Left: roles of `const fn` and a temporal `fn` in bodies |
 | FN-2 | analyser | done | Each temporal function and temporal candidate is a graph or a node by the constructs its body holds, wherever it holds them. A node's body is its declarations and then its hooks: any other statement is rejected, but in a source, whose body is not checked |
-| FN-3 | analyser | partial | A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5). Left: phase rules for iteration, conditionals and hooks; what a runtime body and a composition body call |
+| FN-3 | analyser | partial | A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5). A node's hook is read as value code: a temporal parameter is a value of its declared type, and a temporal function called there is rejected (`call.role`). Left: what a composition body admits of a connection; what it calls; iteration and conditionals in composition |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. a call in a value function takes the value definition, and a temporal one alone is rejected. Left: selection in composition and eval |
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | planned | Lifting a value helper: which arguments are inputs, which configuration |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
-| FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). Left: return by phase; an anonymous function's context |
+| FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type. Left: a composition return; an anonymous function's context |
 | FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
@@ -243,10 +243,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. Left: state initialisers read no input |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
-| TIME-7 | analyser | partial | `inject out` needs a result. Left: where `out` is read and written |
+| TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). Left: piecewise mutation of `out` |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
 | TIME-8 | analyser | partial | `inject` names one of the listed capabilities. Left: capabilities used receiver-first and never passed as data; clock properties read-only |
-| TIME-9 | analyser | planned | `scheduled()`, `activate` and `passivate` are reserved; helpers inherit capabilities |
+| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument or a sequence. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in; helpers inheriting capabilities |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 
 ## Control flow and sources

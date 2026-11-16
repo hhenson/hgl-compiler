@@ -473,10 +473,35 @@ A `const fn` may inject a capability (FN-9). A source, a body with
 `yield`, is a node of another form whose contract is proposed
 (SOURCE-1), and its body is not checked.
 
-Nothing is read inside a hook or a graph yet. The order planned, agreed
-in the same issue: hooks read as value code, with the operations on an
-endpoint and `out`; graphs, with connections, lifting and an operator's
-temporal candidates; conditionals and loops in composition.
+A node's body is then read into the same typed form as a value
+function's (`hir::Body`): a `state` or a `cache` is a local that is
+assigned as a `var` is, each injected capability is a local, and each
+hook is a `Stmt::Hook` with its condition and its statements.
+
+| In a hook | Read as | Rule |
+| --- | --- | --- |
+| A temporal parameter | A value of its declared type, as in a value function | FN-3 |
+| `valid(value)`, `modified(value)`, `scheduled()` | A bool: an operation on the endpoint, which is the language's own and no call of a function | TIME-9 |
+| `delta_value(value)`, `last_modified(value)` | The input's type; a `datetime?` | TIME-9 and core's endpoint contract |
+| `valid()`, `valid([a, b])`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
+| `out` | The node's result: read, or assigned | TIME-7 |
+| `return`, `return value` | Ends the evaluation; the value is of the result's type and is published | FN-7 |
+| A call | Of a value function or an operator's value candidate | FN-3 |
+
+What is rejected there:
+
+| Written | Rejected as | Rule |
+| --- | --- | --- |
+| An endpoint operation given a state, a `const` parameter or an expression | `endpoint.argument` | TIME-9 |
+| `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
+| A temporal function called in a hook | `call.role` | FN-3 |
+
+Not read yet: which inputs a `when` header admits, and so a payload read
+that needs a guard (`payload.unguarded`); a state initializer that reads
+an input (`state.input_read`); a capability used as data
+(`capability.as_value`). A graph's body is not read: connections,
+lifting and an operator's temporal candidates come next, then
+conditionals and loops in composition.
 
 ### Value expressions
 

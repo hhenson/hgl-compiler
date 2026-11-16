@@ -44,7 +44,7 @@ const FILES: [(&str, &str); 3] = [
             "use lib as l\n",
             "impl fn add(left: f64, right: f64) -> f64 => left\n",
             "impl fn mul(left: f64, right: f64) -> f64 => left\n",
-            "fn main<T>(value: T, items: list<T>, const size: i64 = 2) -> T {\n",
+            "fn main<T>(value: T, items: dict<i64, T>, const size: i64 = 2) -> T {\n",
             "    state kept = 0\n",
             "    inject out\n",
             "    when modified(value) {\n",
