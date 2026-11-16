@@ -156,6 +156,12 @@ fn a_capability_type_is_a_value_functions_parameter() {
         "    if flag { clock }\n",
         "    return 0\n",
         "}\n",
+        // FN-7: "In a function that declares no result the expression
+        // is a statement": nothing is returned, and so nothing kept.
+        "const fn discarded(clock: Clock) {\n",
+        "    clock\n",
+        "}\n",
+        "const fn dropped(clock: Clock) => clock\n",
     ));
     assert_eq!(
         checked.summary(),
