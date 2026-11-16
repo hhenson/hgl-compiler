@@ -589,9 +589,9 @@ pair sequence, a call of a name left for the prelude or of an operator
 that has a pack, a generic function's parameter and result types, the
 payload of a nullable or a result. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
-taken to be assigned. An operand that is a generic parameter, or
-nullable, is not judged: its constraints, or its guard, say what it
-admits.
+taken to be assigned. An operand that is nullable is not judged: its
+guard says what it admits. One that is a generic parameter has the
+operations its declaration requires: see "Requirements" below.
 
 A generic application that has been reported, `Box<7>(value: 1)`, makes
 a value whose type is not known: nothing more is reported of it.
@@ -636,7 +636,6 @@ Not read as calls:
 | --- | --- | --- |
 | `&&`, `\|\|`, `!` | Their candidates take a pack, `all_(values: ...bool)`, and a connective does not evaluate its right operand where the left decides (EXPR-6) | The symbol as written, with bool operands |
 | An operand that is nullable | "null presence checks ... have their own language rules" | The symbol as written; a comparison is a bool |
-| An operand that is a generic parameter | Its constraints say what it admits | The symbol as written |
 | An operand of no known type | Nothing can be selected | The symbol as written |
 
 A symbol is its call in every respect (owner's decisions of 2026-11-16
@@ -827,6 +826,26 @@ part:
 | A structure, `tuple<i64, T>` | The same structure, `tuple<U, V>` | Whichever is in its parts: here the first |
 | `tuple<i64, T>` | `tuple<T, str>` | Neither: each is more specific in one part |
 | A concrete type, `i64` | A nullable variable, `T?`, which also takes an `i64` (TYPE-14) | The first: they are compared as the types under the `?` |
+
+#### Requirements
+
+A `requires` may name an operator with the types it is supplied with,
+and the result it gives: `requires add_(T, T) -> T` (GEN-16). It is
+read from both sides.
+
+| Where | Rule | What is done |
+| --- | --- | --- |
+| In the body of the declaration that states it | GEN-7 | A call of that operator, by name or by symbol, whose arguments are of the types supplied is admitted, and is of the arrow's type. The typed body records `Callee::Required` with the operator: which candidate it is is selected where `T` is known |
+| The same body, an operation nothing states | GEN-7 | Selected as any call is. `a + b` of two `T` finds no candidate and is `operator.no_candidate`; `a == b` is taken by core's `eq_<T>`, which is for any one type |
+| At a call that selects the candidate that states it | GEN-16, GEN-5 | Tested with the candidate's generic parameters in place: `add_(f64, f64) -> f64` holds when one most-specific value candidate of `add_` takes two `f64` and gives an `f64`. A requirement of a graph is tested against every candidate, as a call in composition selects |
+| At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement |
+
+A requirement joined to others by `&&` holds wherever the condition
+does, and is one the body may use; one under `!` or `||` is tested at a
+call and admits nothing in the body. A candidate's requirement may be
+met by a candidate that states one of its own, so a test is bounded
+eight deep: past that the requirement is not told, and the call is not
+judged.
 
 A candidate outranks another when it is as specific in every parameter
 and more specific in one. One that nothing outranks is selected; two

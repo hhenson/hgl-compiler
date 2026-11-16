@@ -391,6 +391,16 @@ pub enum Callee {
         /// candidate with none.
         generics: Vec<GenericArgument>,
     },
+    /// An operation the enclosing declaration requires of its generic
+    /// parameters (GEN-7, GEN-16): the `add_(lhs, rhs)` of a body under
+    /// `requires add_(T, T) -> T`. Which candidate it is is selected
+    /// where the parameters are known, not here.
+    Required {
+        /// The operator called: the position of its module in
+        /// `Program::modules`, and its position in that module's
+        /// `declarations`.
+        operator: (usize, usize),
+    },
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.

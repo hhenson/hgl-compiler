@@ -208,6 +208,9 @@ struct Typer<'a> {
     present: Vec<Fact>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
+    /// How many requirements deep a candidate's condition is being
+    /// tested: see [`REQUIRING`].
+    requiring: u32,
     /// The operator of core's module each symbol met so far stands for,
     /// by the operator's name; `None` for one the program has not.
     identities: HashMap<&'static str, Option<OperatorRef>>,
@@ -225,6 +228,13 @@ struct Typer<'a> {
 /// keeps its first reading, a call that needs a trial is not judged,
 /// and the pass ends whatever it is given.
 const REREADS: u32 = 1_000;
+
+/// How deep a requirement's test may go. Testing `requires add_(T, T)`
+/// tries the candidates of `add_`, one of which may state a requirement
+/// of its own, and so on; candidates that require each other would
+/// never end. Past the bound a requirement is not told to hold or not,
+/// and the call is not judged.
+const REQUIRING: u32 = 8;
 
 impl<'a> Typer<'a> {
     fn new(
@@ -255,6 +265,7 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             initializing: false,
+            requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
             diagnostics,
@@ -1151,7 +1162,9 @@ impl<'a> Typer<'a> {
                             .candidate(),
                         Some((Role::Temporal, _))
                     ),
-                    Callee::Unread => false,
+                    // What a requirement names is a value operation
+                    // (GEN-16): lifted when it is given a connection.
+                    Callee::Required { .. } | Callee::Unread => false,
                 };
                 temporal
                     || arguments
@@ -1199,7 +1212,9 @@ impl<'a> Typer<'a> {
                 declaration,
                 ..
             } => (*module, *declaration),
-            Callee::Unread => return,
+            // A requirement is supplied with types, and no `const`
+            // parameter is among them.
+            Callee::Required { .. } | Callee::Unread => return,
         };
         let Some(Detail::Callable(signature)) =
             self.program.modules[module].details.get(declaration)
@@ -1716,26 +1731,34 @@ impl<'a> Typer<'a> {
                     unjudged: Type::Unknown,
                     place: expected.filter(|place| !open(place)).cloned(),
                 };
+                let only = Given::read(0, operand, value);
+                // GEN-7: `-value` under `requires neg_(T) -> T`.
+                if config.is_none()
+                    && let Some(operator) = identity
+                    && let Some(result) = self.required(operator, &[&only])
+                {
+                    return self.call_required(operator, result, vec![only], symbol.form);
+                }
                 // An operand whose operators are not judged here: see
                 // `unjudged_operand`.
                 // A nullable operand is an operand as another is: no
                 // candidate takes one, and the minus is then rejected
                 // (ERR-12).
                 let identity = identity.filter(|_| {
-                    matches!(value.ty, Type::Nullable(_)) || !unjudged_operand(&value.ty)
+                    matches!(only.value.ty, Type::Nullable(_)) || !unjudged_operand(&only.value.ty)
                 });
                 let Some(identity) = identity else {
                     if config.is_none() {
                         let kind = ExprKind::Unary {
                             operator,
-                            operand: Box::new(value),
+                            operand: Box::new(only.value),
                         };
                         return (kind, Type::Unknown);
                     }
-                    given.push(Given::read(0, operand, value));
+                    given.push(only);
                     return (self.unselected(given, symbol.form), Type::Unknown);
                 };
-                given.push(Given::read(0, operand, value));
+                given.push(only);
                 if faulty {
                     return (self.unselected(given, symbol.form), symbol.unjudged);
                 }
@@ -1907,10 +1930,11 @@ impl<'a> Typer<'a> {
     /// for numbers, OPS-1's table for the others, OPS-2 for the
     /// comparisons. "Every other pairing is a source rejection."
     ///
-    /// An operand whose type is not known, a generic parameter, whose
-    /// operators its constraints say, and a nullable one, whose payload
-    /// needs its guard, are not judged here, and neither is a test
-    /// against `null`: the symbol is then recorded as it is written.
+    /// An operand whose type is not known and a nullable one, whose
+    /// payload needs its guard, are not judged here, and neither is a
+    /// test against `null`: the symbol is then recorded as it is
+    /// written. An operand that is a generic parameter has the
+    /// operations its declaration requires (GEN-7).
     /// The generics chapter: "null presence checks ... have their own
     /// language rules; token shape alone does not make them extensible
     /// candidate calls."
@@ -1957,6 +1981,16 @@ impl<'a> Typer<'a> {
                         ty => unjudged_operand(ty) || !whole(ty),
                     }
         };
+        // GEN-7: an operand that is a generic parameter of the enclosing
+        // declaration has the operations its requirements state:
+        // `lhs + rhs` under `requires add_(T, T) -> T`.
+        if !configured
+            && !faulty
+            && let Some(operator) = identity
+            && let Some(result) = self.required(operator, &[&left, &right])
+        {
+            return self.call_required(operator, result, vec![left, right], symbol.form);
+        }
         let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
         let Some(identity) = identity else {
             let (left_node, right_node) = (left.node.clone(), right.node.clone());
@@ -3282,6 +3316,14 @@ impl<'a> Typer<'a> {
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
+        // GEN-7: "A generic body is checked under its stated
+        // requirements": what the enclosing declaration requires of its
+        // generic parameters is callable in its body.
+        if generics.is_none()
+            && let Some(result) = self.required(operator, &given.iter().collect::<Vec<_>>())
+        {
+            return self.call_required(operator, result, given, Form::Named);
+        }
 
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12): each given to one of them says what a
@@ -4114,6 +4156,338 @@ impl<'a> Typer<'a> {
         among
     }
 
+    /// Whether each named operator requirement in the condition of
+    /// `candidate` holds at a call that takes it with `generics` for
+    /// its generic parameters: where the requirement starts, and the
+    /// verdict, `None` when it cannot be told.
+    ///
+    /// GEN-16: "Resolve their meaning from the referenced declaration
+    /// or intrinsic ... a named operator requirement tests callability
+    /// with the supplied types. A result arrow constrains that
+    /// operator's result type". A constraint call that names no
+    /// operator is a predicate, which is not read here.
+    fn requirements_hold(
+        &mut self,
+        candidate: &Declaration,
+        signature: &Signature,
+        (module, generics): (usize, &[Argument]),
+        condition: &SyntaxNode,
+    ) -> Vec<(u32, Option<bool>)> {
+        let calls: Vec<SyntaxNode> = condition
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::ConstraintCall)
+            .collect();
+        if calls.is_empty() {
+            return Vec::new();
+        }
+        let program = self.program;
+        let declared_in = &program.modules[module];
+        let file = declared_in.files[candidate.file].file;
+        let own: Vec<Location> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
+        // What a type written in the condition means, the candidate's
+        // generic parameters in place.
+        let written = |node: &SyntaxNode| -> Option<Type> {
+            let start = node.span().start;
+            let read = declared_in
+                .written
+                .iter()
+                .find(|written| written.at.file == file && written.at.span.start == start)?;
+            let ty = placed(substitute_within(&read.ty, &map), &own);
+            whole(&ty).then_some(ty)
+        };
+        // A temporal candidate whose body is composition calls any
+        // candidate (FN-3); a value candidate, and a node in its hooks,
+        // the value ones.
+        let composes = matches!(candidate.kind.candidate(), Some((Role::Temporal, _)))
+            && declared_in
+                .declarations
+                .iter()
+                .position(|declaration| declaration.at == candidate.at)
+                .and_then(|position| declared_in.phases.get(position))
+                == Some(&Some(Phase::Graph));
+        let mut verdicts = Vec::new();
+        for call in calls {
+            let verdict = (|| {
+                let name = name_token(&call)?;
+                // What the name is bound to where the candidate is
+                // written.
+                let start = name.span().start;
+                let used = declared_in
+                    .uses
+                    .iter()
+                    .find(|used| used.at.file == file && used.at.span.start == start)?;
+                let Binding::Declarations {
+                    module: operator_module,
+                    declarations,
+                } = &used.binding
+                else {
+                    return None;
+                };
+                let declaration = declarations.iter().copied().find(|&declaration| {
+                    program.modules[*operator_module].declarations[declaration].kind
+                        == DeclarationKind::Operator
+                })?;
+                let mut operands = Vec::new();
+                let mut result = None;
+                for part in call.children() {
+                    match part.kind() {
+                        SyntaxKind::QualifiedName => {}
+                        SyntaxKind::ReturnType => {
+                            result = Some(written(&part.children().next()?)?);
+                        }
+                        kind if is_type(kind) => {
+                            let ty = written(&part)?;
+                            operands.push((part, ty));
+                        }
+                        _ => return None,
+                    }
+                }
+                let operator = OperatorRef {
+                    module: *operator_module,
+                    declaration,
+                };
+                Some((operator, operands, result))
+            })();
+            let verdict = match verdict {
+                Some((operator, operands, result)) => {
+                    self.callable(operator, (file, operands), result.as_ref(), composes)
+                }
+                None => None,
+            };
+            verdicts.push((call.span().start, verdict));
+        }
+        verdicts
+    }
+
+    /// Whether `operator` is callable with values of the types
+    /// `operands`, to give `result` where one is stated (GEN-16).
+    /// `None` when it cannot be told.
+    ///
+    /// Types that name a generic parameter of the declaration being
+    /// read are callable as its own requirements state (GEN-7). Any
+    /// other is callable when one most-specific candidate admits it
+    /// (GEN-5): a value candidate, or with `composes` any, as a call in
+    /// composition selects.
+    fn callable(
+        &mut self,
+        operator: OperatorRef,
+        (file, operands): (FileId, Vec<(SyntaxNode, Type)>),
+        result: Option<&Type>,
+        composes: bool,
+    ) -> Option<bool> {
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let generic = operands.iter().any(|(_, ty)| mentions(ty, &own))
+            || result.is_some_and(|result| mentions(result, &own));
+        if generic {
+            let stated = self.requirements().into_iter().any(|requirement| {
+                requirement.operator == operator
+                    && requirement.operands.len() == operands.len()
+                    && requirement
+                        .operands
+                        .iter()
+                        .zip(&operands)
+                        .all(|(stated, (_, ty))| stated == ty)
+                    && (result.is_none() || requirement.result.as_ref() == result)
+            });
+            return Some(stated);
+        }
+        if self.requiring >= REQUIRING {
+            return None;
+        }
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return None;
+        };
+        let mut candidates = self.value_candidates(operator);
+        if !composes {
+            candidates.retain(|&(module, declaration, _)| {
+                matches!(
+                    program.modules[module].declarations[declaration]
+                        .kind
+                        .candidate(),
+                    Some((Role::Value, _))
+                )
+            });
+        }
+        if unreadable(public, &candidates) {
+            return None;
+        }
+        // Each operand as an argument in its place, of the type
+        // supplied: there is no expression to read.
+        let given: Vec<Given> = operands
+            .into_iter()
+            .enumerate()
+            .map(|(position, (node, ty))| {
+                let at = Location::new(file, node.span());
+                let value = Expr {
+                    kind: ExprKind::Unread,
+                    ty,
+                    at,
+                };
+                Given::read(position, node, value)
+            })
+            .collect();
+        let wanted = Wanted {
+            place: result,
+            among: None,
+        };
+        self.requiring += 1;
+        let (selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        self.requiring -= 1;
+        (!untold).then_some(selected.len() == 1)
+    }
+
+    /// The named operator requirements the enclosing declaration
+    /// states: those that stand alone in its `requires`, or are joined
+    /// to the rest by `&&`. One under a negation or a disjunction says
+    /// nothing that holds for sure.
+    ///
+    /// GEN-16: "a named operator requirement tests callability with the
+    /// supplied types. A result arrow constrains that operator's result
+    /// type". The name is an operator when it is bound to one; a
+    /// requirement supplied with what is no type is not read here.
+    fn requirements(&self) -> Vec<Requirement> {
+        let Some(clause) = child(&self.declaration.syntax, SyntaxKind::RequiresClause) else {
+            return Vec::new();
+        };
+        let mut calls = Vec::new();
+        if let Some(condition) = clause.children().next() {
+            required_calls(&condition, &mut calls);
+        }
+        let program = self.program;
+        // What the `read` pass said a type written here means.
+        let type_at = |node: &SyntaxNode| -> Option<Type> {
+            self.written
+                .get(&(self.file, node.span().start))
+                .map(|ty| (*ty).clone())
+        };
+        calls
+            .iter()
+            .filter_map(|call| {
+                let name = name_token(call)?;
+                let (module, declarations) = self.declarations(&name)?;
+                let declaration = declarations.iter().copied().find(|&declaration| {
+                    program.modules[module].declarations[declaration].kind
+                        == DeclarationKind::Operator
+                })?;
+                let mut operands = Vec::new();
+                let mut result = None;
+                for part in call.children() {
+                    match part.kind() {
+                        // `alias::name`: the callee.
+                        SyntaxKind::QualifiedName => {}
+                        SyntaxKind::ReturnType => {
+                            result = Some(type_at(&part.children().next()?)?);
+                        }
+                        kind if is_type(kind) => operands.push(type_at(&part)?),
+                        _ => return None,
+                    }
+                }
+                Some(Requirement {
+                    operator: OperatorRef {
+                        module,
+                        declaration,
+                    },
+                    operands,
+                    result,
+                })
+            })
+            .collect()
+    }
+
+    /// What the enclosing declaration's requirements say of a call of
+    /// `operator` with the arguments `given`: `Some` when one of them
+    /// is that call, with the result its arrow states.
+    ///
+    /// GEN-7: "A generic body is checked under its stated
+    /// requirements". A requirement is the call when it names the
+    /// operator and is supplied with the arguments' types, each in its
+    /// place: under `requires add_(T, T) -> T`, `add_(lhs, rhs)` of two
+    /// `T` is a `T`. It speaks for arguments of which one is of a type
+    /// that names a generic parameter of the declaration: any other
+    /// call selects its candidate here, as it does in a body that has
+    /// no generic parameter.
+    fn required(&self, operator: OperatorRef, given: &[&Given]) -> Option<Option<Type>> {
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        // Each argument in its position, with a type of its own.
+        let positional = given.iter().enumerate().all(|(position, given)| {
+            matches!(given.key, Key::Position(at) if at == position)
+                && !given.by_place
+                && !given.retried
+        });
+        if !positional || !given.iter().any(|given| mentions(&given.value.ty, &own)) {
+            return None;
+        }
+        self.requirements()
+            .into_iter()
+            .find(|requirement| {
+                requirement.operator == operator
+                    && requirement.operands.len() == given.len()
+                    && requirement
+                        .operands
+                        .iter()
+                        .zip(given)
+                        .all(|(operand, given)| *operand == given.value.ty)
+            })
+            .map(|requirement| requirement.result)
+    }
+
+    /// The call of an operation the enclosing declaration requires
+    /// (GEN-7): of the type the requirement's arrow states, and of no
+    /// known type where it states none. No candidate is selected: that
+    /// is done where the generic parameters are known.
+    fn call_required(
+        &mut self,
+        operator: OperatorRef,
+        result: Option<Type>,
+        given: Vec<Given>,
+        form: Form,
+    ) -> (ExprKind, Type) {
+        // The operator's own parameters, in the order it declares them
+        // (GEN-4).
+        let parameters = match self.program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        {
+            Some(Detail::Callable(public)) => public.parameters.len(),
+            _ => 0,
+        };
+        let arguments = given
+            .into_iter()
+            .enumerate()
+            .map(|(position, given)| hir::Argument {
+                parameter: (position < parameters).then_some(position),
+                value: given.value,
+            })
+            .collect();
+        let kind = ExprKind::Call {
+            callee: Callee::Required {
+                operator: (operator.module, operator.declaration),
+            },
+            arguments,
+            form,
+        };
+        (kind, result.unwrap_or(Type::Unknown))
+    }
+
     /// The call of an operator for which no candidate is selected: its
     /// arguments as they were read, and no callee. One whose first
     /// reading was taken back is read where it stands.
@@ -4233,6 +4607,17 @@ impl<'a> Typer<'a> {
         let Some(condition) = clause.children().next() else {
             return Admits::Yes;
         };
+        // GEN-16: "a named operator requirement tests callability with
+        // the supplied types." Each one the condition states is tested
+        // here, before the rest of the condition is read.
+        let callable = self.requirements_hold(candidate, signature, (module, generics), &condition);
+        let callable = |node: &SyntaxNode| -> Option<bool> {
+            let start = node.span().start;
+            callable
+                .iter()
+                .find(|(at, _)| *at == start)
+                .and_then(|(_, verdict)| *verdict)
+        };
         // The value an option has at this call: what the call gives
         // it, or its default, the candidate's and then, for one of the
         // operator's own parameters, the operator's. `None` when it is
@@ -4338,6 +4723,7 @@ impl<'a> Typer<'a> {
             value_of: &value_of,
             type_of: &type_of,
             written: &written,
+            callable: &callable,
         };
         match holds(&condition, &condition_of) {
             Some(true) => Admits::Yes,
@@ -5188,11 +5574,12 @@ impl<'a> Typer<'a> {
 const BOOL: Type = Type::Scalar(Scalar::Bool);
 
 /// True when an operator's contract is not applied to an operand of
-/// this type here: it is not known, it is a generic parameter, whose
-/// operators its constraints say, or it is nullable, and its payload
-/// needs its guard first.
+/// this type here: it is not known, or it is nullable, and its payload
+/// needs its guard first. A generic parameter is judged: it has the
+/// operations its declaration's requirements state (GEN-7), and those
+/// of a candidate that takes any type.
 fn unjudged_operand(ty: &Type) -> bool {
-    open(ty) || matches!(ty, Type::Parameter { .. } | Type::Nullable(_))
+    open(ty) || matches!(ty, Type::Nullable(_))
 }
 
 /// What a reading may change, at one moment: see [`Typer::take_back`].
@@ -5359,6 +5746,37 @@ struct Symbol {
     /// The type the symbol's place expects, when it is known: the
     /// output requested of the candidates (GEN-5).
     place: Option<Type>,
+}
+
+/// A named operator requirement of a declaration (GEN-16): `add_(T, T)
+/// -> T` requires that `add_` is callable with two values of `T`, and
+/// that it gives a `T`.
+struct Requirement {
+    /// The operator named.
+    operator: OperatorRef,
+    /// The types it is supplied with, in order.
+    operands: Vec<Type>,
+    /// The result its arrow states, when it has one.
+    result: Option<Type>,
+}
+
+/// The constraint calls of a condition that hold wherever the condition
+/// does: the condition itself, and each side of an `&&` (GEN-15).
+fn required_calls(node: &SyntaxNode, calls: &mut Vec<SyntaxNode>) {
+    match node.kind() {
+        SyntaxKind::ConstraintCall => calls.push(node.clone()),
+        SyntaxKind::ConstraintParen => {
+            if let Some(inner) = node.children().next() {
+                required_calls(&inner, calls);
+            }
+        }
+        SyntaxKind::ConstraintBinary if has_token(node, SyntaxKind::AmpAmp) => {
+            for side in node.children() {
+                required_calls(&side, calls);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// One argument of an operator's call, before a candidate is selected.
@@ -5817,6 +6235,9 @@ struct Condition<'c> {
     /// generic parameters in place. `None` for what is no type, or is
     /// not known.
     written: &'c dyn Fn(&SyntaxNode) -> Option<Type>,
+    /// Whether a named operator requirement written in the condition
+    /// holds at the call (GEN-16). `None` when it cannot be told.
+    callable: &'c dyn Fn(&SyntaxNode) -> Option<bool>,
 }
 
 /// A candidate a call admits.
@@ -6120,6 +6541,8 @@ fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
     match node.kind() {
         SyntaxKind::ConstraintParen => holds(&node.children().next()?, of),
         SyntaxKind::ConstraintNot => holds(&node.children().next()?, of).map(|held| !held),
+        // GEN-16: a named operator requirement.
+        SyntaxKind::ConstraintCall => (of.callable)(node),
         SyntaxKind::ConstraintBinary => {
             let mut sides = node.children();
             let left = holds(&sides.next()?, of);
