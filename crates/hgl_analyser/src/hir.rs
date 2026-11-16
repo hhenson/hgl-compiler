@@ -194,6 +194,8 @@ pub enum ExprKind {
         callee: Callee,
         /// The arguments, as they are written.
         arguments: Vec<Argument>,
+        /// How the call is written.
+        form: Form,
     },
     /// A struct made from its fields: `Quote(bid: 1.0, ask: 2.0)`. The
     /// expression's type is the struct, with its generic arguments.
@@ -274,6 +276,23 @@ pub enum Callee {
     /// operator whose candidates are generic, a function that is
     /// itself an expression.
     Unread,
+}
+
+/// How a call is written in the source.
+///
+/// A symbol stands for the operator it binds (the generics chapter's
+/// table), so `a + b` is to be recorded as the call `add_(a, b)` is,
+/// marked as written with a symbol. Every call is [`Form::Named`] until
+/// symbols are selected through core's candidates; a symbol is an
+/// [`ExprKind::Binary`] or [`ExprKind::Unary`] until then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// `name(arguments)`.
+    Named,
+    /// `left + right`: a symbol between two operands.
+    Binary(BinaryOperator),
+    /// `-value`: a symbol before one operand.
+    Unary(UnaryOperator),
 }
 
 /// One argument of a call or a constructor.
