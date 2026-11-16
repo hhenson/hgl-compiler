@@ -11,8 +11,12 @@ result outside the signed 64-bit range is an error.
 A division takes `zero`, the name of a member of core's `ZeroPolicy`,
 which says what a zero divisor gives (NUM-3, NUM-12): `"ieee"` what IEEE
 arithmetic does, `"nan"` a NaN, and `"fail"` an error with the code
-`numeric.division_by_zero`. `"error"` gives a `result`, and is a
-candidate of its own that this file does not provide yet.
+`numeric.division_by_zero`. Under `"error"` a division gives a `result`
+(NUM-9): an `Err` for a zero divisor, and an `Ok` of the quotient
+otherwise.
+
+A `result` is an `Ok` or an `Err`, and an `error` an `Error`: the values
+the language's `ok`, `err` and `error` make (ERR-2, ERR-4).
 """
 
 import math as _math
@@ -32,6 +36,86 @@ class HglError(Exception):
     def __init__(self, message, code=None):
         super().__init__(message if code is None else f"{code}: {message}")
         self.code = code
+
+
+class Ok:
+    """A success of a `result`, which owns its value (ERR-2)."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+    # ERR-2: "Equality ... compares tag then selected payload. This
+    # adds no ordering/hash": with `__eq__` and no `__hash__`, Python
+    # makes the class unhashable.
+    def __eq__(self, other):
+        return type(other) is Ok and self.value == other.value
+
+    def __repr__(self):
+        return f"ok({self.value!r})"
+
+
+class Err:
+    """A failure of a `result`, which owns its error (ERR-2)."""
+
+    __slots__ = ("error",)
+
+    def __init__(self, error):
+        self.error = error
+
+    def __eq__(self, other):
+        return type(other) is Err and self.error == other.error
+
+    def __repr__(self):
+        return f"err({self.error!r})"
+
+
+class Error:
+    """An `error`: a message, and a code that may be null (ERR-4).
+
+    "Equality excludes provenance": two errors are equal when their
+    messages and their codes are.
+    """
+
+    __slots__ = ("message", "code")
+
+    def __init__(self, message, code=None):
+        self.message = message
+        self.code = code
+
+    def __eq__(self, other):
+        return type(other) is Error and (self.message, self.code) == (other.message, other.code)
+
+    def __repr__(self):
+        return f"error(message: {self.message!r}, code: {self.code!r})"
+
+
+class Propagated(Exception):
+    """Leaves a value function with the failure a `?` in it met.
+
+    The function catches it and returns `failure` (ERR-5).
+    """
+
+    def __init__(self, failure):
+        super().__init__("a failure propagated by `?`")
+        self.failure = failure
+
+
+def propagated(result):
+    """`result?` in a value function: the value of a success. A failure
+    leaves the function, which returns it (ERR-5)."""
+    if type(result) is Ok:
+        return result.value
+    raise Propagated(result)
+
+
+def succeeded(result):
+    """`result?` in a `when`: the value of a success. A failure fails
+    the node with the error it holds (ERR-5)."""
+    if type(result) is Ok:
+        return result.value
+    raise HglError(result.error.message, code=result.error.code)
 
 
 def _i64(value):
@@ -140,23 +224,7 @@ def _whole(zero):
     raise HglError("a division by zero", code="numeric.division_by_zero")
 
 
-def div__i64_i64(lhs, rhs, zero):
-    return _div(lhs, rhs, zero)
-
-
-def div__f64_f64(lhs, rhs, zero):
-    return _div(lhs, rhs, zero)
-
-
-def div__i64_f64(lhs, rhs, zero):
-    return _div(lhs, rhs, zero)
-
-
-def div__f64_i64(lhs, rhs, zero):
-    return _div(lhs, rhs, zero)
-
-
-def floordiv__i64_i64(lhs, rhs, zero):
+def _floordiv_i64(lhs, rhs, zero):
     # NUM-1: "Integer floor division rounds toward negative infinity",
     # as Python's does.
     if rhs == 0:
@@ -164,19 +232,7 @@ def floordiv__i64_i64(lhs, rhs, zero):
     return _i64(lhs // rhs)
 
 
-def floordiv__f64_f64(lhs, rhs, zero):
-    return _floordiv(lhs, rhs, zero)
-
-
-def floordiv__i64_f64(lhs, rhs, zero):
-    return _floordiv(lhs, rhs, zero)
-
-
-def floordiv__f64_i64(lhs, rhs, zero):
-    return _floordiv(lhs, rhs, zero)
-
-
-def mod__i64_i64(lhs, rhs, zero):
+def _mod_i64(lhs, rhs, zero):
     # NUM-1: "modulo has the divisor's sign when nonzero", as Python's
     # does.
     if rhs == 0:
@@ -184,16 +240,67 @@ def mod__i64_i64(lhs, rhs, zero):
     return lhs % rhs
 
 
+def _divide(ordinary, lhs, rhs, zero):
+    """A division under its zero policy.
+
+    NUM-9: under `error`, "either signed zero divisor produces
+    `err(...)` carrying error code `numeric.division_by_zero`; every
+    nonzero divisor produces `ok(value)` from the ordinary division."
+    """
+    if zero != "error":
+        return ordinary(lhs, rhs, zero)
+    if rhs == 0:
+        return Err(Error("a division by zero", code="numeric.division_by_zero"))
+    # The divisor is not zero, so no policy is consulted.
+    return Ok(ordinary(lhs, rhs, "fail"))
+
+
+def div__i64_i64(lhs, rhs, zero):
+    return _divide(_div, lhs, rhs, zero)
+
+
+def div__f64_f64(lhs, rhs, zero):
+    return _divide(_div, lhs, rhs, zero)
+
+
+def div__i64_f64(lhs, rhs, zero):
+    return _divide(_div, lhs, rhs, zero)
+
+
+def div__f64_i64(lhs, rhs, zero):
+    return _divide(_div, lhs, rhs, zero)
+
+
+def floordiv__i64_i64(lhs, rhs, zero):
+    return _divide(_floordiv_i64, lhs, rhs, zero)
+
+
+def floordiv__f64_f64(lhs, rhs, zero):
+    return _divide(_floordiv, lhs, rhs, zero)
+
+
+def floordiv__i64_f64(lhs, rhs, zero):
+    return _divide(_floordiv, lhs, rhs, zero)
+
+
+def floordiv__f64_i64(lhs, rhs, zero):
+    return _divide(_floordiv, lhs, rhs, zero)
+
+
+def mod__i64_i64(lhs, rhs, zero):
+    return _divide(_mod_i64, lhs, rhs, zero)
+
+
 def mod__f64_f64(lhs, rhs, zero):
-    return _mod(lhs, rhs, zero)
+    return _divide(_mod, lhs, rhs, zero)
 
 
 def mod__i64_f64(lhs, rhs, zero):
-    return _mod(lhs, rhs, zero)
+    return _divide(_mod, lhs, rhs, zero)
 
 
 def mod__f64_i64(lhs, rhs, zero):
-    return _mod(lhs, rhs, zero)
+    return _divide(_mod, lhs, rhs, zero)
 
 
 def neg__i64(value):

@@ -22,6 +22,7 @@
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
+//! | `ok(v)`, `err(e)`, `r?` | `_core.Ok(v)`, `_core.Err(e)`, `_core.propagated(r)` |
 //! | A value function given a connection in a graph | A node of its own that calls it (FN-6) |
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
