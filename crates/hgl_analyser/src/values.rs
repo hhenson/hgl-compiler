@@ -194,7 +194,7 @@ struct Typer<'a> {
     /// (FN-3).
     graph: bool,
     /// Inside a branch of an `if` whose condition is a connection, how
-    /// many locals there were where the outermost such branch began: a
+    /// many locals there were where the nearest such `if` began: a
     /// `var` before that is declared outside it (CTRL-14).
     temporal: Option<usize>,
     /// True once a `return` with a value stands in a branch selected at
@@ -1098,7 +1098,7 @@ impl<'a> Typer<'a> {
             self.locals[local].category = given;
         }
         let held = self.locals[local].category;
-        // Declared before the outermost branch selected at runtime.
+        // Declared before the nearest `if` selected at runtime.
         let chosen_at_runtime = self.temporal.is_some_and(|outside| local < outside);
         let name = self.locals[local].name.clone();
         let message = match (held, given) {
@@ -7332,10 +7332,12 @@ impl<'a> Typer<'a> {
         } else {
             ValueCategory::Value
         };
-        // The outermost branch selected at runtime: a `var` before it
-        // is declared outside (CTRL-14).
+        // A branch selected at runtime: a `var` before it is declared
+        // outside (CTRL-14). The nearest such `if` says which are: one
+        // inside another has its own, and a `var` of the outer branch
+        // is declared before the inner.
         let outer = self.temporal;
-        if selects == ValueCategory::Connection && outer.is_none() {
+        if selects == ValueCategory::Connection {
             self.temporal = Some(self.locals.len());
         }
         // ERR-12: the bindings the condition proves are not null, where

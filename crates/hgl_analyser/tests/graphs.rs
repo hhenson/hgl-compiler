@@ -298,6 +298,20 @@ fn a_var_of_a_graph_keeps_its_category() {
         "    if rising { unset = price }\n",
         "    return unset\n",
         "}\n",
+        // One `if` selected at runtime inside another: a `var` of the
+        // outer branch is declared before the inner `if`.
+        "fn nested(price: f64, rising: bool, open: bool) -> f64 {\n",
+        "    if rising {\n",
+        "        var level = 1.0\n",
+        "        level = 2.0\n",
+        "        if open { level = 3.0 }\n",
+        "        if open {\n",
+        "            var deeper = 1.0\n",
+        "            deeper = 2.0\n",
+        "        }\n",
+        "    }\n",
+        "    return price\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -306,6 +320,7 @@ fn a_var_of_a_graph_keeps_its_category() {
             "m.hgl:19:12 type/binding.category CTRL-14",
             "m.hgl:20:25 type/binding.category CTRL-14",
             "m.hgl:27:12 name/binding.unassigned EXPR-3",
+            "m.hgl:33:27 type/binding.category CTRL-14",
         ]
     );
     assert_eq!(locals(&checked, "late")[2..], ["chosen: f64 (connection)"]);
