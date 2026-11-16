@@ -196,6 +196,13 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
         // Generic arguments the requirement does not agree with.
         "operator make<O>() -> O\n",
         "const fn unlike<T, U>() -> T requires make() -> T => make<U>()\n",
+        // Generic arguments that agree in one part and not in another:
+        // `make2<T>()` asks for a `tuple<T, _>`.
+        "operator make2<A, B>() -> tuple<A, B>\n",
+        "const fn parts<T, U>() requires make2() -> tuple<U, T> {\n",
+        "    let agreed = make2<U>()\n",
+        "    let pair = make2<T>()\n",
+        "}\n",
         // A sequence that is not of the type supplied.
         "const fn lists<T>(a: T) -> list<T>\n",
         "    requires add_(list<T>, list<T>) -> list<T> => [a] + [1]\n",
@@ -220,11 +227,12 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
             "m.hgl:6:52 operator/operator.no_candidate GEN-5",
             "m.hgl:7:60 type/type.mismatch EXPR-5",
             "m.hgl:9:54 operator/operator.no_candidate GEN-5",
-            "m.hgl:11:55 operator/operator.no_candidate OPS-1",
-            "m.hgl:13:33 operator/operator.no_candidate GEN-5",
-            "m.hgl:14:40 operator/operator.no_candidate OPS-1",
-            "m.hgl:15:43 operator/operator.no_candidate OPS-2",
-            "m.hgl:16:33 operator/operator.no_candidate OPS-1",
+            "m.hgl:13:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:16:55 operator/operator.no_candidate OPS-1",
+            "m.hgl:18:33 operator/operator.no_candidate GEN-5",
+            "m.hgl:19:40 operator/operator.no_candidate OPS-1",
+            "m.hgl:20:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:21:33 operator/operator.no_candidate OPS-1",
         ]
     );
 }
@@ -327,17 +335,54 @@ fn a_requirement_is_tested_as_its_call_would_select() {
         // No candidate gives four.
         "operator odd<T>(a: T) -> T\n",
         "impl const fn odd<T>(a: T) -> T requires window(T) -> list<T, 4> => a\n",
-        "const fn uses(x: f64) {\n",
+        // TYPE-14: an arrow that is optional still says which list.
+        "operator maybe<T>(a: T) -> T\n",
+        "impl const fn maybe<T>(a: T) -> T requires window(T) -> list<T, 4>? => a\n",
+        // GEN-13: a default the call would take is of its parameter's
+        // type as the types resolve it: `2` is no `str`.
+        "operator choose<T, const fallback: T = 2>(value: T) -> T\n",
+        "impl const fn choose(value: i64) -> i64 => value\n",
+        "impl const fn choose(value: str) -> str => value\n",
+        "operator chosen<T>(a: T) -> T\n",
+        "impl const fn chosen<T>(a: T) -> T requires choose(T) -> T => a\n",
+        // GEN-2: an abstract struct widens what an earlier operand
+        // decided.
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "operator same<T, const mode: i64 = 0>(left: T, right: T) -> T\n",
+        "impl const fn same(left: Shape, right: Shape) -> Shape => left\n",
+        "operator paired<A, B>(a: A, b: B) -> A\n",
+        "impl const fn paired<A, B>(a: A, b: B) -> A requires same(A, B) => a\n",
+        "const fn uses(x: f64, text: str, round: Round, shape: Shape) {\n",
         "    let three = framed(x)\n",
         "    let five = wide(x)\n",
         "    let four = odd(x)\n",
+        "    let none = maybe(x)\n",
+        "    let whole = chosen(1)\n",
+        "    let words = chosen(text)\n",
+        "    let widened = paired(round, shape)\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:15:16 operator/operator.no_candidate GEN-5"]
+        [
+            "m.hgl:28:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:29:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:31:17 operator/operator.no_candidate GEN-5",
+        ]
     );
-    assert_eq!(locals(&checked, "uses")[1..3], ["three: f64", "five: f64"]);
+    assert_eq!(
+        locals(&checked, "uses")[4..],
+        [
+            "three: f64",
+            "five: f64",
+            "four: _",
+            "none: _",
+            "whole: i64",
+            "words: _",
+            "widened: Round",
+        ]
+    );
 }
 
 /// GEN-16: "a named operator requirement tests callability with the
