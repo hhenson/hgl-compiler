@@ -47,8 +47,7 @@ fn files_of_one_module_share_one_scope() {
     assert_eq!(checked.summary(), [] as [&str; 0]);
 
     let paths: Vec<&str> = checked
-        .program
-        .modules
+        .modules()
         .iter()
         .map(|module| module.path.as_str())
         .collect();
@@ -156,7 +155,7 @@ fn a_file_with_no_module_line_is_left_out() {
     ]);
     assert_eq!(checked.front_end_errors, 1);
     assert_eq!(checked.summary(), [] as [&str; 0]);
-    assert_eq!(checked.program.modules.len(), 1);
+    assert_eq!(checked.modules().len(), 1);
     assert_eq!(declared(&checked, "m"), ["temporal function f"]);
 }
 

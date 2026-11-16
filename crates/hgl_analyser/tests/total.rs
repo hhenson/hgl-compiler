@@ -124,8 +124,8 @@ fn declarations_with_missing_parts_are_analysed() {
     // `a.hgl` names no module. `b.hgl` and `d.hgl` have no part name
     // the parser could read, so with `c.hgl` the module has three
     // unnamed files.
-    assert_eq!(checked.program.modules.len(), 1);
-    assert_eq!(checked.program.modules[0].files.len(), 3);
+    assert_eq!(checked.modules().len(), 1);
+    assert_eq!(checked.modules()[0].files.len(), 3);
 }
 
 /// The analyser reads the tree by calling itself for what is nested, so

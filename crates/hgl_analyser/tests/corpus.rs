@@ -118,12 +118,7 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
                 files[0].0, checked.report
             ));
         }
-        assert_eq!(
-            checked.program.modules.len(),
-            1,
-            "{} is one module",
-            files[0].0
-        );
+        assert_eq!(checked.modules().len(), 1, "{} is one module", files[0].0);
         assembled += usize::from(files.len() > 1);
     }
     assert!(
@@ -150,8 +145,8 @@ fn the_conformance_cases_assemble_into_one_module() {
     let checked = check(&files);
     assert!(checked.findings.is_empty(), "{}", checked.report);
 
-    assert_eq!(checked.program.modules.len(), 1);
-    let module = &checked.program.modules[0];
+    assert_eq!(checked.modules().len(), 1);
+    let module = checked.modules()[0];
     assert_eq!(module.path, "conformance");
     assert_eq!(module.files.len(), samples.len());
     assert!(

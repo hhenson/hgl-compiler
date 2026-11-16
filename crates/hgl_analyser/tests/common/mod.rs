@@ -43,9 +43,22 @@ pub struct Checked {
     pub report: String,
     /// The sources, for looking up positions.
     pub sources: SourceMap,
+    /// True when the program was given no `module core` of its own and
+    /// was analysed with the one the compiler is built with.
+    pub core_supplied: bool,
 }
 
 impl Checked {
+    /// The modules the program itself holds, in path order: every
+    /// module but core's where the compiler supplied that.
+    pub fn modules(&self) -> Vec<&hgl_analyser::Module> {
+        self.program
+            .modules
+            .iter()
+            .filter(|module| !(self.core_supplied && module.path == Program::CORE))
+            .collect()
+    }
+
     /// Each finding as `file:line:column code rule`, for comparing in one
     /// assertion.
     pub fn summary(&self) -> Vec<String> {
@@ -86,11 +99,28 @@ pub fn check_broken(files: &[(&str, &str)]) -> Checked {
 
 /// Lexes, parses and analyses a program. `omit` is asked, for each file
 /// name and text, which declarations to leave out, as byte spans.
+///
+/// Core is the part of the language every program has (UNIT-11). A
+/// program given no `module core` of its own is analysed with the one
+/// the compiler is built with, as `hgl check` does it; its files are
+/// named `<core>/...`.
 pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>) -> Checked {
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut parsed = Vec::new();
-    for (name, text) in files {
+    // A file belongs to core when its `module` line names it.
+    let own_core = files.iter().any(|(_, text)| {
+        text.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .is_some_and(|line| line == "module core" || line.starts_with("module core "))
+    });
+    let supplied: &[(&str, &str)] = if own_core {
+        &[]
+    } else {
+        &hgl_analyser::CORE_FILES
+    };
+    for (name, text) in files.iter().chain(supplied) {
         let file = sources.add(*name, *text).unwrap();
         let tokens = lex(&sources, file, &mut diagnostics);
         literal::validate_literals(&sources, file, &tokens, &mut diagnostics);
@@ -176,6 +206,7 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
         front_end_errors,
         report,
         sources,
+        core_supplied: !own_core,
     }
 }
 
