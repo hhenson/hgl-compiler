@@ -3000,10 +3000,7 @@ impl<'a> Typer<'a> {
             .zip(&public.generics)
             .map(|(found, generic)| {
                 found.unwrap_or_else(|| match generic.kind {
-                    GenericKind::Value(_) => Argument::Constant(Constant {
-                        text: "_".to_string(),
-                        value: ConstantValue::Unevaluated,
-                    }),
+                    GenericKind::Value(_) => Argument::Constant(unsaid()),
                     _ => Argument::Type(Type::Unknown),
                 })
             })
@@ -6991,9 +6988,29 @@ fn infer_constant(
     generics: &[GenericParameter],
     found: &mut [Option<Argument>],
 ) {
+    // A value nothing has said anything of says nothing here either:
+    // an argument, or a default, may yet say what the parameter is.
+    if is_unsaid(actual) {
+        return;
+    }
     if let ConstantValue::Parameter { at, .. } = &pattern.value {
         find(*at, Argument::Constant(actual.clone()), generics, found);
     }
+}
+
+/// The constant that stands for a generic value nothing has said
+/// anything of, in an output requested in part: it agrees with any, and
+/// decides nothing.
+fn unsaid() -> Constant {
+    Constant {
+        text: "_".to_string(),
+        value: ConstantValue::Unevaluated,
+    }
+}
+
+/// True for [`unsaid`]. No constant a source writes is `_`.
+fn is_unsaid(constant: &Constant) -> bool {
+    constant.text == "_" && matches!(constant.value, ConstantValue::Unevaluated)
 }
 
 /// Records that the generic parameter declared at `at` stands for
