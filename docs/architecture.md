@@ -511,11 +511,12 @@ every other parameter a trace.
 | An eval's traces | TST-7 | Of one style, the expectation included (`trace.style`, at the later trace) |
 | An eval of a target with no result | TST-8 | A statement. Bound or compared, it is `eval.no_result` |
 | `eval(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
-| A trace given to a field, or to a temporal function | TST-3 | `trace.escape` |
-| A trace given to a `const fn` | TST-16, proposed | `ExprKind::TraceValue`: a `list<delta<T>?>` for a dense trace, a `dict<duration, delta<T>>` or `dict<datetime, delta<T>>` for a timed one. A dense trace whose cells may be null is `trace.escape` |
+| A trace, or a value that holds one, given to a field or to a temporal function | TST-3 | `trace.escape`, reported where the construction or the call is finished (`Typer::traces_given`), so that a generic place and a trace wrapped in a sequence are held to it too |
+| A trace given to a `const fn` | TST-3 | Accepted. What it is there is proposed (TST-16), so the argument is not held to the parameter's type |
 
-Not read: an `eval` outside a named test; a trace given to a generic
-`const fn`; a generic target whose parameter is given structural cells.
+Not read: an `eval` outside a named test; a trace that is the value of
+a block or an `if`, where it is compared; a generic target whose
+parameter is given structural cells.
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:
