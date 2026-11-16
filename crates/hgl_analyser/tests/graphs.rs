@@ -252,6 +252,27 @@ fn an_if_in_a_graph_is_composed_or_selected() {
     );
 }
 
+/// CTRL-13: with no `else` a branch that is a connection makes the `if`
+/// a connection of `T`, under a temporal condition and under a
+/// wiring-time one alike. So where a condition is not settled, an
+/// operation the graph requires given no connection (GEN-7), the type
+/// still is.
+#[test]
+fn an_unsettled_condition_keeps_a_connections_type() {
+    let checked = module(concat!(
+        "fn gates<T>(price: f64, const sample: T) -> str requires eq_(T, T) -> bool {\n",
+        "    let gated = if eq_(sample, sample) { price }\n",
+        "    let fixed = if eq_(sample, sample) { 1.0 }\n",
+        "    return gated\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:5:12 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        locals(&checked, "gates")[2..],
+        ["gated: f64 (connection)", "fixed: _ (unsettled)"]
+    );
+}
+
 /// CTRL-14: "A `var` keeps the category of its first value (EXPR-3): a
 /// connection assigned to one that holds an ordinary value, or the
 /// reverse, rejects (EXPR-4). Under a temporal condition a `var`

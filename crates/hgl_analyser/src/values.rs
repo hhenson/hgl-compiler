@@ -7605,14 +7605,20 @@ impl<'a> Typer<'a> {
             // condition a branch that is an ordinary value makes it a
             // `T?`, as in a value function, and a branch that is a
             // connection makes it a connection of `T` that never ticks
-            // where the branch is not composed." Where which it is is
-            // not settled, neither is the type.
+            // where the branch is not composed." So a branch that is a
+            // connection gives a connection of `T` whatever the
+            // condition is. Otherwise, where the condition or the
+            // branch is not settled, neither is the type.
             (Outcome::Value(ty), None) if self.graph => {
                 use ValueCategory::{Connection, Unsettled, Value};
                 match (selects, self.category(&then.value)) {
-                    (Connection, _) | (Value, Connection) => Outcome::Value(ty),
+                    // A connection of `T` either way: selected at
+                    // runtime, or composed where the condition holds.
+                    (Connection, _) | (Value | Unsettled, Connection) => Outcome::Value(ty),
                     (Value, Value) => Outcome::Value(nullable(ty)),
-                    (Unsettled, _) | (_, Unsettled) => Outcome::Value(Type::Unknown),
+                    (Unsettled, Value | Unsettled) | (Value, Unsettled) => {
+                        Outcome::Value(Type::Unknown)
+                    }
                 }
             }
             // "With no `else` it is as if its `else` were null: its
