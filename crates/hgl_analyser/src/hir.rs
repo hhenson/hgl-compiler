@@ -410,6 +410,19 @@ pub enum ExprKind {
     /// `value?`: the T of a success; a failure leaves the function or
     /// fails the node (ERR-5).
     Propagate(Box<Expr>),
+    /// `capture(callable, args...)`: a temporal error boundary around
+    /// the call it holds (ERR-7).
+    Capture(Box<Expr>),
+    /// `seen.value` or `seen.error`: one of the two connections a
+    /// capture is read through (ERR-7).
+    Captured {
+        /// The capture read: the local it is bound to, or the capture
+        /// itself.
+        capture: Box<Expr>,
+        /// True for `.error`, a connection of `error`; false for
+        /// `.value`, the call's own output.
+        error: bool,
+    },
     /// `(a, b)`.
     Tuple(Vec<Expr>),
     /// `[a, b]`: a sequence of values. Its type says what it makes.

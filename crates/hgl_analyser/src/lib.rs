@@ -304,6 +304,11 @@ pub mod codes {
     pub const RESULT_PROPAGATION_TYPE: &str = "result.propagation_type";
     /// `?` where nothing propagates: composition and lifecycle (ERR-5).
     pub const RESULT_PROPAGATION_PHASE: &str = "result.propagation_phase";
+    /// `capture` outside composition, or of what is no temporal call
+    /// (ERR-7).
+    pub const CAPTURE_PHASE: &str = "capture.phase";
+    /// `.value` of a capture whose call has no output (ERR-7).
+    pub const CAPTURE_OUTPUT_FIELD: &str = "capture.output_field";
     /// A value that may be null where its payload is required (ERR-12).
     pub const NULLABLE_REQUIRED_PRESENCE: &str = "nullable.required_presence";
     /// A `var` is read on a path that has given it no value

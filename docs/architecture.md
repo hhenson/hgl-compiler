@@ -658,6 +658,7 @@ The pass is built form by form. So far it reads:
 | `binding.value`, `binding.error` | ERR-3 | The T, or the E, of a binding proved a success, or a failure. With no such proof, or on what is no binding, it is `result.required_variant` |
 | `error(message: text, code: optional_code)`, `.message`, `.code` | ERR-4 | An `error`, each part given by its name; the message a `str` and the code a `str?` |
 | `value?` | ERR-5 | The T of a `result<T, E>`. It stands in a value function whose result is a `result<U, E>` of the same E, and in a `when` on a `result<T, error>`; elsewhere it is `result.propagation_phase`, and on another type `result.propagation_type` |
+| `capture(callable, args...)`, `seen.value`, `seen.error` | ERR-7 | In a graph, the call the first argument names, read from the same list less that name as the call itself is. It is bound with `let`, and read through `.value`, the call's output, and `.error`, an `error`, each a connection. Outside a graph, of no callable, or of a call that composes nothing it is `capture.phase`; `.value` of an outputless call is `capture.output_field` |
 
 A value fits its place when its type is the one expected, when it is a
 `T` where a `T?` is expected, or when it is a struct where an abstract
@@ -672,8 +673,8 @@ What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
 pair sequence, a call of a name left for the prelude or of an operator
 that has a pack, a generic function's parameter and result types, the
-payload of a nullable, a `capture`, an error's `.context`, and a
-conversion written `str(value)`. The arguments of a call that is not
+payload of a nullable, an error's `.context`, and a conversion written
+`str(value)`. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
 taken to be assigned. An operand that is nullable is not judged: its
 guard says what it admits. One that is a generic parameter has the

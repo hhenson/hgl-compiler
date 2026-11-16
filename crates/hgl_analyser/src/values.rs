@@ -224,6 +224,14 @@ struct Typer<'a> {
     /// another name, and is held to the same rule, whether or not core
     /// has given the capability a type.
     aliases: HashMap<LocalId, LocalId>,
+    /// The locals a capture is bound to, each with what its `.value`
+    /// is (ERR-7: "What it gives is bound with `let` and read through
+    /// two connections").
+    captures: HashMap<LocalId, CapturedOutput>,
+    /// The argument of the `capture` being read that names its
+    /// callable: `required` in `capture(required, value)`. The call it
+    /// names is read from the same list, less this argument.
+    callable: Option<SyntaxNode>,
     /// True once `start` has asked for a wake on the node's scheduler
     /// or alarm (TIME-3).
     driven: bool,
@@ -293,6 +301,8 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             aliases: HashMap::new(),
+            captures: HashMap::new(),
+            callable: None,
             driven: false,
             undriven: Vec::new(),
             initializing: false,
@@ -1063,6 +1073,16 @@ impl<'a> Typer<'a> {
         if let Some(capability) = value.as_ref().and_then(|value| self.capability_of(value)) {
             self.aliases.insert(local, capability);
         }
+        // ERR-7: "What it gives is bound with `let`".
+        if kind == LocalKind::Let
+            && let Some(Expr {
+                kind: ExprKind::Capture(call),
+                ..
+            }) = &value
+        {
+            let output = self.captured_output(call);
+            self.captures.insert(local, output);
+        }
         // EXPR-3: "Initialization fixes a binding's value/connection
         // category".
         self.locals[local].category = match &value {
@@ -1422,6 +1442,9 @@ impl<'a> Typer<'a> {
             ExprKind::Payload { result, .. } => self.category(result),
             ExprKind::ErrorPart { base, .. } => self.category(base),
             ExprKind::Propagate(operand) => self.category(operand),
+            // ERR-7: a capture is a temporal boundary, and what is read
+            // of it a connection.
+            ExprKind::Capture(_) | ExprKind::Captured { .. } => Connection,
             ExprKind::Error { message, code } => {
                 code.iter().fold(self.category(message), |given, code| {
                     join(given, self.category(code))
@@ -3039,8 +3062,7 @@ impl<'a> Typer<'a> {
             "err" => self.tagged(false, name, list, expected),
             "is_ok" => self.tag_test(true, name, list),
             "is_err" => self.tag_test(false, name, list),
-            // ERR-7: a capture is for a later part.
-            "capture" => self.unread_call(list),
+            "capture" => self.capture(name, list),
             _ => return None,
         })
     }
@@ -3379,6 +3401,194 @@ impl<'a> Typer<'a> {
         (kind, Type::Error)
     }
 
+    /// The arguments of the call `list` is the list of. For the call a
+    /// `capture` names, they are what follows the callable's name:
+    /// `capture(required, value)` gives `required` the argument
+    /// `value` (ERR-7).
+    fn call_arguments(&self, list: &SyntaxNode) -> Vec<(Option<SyntaxToken>, SyntaxNode)> {
+        arguments_of(list)
+            .into_iter()
+            .filter(|(_, value)| Some(value) != self.callable.as_ref())
+            .collect()
+    }
+
+    /// `capture(callable, args...)` (ERR-7): "In composition,
+    /// `capture(callable, args...)` creates a temporal error boundary.
+    /// It names a callable and gives it the arguments its own call
+    /// takes, positional or named, read, checked, and selected as that
+    /// call's are (EXPR-2, FN-4, GEN-5). In a value function or a hook
+    /// it rejects (`capture.phase`) ... Capture of wiring-time scalar
+    /// work rejects (`capture.phase`)."
+    fn capture(&mut self, name: &SyntaxToken, list: &SyntaxNode) -> (ExprKind, Type) {
+        // The primary location is the call: `capture` to its `)`.
+        let at = list
+            .parent()
+            .map_or(Location::new(self.file, name.span()), |call| self.at(&call));
+        if !self.graph {
+            let place = if self.hook.is_some() {
+                "a hook"
+            } else {
+                "a value function"
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::CAPTURE_PHASE,
+                    at,
+                    format!("`capture` is a boundary in composition, and this is {place}"),
+                    "ERR-7",
+                )
+                .with_note("a graph captures a temporal call: `let seen = capture(node, input)`"),
+            );
+            return self.unread_call(list);
+        }
+        // "It names a callable": the first argument, by position.
+        let first = arguments_of(list).into_iter().next();
+        let Some((label, callable)) = first else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                at,
+                "`capture` is given nothing: it names the callable it covers".to_string(),
+                "ERR-7",
+            ));
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        let named = (label.is_none() && callable.kind() == SyntaxKind::NameExpr)
+            .then(|| name_token(&callable))
+            .flatten();
+        let Some(callee) = named else {
+            self.diagnostics.emit(error(
+                Category::Phase,
+                codes::CAPTURE_PHASE,
+                self.at(&callable),
+                "`capture` names the callable it covers, and this is no name".to_string(),
+                "ERR-7",
+            ));
+            return self.unread_call(list);
+        };
+        let Some(found) = self.declarations(&callee) else {
+            // A local or a parameter is no callable. A name nothing
+            // binds is left for the prelude, and is not judged.
+            if self.local_of(&callable).is_some() {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::CAPTURE_PHASE,
+                    self.at(&callable),
+                    format!(
+                        "`capture` names the callable it covers, and `{}` is none",
+                        callee.text()
+                    ),
+                    "ERR-7",
+                ));
+            }
+            self.callable = Some(callable);
+            let unread = self.unread_call(list);
+            self.callable = None;
+            return unread;
+        };
+        // The call it names, read as that call is: from the same list,
+        // less the name.
+        let outer = self.callable.replace(callable);
+        let (kind, ty) = self.call_named(&callee, list, found, None, None);
+        self.callable = outer;
+        let call = Expr { kind, ty, at };
+        // "Capture of wiring-time scalar work rejects": a call that
+        // composes nothing, all its arguments ordinary values.
+        if matches!(call.kind, ExprKind::Call { .. })
+            && self.category(&call) == ValueCategory::Value
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::CAPTURE_PHASE,
+                    at,
+                    format!(
+                        "`{}` is ordinary work here, done while the graph is built: there is \
+                         no temporal call for `capture` to cover",
+                        callee.text()
+                    ),
+                    "ERR-7",
+                )
+                .with_note("a value function is lifted, and may be captured, where it is given a connection"),
+            );
+        }
+        (ExprKind::Capture(Box::new(call)), Type::Unknown)
+    }
+
+    /// What the `.value` of a capture of `call` is (ERR-7): "`.value`
+    /// retains the normal output type; outputless calls expose only
+    /// `.error`".
+    fn captured_output(&self, call: &Expr) -> CapturedOutput {
+        let callee = match &call.kind {
+            ExprKind::Call {
+                callee:
+                    Callee::Function {
+                        module,
+                        declaration,
+                        ..
+                    }
+                    | Callee::Candidate {
+                        module,
+                        declaration,
+                        ..
+                    },
+                ..
+            } => self.program.modules[*module].details.get(*declaration),
+            _ => None,
+        };
+        match callee {
+            Some(Detail::Callable(signature)) if signature.result.is_none() => CapturedOutput::None,
+            _ => CapturedOutput::Of(call.ty.clone()),
+        }
+    }
+
+    /// `seen.value` or `seen.error` (ERR-7): "`.value` retains the
+    /// normal output type; outputless calls expose only `.error`, a
+    /// connection of `error`, and `.value` rejects there
+    /// (`capture.output_field`)."
+    fn captured(
+        &mut self,
+        base: Expr,
+        name: &SyntaxToken,
+        output: CapturedOutput,
+    ) -> (ExprKind, Type) {
+        let at = Location::new(self.file, name.span());
+        let (failure, ty) = match (name.text(), output) {
+            ("error", _) => (true, Type::Error),
+            ("value", CapturedOutput::Of(ty)) => (false, ty),
+            ("value", CapturedOutput::None) => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::CAPTURE_OUTPUT_FIELD,
+                        at,
+                        "the call this capture covers has no output, and so no `.value`"
+                            .to_string(),
+                        "ERR-7",
+                    )
+                    .with_note("an outputless capture is read through `.error`"),
+                );
+                (false, Type::Unknown)
+            }
+            (other, _) => {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    at,
+                    format!("a capture has no `{other}`: it is read through `.value` and `.error`"),
+                    "ERR-7",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            }
+        };
+        let kind = ExprKind::Captured {
+            capture: Box::new(base),
+            error: failure,
+        };
+        (kind, ty)
+    }
+
     /// `value?` (ERR-5): "Success yields T. In a value function
     /// returning `result<U,E>`, failure returns the same E as Err. In
     /// when, only `result<T,error>` may propagate to node failure ...
@@ -3492,7 +3702,8 @@ impl<'a> Typer<'a> {
     /// A call this pass does not read: its arguments are read for what
     /// they report themselves, with nothing expected of them.
     fn unread_call(&mut self, list: &SyntaxNode) -> (ExprKind, Type) {
-        let arguments = arguments_of(list)
+        let arguments = self
+            .call_arguments(list)
             .into_iter()
             .map(|(_, value)| hir::Argument {
                 parameter: None,
@@ -3749,7 +3960,7 @@ impl<'a> Typer<'a> {
         found: &mut [Option<Argument>],
     ) -> Vec<(usize, SyntaxNode)> {
         let mut named = Vec::new();
-        for (name, value) in arguments_of(list) {
+        for (name, value) in self.call_arguments(list) {
             let Some(name) = name else {
                 continue;
             };
@@ -5078,7 +5289,7 @@ impl<'a> Typer<'a> {
         let mut position = 0;
         let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut arguments = Vec::new();
-        for (name, value) in arguments_of(list) {
+        for (name, value) in self.call_arguments(list) {
             let key = match name {
                 None => {
                     if named_seen {
@@ -6323,7 +6534,7 @@ impl<'a> Typer<'a> {
         // reported as missing (ERR-9).
         let mut unnamed_field = false;
         let mut arguments = Vec::new();
-        for (name, value) in arguments_of(list) {
+        for (name, value) in self.call_arguments(list) {
             let at = self.at(&value);
             let slot = match &name {
                 // TYPE-5: "it takes no positional argument."
@@ -6497,6 +6708,15 @@ impl<'a> Typer<'a> {
             return self.enum_member(&name, module, declaration);
         }
         let base = self.expression(&base, None);
+        // ERR-7: a capture is "read through two connections".
+        let captured = match &base.kind {
+            ExprKind::Local(local) => self.captures.get(local).cloned(),
+            ExprKind::Capture(call) => Some(self.captured_output(call)),
+            _ => None,
+        };
+        if let Some(output) = captured {
+            return self.captured(base, &name, output);
+        }
         // ERR-3 and ERR-4: the payload of a result, and a part of an
         // error.
         match &base.ty {
@@ -6956,6 +7176,15 @@ fn options_of<'a>(
         .chain(selecting.iter().copied())
         .collect();
     (selecting, options)
+}
+
+/// What the `.value` of a capture is (ERR-7).
+#[derive(Debug, Clone)]
+enum CapturedOutput {
+    /// The call it covers has no output: there is no `.value`.
+    None,
+    /// The call's own output, of this type.
+    Of(Type),
 }
 
 /// What a test has proved of a binding where the pass is reading.
