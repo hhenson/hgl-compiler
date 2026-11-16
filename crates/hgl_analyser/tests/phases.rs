@@ -90,3 +90,109 @@ fn a_temporal_body_is_a_graph_or_a_node() {
         ]
     );
 }
+
+/// FN-2: "A node's body is its `state`, `cache`, and `inject`
+/// declarations and then its `start`, `when`, and `stop` hooks, and
+/// nothing else: a local that every hook reads is a `cache`, and work
+/// done once belongs in `start`." TIME-5: "State/cache/inject
+/// declarations precede executable hooks. At most one start and one stop
+/// are admitted." TIME-3: "A `when` nested in another block is
+/// rejected." TIME-7: `inject out` "is rejected for outputless
+/// functions."
+#[test]
+fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn counted(value: i64) -> i64 {\n",
+            "    state seen: i64 = 0\n",
+            "    cache step: i64 = 1\n",
+            "    inject out, scheduler\n",
+            "    start { }\n",
+            "    when modified() {\n",
+            "        seen += step\n",
+            "        return seen\n",
+            "    }\n",
+            "    when scheduled() { return seen }\n",
+            "    stop { }\n",
+            "}\n",
+            "fn disordered(value: i64) -> i64 {\n",
+            "    when { return value }\n",
+            // A declaration after a hook.
+            "    state late: i64 = 0\n",
+            "    start { }\n",
+            // A second `start`.
+            "    start { }\n",
+            "    stop { }\n",
+            "    stop { }\n",
+            "}\n",
+            "fn mixed(value: i64) -> i64 {\n",
+            // Neither a declaration nor a hook.
+            "    let doubled = 2\n",
+            "    when { return value }\n",
+            "    announce(value)\n",
+            "}\n",
+            "fn nested(flag: bool, value: i64) -> i64 {\n",
+            "    when {\n",
+            "        state inner: i64 = 0\n",
+            "        return value\n",
+            "    }\n",
+            "    start {\n",
+            "        when { }\n",
+            "    }\n",
+            "}\n",
+            // No result for `out` to be.
+            "fn sink(value: i64) {\n",
+            "    inject out, logger\n",
+            "    when { }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:15:5 phase/node.declaration_order TIME-5",
+            "m.hgl:17:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:19:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:22:5 phase/node.statement FN-2",
+            "m.hgl:24:5 phase/node.statement FN-2",
+            "m.hgl:28:9 phase/node.nested TIME-5",
+            "m.hgl:32:9 phase/node.nested TIME-3",
+            "m.hgl:36:12 injectable/inject.out_without_result TIME-7",
+        ]
+    );
+}
+
+/// FN-1: "A `const fn` is a value function." FN-2 has `state`, `cache`,
+/// `inject`, `start`, `when` and `stop` classify a temporal body: a
+/// value function has none of them.
+#[test]
+fn a_value_function_has_no_state_and_no_hooks() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn total(value: i64) -> i64 {\n",
+            "    state seen: i64 = 0\n",
+            "    when { return value }\n",
+            "    return value\n",
+            "}\n",
+            "operator pass<V>(value: V) -> V\n",
+            "impl const fn pass(value: i64) -> i64 {\n",
+            "    inject logger\n",
+            "    start { }\n",
+            "    return value\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:5 phase/node.in_value_function FN-1",
+            "m.hgl:4:5 phase/node.in_value_function FN-1",
+            "m.hgl:9:5 phase/node.in_value_function FN-1",
+            "m.hgl:10:5 phase/node.in_value_function FN-1",
+        ]
+    );
+}

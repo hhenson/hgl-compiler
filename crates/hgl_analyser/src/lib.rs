@@ -30,7 +30,9 @@
 //!   and a rule does not: a pack with a default, a hook a native
 //!   implementation cannot have (FN-8, NATIVE-3);
 //! * `phases` says of each temporal function whether its body describes
-//!   composition, a graph, or runtime, a node (FN-2);
+//!   composition, a graph, or runtime, a node (FN-2), and checks that a
+//!   node's body is its declarations and then its hooks (FN-2, TIME-3,
+//!   TIME-5, TIME-7);
 //! * `read` turns every written type into a [`Type`], records each
 //!   declaration's signature or fields, rejects a type made of what its
 //!   place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12, TYPE-14,
@@ -171,6 +173,20 @@ pub mod codes {
     pub const NATIVE_DUPLICATE_HOOK: &str = "native.duplicate_hook";
     /// An `inject` names something that is not a capability (TIME-8).
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
+    /// `inject out` in a function that declares no result (TIME-7).
+    pub const INJECT_OUT_WITHOUT_RESULT: &str = "inject.out_without_result";
+    /// A node's construct inside a block of a temporal function
+    /// (TIME-3, TIME-5).
+    pub const NODE_NESTED: &str = "node.nested";
+    /// A node's construct in a `const fn` (FN-1, FN-2).
+    pub const NODE_IN_VALUE_FUNCTION: &str = "node.in_value_function";
+    /// A `state`, `cache` or `inject` after a hook (TIME-5).
+    pub const NODE_DECLARATION_ORDER: &str = "node.declaration_order";
+    /// A second `start` or a second `stop` (TIME-5).
+    pub const NODE_DUPLICATE_HOOK: &str = "node.duplicate_hook";
+    /// A statement of a node's body that is no declaration and no hook
+    /// (FN-2).
+    pub const NODE_STATEMENT: &str = "node.statement";
     /// A window's size is neither a tick count nor a duration, or its
     /// two sizes are of different kinds (TYPE-11).
     pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";
@@ -373,6 +389,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     forms::check(&program, diagnostics);
     phases::classify(&mut program);
     read::read(&mut program, diagnostics);
+    phases::check(&program, diagnostics);
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
