@@ -1735,7 +1735,7 @@ impl<'a> Typer<'a> {
                 // GEN-7: `-value` under `requires neg_(T) -> T`.
                 if config.is_none()
                     && let Some(operator) = identity
-                    && let Some(result) = self.required(operator, &[&only], expected)
+                    && let Some(result) = self.required(operator, &[&only], expected, None)
                 {
                     return self.call_required(operator, result, vec![only], symbol.form);
                 }
@@ -1987,7 +1987,7 @@ impl<'a> Typer<'a> {
         if !configured
             && !faulty
             && let Some(operator) = identity
-            && let Some(result) = self.required(operator, &[&left, &right], place)
+            && let Some(result) = self.required(operator, &[&left, &right], place, None)
         {
             return self.call_required(operator, result, vec![left, right], symbol.form);
         }
@@ -3319,10 +3319,13 @@ impl<'a> Typer<'a> {
         // GEN-7: "A generic body is checked under its stated
         // requirements": what the enclosing declaration requires of its
         // generic parameters is callable in its body.
-        if generics.is_none()
-            && let Some(result) =
-                self.required(operator, &given.iter().collect::<Vec<_>>(), expected)
-        {
+        let supplied = generics.map(|_| found.as_slice());
+        if let Some(result) = self.required(
+            operator,
+            &given.iter().collect::<Vec<_>>(),
+            expected,
+            supplied,
+        ) {
             return self.call_required(operator, result, given, Form::Named);
         }
 
@@ -4430,12 +4433,15 @@ impl<'a> Typer<'a> {
     /// parameter of the declaration, its result's among them: any
     /// other call selects its candidate here, as it does in a body
     /// that has no generic parameter. `expected` is the type the
-    /// call's place expects.
+    /// call's place expects, and `written` the operator's generic
+    /// arguments as far as the call writes them, `make<T>()`: the
+    /// requirement is then one those agree with (GEN-8).
     fn required(
         &mut self,
         operator: OperatorRef,
         given: &[&Given],
         expected: Option<&Type>,
+        written: Option<&[Option<Argument>]>,
     ) -> Option<Required> {
         let own: Vec<Location> = self
             .signature
@@ -4506,6 +4512,37 @@ impl<'a> Typer<'a> {
                 || !generic
             {
                 continue;
+            }
+            // GEN-8: "A call may supply its generic arguments as a
+            // generic constructor does". With them in place, what the
+            // operator's own signature says of a parameter or of the
+            // result is what the requirement says of it.
+            if let Some(written) = written {
+                let map: Vec<(Location, &Argument)> = public
+                    .generics
+                    .iter()
+                    .zip(written)
+                    .filter_map(|(generic, argument)| Some((generic.at, argument.as_ref()?)))
+                    .collect();
+                let operators: Vec<Location> =
+                    public.generics.iter().map(|generic| generic.at).collect();
+                // What the signature says of a type, where the written
+                // arguments settle it whole.
+                let settled = |declared: &Type| -> Option<Type> {
+                    let ty = substitute_within(declared, &map);
+                    (!mentions(&ty, &operators)).then_some(ty)
+                };
+                let agrees = public.parameters.iter().zip(&requirement.operands).all(
+                    |(parameter, operand)| settled(&parameter.ty).is_none_or(|ty| ty == *operand),
+                ) && match (&public.result, &requirement.result) {
+                    (Some(declared), Some(result)) => {
+                        settled(declared).is_none_or(|ty| ty == *result)
+                    }
+                    _ => true,
+                };
+                if !agrees {
+                    continue;
+                }
             }
             let mut supplied = true;
             for (operand, argument) in requirement.operands.iter().zip(&ordered) {
