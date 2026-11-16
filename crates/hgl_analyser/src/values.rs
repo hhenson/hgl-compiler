@@ -26,7 +26,7 @@
 //! known is reported once, where it was found, and never again where it
 //! is used (ERR-9).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_lexer::literal::{
@@ -218,6 +218,11 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// The locals a capability has been bound to: `let bound = clock`
+    /// (TIME-8: "Binding one to a `let` ... [is a use]"). The local is
+    /// then the capability under another name, and is held to the same
+    /// rule, whether or not core has given the capability a type.
+    aliases: HashSet<LocalId>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
     /// How many requirements deep a candidate's condition is being
@@ -279,6 +284,7 @@ impl<'a> Typer<'a> {
             hook: None,
             out: None,
             present: Vec::new(),
+            aliases: HashSet::new(),
             initializing: false,
             requiring: 0,
             identities: HashMap::new(),
@@ -1093,6 +1099,13 @@ impl<'a> Typer<'a> {
         // is declared with no value ... it is assigned from there".
         let assigned = value.is_some() || matches!(ty, Type::Nullable(_));
         let local = self.declare(name.text(), at, kind, ty, assigned);
+        // TIME-8: a local a capability is bound to is that capability.
+        if value
+            .as_ref()
+            .is_some_and(|value| self.gives_capability(value))
+        {
+            self.aliases.insert(local);
+        }
         // EXPR-3: "Initialization fixes a binding's value/connection
         // category".
         self.locals[local].category = match &value {
@@ -1222,6 +1235,11 @@ impl<'a> Typer<'a> {
             );
         } else if self.graph {
             self.assigned_category(local, &value);
+        }
+        // TIME-8: a `var` a capability is assigned to is that
+        // capability from there.
+        if operator.is_none() && self.gives_capability(&value) {
+            self.aliases.insert(local);
         }
         Stmt::Assign {
             local,
@@ -1654,6 +1672,35 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// True when `local` is a capability (TIME-8): one the node
+    /// injects, other than `out`, which is its result; a parameter of a
+    /// capability's type; or a local one of those has been bound to.
+    fn is_capability(&self, local: LocalId) -> bool {
+        (self.locals[local].kind == LocalKind::Inject && Some(local) != self.out)
+            || self.program.is_capability_type(&self.locals[local].ty)
+            || self.aliases.contains(&local)
+    }
+
+    /// True when the value of `value` is a capability: a read of one,
+    /// or a block or an `if` whose value is one.
+    fn gives_capability(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Local(local) => self.is_capability(*local),
+            ExprKind::Block {
+                value: Some(value), ..
+            } => self.gives_capability(value),
+            ExprKind::If {
+                then, otherwise, ..
+            } => {
+                self.gives_capability(then)
+                    || otherwise
+                        .as_ref()
+                        .is_some_and(|otherwise| self.gives_capability(otherwise))
+            }
+            _ => false,
+        }
+    }
+
     /// How the capability named at `node` is retained where it stands,
     /// in a few words for the message; `None` where it is used and not
     /// retained.
@@ -1796,9 +1843,9 @@ impl<'a> Typer<'a> {
         // and is not retained". An injected capability other than `out`,
         // which is the node's result, and a parameter of a capability's
         // type are both one.
-        let capability = (self.locals[local].kind == LocalKind::Inject && Some(local) != self.out)
-            || self.program.is_capability_type(&self.locals[local].ty);
-        if capability && let Some(how) = self.retained(node) {
+        if self.is_capability(local)
+            && let Some(how) = self.retained(node)
+        {
             self.diagnostics.emit(
                 error(
                     Category::Injectable,
