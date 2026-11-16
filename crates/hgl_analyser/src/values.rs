@@ -800,10 +800,19 @@ impl<'a> Typer<'a> {
                     .and_then(|callee| name_token(&callee))
                     .is_some_and(|name| name.text() == "schedule");
                 // The capability is the first argument, by its name.
+                // "Parentheses select grouping" (EXPR-1): `(scheduler)`
+                // is the same argument.
                 let first = parts
                     .next()
                     .and_then(|list| arguments_of(&list).into_iter().next())
-                    .map(|(_, value)| value)
+                    .map(|(_, mut value)| {
+                        while value.kind() == SyntaxKind::ParenExpr
+                            && let Some(inner) = value.children().next()
+                        {
+                            value = inner;
+                        }
+                        value
+                    })
                     .filter(|value| value.kind() == SyntaxKind::NameExpr)
                     .and_then(|value| name_token(&value));
                 called && first.is_some_and(|name| drivers.contains(&name.text()))

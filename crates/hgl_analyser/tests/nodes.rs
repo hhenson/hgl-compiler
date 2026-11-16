@@ -353,10 +353,12 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "        if valid(a) { return a }\n",
         "    }\n",
         "}\n",
+        // In a branch of `start`, and in parentheses, which only group
+        // (EXPR-1).
         "fn alarmed(a: f64) -> f64 {\n",
         "    inject alarm\n",
         "    start {\n",
-        "        if true { schedule(alarm, 1s) }\n",
+        "        if true { schedule((alarm), 1s) }\n",
         "    }\n",
         "    when modified([]) { return a }\n",
         "}\n",
