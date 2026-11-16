@@ -449,10 +449,11 @@ fn a_capability_is_used_and_not_retained() {
         "        let last = stamped(clock.evaluation_time, out)\n",
         "        let bound = clock\n",
         "        let count = get<i64>(logger, \"count\")\n",
-        // Retained: in a tuple, a list, a struct, a `state`, and what
-        // is published.
+        // Retained: in a tuple, a list, a dictionary, a struct, a
+        // `state`, and what is published.
         "        let pair = (scheduler, value)\n",
         "        let listed = [clock]\n",
+        "        let keyed: dict<str, i64> = [\"at\": (clock)]\n",
         "        let entry = Kept(value: logger)\n",
         "        held = clock\n",
         "        out = scheduler\n",
@@ -484,14 +485,15 @@ fn a_capability_is_used_and_not_retained() {
         [
             "m.hgl:14:21 injectable/capability.as_value TIME-8",
             "m.hgl:15:23 injectable/capability.as_value TIME-8",
-            "m.hgl:16:33 injectable/capability.as_value TIME-8",
-            "m.hgl:17:16 injectable/capability.as_value TIME-8",
-            "m.hgl:18:15 injectable/capability.as_value TIME-8",
-            "m.hgl:20:23 injectable/capability.as_value TIME-8",
-            "m.hgl:22:22 injectable/capability.as_value TIME-8",
-            "m.hgl:23:30 injectable/capability.as_value TIME-8",
-            "m.hgl:24:16 injectable/capability.as_value TIME-8",
-            "m.hgl:28:23 injectable/inject.alarm_and_scheduler TIME-8",
+            "m.hgl:16:45 injectable/capability.as_value TIME-8",
+            "m.hgl:17:33 injectable/capability.as_value TIME-8",
+            "m.hgl:18:16 injectable/capability.as_value TIME-8",
+            "m.hgl:19:15 injectable/capability.as_value TIME-8",
+            "m.hgl:21:23 injectable/capability.as_value TIME-8",
+            "m.hgl:23:22 injectable/capability.as_value TIME-8",
+            "m.hgl:24:30 injectable/capability.as_value TIME-8",
+            "m.hgl:25:16 injectable/capability.as_value TIME-8",
+            "m.hgl:29:23 injectable/inject.alarm_and_scheduler TIME-8",
         ]
     );
 }

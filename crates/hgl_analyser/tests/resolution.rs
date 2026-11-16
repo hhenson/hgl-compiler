@@ -180,7 +180,7 @@ fn a_binding_takes_no_name_already_in_scope() {
                 // A parameter named for a declaration; one named twice;
                 // one named for a generic parameter.
                 "const fn a<T>(seed: i64, twice: i64, twice: i64, T: i64, last: T) -> i64 => 1\n",
-                "const fn b(base: i64) -> i64 {\n",
+                "const fn b(base: i64, book: dict<i64, i64>) -> i64 {\n",
                 // A local named for a parameter, an import, an alias.
                 "    let base = 1\n",
                 "    let shared = 2\n",
@@ -189,7 +189,7 @@ fn a_binding_takes_no_name_already_in_scope() {
                 "    if base == 1 {\n",
                 // A local of an inner block named for one around it.
                 "        let outer = 5\n",
-                "        for outer, fine in [1: 2] { }\n",
+                "        for outer, fine in book { }\n",
                 "    }\n",
                 // Twice in one block.
                 "    let outer = 6\n",
