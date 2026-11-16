@@ -2522,3 +2522,339 @@ fn equally_specific_generic_candidates_are_ambiguous() {
     );
     assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
 }
+
+// ---- An option that selects ----
+
+/// GEN-6: "An option that selects among candidates is a generic value
+/// parameter, `<const zero: Zero = .ieee>` ... A call admits the
+/// candidate only where that holds for the parameter's value at the
+/// call, a default included." GEN-8: "A call may give a generic value
+/// parameter of its callee by name ... A name binds the callee's generic
+/// value parameter of that name, or else its parameter of that name."
+#[test]
+fn an_option_that_selects_is_a_generic_value_parameter() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio<const zero: Zero = .ieee>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio<const zero: Zero>(lhs: f64, rhs: f64) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, text: str) {\n",
+        // The default: the first candidate's condition holds for it.
+        "    let plain = ratio(a, b)\n",
+        "    let nan = ratio(a, b, zero: .nan)\n",
+        // The second has no default: it is admitted because the call
+        // gives the option.
+        "    let checked = ratio(a, b, zero: .error)\n",
+        // TYPE-7: an enum member written in full is the same constant,
+        // in parentheses or not (EXPR-1).
+        "    let full = ratio(a, b, zero: Zero.error)\n",
+        "    let grouped = ratio(a, b, zero: (Zero.error))\n",
+        "    let texts = ratio(text, 2)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        [
+            "plain: f64",
+            "nan: f64",
+            "checked: result<f64, error>",
+            "full: result<f64, error>",
+            "grouped: result<f64, error>",
+            "texts: str",
+        ]
+    );
+    // What the option is given is a compile-time constant: it is among
+    // the call's generic arguments, and not among its arguments.
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body(&checked, "uses").statements[2]
+    else {
+        panic!("a declaration with a value");
+    };
+    let ExprKind::Call {
+        callee: Callee::Candidate { generics, .. },
+        arguments,
+        ..
+    } = &value.kind
+    else {
+        panic!("a call of a candidate: {:?}", value.kind);
+    };
+    assert_eq!(arguments.len(), 2);
+    let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
+    assert_eq!(resolved, [".error"]);
+}
+
+/// GEN-8: "The value a call gives a generic value parameter is a
+/// compile-time constant: a literal, an enum member however it is
+/// written (TYPE-7), `Zero.nan` or `.nan`, a generic value parameter in
+/// scope, or a constant expression of those. Any other rejects." GEN-6:
+/// a call "that names an option admits only the candidates that declare
+/// it".
+#[test]
+fn a_selecting_option_is_given_a_compile_time_constant() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio<const zero: Zero = .ieee>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses<const P: Zero>(a: f64, b: f64, text: str, policy: Zero) {\n",
+        // A parameter is known only when the program runs.
+        "    let runtime = ratio(a, b, zero: policy)\n",
+        // The candidate for a `str` and an `i64` declares no `zero`.
+        "    let absent = ratio(text, 2, zero: .nan)\n",
+        // An `i64` is no `Zero`.
+        "    let mistyped = ratio(a, b, zero: 3)\n",
+        // A generic value parameter in scope is a compile-time constant.
+        // What it is, is known where `uses` is called: which candidate
+        // it selects is not judged here.
+        "    let passed = ratio(a, b, zero: P)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:37 type/generic.argument_constant GEN-8",
+            "m.hgl:9:18 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:20 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[7], "passed: _");
+}
+
+/// GEN-13: "An explicit `const N: V` declares a value parameter of
+/// ordinary type V", and V may name another generic parameter. What a
+/// call gives it is held to that type with the candidate's generics
+/// resolved.
+#[test]
+fn a_generic_value_parameters_type_may_be_generic() {
+    let checked = module(concat!(
+        "operator pick<V, O>(value: V) -> O\n",
+        "impl const fn pick<T, const fallback: T>(value: T) -> T => value\n",
+        // `T` is in the type of no parameter here: what `fallback` is
+        // given says what it is.
+        "operator make<V, O>(value: V) -> O\n",
+        "impl const fn make<T, const fallback: T>(value: i64) -> T => fallback\n",
+        // GEN-12: the first declared that says what `T` is decides it,
+        // whatever order the call writes them in.
+        "operator both<V>(value: V) -> i64\n",
+        "impl const fn both<T, const first: T, const second: T>(value: i64) -> i64 => value\n",
+        "const fn orders() {\n",
+        "    let declared = both(0, first: 1.5, second: 2)\n",
+        "    let written = both(0, second: 2, first: 1.5)\n",
+        "}\n",
+        "const fn uses() {\n",
+        "    let whole = pick(1, fallback: 2)\n",
+        "    let text = pick(\"a\", fallback: \"b\")\n",
+        // The parameter decides `T` first: an integer literal is then
+        // an `f64` where one is expected (EXPR-5).
+        "    let real = pick(1.5, fallback: 2)\n",
+        "    let made = make(1, fallback: 2)\n",
+        "    let word = make(1, fallback: \"b\")\n",
+        // A `str` is no `i64`.
+        "    let mixed = pick(1, fallback: \"b\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:18:17 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "orders"),
+        ["declared: i64", "written: i64"]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[..5],
+        [
+            "whole: i64",
+            "text: str",
+            "real: f64",
+            "made: i64",
+            "word: str"
+        ]
+    );
+}
+
+/// GEN-13: "An explicit `const N: V` declares a value parameter of
+/// ordinary type V", and the default a callable gives it (GEN-2) is a
+/// V. A default that is not is reported where it is declared, and a
+/// call that takes it is not judged (ERR-9). One whose type names
+/// another generic parameter is checked where a call resolves that.
+#[test]
+fn a_generic_value_parameters_default_is_of_its_type() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan }\n",
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick<const N: i64 = \"bad\">(value: i64) -> i64 => N\n",
+        "impl const fn pick<const mode: Zero = .none>(value: str) -> i64 => 1\n",
+        "impl const fn pick<const exact: bool = 1.5>(value: f64) -> i64 => 1\n",
+        "operator hold<V, O>(value: V) -> O\n",
+        "impl const fn hold<T, const fallback: T = 2>(value: T) -> T => fallback\n",
+        "const fn uses() {\n",
+        "    let bad = pick(1)\n",
+        // Given by name, the default is not what the call takes.
+        "    let given = pick(1, N: 3)\n",
+        "    let whole = hold(1)\n",
+        // EXPR-5: an integer literal is an `f64` where one is expected.
+        "    let real = hold(1.5)\n",
+        // The default, `2`, is no `str`.
+        "    let text = hold(\"a\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:35 type/type.mismatch GEN-13",
+            "m.hgl:5:39 name/member.unknown TYPE-7",
+            "m.hgl:6:40 type/type.mismatch GEN-13",
+            "m.hgl:14:16 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "this is a `str`, and the generic value parameter `N` is `i64`"
+    );
+    assert_eq!(
+        locals(&checked, "uses"),
+        ["bad: _", "given: i64", "whole: i64", "real: f64", "text: _"]
+    );
+}
+
+/// GEN-2: "A call resolves a generic of its callee from what it writes
+/// ... then from its arguments". A generic value parameter the call
+/// gives by name is what it writes: an argument whose type says
+/// otherwise is then no argument for the candidate, and is not what
+/// decides.
+#[test]
+fn a_generic_value_given_by_name_is_not_overridden_by_an_argument() {
+    let checked = module(concat!(
+        "operator count<V>(value: V) -> i64\n",
+        "impl const fn count<const N: i64>(value: list<i64, N>) -> i64 => N\n",
+        "const fn uses(pair: list<i64, 2>) {\n",
+        // From the argument's type, and by name where they agree.
+        "    let inferred = count(pair)\n",
+        "    let agreed = count(pair, N: 2)\n",
+        // A list of two is no list of three.
+        "    let differs = count(pair, N: 3)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:19 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[1..3],
+        ["inferred: i64", "agreed: i64"]
+    );
+}
+
+/// GEN-6: "A call admits the candidate only where that holds for the
+/// parameter's value at the call, a default included." The value is the
+/// one resolved: from an argument's type where that says it, and the
+/// default only where nothing else does. GEN-8: a constant expression is
+/// a compile-time constant, and is compared as what it comes to.
+#[test]
+fn a_candidates_condition_is_checked_against_the_value_resolved() {
+    let checked = module(concat!(
+        "operator count<V>(value: V) -> i64\n",
+        "impl const fn count<const N: i64 = 3>(value: list<i64, N>) -> i64\n",
+        "    requires N == 3 => N\n",
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick<const N: i64>(value: i64) -> i64 requires N == 2 => value\n",
+        "operator twice<V>(value: V) -> i64\n",
+        "impl const fn twice<const N: i64 = 1 + 1>(value: i64) -> i64\n",
+        "    requires N in {2, 4} => value\n",
+        "const fn uses(pair: list<i64, 2>, triple: list<i64, 3>) {\n",
+        "    let three = count(triple)\n",
+        // `N` is 2 here, from the list, and not its default 3.
+        "    let two = count(pair)\n",
+        // `1 + 1` is 2.
+        "    let sum = pick(1, N: 1 + 1)\n",
+        "    let other = pick(1, N: 1 + 2)\n",
+        "    let default = twice(1)\n",
+        "    let given = twice(1, N: 2 * 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:15 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:17 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    let locals = locals(&checked, "uses");
+    assert_eq!(locals[2], "three: i64");
+    assert_eq!(locals[4], "sum: i64");
+    assert_eq!(locals[6..], ["default: i64", "given: i64"]);
+}
+
+/// GEN-8: "a generic value parameter in scope" is a compile-time
+/// constant. One passed on to a callee's generic value parameter is
+/// still that parameter there: the result of `keep(value, N: M)` is a
+/// list of `M`, and nothing says `M` is 2.
+#[test]
+fn a_generic_value_parameter_passed_on_is_still_that_parameter() {
+    let checked = module(concat!(
+        "operator keep<V, O>(value: V) -> O\n",
+        "impl const fn keep<const N: i64>(value: list<i64, N>) -> list<i64, N> => value\n",
+        "const fn uses<const M: i64>(value: list<i64, M>) {\n",
+        "    let kept = keep(value, N: M)\n",
+        "    let two: list<i64, 2> = keep(value, N: M)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:29 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[1], "kept: list<i64, M>");
+}
+
+/// GEN-2: a generic value parameter's default is written in its
+/// candidate's declaration, which may be in another file than the call.
+/// TYPE-7: an enum member written in full there, `Zero.ieee`, is the
+/// constant `.ieee` is, and the candidate's condition is checked
+/// against it.
+#[test]
+fn a_default_is_read_where_its_candidate_is_declared() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export enum Zero { ieee, nan, error }\n",
+                "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "impl const fn ratio<const zero: Zero = (Zero.ieee)>(lhs: f64, rhs: f64) -> f64\n",
+                "    requires zero == .ieee => lhs\n",
+                // An option that is a parameter, under a name of its
+                // own (GEN-6).
+                "impl const fn ratio(lhs: i64, rhs: i64, mode: Zero = Zero.nan) -> i64\n",
+                "    requires mode == .nan => lhs\n",
+                // TYPE-14: an optional enum's default may be a member.
+                "impl const fn ratio<const zero: Zero? = Zero.error>(lhs: str, rhs: str) -> str\n",
+                "    requires zero == .error => lhs\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib::{ratio}\n",
+                // Padding, so that the call is not at the default's offset.
+                "const fn uses(a: f64, n: i64, text: str) {\n",
+                "    let real = ratio(a, a)\n",
+                "    let whole = ratio(n, n)\n",
+                "    let words = ratio(text, text)\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        ["real: f64", "whole: i64", "words: str"]
+    );
+}

@@ -233,6 +233,7 @@ It is built in passes:
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
+| Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6 | in part: a default that names something is not checked |
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
@@ -570,26 +571,52 @@ own signature (GEN-6):
 | Part of a candidate | How a call gives it |
 | --- | --- |
 | Its first parameters, which are the operator's, place for place | In position, or by the name the operator gives the parameter |
-| The options it declares after them | By the option's name, or in position |
+| An option that selects among candidates: a generic value parameter, `<const zero: Zero = .ieee>` | By its name |
+| An option that does not select: a parameter after the operator's | By its name, or in position |
+
+A name is looked for among the candidate's generic value parameters and
+then among its parameters (GEN-8); a candidate has only one of the two
+under a name, and across an operator's candidates an option's name is
+one kind (GEN-6), or the candidate that declares the parameter is
+`impl.option_kind`.
 
 A candidate is admitted when its result fits the type the place expects,
-each argument fits the parameter it is given to, what the call leaves
-out has a default or a type written `T?`, and its `requires` holds. A
-call that names an option admits only the candidates that declare it; a
-name neither the operator nor any candidate declares is
-`argument.unknown`. Candidates may order their options differently, so
-which option an argument in position is given to is judged candidate by
-candidate; only what is wrong for every candidate is reported of the
-call itself. A candidate's `requires` compares an option with
-constants, `zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`,
-`||` and `!`: it is checked against what the call gives the option, or
-the option's default, the candidate's and then the operator's for a
-parameter the operator declares. Constants are compared as the values
-they denote: `1_000` is `1000`, and a string is its contents. So `ratio(a, b, zero: .error)` selects the
-candidate that is for `.error`, and has its result type (EXPR-12). Where
-the call gives such an option as no constant, a name say, which
-candidate is for it cannot be told and the call is not judged: the
-catalogue has no row for that rejection (hhenson/hgl_spec#48).
+each argument fits what it is given to, what the call leaves out has a
+default or a type written `T?`, and its `requires` holds. A call that
+names an option admits only the candidates that declare it; a name
+neither the operator nor any candidate declares is `argument.unknown`.
+Candidates may order their options differently, so which option an
+argument in position is given to is judged candidate by candidate; only
+what is wrong for every candidate is reported of the call itself.
+
+A candidate's `requires` compares an option with constants,
+`zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`, `||` and
+`!`. It is checked against what the call gives the option, or the
+option's default: the candidate's, and for a parameter the operator
+declares then the operator's. Constants are compared as the values they
+denote: `1_000` is `1000`, a string is its contents, and an enum member
+is the same written `.error` or `Zero.error` (TYPE-7). So
+`ratio(a, b, zero: .error)` selects the candidate that is for `.error`,
+and has its result type (EXPR-12).
+
+What a call gives a generic value parameter is a compile-time constant
+(GEN-8): a literal, an enum member, a generic value parameter in scope,
+or an expression of those. Any other is `generic.argument_constant`. It
+is kept among the call's generic arguments in the typed body, and is not
+one of its arguments. What the call writes for it decides before any
+argument's type does (GEN-2), and its condition reads the value so
+resolved, the default only where nothing else said. Its own type may
+name a type parameter, `<T, const fallback: T>`: the parameters decide
+`T` first, and what `fallback` is given decides it where they do not.
+
+A default is of its parameter's type (GEN-13). One that is not, as far
+as how it is written says, is `type.mismatch` where it is declared, and
+a call that would take it is not judged. Where the type names a type
+parameter, `<T, const fallback: T = 2>`, the default is checked against
+what the call resolves `T` to, and the candidate is not for a call
+where it does not fit. Where it is a generic value parameter of the
+enclosing function, which candidate it selects is known only where that
+function is called, and the call is not judged here.
 
 An operator's own requirement may say what its result is: `operator
 convert<T, V, O>(value: V) -> O requires O in {T, result<T, error>}`.
