@@ -587,9 +587,24 @@ A `return` with a value in a branch selected at runtime makes the
 graph's result the continuation's where the branch is not selected, so
 a graph that can then reach its end with no value is `return.missing`.
 
-Not read yet in a graph: `switch`, `for` and `while` (CTRL-15); whether
-a graph that returns nowhere under a temporal condition gives a result
-on every path.
+A `switch` and the loops of a graph are told apart the same way
+(CTRL-15):
+
+| Written | What is done |
+| --- | --- |
+| `switch` over an ordinary value | One case is composed: read as in a value function |
+| `switch` over a connection | Each case is a child graph selected at runtime: an assignment or a `return` in a case follows the rules of a branch selected at runtime |
+| A label that is a connection | `connection.as_constant` |
+| `for item in items`, `items` an ordinary list, set or dictionary | Unrolled while the graph is built: ordinary values bound, and a `var` may be carried from pass to pass |
+| `items` a connection of `list<T, N>` | Composed `N` times: `item` is a connection of `T` |
+| `items` a connection of `list<T>`, `set<T>` or `dict<K, V>` | One child for each member. `item` is a connection of `T` for a list and the member, an ordinary `T`, for a set; `key` is an ordinary `K` and `value` a connection of `V`. An assignment to a `var` declared outside the loop, and a `return`, are `loop.carried` |
+| `items` a connection of a tuple, or of any other type | `type.mismatch` |
+| `while condition`, the condition a connection | `connection.as_constant`: the condition is tested while the graph is built |
+| `while { }` | `while.condition`, as in a value function |
+
+Not read yet in a graph: whether a graph that returns nowhere under a
+temporal condition gives a result on every path; the traversal forms
+`elements`, `keys`, `values` and `items` (CTRL-8).
 
 ### Value expressions
 

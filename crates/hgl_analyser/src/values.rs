@@ -201,6 +201,10 @@ struct Typer<'a> {
     /// runtime: the graph's result is then the continuation's where the
     /// branch is not selected, so every path returns (CTRL-14).
     must_return: bool,
+    /// Inside a composition loop that makes one child for each member,
+    /// how many locals there were where the outermost such loop began:
+    /// a `var` before that is declared outside it (CTRL-15).
+    dynamic: Option<usize>,
     /// The hook of a node being read; `None` in a value function, and
     /// between a node's hooks.
     hook: Option<Hook>,
@@ -271,6 +275,7 @@ impl<'a> Typer<'a> {
             graph: false,
             temporal: None,
             must_return: false,
+            dynamic: None,
             hook: None,
             out: None,
             present: Vec::new(),
@@ -879,6 +884,20 @@ impl<'a> Typer<'a> {
                 if value.is_some() && self.temporal.is_some() {
                     self.must_return = true;
                 }
+                // CTRL-15: in a loop that makes one child for each
+                // member "an assignment to a `var` declared outside it
+                // rejects (CTRL-8), and so does a `return`."
+                if self.dynamic.is_some() {
+                    self.diagnostics.emit(error(
+                        Category::Phase,
+                        codes::LOOP_CARRIED,
+                        at,
+                        "this loop makes one child for each member, and a child does not \
+                         return from the graph"
+                            .to_string(),
+                        "CTRL-15",
+                    ));
+                }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
                 Stmt::Return { value, at }
@@ -889,11 +908,6 @@ impl<'a> Typer<'a> {
                 Some(value) => Stmt::Expr(self.flow(&value, None, false).0),
                 None => Stmt::Unread { at: self.at(node) },
             },
-            // CTRL-7: a loop in composition, and a `switch` there, are
-            // for a later part.
-            SyntaxKind::WhileStmt | SyntaxKind::ForStmt | SyntaxKind::SwitchStmt if self.graph => {
-                self.unread(node)
-            }
             SyntaxKind::WhileStmt => self.while_loop(node),
             SyntaxKind::ForStmt => self.for_loop(node),
             SyntaxKind::SwitchStmt => self.switch(node),
@@ -1071,7 +1085,25 @@ impl<'a> Typer<'a> {
             }
         };
         self.assigned[local] = true;
-        if self.graph {
+        // CTRL-8: "Dynamic composition loops do not admit loop-carried
+        // accumulation". CTRL-15: "In such a loop an assignment to a
+        // `var` declared outside it rejects".
+        if self.dynamic.is_some_and(|outside| local < outside) {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::LOOP_CARRIED,
+                    self.at(&place),
+                    format!(
+                        "`{}` is declared outside this loop, which makes one child for each \
+                         member: nothing is carried from one child to the next",
+                        self.locals[local].name
+                    ),
+                    "CTRL-15",
+                )
+                .with_related(self.locals[local].at, "declared here"),
+            );
+        } else if self.graph {
             self.assigned_category(local, &value);
         }
         Stmt::Assign {
@@ -6303,6 +6335,35 @@ fn from_place(public: &Signature, expected: Option<&Type>, found: &mut [Option<A
     }
 }
 
+/// What a `for` binds, and whether it makes one child for each member,
+/// by what it loops over (CTRL-15).
+///
+/// "`for item in items` over an ordinary list, set, or dictionary
+/// composes its body once for each element, with ordinary values bound
+/// ... Over a connection of `list<T, N>` it composes its body `N` times,
+/// `item` a connection of `T` ... Over a connection of `list<T>`,
+/// `set<T>`, or `dict<K, V>` it makes one child for each member
+/// (CTRL-7): `item` is a connection of `T` for a list and an ordinary
+/// `T`, the member itself, for a set; `key` is an ordinary `K` and
+/// `value` a connection of `V` for a dictionary."
+fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCategory>, bool) {
+    use ValueCategory::{Connection, Unsettled, Value};
+    match (over, ty) {
+        (Connection, Type::List { size, .. }) => {
+            // `list<T, unbounded>` grows as `list<T>` does.
+            let fixed = size
+                .as_ref()
+                .is_some_and(|size| !matches!(size.value, ConstantValue::Unbounded));
+            (vec![Connection; names], !fixed)
+        }
+        (Connection, Type::Set(_)) => (vec![Value; names], true),
+        (Connection, Type::Dict { .. }) if names == 2 => (vec![Value, Connection], true),
+        // What is looped over is not settled: neither is what is bound.
+        (Unsettled, _) => (vec![Unsettled; names], false),
+        _ => (vec![Value; names], false),
+    }
+}
+
 /// True when an expression gives a value where it stands. A block gives
 /// the one it ends in (CTRL-10), and none when it ends in a `return` or
 /// any other statement; an `if` gives one where a branch does.
@@ -7434,6 +7495,13 @@ impl<'a> Typer<'a> {
         if self.graph { "CTRL-13" } else { "CTRL-10" }
     }
 
+    /// The rule that says what a loop and a `switch` are where this one
+    /// stands: CTRL-15 in a graph, CTRL-12 in a value function and a
+    /// hook.
+    fn loop_rule(&self) -> &'static str {
+        if self.graph { "CTRL-15" } else { "CTRL-12" }
+    }
+
     /// One branch of an `if`, read from what is assigned before the
     /// `if`.
     fn branch(
@@ -7727,14 +7795,37 @@ impl<'a> Typer<'a> {
                     Category::Phase,
                     codes::WHILE_CONDITION,
                     keyword,
-                    "a `while` with no condition is for a source that yields: in a value \
-                     function it has one"
-                        .to_string(),
-                    "CTRL-12",
+                    format!(
+                        "a `while` with no condition is for a source that yields: in a {} it \
+                         has one",
+                        if self.graph {
+                            "graph"
+                        } else {
+                            "value function"
+                        }
+                    ),
+                    self.loop_rule(),
                 ));
                 None
             }
         };
+        // CTRL-15: "The condition of a `while` is an ordinary `bool`,
+        // tested while the graph is built: a connection there rejects
+        // (FN-3)".
+        if let Some(condition) = &condition
+            && self.graph
+            && self.category(condition) == ValueCategory::Connection
+        {
+            self.diagnostics.emit(error(
+                Category::Phase,
+                codes::CONNECTION_AS_CONSTANT,
+                condition.at,
+                "the condition of a `while` is tested while the graph is built, and this is \
+                 a connection"
+                    .to_string(),
+                "FN-3",
+            ));
+        }
         // ERR-12: the body is reached only where the condition holds,
         // so what it proves is not null is not null there.
         let frame = self.present.len();
@@ -7788,12 +7879,21 @@ impl<'a> Typer<'a> {
                     codes::TYPE_MISMATCH,
                     sequence.at,
                     format!("this is `{ty}`, and {takes}"),
-                    "CTRL-12",
+                    self.loop_rule(),
                 ));
                 vec![Type::Unknown; count]
             }
         };
-        let names = names
+        // CTRL-15: what the loop binds, and whether it makes one child
+        // for each member.
+        let over = if self.graph {
+            self.category(&sequence)
+        } else {
+            ValueCategory::Value
+        };
+        let (categories, children) = bound_by_loop(over, &sequence.ty, names.len());
+        let outside = self.locals.len();
+        let names: Vec<LocalId> = names
             .iter()
             .zip(types)
             .map(|(name, ty)| {
@@ -7801,7 +7901,19 @@ impl<'a> Typer<'a> {
                 self.declare(name.text(), at, LocalKind::Iteration, ty, true)
             })
             .collect();
+        for (local, category) in names.iter().zip(categories) {
+            self.locals[*local].category = category;
+        }
+        // Each such loop says which `var`s are outside it: one declared
+        // in an enclosing loop's body is outside the loop nested there.
+        // A loop that makes no children keeps the boundary of the one
+        // it stands in.
+        let outer = self.dynamic;
+        if children {
+            self.dynamic = Some(outside);
+        }
         let body = self.loop_body(child(node, SyntaxKind::Block).as_ref());
+        self.dynamic = outer;
         Stmt::For {
             names,
             sequence,
@@ -7846,6 +7958,14 @@ impl<'a> Typer<'a> {
             return self.unread(node);
         };
         let selector = self.expression(&selector, None);
+        // CTRL-15: "a `switch` over an ordinary value composes the one
+        // case selected, and over a connection each case is a child
+        // graph selected at runtime ... a case's assignments and returns
+        // follow CTRL-14."
+        let outer = self.temporal;
+        if self.graph && self.category(&selector) == ValueCategory::Connection {
+            self.temporal = Some(self.locals.len());
+        }
         let members = self.enum_members(&selector.ty);
         let selects = open(&selector.ty)
             || members.is_some()
@@ -7863,7 +7983,7 @@ impl<'a> Typer<'a> {
                      value",
                     selector.ty
                 ),
-                "CTRL-12",
+                self.loop_rule(),
             ));
         }
         // What a label is expected to be.
@@ -7891,6 +8011,17 @@ impl<'a> Typer<'a> {
                     self.returned = before_returned;
                     let label = self.expression(&label, Some(&of));
                     let label = self.fit(label, &of, "the selector");
+                    // FN-3: "Where a constant is required, a `switch`
+                    // label ... a connection rejects."
+                    if self.graph && self.category(&label) == ValueCategory::Connection {
+                        self.diagnostics.emit(error(
+                            Category::Phase,
+                            codes::CONNECTION_AS_CONSTANT,
+                            label.at,
+                            "a `switch` label is a constant, and this is a connection".to_string(),
+                            "FN-3",
+                        ));
+                    }
                     if let Some(value) = label_of(&label) {
                         match seen.iter().find(|(other, _)| *other == value) {
                             Some((_, first)) => self.diagnostics.emit(
@@ -7951,6 +8082,7 @@ impl<'a> Typer<'a> {
             self.assigned = restored(&before, count, false);
             self.returned = before_returned;
         }
+        self.temporal = outer;
         Stmt::Switch {
             selector,
             cases,
