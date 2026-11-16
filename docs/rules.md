@@ -171,7 +171,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-11 | parser | done | `<=>` at the comparison tier |
 | EXPR-11 | analyser | partial | In a value function `<=>` is core's `CmpResult`, through the candidates of `compare_`, and each other comparison a bool; an outcome where a bool is expected is rejected. Left: temporal bodies |
 | EXPR-12 | analyser | partial | In a value function, an option of an operator's call, by name or as a symbol's configuration, that a candidate's `requires` reads selects the candidate, and so the result type; one that is a generic value parameter is given a compile-time constant. Left: temporal bodies |
-| EXPR-13 | transpiler | planned | Evaluation order of a configured operator |
+| EXPR-13 | transpiler | partial | hgraph: a configured binary expression is written left operand, configuration, right operand, and Python evaluates a call's arguments in that order. Left: unary configuration, and short-circuiting |
 | EXPR-14 | analyser | planned | Configuration introduces no temporal input |
 | EXPR-14 | transpiler | planned | Configuration bound at graph construction in composition, per invocation elsewhere |
 | EXPR-15 | analyser | planned | Proposed. An assignment into a place in a graph is not read |
@@ -413,10 +413,10 @@ the same numeric rules the transpiler rows give.
 | --- | --- | --- | --- |
 | NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions, through core's candidates. Left: temporal bodies |
 | NUM-1 | transpiler | partial | hgraph: `//` rounds toward negative infinity and `%` has the divisor's sign, for `i64` and with an `f64` operand; `/` of numbers gives an `f64`. Left: durations |
-| NUM-2 | transpiler | partial | hgraph: `+`, `-`, `*`, `//` and negation of `i64` raise where the result leaves the signed 64-bit range; float arithmetic is the host's binary64. Left: comparison within a tolerance |
+| NUM-2 | transpiler | done | hgraph: `+`, `-`, `*`, `//` and negation of `i64` raise where the result leaves the signed 64-bit range; float arithmetic is the host's binary64; an `i64` is compared with an `f64` by their exact values |
 | NUM-3 | transpiler | done | hgraph: a zero divisor gives a signed infinity or NaN under `ieee`, NaN under `nan`, and an error with the code `numeric.division_by_zero` under `fail` |
-| NUM-4 | transpiler | planned | Exact and tolerant equality; invalid tolerance is an error |
-| NUM-5 | transpiler | planned | NaN, infinity and signed zero in equality and closeness |
+| NUM-4 | transpiler | done | hgraph: `==` with no tolerance is exact, and with one the symmetric condition, made in exact arithmetic; `!=` is its complement; a tolerance that is not finite and nonnegative is an error |
+| NUM-5 | transpiler | done | hgraph: NaN is equal and close to nothing, an infinity to itself alone, and the two zeros to each other; the finite test is exact, so a difference or a scaled tolerance that is no `f64` admits nothing wrongly |
 | NUM-6 | analyser | partial | In a value function a comparison outcome is a `CmpResult`, and is rejected where a bool or a number is expected. Left: temporal bodies |
 | NUM-6 | transpiler | planned | `compare_` outcomes; Boolean comparisons |
 | NUM-7 | analyser | planned | Tolerance does not configure `<=>`; ordering an unordered domain needs a stated policy |
@@ -428,7 +428,7 @@ the same numeric rules the transpiler rows give.
 | NUM-9 | transpiler | done | hgraph: under `zero: .error` a zero divisor gives `err` of an error with the code `numeric.division_by_zero`, and any other divisor `ok` of the ordinary division |
 | NUM-10 | transpiler | partial | hgraph: a checked division's `Err` is a value like any other, and `?` returns it from a value function or fails the node in a `when`. Left: an `Err` published by a node |
 | NUM-11 | analyser | partial | `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other. The same as the symbol's configuration, `a =={abs: ...} b`. Left: temporal bodies |
-| NUM-11 | transpiler | planned | Tolerances bound at graph construction in composition |
+| NUM-11 | transpiler | done | hgraph: a tolerance of a lifted comparison is configuration of its node, given where the graph is built, and no input |
 | NUM-12 | analyser | partial | Every division, by name or by symbol, through core's candidates in a value function: a division whose result is an `f64` admits each policy, one whose result is an `i64` or a `duration` only `.error` and `.fail`, and `.error` gives a `result`. Left: temporal bodies |
 | NUM-12 | transpiler | partial | hgraph: `/`, `//` and `%` of numbers take `zero`, given to the provider's function by name: the policy written, or the candidate's default. Left: durations |
 | OPS-1 | analyser | partial | In a value function a symbol is the call of the core operator it stands for, and admits the operand types that operator's candidates declare, core's and a module's own; any other pairing rejected (`operator.no_candidate`). Its operands are read as the call's arguments are, and the type its place expects is requested of the candidates. Left: temporal bodies |

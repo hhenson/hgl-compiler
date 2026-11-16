@@ -1435,6 +1435,104 @@ fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
     assert_eq!(python.matches("except _core.Propagated").count(), 2);
 }
 
+/// Numeric equality within a tolerance: core's observations for
+/// NUM-4 and NUM-5.
+const CLOSE: &str = concat!(
+    "module demo.close\n",
+    "\n",
+    "const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
+    "const fn near(a: f64, b: f64, share: f64) -> bool => a =={rel: share} b\n",
+    "const fn apart(a: f64, b: f64, tolerance: f64) -> bool => a !={abs: tolerance} b\n",
+    "const fn whole(a: i64, b: i64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
+    "const fn mixed(a: i64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
+    "\n",
+    "fn closes(a: f64, b: f64) -> bool => a =={abs: 0.5} b\n",
+    "\n",
+    "test closeness {\n",
+    "    assert !(1.0 == 1.005)\n",
+    "    assert 1.0 =={abs: 0.01} 1.005\n",
+    "    assert close(1.0, 1.005, 0.01)\n",
+    "    assert !close(1.0, 1.005, 0.001)\n",
+    // "Configured `!=` is the complement under the same options."
+    "    assert apart(1.0, 1.005, 0.001)\n",
+    "    assert !apart(1.0, 1.005, 0.01)\n",
+    // NUM-2: an `i64` is not rounded to an `f64` to be compared.
+    "    assert !(9007199254740993 == 9007199254740992.0)\n",
+    // A relative tolerance under one never reaches zero.
+    "    assert !near(1.0, 0.0, 0.5)\n",
+    // NUM-5: the difference, and the tolerance scaled, are no `f64`.
+    "    assert !near(1.0e308, -1.0e308, 1.9)\n",
+    "    assert near(1.0e308, -1.0e308, 2.0)\n",
+    // NUM-7: closeness is not transitive.
+    "    assert close(0.0, 0.75, 1.0)\n",
+    "    assert close(0.75, 1.5, 1.0)\n",
+    "    assert !close(0.0, 1.5, 1.0)\n",
+    // NUM-5: an infinity is close to itself alone, NaN to nothing,
+    // and the two zeros are equal.
+    "    assert close(1.0 / 0.0, 1.0 / 0.0, 1.0)\n",
+    "    assert !close(1.0 / 0.0, -1.0 / 0.0, 1.0)\n",
+    "    assert !close(0.0 / 0.0, 0.0 / 0.0, 1.0)\n",
+    "    assert close(0.0, -0.0, 0.0)\n",
+    "    assert whole(7, 9, 2.0)\n",
+    "    assert !whole(7, 10, 2.0)\n",
+    "    assert mixed(9007199254740993, 9007199254740992.0, 1.0)\n",
+    "    assert !mixed(9007199254740993, 9007199254740992.0, 0.5)\n",
+    "    assert eval(closes, a: [1.0, 2.0], b: [1.4]) == [true, false]\n",
+    "}\n",
+);
+
+/// A tolerance that is no tolerance.
+const CLOSE_FAILS: &str = concat!(
+    "module demo.close.fails\n",
+    "const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
+    "test negative_tolerance { assert close(1.0, 1.0, -1.0) }\n",
+);
+
+/// NUM-4: "Configured `==` accepts absolute (`abs`) and relative
+/// (`rel`) tolerance, each defaulting to zero." The tolerances are
+/// arguments of the provider's function, which makes the test of
+/// NUM-4 and NUM-5 in exact arithmetic.
+///
+/// EXPR-13: "Evaluate a configured binary expression in written order:
+/// left operand, configuration entries in their written order, then
+/// right operand, each once." The call is written in that order, and
+/// Python evaluates its arguments in the order of the call.
+///
+/// NUM-11: "In temporal composition they bind during graph
+/// construction": a lifted comparison takes its tolerance as
+/// configuration, and no input.
+#[test]
+fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
+    let emitted = emit(&[("close.hgl", CLOSE)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_close/__init__.py");
+    for expected in [
+        concat!(
+            "def close(a, b, tolerance):\n",
+            "    return _core.eq__f64_f64_f64_f64(lhs=a, abs=tolerance, rhs=b, rel=0.0)\n",
+        ),
+        concat!(
+            "def near(a, b, share):\n",
+            "    return _core.eq__f64_f64_f64_f64(lhs=a, rel=share, rhs=b, abs=0.0)\n",
+        ),
+        concat!(
+            "def apart(a, b, tolerance):\n",
+            "    return _core.ne__f64_f64_f64_f64(lhs=a, abs=tolerance, rhs=b, rel=0.0)\n",
+        ),
+        concat!(
+            "def _lift_0_eq__f64_f64_f64_f64(lhs: _hg.TS[_py.float], rhs: _hg.TS[_py.float], ",
+            "abs: _py.float) -> _hg.TS[_py.bool]:\n",
+            "    return _core.eq__f64_f64_f64_f64(lhs=lhs.value, rhs=rhs.value, abs=abs, rel=0.0)\n",
+        ),
+        "    return _lift_0_eq__f64_f64_f64_f64(lhs=a, abs=0.5, rhs=b)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a loop in two of its
 /// functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -1622,6 +1720,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("mixed.hgl", CANDIDATES),
         ("div.hgl", DIVISION),
         ("results.hgl", RESULTS),
+        ("close.hgl", CLOSE),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
@@ -1643,7 +1742,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        27,
+        28,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
@@ -1653,7 +1752,8 @@ fn the_generated_tests_pass_on_hgraph() {
 /// (NUM-2: an `i64` result out of range; NUM-3: "The `fail` policy
 /// makes a zero divisor an HGL error with code
 /// `numeric.division_by_zero`"). ERR-5: a failure a `?` meets in a
-/// `when` fails the node, and the test with it. Needs hgraph, as above.
+/// `when` fails the node, and the test with it. NUM-4: "An invalid
+/// tolerance is an HGL error". Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -1663,6 +1763,7 @@ fn a_failure_names_the_statement_that_failed() {
     let mut files = REACH.to_vec();
     files.push(("fails.hgl", DIVISION_FAILS));
     files.push(("node.hgl", RESULT_FAILS));
+    files.push(("close.hgl", CLOSE_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -1670,6 +1771,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("overflows").0,
         emitted.test("whole_by_zero").0,
         emitted.test("strict_by_zero").0,
+        emitted.test("negative_tolerance").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -1691,6 +1793,7 @@ fn a_failure_names_the_statement_that_failed() {
             "failed reach.hgl:26:5 HglError: an i64 result is outside the signed 64-bit range",
             "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
             "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
+            "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
         ]
     );
 

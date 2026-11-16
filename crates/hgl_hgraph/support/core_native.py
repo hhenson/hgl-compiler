@@ -20,6 +20,11 @@ the language's `ok`, `err` and `error` make (ERR-2, ERR-4).
 """
 
 import math as _math
+from fractions import Fraction as _Fraction
+
+# `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
+# parameter below: Python's own is kept under another name.
+_magnitude = abs
 
 _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
@@ -342,39 +347,65 @@ def ge__T_T(lhs, rhs):
     return lhs >= rhs
 
 
-def _exact(abs, rel):
-    if abs != 0.0 or rel != 0.0:
-        raise HglError("comparison within a tolerance is not provided yet")
+def _close(lhs, rhs, abs, rel):
+    """`lhs == rhs` under the tolerances `abs` and `rel` (NUM-4, NUM-5).
+
+    With no tolerance it is exact. Python compares an `int` with a
+    `float` by their exact values, as NUM-2 has a mixed comparison do,
+    and its `==` already has NaN equal to nothing, an infinity equal to
+    itself alone, and the two zeros equal.
+
+    NUM-4: "For finite operands, closeness is the symmetric condition"
+
+        abs(a - b) <= max(abs_tolerance, rel_tolerance * max(abs(a), abs(b)))
+
+    NUM-5: "The finite test must not admit an incorrect result through
+    overflow of intermediate subtraction or scaling." The difference of
+    `1e308` and `-1e308` is no `f64`, and nor is 1.9 times `1e308`: the
+    test is made in exact fractions, which every finite number is.
+    """
+    # NUM-4: "Tolerances must be finite and nonnegative. ... An invalid
+    # tolerance is an HGL error".
+    for name, tolerance in (("abs", abs), ("rel", rel)):
+        if not (_math.isfinite(tolerance) and tolerance >= 0):
+            raise HglError(f"the tolerance `{name}` is not finite and nonnegative")
+    if abs == 0 and rel == 0:
+        return lhs == rhs
+    # NUM-5: "NaN is neither equal nor close to any value, including
+    # itself. Infinities are equal/close only to the same signed
+    # infinity ... Apply these cases before the finite closeness rule."
+    if lhs != lhs or rhs != rhs:
+        return False
+    if _math.isinf(lhs) or _math.isinf(rhs):
+        return lhs == rhs
+    left, right = _Fraction(lhs), _Fraction(rhs)
+    allowed = max(_Fraction(abs), _Fraction(rel) * max(_magnitude(left), _magnitude(right)))
+    return _magnitude(left - right) <= allowed
 
 
 def eq__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs == rhs
+    return _close(lhs, rhs, abs, rel)
 
 
 def eq__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs == rhs
+    return _close(lhs, rhs, abs, rel)
 
 
 def eq__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs == rhs
+    return _close(lhs, rhs, abs, rel)
 
 
+# NUM-4: "Configured `!=` is the complement under the same options."
 def ne__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs != rhs
+    return not _close(lhs, rhs, abs, rel)
 
 
 def ne__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs != rhs
+    return not _close(lhs, rhs, abs, rel)
 
 
 def ne__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    _exact(abs, rel)
-    return lhs != rhs
+    return not _close(lhs, rhs, abs, rel)
 
 
 def lt__i64_f64(lhs, rhs):
