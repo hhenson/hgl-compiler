@@ -408,6 +408,11 @@ fn a_dormant_node_is_warned_of() {
         "fn other(a: f64) {\n",
         "    when modified([]) { }\n",
         "}\n",
+        // The string's value names the warning, however it is spelled.
+        "@suppress_warning(\"node\\u{2e}no_activation\")\n",
+        "fn escaped(a: f64) {\n",
+        "    when modified([]) { }\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),

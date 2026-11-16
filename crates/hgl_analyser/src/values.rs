@@ -1893,9 +1893,9 @@ impl<'a> Typer<'a> {
             .filter_map(|annotation| {
                 tokens(&annotation).find(|token| token.kind() == SyntaxKind::Str)
             })
-            // The string as it is written, between its quotes: a
-            // warning's code has no escape in it.
-            .any(|string| string.text().trim_matches('"') == code)
+            // The string's value, not its spelling: an escape, or a
+            // text block, that says the code names the same warning.
+            .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
     }
 
     /// TIME-8: a capability is not "a capture of an anonymous function
