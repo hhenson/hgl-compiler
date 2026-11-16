@@ -746,7 +746,11 @@ impl<'a> Typer<'a> {
         if none && operation == EndpointOperation::Modified {
             // The selector: `modified([])`, its name to its `)`.
             let selector = list.parent().map_or(at, |call| self.at(&call));
-            self.undriven.push(selector);
+            // Once, where an argument is read a second time for the
+            // candidate it is given to.
+            if !self.undriven.contains(&selector) {
+                self.undriven.push(selector);
+            }
         }
         let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
             None
@@ -3034,10 +3038,14 @@ impl<'a> Typer<'a> {
         else {
             return;
         };
-        // Whose `schedule` it is: core's, or nobody's yet.
+        // Whose `schedule` it is: core's, or nobody's yet. A call that
+        // is not read may be of a local that holds a function, which is
+        // bound, and is not the name the prelude is waited on for.
         let core = self.program.core();
         let cores = match called {
-            Callee::Unread => true,
+            Callee::Unread => !self
+                .bindings
+                .contains_key(&(self.file, callee.span().start)),
             Callee::Function { module, .. } => Some(*module) == core,
             Callee::Candidate { operator, .. } | Callee::Required { operator } => {
                 Some(operator.0) == core
@@ -6438,6 +6446,10 @@ impl<'a> Typer<'a> {
         self.diagnostics.truncate(mark.diagnostics);
         self.locals.truncate(mark.locals);
         self.declared.retain(|_, local| *local < mark.locals);
+        // What was noted of a local that is taken back goes with it:
+        // its number is given to the next local declared.
+        self.aliases.retain(|local, _| *local < mark.locals);
+        self.captures.retain(|local, _| *local < mark.locals);
         self.present.truncate(mark.present);
         if keep_flow {
             self.assigned.truncate(mark.locals);
