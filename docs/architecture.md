@@ -783,6 +783,24 @@ subdirectories, or a single file. Linked directories are followed. A file
 reached twice is read once. A module that an import names must be under
 one of the roots given: nothing is searched for elsewhere.
 
+Core's module is the exception. Every module binds its public
+declarations with no `use` (UNIT-11), so a program is checked with it
+whether or not its roots hold it:
+
+| The source roots | Core's module |
+| --- | --- |
+| Hold no `module core` | The compiler supplies its own: the files of the `spec/hgl_core` pin, built into `hgl` when it is compiled |
+| Hold a `module core` | That one. This is how core itself is checked |
+| Any, with `--no-core` | None is supplied. The names core declares are then bound to nothing |
+
+A module the compiler supplied is not counted in `hgl check`'s summary
+or listed by `--modules`; a diagnostic in it names its file as
+`<core>/...`. It is read under the default limits whatever
+`--nesting-limit` and `--tree-depth-limit` say: those are for the
+program's own source. A test in `hgl_cli` holds the built-in files to the pin:
+a pin that adds a file to core fails it until the list in
+`crates/hgl_cli/src/main.rs` has the file.
+
 ## Planned order
 
 1. Lexer (done).

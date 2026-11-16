@@ -53,8 +53,10 @@ node or token per line; `--fragment declarations` or `--fragment statements`
 parses source that has no `module` line. `hgl check` reads a program, every
 `.hgl` file under the source roots given, and reports what is wrong with
 its modules, declarations, imports, names and written types; `--modules`
-lists what it found. What an expression is, phases and constants are not
-checked yet. `hgl test` checks the
+lists what it found. Core's module, which every module uses with no
+`use`, is the one `hgl` is built with unless the roots hold a `module
+core` of their own; `--no-core` leaves it out. What an expression is,
+phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
 `# expect-error(category, "code")`, and lists its tests; no test can be run
 until there is a target. Exit status is 0 when the source is accepted and

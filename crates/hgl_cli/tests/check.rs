@@ -302,3 +302,90 @@ fn the_conformance_cases_are_one_module() {
     );
     assert!(stdout.contains(" in 1 module: no errors\n"), "{stdout}");
 }
+
+/// UNIT-11: "every module binds its public declarations without a
+/// `use`". The compiler supplies core's module, the one it is built
+/// with, to a program whose source roots hold none. It is not counted
+/// or listed: the counts and the listing are of what the roots hold.
+#[test]
+fn core_is_supplied_when_the_roots_hold_none() {
+    let directory = scratch("core_supplied");
+    write(
+        &directory,
+        "use.hgl",
+        concat!(
+            "module examples.core_use\n",
+            "const fn uses(a: f64, b: f64, n: i64) -> result<f64, error> {\n",
+            "    let real = convert<f64>(n)\n",
+            "    return div_(a, real, zero: .error)\n",
+            "}\n",
+        ),
+    );
+    let root = argument(&directory);
+
+    let supplied = hgl(&["check", "--modules", &root]);
+    let stdout = text(&supplied.stdout);
+    assert!(supplied.status.success(), "{}", text(&supplied.stderr));
+    assert!(
+        stdout.contains("checked 1 file in 1 module: no errors\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("module examples.core_use\n"), "{stdout}");
+    assert!(!stdout.contains("module core\n"), "{stdout}");
+    assert!(!stdout.contains("left for the prelude"), "{stdout}");
+
+    // Without it the names core declares are bound to nothing.
+    let without = hgl(&["check", "--no-core", &root]);
+    let stdout = text(&without.stdout);
+    assert!(stdout.contains("left for the prelude"), "{stdout}");
+    assert!(stdout.contains(" div_\n"), "{stdout}");
+    assert!(stdout.contains(" convert\n"), "{stdout}");
+
+    // A program that brings its own `module core` is checked with that
+    // one, which is then counted and listed with the rest.
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
+    let own = hgl(&["check", "--modules", &root, &argument(&core)]);
+    let stdout = text(&own.stdout);
+    assert!(own.status.success(), "{}", text(&own.stderr));
+    assert!(
+        stdout.contains("checked 3 files in 2 modules: no errors\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("module core\n"), "{stdout}");
+}
+
+/// The limits given to `hgl check` are for the program's own source.
+/// Core's module, which the compiler supplies, is read under the default
+/// ones: a limit too small for core's files reports nothing of them,
+/// and a program the limit cuts down to no module is still counted.
+#[test]
+fn a_limit_is_for_the_programs_source_and_not_for_the_core_supplied() {
+    let directory = scratch("core_limits");
+    write(
+        &directory,
+        "use.hgl",
+        concat!(
+            "module examples.core_limits\n",
+            "const fn uses(a: f64, b: f64) -> f64 => div_(a, b)\n",
+        ),
+    );
+    let root = argument(&directory);
+
+    // Too small for any file: the program's is not built at all.
+    let shallow = hgl(&["check", "--tree-depth-limit", "1", &root]);
+    let stdout = text(&shallow.stdout);
+    let stderr = text(&shallow.stderr);
+    assert_eq!(shallow.status.code(), Some(1), "{stderr}");
+    assert!(
+        stdout.contains("checked 1 file in 0 modules: 1 error\n"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("syntax.nesting_limit"), "{stderr}");
+    assert!(!stderr.contains("<core>"), "{stderr}");
+
+    // Too small for the nesting core's own files have.
+    let flat = hgl(&["check", "--nesting-limit", "1", &root]);
+    let stderr = text(&flat.stderr);
+    assert_eq!(flat.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("<core>"), "{stderr}");
+}

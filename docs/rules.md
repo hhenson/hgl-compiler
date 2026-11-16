@@ -108,7 +108,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-8 | analyser | partial | Any parameter but a pack may have a default; a pack's is rejected under FN-8. A parameter that may be omitted follows every one that may not, and a value function's call may omit one written `T?`. Left: defaults as required constants of the expected type; a temporal default as a constant of its type |
 | UNIT-9 | analyser | planned | Inherited defaults compared; a conflict needs an override |
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
-| UNIT-11 | analyser | partial | When the program has the module `core`, a name nothing nearer binds is its public declaration of that name. Left: a name core does not declare yet is listed, not reported; the module is given among the source roots, not found by the compiler |
+| UNIT-11 | analyser | partial | When the program has the module `core`, a name nothing nearer binds is its public declaration of that name. `hgl` supplies the pinned core's module to a program whose source roots hold none. Left: a name core does not declare yet is listed, not reported |
 | UNIT-12 | analyser | partial | No declaration, import, local, parameter or generic parameter takes a name already in scope, a prelude name included for a declaration, an import alias and a local. Left: a prelude name core does not declare yet |
 
 ## Types and values
