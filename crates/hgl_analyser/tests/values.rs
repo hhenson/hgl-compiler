@@ -3937,6 +3937,39 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
             "m.hgl:20:19 type/argument.constant FN-1",
         ]
     );
+
+    // GEN-8: "The value a call gives a generic value parameter is a
+    // compile-time constant: a literal, an enum member however it is
+    // written (TYPE-7)". A member constructed from a constant is one,
+    // and selects the candidate its member does; one constructed from
+    // a value of the run is none.
+    let generic = module(concat!(
+        "enum Side { buy, sell }\n",
+        "const fn priced<const side: Side>() -> i64 => 1\n",
+        "operator quoted<L, O>(lhs: L) -> O\n",
+        "impl const fn quoted(lhs: f64, side: Side) -> str\n",
+        "    requires side == .buy => \"bid\"\n",
+        "impl const fn quoted(lhs: f64, side: Side) -> f64\n",
+        "    requires side == .sell => lhs\n",
+        "const fn given<const N: i64>(code: i64, price: f64) -> i64 {\n",
+        "    let member = priced(side: Side.sell)\n",
+        "    let numbered = priced(side: Side(1))\n",
+        "    let named = priced(side: Side(\"buy\"))\n",
+        "    let fixed = priced(side: Side(N))\n",
+        "    let bid = quoted(price, side: Side(0))\n",
+        "    let offer = quoted(price, side: Side(\"sell\"))\n",
+        "    return priced(side: Side(code))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        generic.summary(),
+        ["m.hgl:16:25 type/generic.argument_constant GEN-8"]
+    );
+    assert_eq!(
+        locals(&generic, "given")[6..],
+        ["bid: str", "offer: f64"],
+        "a constructed member selects the candidate its member does"
+    );
 }
 
 /// EXPR-9: "`[a: b]` has one pair entry, not a standalone pair value.
