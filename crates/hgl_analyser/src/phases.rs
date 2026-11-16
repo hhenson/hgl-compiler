@@ -19,6 +19,7 @@
 //! bodies.
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
@@ -143,6 +144,9 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                 in_anonymous_function(declaration, file, diagnostics);
             }
         }
+        for test in &module.tests {
+            test_body(&test.syntax, module.files[test.file].file, diagnostics);
+        }
     }
 }
 
@@ -230,6 +234,93 @@ fn in_anonymous_function(declaration: &Declaration, file: FileId, diagnostics: &
             rule,
         ));
     }
+}
+
+/// The block of a named test. TST-3: "A test is a composition-phase
+/// block with assertions. It cannot itself declare state/cache, inject,
+/// lifecycle hooks, when, yield, or return." TST-10: "`assert
+/// raises(\"code\")` requires one literal catalogued execution code."
+///
+/// What an anonymous function in a test holds is that function's, and
+/// not the test's own.
+fn test_body(test: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    for node in own_nodes(test) {
+        match node.kind() {
+            SyntaxKind::StateDecl
+            | SyntaxKind::CacheDecl
+            | SyntaxKind::InjectDecl
+            | SyntaxKind::LifecycleBlock
+            | SyntaxKind::WhenStmt
+            | SyntaxKind::YieldStmt
+            | SyntaxKind::ReturnStmt => {
+                let Some((word, at)) = keyword(&node, file) else {
+                    continue;
+                };
+                diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::TEST_STATEMENT_PHASE,
+                        at,
+                        format!(
+                            "`{}` has no place in a test: a test is a composition block with \
+                             assertions",
+                            word.text()
+                        ),
+                        "TST-3",
+                    )
+                    .with_note("what a test runs is a function it names in `eval`"),
+                );
+            }
+            SyntaxKind::RaisesAssertion => raises_code(&node, file, diagnostics),
+            _ => {}
+        }
+    }
+}
+
+/// TST-10: "`assert raises(\"code\")` requires one literal catalogued
+/// execution code." The argument is a string literal, written out, whose
+/// value the catalogue lists among its execution codes.
+fn raises_code(assertion: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
+    // What stands between the parentheses: every child but the block.
+    let arguments: Vec<SyntaxNode> = assertion
+        .children()
+        .filter(|part| part.kind() != SyntaxKind::Block)
+        .collect();
+    let code = match arguments.as_slice() {
+        [literal] if literal.kind() == SyntaxKind::Literal => tokens(literal)
+            .next()
+            .filter(|token| token.kind() == SyntaxKind::Str)
+            .and_then(|token| decode_string(token.text()).ok()),
+        _ => None,
+    };
+    if code
+        .as_deref()
+        .is_some_and(hgl_diagnostics::catalogue::is_execution)
+    {
+        return;
+    }
+    // The argument, or the word `raises` where there is none.
+    let at = arguments
+        .first()
+        .map(|argument| argument.span())
+        .or_else(|| tokens(assertion).next().map(|word| word.span()));
+    let Some(at) = at else {
+        return;
+    };
+    let message = match &code {
+        Some(code) => format!("`{code}` is no execution code of the catalogue"),
+        None => "`raises` names one execution code, as a string literal".to_string(),
+    };
+    diagnostics.emit(
+        error(
+            Category::Type,
+            codes::TEST_RAISES_CODE,
+            Location::new(file, at),
+            message,
+            "TST-10",
+        )
+        .with_note("an execution code names a failure of a running program: `value.missing_key`"),
+    );
 }
 
 /// The body of a source (SOURCE-1): "A temporal `fn` whose body has a

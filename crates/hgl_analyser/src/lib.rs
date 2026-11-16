@@ -198,6 +198,11 @@ pub mod codes {
     /// A statement of a node's body that is no declaration and no hook
     /// (FN-2).
     pub const NODE_STATEMENT: &str = "node.statement";
+    /// A node's construct or a `return` in a test (TST-3).
+    pub const TEST_STATEMENT_PHASE: &str = "test.statement_phase";
+    /// `assert raises(...)` given what is no literal catalogued
+    /// execution code (TST-10).
+    pub const TEST_RAISES_CODE: &str = "test.raises_code";
     /// A statement a source's shape has no place for (SOURCE-1).
     pub const SOURCE_STATEMENT: &str = "source.statement";
     /// `when` in a source (SOURCE-1).
