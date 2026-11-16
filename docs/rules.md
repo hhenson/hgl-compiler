@@ -311,12 +311,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | ERR-1 | diagnostics | done | Every diagnostic has a category and a code; a warning does not reject |
-| ERR-2 | analyser | planned | `ok` and `err` need a complete result type (`result.context_type`) |
+| ERR-2 | analyser | partial | `ok(value)` and `err(value)` take one value by position and no generic argument (`generic.argument_count`), and both types from the complete `result<T, E>` the place expects, a nullable one included; with none it is `result.context_type`. The payload is read as its side's type. Left: a result expected through a generic parameter still being inferred; equality |
 | ERR-2 | transpiler | planned | Result equality; atomic publication |
-| ERR-3 | analyser | planned | Tag facts from `is_ok` and `is_err` guards (`result.required_variant`) |
-| ERR-4 | analyser | planned | Typing of `error(message, code)` |
+| ERR-3 | analyser | partial | `is_ok` and `is_err` take one result by position and give a `bool`. A direct guard on an immutable result binding proves its tag: in the branch it holds for, across `!` and the Boolean connectives, and after a branch that returns. `binding.value` and `binding.error` need the matching fact (`result.required_variant`), and have the T and the E. In a graph a test of a connection gives no fact. Left: a fact carried through a `switch` or a loop |
+| ERR-4 | analyser | partial | `error(message: text, code: optional_code)`: each by its name, `message` a `str` and required, `code` a `str?`; `.message` is a `str` and `.code` a `str?`. Left: `.context` and its record |
 | ERR-4 | transpiler | planned | Provenance attached on first graph failure and kept |
-| ERR-5 | analyser | planned | Where `?` may propagate (`result.propagation_type`, `result.propagation_phase`) |
+| ERR-5 | analyser | partial | `value?` has the T of a `result<T, E>`. In a value function the enclosing result is a `result<U, E>` of the same E, and in a `when` the E is `error` (`result.propagation_type`, which what is no result, a nullable included, is too); in a graph, `start`, `stop` and a node's declarations it is `result.propagation_phase`. Left: a generator, whose body is not read; an anonymous function |
 | ERR-5 | transpiler | planned | `?` evaluates once; failure returns or fails the node |
 | ERR-6 | analyser | partial | A list is indexed by an `i64` and a dictionary by its key, for the element or the value. Left: `at`, `get` and their fallbacks (`lookup.default_type`, `nullable.required_presence`) |
 | ERR-6 | transpiler | planned | A strict read fails on absence (`value.missing_key`); `get` fallback |
@@ -330,7 +330,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
 | ERR-12 | analyser | partial | In a value function a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns. A nullable where its payload is required, or as an operand no candidate takes, is `nullable.required_presence`. Left: temporal bodies |
 | ERR-13 | parser | done | The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?` |
-| ERR-13 | analyser | planned | `ok`, `err`, `is_ok`, `is_err` and `capture` as the forms the chapter defines, taken by no declaration, alias, parameter or local |
+| ERR-13 | analyser | partial | `ok`, `err`, `is_ok` and `is_err` as the callee of a call are the forms, looked up nowhere; no declaration, import alias, parameter or local takes one of the five names (`name.duplicate`). Left: `capture` as its form (ERR-7) |
 
 ## Tests and eval
 

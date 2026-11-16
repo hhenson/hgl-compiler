@@ -31,7 +31,7 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program,
 };
-use crate::{INJECTABLES, codes, error};
+use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
 /// [`Module::decisions`] and adding to [`Module::prelude_names`].
@@ -135,6 +135,18 @@ fn identifiers(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|element| element.into_token())
         .filter(|token| token.kind() == SyntaxKind::Ident)
+}
+
+/// True when `node` is the name a call calls, `name(...)`, or is a
+/// call that writes generic arguments after its name, `name<T>(...)`.
+fn is_callee(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::NameExpr => node.parent().is_some_and(|call| {
+            call.kind() == SyntaxKind::CallExpr && call.children().next().as_ref() == Some(node)
+        }),
+        SyntaxKind::TypedConstructor | SyntaxKind::UndecidedConstructor => true,
+        _ => false,
+    }
 }
 
 /// The name a parameter or generic parameter declares: the last
@@ -443,11 +455,22 @@ impl Resolver<'_> {
         // generic type, function, or operator in an expression, `<`
         // opens generic arguments rather than a comparison."
         let binding = self.name_of(node);
+        // ERR-13: a result form's name is the form, whatever follows
+        // it: `ok<i64>(1)` is that call given generic arguments, which
+        // the pass that reads it rejects (ERR-2), and no comparison.
+        let form = child(node, SyntaxKind::QualifiedName).is_none()
+            && identifiers(node)
+                .next()
+                .is_some_and(|name| RESULT_FORMS.contains(&name.text()));
         self.decisions.push(Decision {
             at: Location::new(self.file_id, node.span()),
-            constructor: binding.map(|binding| {
-                self.is_generic_type(&binding) || self.is_generic_callable(&binding)
-            }),
+            constructor: if form {
+                Some(true)
+            } else {
+                binding.map(|binding| {
+                    self.is_generic_type(&binding) || self.is_generic_callable(&binding)
+                })
+            },
         });
         // The names inside are the same names under either reading, so
         // they are resolved as they stand.
@@ -583,6 +606,25 @@ impl Resolver<'_> {
             frame.later.remove(name);
         }
 
+        // ERR-13: "No declaration, import alias, parameter, or local
+        // takes one of them (UNIT-12)".
+        if RESULT_FORMS.contains(&name) {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::NAME_DUPLICATE,
+                    at,
+                    format!("`{name}` is the name of a result form, and nothing else takes it"),
+                    "ERR-13",
+                )
+                .with_note(format!(
+                    "{} takes none of `{}`",
+                    kind.describe(),
+                    RESULT_FORMS.join("`, `")
+                )),
+            );
+        }
+
         // A binding of an enclosing block, function or declaration.
         let enclosing = self
             .frames
@@ -680,6 +722,13 @@ impl Resolver<'_> {
             return self.qualified(&alias, &name);
         }
         let name = identifiers(node).next()?;
+        // ERR-13: "as the callee of a call each is the form this
+        // chapter defines, whatever else is in scope." So the name is
+        // looked up nowhere, and is not one the prelude is waited on
+        // for.
+        if RESULT_FORMS.contains(&name.text()) && is_callee(node) {
+            return None;
+        }
         self.lookup(&name)
     }
 

@@ -10,7 +10,7 @@ use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::program::{DeclarationKind, ImportKind, Module, OperatorRef, PreludeName, Program};
-use crate::{codes, error};
+use crate::{RESULT_FORMS, codes, error};
 
 /// Resolves the imports of every module and reports what is wrong with
 /// them, then finds the operator of each `impl fn`.
@@ -178,6 +178,7 @@ fn check_declarations_against_imports(module: &Module, diagnostics: &mut Diagnos
 /// UNIT-12: "outside core's mandatory module neither a declaration nor
 /// an import alias takes a prelude name."
 fn check_names_against_prelude(program: &Program, index: usize, diagnostics: &mut Diagnostics) {
+    check_names_against_result_forms(&program.modules[index], diagnostics);
     let Some(core) = program.core().filter(|core| *core != index) else {
         return;
     };
@@ -224,6 +225,40 @@ fn check_names_against_prelude(program: &Program, index: usize, diagnostics: &mu
                     )
                     .with_related(bound.at, "declared here, in core's module"),
                 );
+            }
+        }
+    }
+}
+
+/// ERR-13: "`ok`, `err`, `is_ok`, `is_err`, and `capture` are
+/// contextual names ... No declaration, import alias, parameter, or
+/// local takes one of them (UNIT-12)". Core's module is held to it as
+/// any other is.
+fn check_names_against_result_forms(module: &Module, diagnostics: &mut Diagnostics) {
+    let mut report = |at: Location, name: &str, what: &str| {
+        diagnostics.emit(
+            error(
+                Category::Name,
+                codes::NAME_DUPLICATE,
+                at,
+                format!("`{name}` is the name of a result form, and nothing else takes it"),
+                "ERR-13",
+            )
+            .with_note(format!(
+                "{what} takes none of `{}`",
+                RESULT_FORMS.join("`, `")
+            )),
+        );
+    };
+    for declaration in &module.declarations {
+        if declaration.kind.binds_name() && RESULT_FORMS.contains(&declaration.name.as_str()) {
+            report(declaration.at, &declaration.name, "a declaration");
+        }
+    }
+    for file in &module.files {
+        for import in &file.imports {
+            if import.kind == ImportKind::Alias && RESULT_FORMS.contains(&import.name.as_str()) {
+                report(import.at, &import.name, "an import alias");
             }
         }
     }

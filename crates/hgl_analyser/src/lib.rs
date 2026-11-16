@@ -293,6 +293,17 @@ pub mod codes {
     /// A value's type is not the type its place requires (EXPR-5),
     /// or `null` stands where the type is not nullable (TYPE-14).
     pub const TYPE_MISMATCH: &str = "type.mismatch";
+    /// `ok` or `err` where no complete `result<T, E>` is expected
+    /// (ERR-2).
+    pub const RESULT_CONTEXT_TYPE: &str = "result.context_type";
+    /// `.value` or `.error` of a result no guard has proved a success,
+    /// or a failure (ERR-3).
+    pub const RESULT_REQUIRED_VARIANT: &str = "result.required_variant";
+    /// `?` on what is no result, or whose failure the enclosing
+    /// function does not return (ERR-5).
+    pub const RESULT_PROPAGATION_TYPE: &str = "result.propagation_type";
+    /// `?` where nothing propagates: composition and lifecycle (ERR-5).
+    pub const RESULT_PROPAGATION_PHASE: &str = "result.propagation_phase";
     /// A value that may be null where its payload is required (ERR-12).
     pub const NULLABLE_REQUIRED_PRESENCE: &str = "nullable.required_presence";
     /// A `var` is read on a path that has given it no value
@@ -463,6 +474,13 @@ pub const CORE_FILES: [(&str, &str); 2] = [
         include_str!("../../../spec/hgl_core/hgl/native/scalar_operators.hgl"),
     ),
 ];
+
+/// The contextual names of the result forms (ERR-13): "`ok`, `err`,
+/// `is_ok`, `is_err`, and `capture` are contextual names (LEX-10): as
+/// the callee of a call each is the form this chapter defines, whatever
+/// else is in scope. No declaration, import alias, parameter, or local
+/// takes one of them".
+pub const RESULT_FORMS: [&str; 5] = ["ok", "err", "is_ok", "is_err", "capture"];
 
 /// The names `inject` may name (TIME-8): "The injectables are `out`,
 /// `logger`, `clock`, and `scheduler`, and the proposed `alarm` and
