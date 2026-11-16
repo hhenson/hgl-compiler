@@ -440,10 +440,16 @@ impl<'a> Typer<'a> {
                 "TIME-9",
             ));
         }
-        // The endpoints named: one, or the entries of a sequence.
+        // The endpoints named: one, or for a selector the entries of a
+        // sequence (TIME-3: `valid([])`). Any other operation takes one
+        // endpoint by its name, and a sequence is none.
+        let selector = matches!(
+            operation,
+            EndpointOperation::Valid | EndpointOperation::Modified
+        );
         let inputs: Option<Vec<LocalId>> = arguments.first().filter(|_| most == 1).map(|first| {
             let entries: Vec<SyntaxNode> = match first.kind() {
-                SyntaxKind::SequenceExpr => first.children().collect(),
+                SyntaxKind::SequenceExpr if selector => first.children().collect(),
                 _ => vec![first.clone()],
             };
             entries
