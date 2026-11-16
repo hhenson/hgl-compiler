@@ -3972,4 +3972,41 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
         ["bid: str", "offer: f64", "plain: str"],
         "a constructed member selects the candidate its member does"
     );
+
+    // A default is read in the file it is written in, which may be of
+    // another module. Only a call of the option's own enum constructs
+    // a member: `choose(0)` is a call of a function, and says nothing
+    // of which member it gives.
+    let elsewhere = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export enum Side { buy, sell }\n",
+                "const fn choose(code: i64) -> Side => Side.sell\n",
+                "operator quoted<L, O>(lhs: L) -> O\n",
+                "impl const fn quoted(lhs: f64, side: Side = Side(0)) -> str\n",
+                "    requires side == .buy => \"bid\"\n",
+                "impl const fn quoted(lhs: i64, side: Side = choose(0)) -> str\n",
+                "    requires side == .buy => \"bid\"\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib::{quoted}\n",
+                "const fn uses(price: f64, count: i64) {\n",
+                "    let constructed = quoted(price)\n",
+                "    let called = quoted(count)\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(elsewhere.summary(), NONE);
+    assert_eq!(
+        locals(&elsewhere, "uses")[2..],
+        ["constructed: str", "called: _"],
+        "`choose(0)` is not read as the member numbered 0"
+    );
 }
