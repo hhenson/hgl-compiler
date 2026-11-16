@@ -1300,6 +1300,8 @@ only where the program reaches it, at core's source.
 | A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. The analyser says which member a constant comes to, however it is written (TYPE-7), and the target reads none of its spelling. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `operator` | Nothing: its candidates are the functions |
+| `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
+| `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
 | `ok(value)`, `err(value)`, `error(message: m, code: c)` (ERR-2, ERR-4) | `_core.Ok(value)`, `_core.Err(value)`, `_core.Error(message=m, code=c)`: values of the provider's, equal when their parts are |
 | `is_ok(r)`, `is_err(r)`; `r.value`, `r.error`; `e.message`, `e.code` (ERR-3, ERR-4) | `_py.isinstance(r, _core.Ok)`, `_py.isinstance(r, _core.Err)`; the attribute of the same name |
 | `r?` in a value function (ERR-5) | `_core.propagated(r)`, which gives a success's value and raises for a failure. The function's body is in a `try`, and returns the failure raised |
@@ -1321,7 +1323,7 @@ for each input through hgraph's own `eval_node` and ends the result at
 its last publication (TST-6).
 
 Reported as not written yet (`target.unsupported`): a type other than
-the four scalars above, a nullable among them; structs and enums; a
+the four scalars above and an enum, a nullable among them; structs; a
 temporal candidate of an operator, a native declaration of a program,
 and a candidate with the parameter types of another of its module;
 generic temporal functions;

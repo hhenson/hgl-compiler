@@ -123,6 +123,27 @@ def succeeded(result):
     raise HglError(result.error.message, code=result.error.code)
 
 
+def member(enum, value):
+    """`Side(1)` or `Side("buy")`: the member of `enum` with that number
+    or that exact name (TYPE-7). "A value that is none fails where it
+    is evaluated."
+
+    A member's name is kept from `Enum`'s own as the compiler keeps
+    it: one that starts with `_` or is `mro`, under any number of
+    `hgl_`, has one more `hgl_` before it.
+    """
+    try:
+        if isinstance(value, str):
+            rest = value
+            while rest.startswith("hgl_"):
+                rest = rest[4:]
+            kept = rest.startswith("_") or rest == "mro"
+            return enum["hgl_" + value if kept else value]
+        return enum(value)
+    except (KeyError, ValueError):
+        raise HglError(f"`{enum.__name__}` has no member {value!r}") from None
+
+
 def _i64(value):
     if not _I64_MIN <= value <= _I64_MAX:
         raise HglError("an i64 result is outside the signed 64-bit range")

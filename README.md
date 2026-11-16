@@ -30,7 +30,7 @@ the front end. The first target is the
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
 | Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests run on hgraph (`hgl test --target hgraph`), where the target writes what they need |
 | Optimiser | planned |
-| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`) |
+| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`) |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
 Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).

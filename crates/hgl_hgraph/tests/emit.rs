@@ -1533,6 +1533,125 @@ fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
     }
 }
 
+/// Enums: members, constructions, and an enum as the type of an
+/// input, an output and a configuration. `Side` is declared after the
+/// function that first names it.
+const ENUMS: &str = concat!(
+    "module demo.enums\n",
+    "\n",
+    "const fn opposite(side: Side) -> Side {\n",
+    "    if side == .buy { return .sell }\n",
+    "    if side == Side.sell { return .buy }\n",
+    "    return side\n",
+    "}\n",
+    "\n",
+    "fn flipped(side: Side) -> Side => opposite(side)\n",
+    "\n",
+    "enum Side { buy, sell = 5, hold }\n",
+    "enum Odd { mro, _x_, class, hgl_mro, name }\n",
+    "\n",
+    "const fn numbered(number: i64) -> Side => Side(number)\n",
+    "const fn named(text: str) -> Side => Side(text)\n",
+    "const fn odd(text: str) -> Odd => Odd(text)\n",
+    "\n",
+    "fn chosen(value: i64, const other: Side) -> Side {\n",
+    "    when {\n",
+    "        if value == 0 { return Side.buy }\n",
+    "        return other\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn fixed(side: Side) -> bool => side == .hold\n",
+    "\n",
+    "test enums {\n",
+    "    assert opposite(.buy) == .sell\n",
+    "    assert opposite(Side.sell) == Side.buy\n",
+    "    assert opposite(.hold) == .hold\n",
+    // A member by its number, and by its exact name.
+    "    assert Side(5) == .sell\n",
+    "    assert Side(\"hold\") == Side(6)\n",
+    "    assert numbered(0) == .buy\n",
+    "    assert named(\"sell\") == .sell\n",
+    // Names Python's `Enum` keeps for itself, and a keyword.
+    "    assert odd(\"mro\") == .mro\n",
+    "    assert odd(\"_x_\") == Odd._x_\n",
+    "    assert odd(\"class\") == .class\n",
+    "    assert odd(\"hgl_mro\") == .hgl_mro\n",
+    "    assert odd(\"mro\") != odd(\"hgl_mro\")\n",
+    "    assert odd(\"name\") == .name\n",
+    "    assert eval(flipped, side: [.buy, _, .sell, .hold]) == [.sell, _, .buy, .hold]\n",
+    "    assert eval(chosen, value: [0, 7], other: .hold) == [.buy, .hold]\n",
+    "    assert eval(fixed, side: [.buy, .hold]) == [false, true]\n",
+    "}\n",
+);
+
+/// Constructions of a member from a value that is none of the enum's.
+const ENUM_FAILS: &str = concat!(
+    "module demo.enums.fails\n",
+    "enum Side { buy, sell = 5, hold }\n",
+    "const fn numbered(number: i64) -> Side => Side(number)\n",
+    "const fn named(text: str) -> Side => Side(text)\n",
+    "test no_number { assert numbered(9) == .buy }\n",
+    "test no_name { assert named(\"none\") == .buy }\n",
+);
+
+/// TYPE-7: "Enum members are distinct typed constants with distinct
+/// names. ... Unnumbered numbering starts at zero and increments the
+/// previous member; explicit numbers reset the next value. ... A call
+/// of the enum's name constructs a member ... `Side(1)` is the member
+/// whose number is 1, and `Side("buy")` the member of that exact name.
+/// ... a value that is none fails where it is evaluated."
+///
+/// An enum is a Python `Enum`, which hgraph takes as a scalar. It is
+/// written before the functions of its module, whose annotations name
+/// it where they are defined.
+#[test]
+fn an_enum_is_a_python_enum_and_a_scalar() {
+    let emitted = emit(&[("enums.hgl", ENUMS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_enums/__init__.py");
+    for expected in [
+        "import enum as _enum\n",
+        "Side = _enum.Enum(\"Side\", [(\"buy\", 0), (\"sell\", 5), (\"hold\", 6)])\n",
+        // A name that `Enum` keeps has `hgl_` before it, and so has one
+        // that would then be taken for it.
+        concat!(
+            "Odd = _enum.Enum(\"Odd\", [(\"hgl_mro\", 0), (\"hgl__x_\", 1), (\"class\", 2), ",
+            "(\"hgl_hgl_mro\", 3), (\"name\", 4)])\n",
+        ),
+        concat!(
+            "def opposite(side):\n",
+            "    if _core.eq__T_T(lhs=side, rhs=Side[\"buy\"]):\n",
+            "        return Side[\"sell\"]\n",
+        ),
+        "def numbered(number):\n    return _core.member(Side, number)\n",
+        // An input, an output and a configuration of the enum.
+        concat!(
+            "@_hg.compute_node\n",
+            "def chosen(value: _hg.TS[_py.int], other: Side) -> _hg.TS[Side]:\n",
+        ),
+        concat!(
+            "def _lift_1_eq__T_T(lhs: _hg.TS[Side], rhs: Side) -> _hg.TS[_py.bool]:\n",
+            "    return _core.eq__T_T(lhs=lhs.value, rhs=rhs)\n",
+        ),
+        "    return _lift_1_eq__T_T(lhs=side, rhs=Side[\"hold\"])\n",
+        // A trace of members.
+        concat!(
+            "_harness.evaluate(flipped, side=[Side[\"buy\"], None, Side[\"sell\"], Side[\"hold\"]]) == ",
+            "[Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]]",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // The enums come before the function that is declared before them.
+    let at = |text: &str| python.find(text).expect("it is written");
+    assert!(at("Side = _enum.Enum(") < at("def opposite("));
+    assert!(at("Odd = _enum.Enum(") < at("def opposite("));
+}
+
 /// A program with forms that are not written: a loop in two of its
 /// functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -1721,6 +1840,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("div.hgl", DIVISION),
         ("results.hgl", RESULTS),
         ("close.hgl", CLOSE),
+        ("enums.hgl", ENUMS),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
@@ -1742,7 +1862,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        28,
+        29,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
@@ -1753,7 +1873,9 @@ fn the_generated_tests_pass_on_hgraph() {
 /// makes a zero divisor an HGL error with code
 /// `numeric.division_by_zero`"). ERR-5: a failure a `?` meets in a
 /// `when` fails the node, and the test with it. NUM-4: "An invalid
-/// tolerance is an HGL error". Needs hgraph, as above.
+/// tolerance is an HGL error". TYPE-7: an enum constructed from "a
+/// value that is none fails where it is evaluated". Needs hgraph, as
+/// above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -1764,6 +1886,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("fails.hgl", DIVISION_FAILS));
     files.push(("node.hgl", RESULT_FAILS));
     files.push(("close.hgl", CLOSE_FAILS));
+    files.push(("enums.hgl", ENUM_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -1772,6 +1895,8 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("whole_by_zero").0,
         emitted.test("strict_by_zero").0,
         emitted.test("negative_tolerance").0,
+        emitted.test("no_number").0,
+        emitted.test("no_name").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -1794,6 +1919,8 @@ fn a_failure_names_the_statement_that_failed() {
             "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
             "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
             "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
+            "failed enums.hgl:5:18 HglError: `Side` has no member 9",
+            "failed enums.hgl:6:16 HglError: `Side` has no member 'none'",
         ]
     );
 
