@@ -468,6 +468,10 @@ pub enum ExprKind {
     Tuple(Vec<Expr>),
     /// `[a, b]`: a sequence of values. Its type says what it makes.
     Sequence(Vec<Expr>),
+    /// `[key: value, ...]`: a sequence of pairs, which the type its
+    /// place expects makes a dictionary (EXPR-9). Each pair is its key
+    /// and its value.
+    Pairs(Vec<(Expr, Expr)>),
     /// An expression no pass reads yet, or one that has been reported.
     Unread,
 }

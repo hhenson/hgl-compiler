@@ -1896,6 +1896,9 @@ impl<'a> Typer<'a> {
             }
             ExprKind::Index { base, index } => join(self.category(base), self.category(index)),
             ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => all(&mut entries.iter()),
+            ExprKind::Pairs(entries) => {
+                all(&mut entries.iter().flat_map(|(key, value)| [key, value]))
+            }
             ExprKind::Block {
                 value: Some(value), ..
             } => self.category(value),
@@ -2256,9 +2259,9 @@ impl<'a> Typer<'a> {
             SyntaxKind::StateDecl => Some("the value of a `state`"),
             SyntaxKind::CacheDecl => Some("the value of a `cache`"),
             SyntaxKind::TupleExpr => Some("an entry of a tuple"),
-            // A sequence with a pair, `[key: value]`, is not read yet,
-            // and so neither is what a dictionary holds.
             SyntaxKind::SequenceExpr => Some("an entry of a list or a set"),
+            // `[key: value]`: either side of a dictionary's entry.
+            SyntaxKind::SequencePair => Some("an entry of a dictionary"),
             SyntaxKind::ReturnStmt => Some("what is returned"),
             // `yield time: value`: the value is what the source
             // publishes.
@@ -2461,6 +2464,77 @@ impl<'a> Typer<'a> {
             .is_some_and(|parameter| !parameter.constant)
     }
 
+    /// `[key: value, ...]` (EXPR-9): "`[a: b]` has one pair entry, not a
+    /// standalone pair value ... The use site and expected type
+    /// constrain element types, keys, ordering, uniqueness, and
+    /// placeholder admission; syntax alone does not select a
+    /// dictionary, timed trace, or sparse delta."
+    ///
+    /// So pairs are a dictionary where one is expected: each key is
+    /// read as its key type and each value as its value type. Where
+    /// nothing is expected, nothing says what they are
+    /// (`sequence.context_type`); where another type that is known is
+    /// expected, the place reports that this is none of it.
+    fn pairs(
+        &mut self,
+        node: &SyntaxNode,
+        items: &[SyntaxNode],
+        expected: Option<&Type>,
+        unexpected: bool,
+    ) -> (ExprKind, Type) {
+        let sides = match expected {
+            Some(Type::Dict { key, value }) => Some(((**key).clone(), (**value).clone())),
+            _ => None,
+        };
+        if sides.is_none() && unexpected {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::SEQUENCE_CONTEXT,
+                    self.at(node),
+                    "nothing here says what these pairs make: write the type".to_string(),
+                    "EXPR-9",
+                )
+                .with_note("pairs are a dictionary where one is expected: `let book: dict<str, f64> = [\"a\": 1.0]`"),
+            );
+        }
+        let unknown = Type::Unknown;
+        let (key_type, value_type) = match &sides {
+            Some((key, value)) => (key, value),
+            None => (&unknown, &unknown),
+        };
+        let entries: Vec<(Expr, Expr)> = items
+            .iter()
+            .filter(|item| item.kind() == SyntaxKind::SequencePair)
+            .filter_map(|pair| {
+                let mut parts = pair.children();
+                let (key, value) = (parts.next()?, parts.next()?);
+                let key = self.expression(&key, Some(key_type));
+                let value = self.expression(&value, Some(value_type));
+                Some(if sides.is_some() {
+                    (
+                        self.fit(key, key_type, "a dictionary's key"),
+                        self.fit(value, value_type, "a dictionary's value"),
+                    )
+                } else {
+                    (key, value)
+                })
+            })
+            .collect();
+        let ty = match (expected, &sides) {
+            (Some(expected), Some(_)) => expected.clone(),
+            // A place whose type is known and is no dictionary is given
+            // a dictionary of what is not known, which it reports as
+            // none of what it expects.
+            (Some(expected), None) if !open(expected) => Type::Dict {
+                key: Box::new(Type::Unknown),
+                value: Box::new(Type::Unknown),
+            },
+            _ => Type::Unknown,
+        };
+        (ExprKind::Pairs(entries), ty)
+    }
+
     /// `(a, b)`. An expected tuple of as many elements gives each its
     /// expected type.
     fn tuple(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
@@ -2512,14 +2586,23 @@ impl<'a> Typer<'a> {
         // the same as what is expected not being known.
         let unexpected = expected.is_none();
         let items: Vec<SyntaxNode> = node.children().collect();
-        if items
-            .iter()
-            .any(|item| matches!(item.kind(), SyntaxKind::SequencePair | SyntaxKind::Hole))
-        {
+        // EXPR-8: "Harness `_` and timed cells exist only in test
+        // traces". A sequence with a `_` is for the part that reads
+        // those.
+        if items.iter().any(|item| item.kind() == SyntaxKind::Hole) {
             return (ExprKind::Unread, Type::Unknown);
         }
         // A sequence is no `null`: of a `set<i64>?` expected, the set.
         let expected = not_null(expected);
+        // EXPR-9: "Entries are either all values or all colon-separated
+        // pairs", which the parser holds a sequence to. Pairs, and no
+        // entries where a dictionary is expected, are read as one.
+        let pairs = items
+            .iter()
+            .any(|item| item.kind() == SyntaxKind::SequencePair);
+        if pairs || (items.is_empty() && matches!(expected, Some(Type::Dict { .. }))) {
+            return self.pairs(node, &items, expected, unexpected);
+        }
         let element = match expected {
             Some(Type::List { element, .. }) | Some(Type::Set(element)) => Some(&**element),
             _ => None,
@@ -3512,6 +3595,9 @@ impl<'a> Typer<'a> {
             ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
                 entries.iter().all(|entry| self.is_fixed(entry))
             }
+            ExprKind::Pairs(entries) => entries
+                .iter()
+                .all(|(key, value)| self.is_fixed(key) && self.is_fixed(value)),
             _ => false,
         }
     }

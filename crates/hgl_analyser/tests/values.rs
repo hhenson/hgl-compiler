@@ -3905,3 +3905,59 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
         ]
     );
 }
+
+/// EXPR-9: "`[a: b]` has one pair entry, not a standalone pair value.
+/// Empty brackets have no entries. The use site and expected type
+/// constrain element types, keys, ordering, uniqueness, and placeholder
+/// admission; syntax alone does not select a dictionary, timed trace,
+/// or sparse delta."
+#[test]
+fn pairs_are_a_dictionary_where_one_is_expected() {
+    let checked = module(concat!(
+        "const fn made() -> dict<str, f64> {\n",
+        // An integer literal is an `f64` where one is expected; no
+        // entries make an empty dictionary; a value may be a sequence.
+        "    let book: dict<str, f64> = [\"a\": 1.0, \"b\": 2]\n",
+        "    let empty: dict<str, i64> = []\n",
+        "    let nested: dict<str, list<i64>> = [\"a\": [1, 2], \"b\": []]\n",
+        // Nothing says what the pairs make.
+        "    let loose = [\"a\": 1.0]\n",
+        // A key, and a value, of another type; a place that takes no
+        // dictionary.
+        "    let keyed: dict<str, f64> = [1: 1.0]\n",
+        "    let valued: dict<str, f64> = [\"a\": \"text\"]\n",
+        "    let listed: list<f64> = [\"a\": 1.0]\n",
+        "    return [\"x\": 1.5]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:17 type/sequence.context_type EXPR-9",
+            "m.hgl:7:34 type/type.mismatch EXPR-5",
+            "m.hgl:8:40 type/type.mismatch EXPR-5",
+            "m.hgl:9:29 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "made")[..3],
+        [
+            "book: dict<str, f64>",
+            "empty: dict<str, i64>",
+            "nested: dict<str, list<i64>>",
+        ]
+    );
+    // `["x": 1.5]`: the pairs of the function's result.
+    let Some(Stmt::Return {
+        value: Some(returned),
+        ..
+    }) = body(&checked, "made").statements.last()
+    else {
+        panic!("`made` ends in a `return`");
+    };
+    assert_eq!(returned.ty.to_string(), "dict<str, f64>");
+    let ExprKind::Pairs(entries) = &returned.kind else {
+        panic!("the result is a sequence of pairs");
+    };
+    assert_eq!(entries.len(), 1);
+}

@@ -589,16 +589,14 @@ retained:
 | --- | --- |
 | `clock.evaluation_time` | A property, of the type the native type declares for it (NATIVE-6) |
 | `let bound = clock`, `stamped(clock, value)` | Uses: a `let`, and an argument of a parameter of its type |
-| `(clock, value)`, `[clock]`, `Kept(value: clock)`, `held = clock` of a `state` or `cache`, `out = clock`, `return clock` | Retained: `capability.as_value` |
+| `(clock, value)`, `[clock]`, `["at": clock]`, `Kept(value: clock)`, `held = clock` of a `state` or `cache`, `out = clock`, `return clock` | Retained: `capability.as_value` |
 | `boxed(clock)` where the parameter is written as a generic parameter or `any` | `capability.as_value`: such a parameter takes any type, and no capability |
 | `Clock` written anywhere but as the whole type of a parameter of a `const fn` or a native value function | `capability.as_value` |
 
 A parameter of a capability's type in a value function is held to the
 same rule as the injected local it was given. Where a program's own
 `module core` declares no capability type, a capability has no type and
-its properties none, and what is retained is still reported. A
-capability in a dictionary, whose literal is not read yet, is not
-reported yet.
+its properties none, and what is retained is still reported.
 
 A native type's properties are kept as `Detail::Native`, each a name
 and an ordinary value type, and a member access on a value of the type
@@ -715,6 +713,7 @@ The pass is built form by form. So far it reads:
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
 | `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
+| A sequence of pairs, `[key: value]` | EXPR-9 | A dictionary where one is expected (`ExprKind::Pairs`): each key is read as the key type and each value as the value type, and no entries make an empty one. With nothing expected the pairs are `sequence.context_type`: syntax alone selects no dictionary |
 | A test against null | ERR-12, ERR-3 | `value == null` and `value != null` prove an immutable nullable parameter, `let` or loop binding is not null: in the branch the test holds for, in the right operand of `&&` or `\|\|` it guards, and from a branch that returns to the end of the block the `if` stands in. There the binding is read as its payload's type. A `var`, a saved bool and a test of anything else prove nothing |
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
@@ -743,7 +742,7 @@ expected, or as an operand no candidate takes, is
 
 What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
-pair sequence, a call of a name left for the prelude or of an operator
+sequence with a `_`, a call of a name left for the prelude or of an operator
 that has a pack, a generic function's parameter and result types, the
 payload of a nullable, an error's `.context`, and a conversion written
 `str(value)`. The arguments of a call that is not
