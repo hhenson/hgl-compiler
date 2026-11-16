@@ -66,9 +66,11 @@ fn an_assert_takes_a_wiring_time_bool() {
         "}\n",
         "test rejected {\n",
         "    let bound = limit()\n",
-        // No bool.
+        // No bool: a number, a string, and a list whose entries say
+        // nothing of what it holds.
         "    assert bound\n",
         "    assert \"text\"\n",
+        "    assert []\n",
         // A connection: what `forward` publishes is known only as the
         // graph runs.
         "    assert forward(bound) == 3\n",
@@ -82,8 +84,9 @@ fn an_assert_takes_a_wiring_time_bool() {
         [
             "m.hgl:22:12 type/type.mismatch TST-4",
             "m.hgl:23:12 type/type.mismatch TST-4",
-            "m.hgl:24:12 phase/connection.as_constant TST-4",
-            "m.hgl:26:22 type/type.mismatch EXPR-5",
+            "m.hgl:24:12 type/type.mismatch TST-4",
+            "m.hgl:25:12 phase/connection.as_constant TST-4",
+            "m.hgl:27:22 type/type.mismatch EXPR-5",
         ]
     );
     // `missing` is a name nothing binds, left for the prelude.

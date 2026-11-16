@@ -525,9 +525,10 @@ impl<'a> Typer<'a> {
             return Stmt::AssertRaises { body, at };
         }
         let condition = self.expression(&asserted, Some(&BOOL));
-        // What is not known has been reported, or is for a later part:
-        // an `eval`, and so a comparison with one (ERR-9).
-        if whole(&condition.ty) && !open(&condition.ty) && condition.ty != BOOL {
+        // What is not known at all has been reported, or is for a later
+        // part: an `eval`, and so a comparison with one (ERR-9). A type
+        // known in part is known to be no `bool`: the list of `[]`.
+        if !open(&condition.ty) && condition.ty != BOOL {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::TYPE_MISMATCH,
