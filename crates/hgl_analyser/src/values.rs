@@ -1673,6 +1673,27 @@ impl<'a> Typer<'a> {
                 LocalKind::Var | LocalKind::State | LocalKind::Cache
             );
         let target = self.expression(place, None);
+        // NATIVE-6: "None is assigned." A property is read-only
+        // wherever the native value is reached from: `items[0].size`.
+        if let Some(holder) = self.native_property(&target) {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::BINDING_IMMUTABLE,
+                self.at(place),
+                format!(
+                    "this is a property of `{holder}`, a native type, and a property is read \
+                     and not assigned"
+                ),
+                "NATIVE-6",
+            ));
+            let value = self.expression(value, Some(&target.ty));
+            return Stmt::AssignPlace {
+                place: target,
+                operator,
+                value,
+                at,
+            };
+        }
         if !writable {
             self.diagnostics.emit(
                 error(
@@ -1731,6 +1752,27 @@ impl<'a> Typer<'a> {
             value,
             at,
         }
+    }
+
+    /// The native type a place reaches into, when it does: the place is
+    /// a property of a native value or something inside one, however
+    /// that value is reached. `items[0].size`, with `items` a list of a
+    /// native type, is one.
+    fn native_property(&self, place: &Expr) -> Option<Type> {
+        let (ExprKind::Field { base, .. } | ExprKind::Index { base, .. }) = &place.kind else {
+            return None;
+        };
+        if let Type::Named {
+            module,
+            declaration,
+            ..
+        } = &base.ty
+            && self.program.modules[*module].declarations[*declaration].kind
+                == DeclarationKind::NativeType
+        {
+            return Some(base.ty.clone());
+        }
+        self.native_property(base)
     }
 
     /// Reports an assignment whose place is a property of a native

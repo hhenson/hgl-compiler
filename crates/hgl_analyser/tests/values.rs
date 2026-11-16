@@ -4179,4 +4179,32 @@ fn a_place_inside_a_value_is_assigned() {
     assert!(matches!(place.kind, ExprKind::Field { .. }));
     assert_eq!(*operator, Some(BinaryOperator::Add));
     assert_eq!(value.ty.to_string(), "f64");
+
+    // NATIVE-6: "None is assigned." A property of a native type is
+    // read-only however the native value is reached: as an element of
+    // a `var`'s list, and under a field of it.
+    let native = module(concat!(
+        "native type Handle {\n",
+        "    size: i64\n",
+        "}\n",
+        "struct Held {\n",
+        "    handle: Handle\n",
+        "    count: i64\n",
+        "}\n",
+        "const fn resized(handles: list<Handle>, held: Held) -> i64 {\n",
+        "    var items = handles\n",
+        "    items[0].size = 2\n",
+        "    var keeper = held\n",
+        "    keeper.handle.size += 1\n",
+        "    keeper.count = 3\n",
+        "    return keeper.count\n",
+        "}\n",
+    ));
+    assert_eq!(
+        native.summary(),
+        [
+            "m.hgl:11:5 name/binding.immutable NATIVE-6",
+            "m.hgl:13:5 name/binding.immutable NATIVE-6",
+        ]
+    );
 }
