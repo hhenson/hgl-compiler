@@ -62,8 +62,7 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
 
 /// Every node of a function's own body: what stands under `root`,
 /// but for what an anonymous function inside it holds. That is a
-/// function of its own (FN-14), a value helper that may inject a
-/// capability (FN-9), and what it holds is not `root`'s.
+/// function of its own (FN-14), and what it holds is not `root`'s.
 fn own_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
     fn collect(node: &SyntaxNode, found: &mut Vec<SyntaxNode>) {
         for child in node.children() {
@@ -122,8 +121,15 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         for (index, declaration) in module.declarations.iter().enumerate() {
             let file = module.files[declaration.file].file;
             match declaration.kind {
+                // A native one states its contract in its body
+                // (NATIVE-3): "A native const implementation stays
+                // value-level and admits neither `inject` nor temporal
+                // lifecycle hooks." NATIVE-5: "A native value function
+                // injects nothing".
                 DeclarationKind::Function(Role::Value)
-                | DeclarationKind::Implementation(Role::Value, _) => {
+                | DeclarationKind::Implementation(Role::Value, _)
+                | DeclarationKind::NativeImplementation(Role::Value)
+                | DeclarationKind::NativeCandidateImplementation(Role::Value) => {
                     in_value_function(declaration, file, diagnostics);
                 }
                 _ => {}
@@ -134,34 +140,94 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                     Some(Detail::Callable(signature)) if signature.result.is_none()
                 );
                 node_body(declaration, file, outputless, diagnostics);
+                in_anonymous_function(declaration, file, diagnostics);
             }
         }
     }
 }
 
 /// FN-1: "A `const fn` is a value function." It has no state and no
-/// hooks: each of those in one is rejected, at its keyword. It may
-/// inject a capability, which its caller then needs (FN-9: "Injection
-/// does not turn a value function into a node").
+/// hooks: each of those in one is rejected, at its keyword. FN-9:
+/// "Capabilities belong to nodes ... A value function has none. A
+/// value it needs from one, the evaluation time say, is its argument",
+/// so an `inject` in one is rejected as they are.
 fn in_value_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
     for node in declaration.syntax.descendants() {
-        if !is_node_construct(node.kind()) || node.kind() == SyntaxKind::InjectDecl {
+        if !is_node_construct(node.kind()) {
             continue;
         }
         let Some((word, at)) = keyword(&node, file) else {
             continue;
+        };
+        let diagnostic = if node.kind() == SyntaxKind::InjectDecl {
+            error(
+                Category::Phase,
+                codes::NODE_IN_VALUE_FUNCTION,
+                at,
+                format!(
+                    "`inject` is a node's, and `{}` is a `const fn`: a value function has no \
+                     capability",
+                    declaration.name
+                ),
+                "FN-9",
+            )
+            .with_note(
+                "pass what it needs as an argument: the node reads `clock.evaluation_time` \
+                 and gives it to the function",
+            )
+        } else {
+            error(
+                Category::Phase,
+                codes::NODE_IN_VALUE_FUNCTION,
+                at,
+                format!(
+                    "`{}` is a node's, and `{}` is a `const fn`: a value function has no state \
+                     and no hooks",
+                    word.text(),
+                    declaration.name
+                ),
+                "FN-1",
+            )
+        };
+        diagnostics.emit(diagnostic);
+    }
+}
+
+/// An anonymous function written in a node is value code: a hook
+/// "calls only value functions" (FN-3), so it can be called from
+/// nowhere else. It has no state and no hooks, and no capability
+/// (FN-9: "A value function has none"), as a `const fn` has none.
+///
+/// One written in a graph is not judged here: what it may be there is
+/// not stated.
+fn in_anonymous_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
+    for node in declaration.syntax.descendants() {
+        if !is_node_construct(node.kind())
+            || !node
+                .ancestors()
+                .any(|ancestor| ancestor.kind() == SyntaxKind::FnExpr)
+        {
+            continue;
+        }
+        let Some((word, at)) = keyword(&node, file) else {
+            continue;
+        };
+        let (what, rule) = if node.kind() == SyntaxKind::InjectDecl {
+            ("no capability", "FN-9")
+        } else {
+            ("no state and no hooks", "FN-3")
         };
         diagnostics.emit(error(
             Category::Phase,
             codes::NODE_IN_VALUE_FUNCTION,
             at,
             format!(
-                "`{}` is a node's, and `{}` is a `const fn`: a value function has no state \
-                 and no hooks",
+                "`{}` is a node's, and this anonymous function is called from the hooks of \
+                 `{}`: a value function has {what}",
                 word.text(),
                 declaration.name
             ),
-            "FN-1",
+            rule,
         ));
     }
 }

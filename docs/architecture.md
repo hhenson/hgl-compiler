@@ -468,10 +468,14 @@ else".
 | Any other statement of the body | `node.statement` | FN-2 |
 | `inject out` in a function that declares no result | `inject.out_without_result` | TIME-7 |
 | `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
+| `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
+| `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
 
-A `const fn` may inject a capability (FN-9). A source, a body with
-`yield`, is a node of another form whose contract is proposed
-(SOURCE-1), and its body is not checked.
+A value function has no capability (owner's decision of 2026-11-16 on
+hhenson/hgl_spec#57): what it needs of one is its argument, which the
+node reads and passes. A source, a body with `yield`, is a node of
+another form whose contract is proposed (SOURCE-1), and its body is not
+checked.
 
 A node's body is then read into the same typed form as a value
 function's (`hir::Body`): a `state` or a `cache` is a local that is
