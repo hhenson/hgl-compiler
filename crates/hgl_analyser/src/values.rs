@@ -492,14 +492,16 @@ impl<'a> Typer<'a> {
                 // `name += value` assigns what `name + value` is: the
                 // target is the left operand, and is read.
                 let left = self.read_local(local, &place);
-                let right = self.expression(&value, None);
+                let left = Given::read(0, place.clone(), left);
+                let right = self.operand(1, value.clone());
                 let identity = self.symbol_operator(operator.identity());
+                // What the sum is given to says what it is to be.
                 let (kind, result) = self.symbol(
                     (operator, operator_at),
                     identity,
-                    (place.clone(), left),
+                    (left, right),
                     (Vec::new(), false, false),
-                    (value.clone(), right),
+                    Some(&target),
                 );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
                 Expr {
@@ -536,8 +538,8 @@ impl<'a> Typer<'a> {
             },
             SyntaxKind::TupleExpr => self.tuple(node, expected),
             SyntaxKind::SequenceExpr => self.sequence(node, expected),
-            SyntaxKind::UnaryExpr => self.unary(node),
-            SyntaxKind::BinaryExpr => self.binary(node),
+            SyntaxKind::UnaryExpr => self.unary(node, expected),
+            SyntaxKind::BinaryExpr => self.binary(node, expected),
             SyntaxKind::CallExpr => self.call(node, expected),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
             SyntaxKind::UndecidedConstructor => {
@@ -990,7 +992,7 @@ impl<'a> Typer<'a> {
     /// "Unary negation preserves the numeric type", and OPS-1 are what
     /// its candidates declare. `!` is of a bool (EXPR-6; OPS-5: "`&&`,
     /// `||`, and `!` take bools"), and is read as it is written.
-    fn unary(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+    fn unary(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let config = child(node, SyntaxKind::OperatorConfig);
         let operand = node
             .children()
@@ -1039,6 +1041,7 @@ impl<'a> Typer<'a> {
                     at: Location::new(self.file, token.span()),
                     rule: "OPS-1",
                     unjudged: Type::Unknown,
+                    place: expected.filter(|place| !open(place)).cloned(),
                 };
                 // An operand whose operators are not judged here: see
                 // `unjudged_operand`.
@@ -1065,7 +1068,7 @@ impl<'a> Typer<'a> {
     }
 
     /// `left + right`, and each other operator with two operands.
-    fn binary(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+    fn binary(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         // A chain, `a + b + c`, nests to the left as deep as it is long
         // (the parser's tree depth, not its nesting). It is read from
         // its innermost link outward, in a loop, so that its length
@@ -1086,7 +1089,11 @@ impl<'a> Typer<'a> {
         let mut inside: Option<Expr> = None;
         loop {
             let link = links.pop().expect("never empty");
-            let (kind, ty) = self.binary_link(&link, inside.take());
+            // The type the place expects is of the whole chain, which
+            // is its outermost link: a link inside is an operand, read
+            // as an argument is.
+            let place = if links.is_empty() { expected } else { None };
+            let (kind, ty) = self.binary_link(&link, inside.take(), place);
             if links.is_empty() {
                 return (kind, ty);
             }
@@ -1111,7 +1118,12 @@ impl<'a> Typer<'a> {
     /// chapter: "Syntax binds these core identities independently of
     /// local same-named functions"), and is read as the call of it: see
     /// [`Typer::symbol`].
-    fn binary_link(&mut self, node: &SyntaxNode, read: Option<Expr>) -> (ExprKind, Type) {
+    fn binary_link(
+        &mut self,
+        node: &SyntaxNode,
+        read: Option<Expr>,
+        place: Option<&Type>,
+    ) -> (ExprKind, Type) {
         let config = child(node, SyntaxKind::OperatorConfig);
         let mut read = read;
         let mut operands = node
@@ -1164,20 +1176,16 @@ impl<'a> Typer<'a> {
             return (kind, BOOL);
         }
         let identity = self.symbol_operator(operator.identity());
-        // TYPE-7: `.member` "names a member of the enum type its
-        // position expects": beside an operand, that operand's.
-        // "Parentheses select grouping" (EXPR-1): `(.buy)` is `.buy`.
-        // A `null` beside an operand is of that operand's type when it
-        // is nullable; beside any other, what it is of is not known
-        // here. So an operand that takes its type from the other is
-        // read after it.
-        let left_first = takes_its_type(&right) || !takes_its_type(&left);
-        let mut left_value = left_first.then(|| match read.take() {
-            Some(left) => left,
-            None => self.expression(&left, None),
-        });
-        // EXPR-13: "left operand, configuration entries in their
-        // written order, then right operand".
+        // The generics chapter: a symbol's "operands are read as that
+        // call's arguments are". Each is read with nothing expected of
+        // it, and one with no type of its own, a `.member` or a
+        // sequence written out, again as the parameter of the candidate
+        // selected. EXPR-13: "left operand, configuration entries in
+        // their written order, then right operand".
+        let left = match read.take() {
+            Some(value) => Given::read(0, left, value),
+            None => self.operand(0, left),
+        };
         let (entries, faulty) = match (&config, identity) {
             (Some(config), Some(identity)) => {
                 self.configuration(operator.symbol(), config, identity)
@@ -1186,51 +1194,44 @@ impl<'a> Typer<'a> {
             (Some(_), None) => return (ExprKind::Unread, Type::Unknown),
             (None, _) => (Vec::new(), false),
         };
-        let right_value = match &left_value {
-            Some(left) if takes_its_type(&right) => {
-                let expected = beside(&right, &left.ty);
-                self.expression(&right, Some(&expected))
-            }
-            _ => self.expression(&right, None),
-        };
-        let left_value = match left_value.take() {
-            Some(left) => left,
-            None => {
-                let expected = beside(&left, &right_value.ty);
-                self.expression(&left, Some(&expected))
-            }
-        };
+        let right = self.operand(1, right);
         self.symbol(
             (operator, operator_at),
             identity,
-            (left, left_value),
+            (left, right),
             (entries, faulty, config.is_some()),
-            (right, right_value),
+            place,
         )
     }
 
-    /// A symbol between two operands that are read, as the call of the
-    /// operator it stands for. `identity` is that operator, when the
-    /// program has it; `entries` the configuration's entries, whether
-    /// one of them was reported, and whether a configuration is written.
+    /// A symbol between two operands, as the call of the operator it
+    /// stands for. `identity` is that operator, when the program has
+    /// it; `entries` the configuration's entries, whether one of them
+    /// was reported, and whether a configuration is written; `place`
+    /// the type the symbol's place expects.
     ///
-    /// The candidates of core's operators say what a symbol admits:
-    /// NUM-1 for numbers, OPS-1's table for the others, OPS-2 for the
+    /// The generics chapter: "A symbol is the call of its identity: its
+    /// operands are read as that call's arguments are, the type its
+    /// place expects is requested of the candidates (GEN-5), and its
+    /// configuration gives the call's named arguments (EXPR-10)." The
+    /// candidates of core's operators say what a symbol admits: NUM-1
+    /// for numbers, OPS-1's table for the others, OPS-2 for the
     /// comparisons. "Every other pairing is a source rejection."
     ///
     /// An operand whose type is not known, a generic parameter, whose
     /// operators its constraints say, and a nullable one, whose payload
-    /// needs its guard, are not judged here: the symbol is then
-    /// recorded as it is written. The generics chapter: "null presence
-    /// checks ... have their own language rules; token shape alone does
-    /// not make them extensible candidate calls."
+    /// needs its guard, are not judged here, and neither is a test
+    /// against `null`: the symbol is then recorded as it is written.
+    /// The generics chapter: "null presence checks ... have their own
+    /// language rules; token shape alone does not make them extensible
+    /// candidate calls."
     fn symbol(
         &mut self,
         (operator, at): (BinaryOperator, Location),
         identity: Option<OperatorRef>,
-        (left_node, left): (SyntaxNode, Expr),
+        (left, right): (Given, Given),
         (entries, faulty, configured): (Vec<Given>, bool, bool),
-        (right_node, right): (SyntaxNode, Expr),
+        place: Option<&Type>,
     ) -> (ExprKind, Type) {
         use BinaryOperator as Op;
         let comparison = matches!(
@@ -1249,10 +1250,20 @@ impl<'a> Typer<'a> {
             // What the symbol gives when no candidate is selected: a
             // comparison is a bool whichever candidate it is.
             unjudged: if comparison { BOOL } else { Type::Unknown },
+            place: place.filter(|place| !open(place)).cloned(),
         };
-        let identity =
-            identity.filter(|_| !(unjudged_operand(&left.ty) || unjudged_operand(&right.ty)));
+        // An operand whose type is known only in part says nothing of
+        // the candidates either: a call that leaves a generic parameter
+        // for its place to say, `repeat(1)`.
+        let as_written = |operand: &Given| {
+            is_null(&operand.node)
+                || !operand.by_place
+                    && (unjudged_operand(&operand.value.ty) || !whole(&operand.value.ty))
+        };
+        let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
         let Some(identity) = identity else {
+            let (left_node, right_node) = (left.node.clone(), right.node.clone());
+            let (left, right) = self.operands_as_written(left, right);
             if !configured {
                 let kind = ExprKind::Binary {
                     operator,
@@ -1266,13 +1277,87 @@ impl<'a> Typer<'a> {
             given.push(Given::read(1, right_node, right));
             return (self.unselected(given, symbol.form), symbol.unjudged);
         };
-        let mut given = vec![Given::read(0, left_node, left)];
+        let mut given = vec![left];
         given.extend(entries);
-        given.push(Given::read(1, right_node, right));
+        given.push(right);
         if faulty {
             return (self.unselected(given, symbol.form), symbol.unjudged);
         }
         self.call_symbol(symbol, identity, given)
+    }
+
+    /// The operands of a symbol that is recorded as it is written, each
+    /// read where it stands.
+    ///
+    /// TYPE-7: `.member` "names a member of the enum type its position
+    /// expects": beside an operand, that operand's. "Parentheses select
+    /// grouping" (EXPR-1): `(.buy)` is `.buy`. A `null` beside an
+    /// operand is of that operand's type when it is nullable; beside
+    /// any other, what it is of is not known here. So an operand whose
+    /// first reading was taken back is read again with the other's
+    /// type before it.
+    fn operands_as_written(&mut self, left: Given, right: Given) -> (Expr, Expr) {
+        // An operand read again: as the other's type where it takes its
+        // type from it, and with nothing expected of it where it does
+        // not, so that what it leaves unresolved is reported
+        // (`generic.unresolved` for the `repeat(1)` of
+        // `repeat(1) == repeat(2)`).
+        let reread = |this: &mut Self, operand: &Given, other: &Type| {
+            if takes_its_type(&operand.node) {
+                let expected = beside(&operand.node, other);
+                this.expression(&operand.node, Some(&expected))
+            } else {
+                this.expression(&operand.node, None)
+            }
+        };
+        match (left.retried, right.retried) {
+            (false, false) => (left.value, right.value),
+            (false, true) => {
+                let right = reread(self, &right, &left.value.ty);
+                (left.value, right)
+            }
+            (true, false) => {
+                let left = reread(self, &left, &right.value.ty);
+                (left, right.value)
+            }
+            // One that takes its type from the other is read after it.
+            (true, true) if takes_its_type(&left.node) && !takes_its_type(&right.node) => {
+                let right = reread(self, &right, &Type::Unknown);
+                let left = reread(self, &left, &right.ty);
+                (left, right)
+            }
+            (true, true) => {
+                let left = reread(self, &left, &Type::Unknown);
+                let right = reread(self, &right, &left.ty);
+                (left, right)
+            }
+        }
+    }
+
+    /// An operand of a symbol, read as an argument is: with nothing
+    /// expected of it. A reading that reports nothing and settles no
+    /// whole type is taken back, as one of an operand with no type of
+    /// its own is, and the operand is read again: as the selected
+    /// candidate's parameter, or where the symbol is recorded as it is
+    /// written, by [`Typer::operands_as_written`].
+    fn operand(&mut self, position: usize, node: SyntaxNode) -> Given {
+        let by_place = typed_by_place(&node);
+        let mark = self.mark();
+        let value = self.expression(&node, Some(&Type::Unknown));
+        let retried = (by_place || !whole(&value.ty))
+            && self.diagnostics.len() == mark.diagnostics
+            && self.may_reread();
+        if retried {
+            self.take_back(mark, true);
+        }
+        Given {
+            key: Key::Position(position),
+            by_place,
+            value,
+            retried,
+            node,
+            constant: None,
+        }
     }
 
     /// The operator of core's module that a symbol stands for, by its
@@ -1434,7 +1519,7 @@ impl<'a> Typer<'a> {
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
         let wanted = Wanted {
-            place: None,
+            place: symbol.place.as_ref(),
             among: self.result_among(operator, public, &[], &own_generics),
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
@@ -1449,36 +1534,20 @@ impl<'a> Typer<'a> {
         {
             return self.called(operator, chosen, given, symbol.form);
         }
-        // Equality between a value and one of a type it is also a value
-        // of, a `Round` and the abstract `Shape` it inherits from: the
-        // candidate for two values of one type takes them with the
-        // `Shape` first, and not the other way round (GEN-2: the first
-        // argument that says what a parameter is decides it). Whether
-        // the order of a comparison's operands is to matter is asked in
-        // hhenson/hgl_spec#51, and is not judged here.
-        if selected.is_empty()
-            && matches!(
-                symbol.form,
-                Form::Binary(BinaryOperator::Equal | BinaryOperator::NotEqual)
-            )
-        {
-            // Only that case: two operands and no configuration, the
-            // right one of a type the left is a value of and not the
-            // other way round. Two of one type that find no candidate,
-            // for what a configuration gives say, are rejected below.
-            if let [left, right] = &given[..]
-                && self.admits(&right.value.ty, &left.value.ty)
-                && !self.admits(&left.value.ty, &right.value.ty)
-            {
-                return (self.unselected(given, symbol.form), symbol.unjudged);
-            }
-        }
         // `i64` and `f64`, and after them what the configuration gives:
         // `zero: .nan`.
         let operands: Vec<String> = given
             .iter()
             .filter(|given| matches!(given.key, Key::Position(_)))
-            .map(|given| format!("`{}`", given.value.ty))
+            .map(|given| {
+                // An operand with no type of its own is named as it is
+                // written: `.buy`.
+                if given.by_place {
+                    format!("`{}`", given.node.text().to_string().trim())
+                } else {
+                    format!("`{}`", given.value.ty)
+                }
+            })
             .collect();
         let entries: Vec<String> = given
             .iter()
@@ -1497,6 +1566,10 @@ impl<'a> Typer<'a> {
         let mut takes = operands.join(" and ");
         if !entries.is_empty() {
             takes = format!("{takes} with {}", entries.join(", "));
+        }
+        // GEN-5: "the requested output before inputs".
+        if let Some(place) = &symbol.place {
+            takes = format!("{takes} to give `{place}`");
         }
         let diagnostic = if selected.is_empty() {
             error(
@@ -1527,7 +1600,14 @@ impl<'a> Typer<'a> {
             diagnostic
         };
         self.diagnostics.emit(diagnostic);
-        (self.unselected(given, symbol.form), symbol.unjudged)
+        // What the place expects was asked of the candidates and none
+        // gives it: the place is not then told the symbol is of another
+        // type (ERR-9).
+        let ty = match symbol.place {
+            Some(_) => Type::Unknown,
+            None => symbol.unjudged,
+        };
+        (self.unselected(given, symbol.form), ty)
     }
 
     // ---- Calls and constructions ----
@@ -2169,6 +2249,9 @@ impl<'a> Typer<'a> {
             Takes::Parameters => declared_order(&assigned),
             Takes::Fields => (0..assigned.len()).collect(),
         };
+        // The generic parameters an argument decided: what the call
+        // writes, or its place expects, is not widened (GEN-2).
+        let mut by_argument = vec![false; generics.len()];
         for position in order {
             let (slot, node) = &assigned[position];
             let Some(index) = *slot else {
@@ -2181,21 +2264,51 @@ impl<'a> Typer<'a> {
                 .filter(|(_, found)| found.is_none())
                 .map(|(generic, _)| generic.at)
                 .collect();
-            if takes_its_type(node) || !mentions(pattern, &unfound) {
+            // GEN-2: "One later argument changes what an earlier
+            // argument decided: an abstract struct that the type
+            // decided inherits from widens the parameter to that
+            // struct". So a parameter that is `T` and nothing more is
+            // read here though an earlier argument has said what `T`
+            // is, where that is a struct.
+            let widenable = match bare_parameter(pattern, generics) {
+                Some(generic) if takes == Takes::Parameters && by_argument[generic] => {
+                    matches!(&found[generic], Some(Argument::Type(Type::Named { .. })))
+                        .then_some(generic)
+                }
+                _ => None,
+            };
+            if takes_its_type(node) || !(mentions(pattern, &unfound) || widenable.is_some()) {
                 continue;
             }
+            // What the argument's type says: a parameter not yet found,
+            // or a wider one for a parameter an argument decided.
+            let mut learn = |this: &Self, actual: &Type, found: &mut Vec<Option<Argument>>| {
+                if let Some(generic) = widenable {
+                    if let Some(Argument::Type(decided)) = &found[generic]
+                        && this.widens(decided, actual)
+                    {
+                        found[generic] = Some(Argument::Type(actual.clone()));
+                    }
+                    return;
+                }
+                let before: Vec<bool> = found.iter().map(Option::is_some).collect();
+                infer(pattern, actual, generics, found);
+                for (generic, was) in before.into_iter().enumerate() {
+                    by_argument[generic] |= !was && found[generic].is_some();
+                }
+            };
             if ordered {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = self.expression(node, Some(&Type::Unknown));
-                    infer(pattern, &value.ty, generics, &mut found);
+                    learn(self, &value.ty, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
             let value = self.expression(node, Some(&Type::Unknown));
-            infer(pattern, &value.ty, generics, &mut found);
+            learn(self, &value.ty, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
             // that is read as the type of its place, a sequence or a
@@ -2736,13 +2849,20 @@ impl<'a> Typer<'a> {
         };
         let mut selected: Vec<Chosen> = Vec::new();
         let mut untold = false;
+        // True when the candidates were tried with integer literals
+        // widened.
+        let mut widened = false;
         for widening in [false, true] {
+            // True when a candidate takes the call by its result and
+            // parameter types, whatever its condition says.
+            let mut fits = false;
             for &(module, declaration, signature) in candidates {
                 let candidate = &program.modules[module].declarations[declaration];
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
+                let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let Some((taken, generics, defaulted)) =
-                    instance((candidate, signature), public, given, wanted)
+                    instance((candidate, signature), public, given, wanted, &widens)
                 else {
                     continue;
                 };
@@ -2778,6 +2898,7 @@ impl<'a> Typer<'a> {
                     (given, wanted),
                     widening,
                 );
+                fits |= admits != Admits::Misfit;
                 match admits {
                     Admits::Yes => selected.push(Chosen {
                         module,
@@ -2786,11 +2907,18 @@ impl<'a> Typer<'a> {
                         taken,
                         generics,
                     }),
-                    Admits::No => {}
+                    Admits::No | Admits::Misfit => {}
                     Admits::Unknown => untold = true,
                 }
             }
-            if !selected.is_empty() {
+            // GEN-5: "Whether a literal is widened is settled by the
+            // candidates' result and parameter types, before their
+            // conditions: where a candidate that gives the requested
+            // output takes every integer literal as an `i64`, none is
+            // widened, and the conditions select among the candidates
+            // that do. An option so does not change what a literal is."
+            if fits {
+                widened = widening;
                 break;
             }
         }
@@ -2798,7 +2926,77 @@ impl<'a> Typer<'a> {
         // Concrete types outrank variables; structurally constrained
         // variables outrank unconstrained ones."
         most_specific(&mut selected, public.parameters.len());
+        if widened && selected.len() > 1 {
+            Self::prefer_widened(&mut selected, public, given);
+        }
         (selected, untold)
+    }
+
+    /// GEN-5: "Among candidates that tie and differ only in which
+    /// integer literals they take as an `f64`, the one that takes every
+    /// one of them as an `f64` is selected." So `1 + 2` where an `f64`
+    /// is expected is the candidate for two `f64`, and not a tie with
+    /// those that widen one literal.
+    ///
+    /// `selected` is the tied candidates, and is left as it is where
+    /// they differ in anything else, or no one of them widens every
+    /// literal.
+    fn prefer_widened(selected: &mut Vec<Chosen<'a>>, public: &Signature, given: &[Given]) {
+        // The type each candidate has for each argument, in the order
+        // the arguments are given; `None` for one given to a generic
+        // value parameter.
+        let places = |chosen: &Chosen| -> Option<Vec<Option<Type>>> {
+            let bound = bound(&chosen.taken, public, given)?;
+            Some(
+                bound
+                    .iter()
+                    .map(|place| match place {
+                        Place::Parameter(index) => Some(chosen.taken.parameters[*index].ty.clone()),
+                        Place::Generic(_) => None,
+                    })
+                    .collect(),
+            )
+        };
+        let Some(taken) = selected.iter().map(places).collect::<Option<Vec<_>>>() else {
+            return;
+        };
+        let literal: Vec<bool> = given
+            .iter()
+            .map(|given| !given.by_place && is_integer_literal(&given.value))
+            .collect();
+        // They differ only in what they take the literals as: every
+        // other argument is given to one type, and they give one
+        // result.
+        let first = &selected[0];
+        let alike = selected.iter().zip(&taken).all(|(chosen, places)| {
+            chosen.taken.result == first.taken.result
+                && places
+                    .iter()
+                    .zip(&taken[0])
+                    .zip(&literal)
+                    .all(|((place, other), literal)| *literal || place == other)
+        });
+        if !alike || !literal.contains(&true) {
+            return;
+        }
+        // The candidates that take every literal as an `f64`.
+        let widest: Vec<usize> = taken
+            .iter()
+            .enumerate()
+            .filter(|(_, places)| {
+                places
+                    .iter()
+                    .zip(&literal)
+                    .filter(|(_, literal)| **literal)
+                    .all(|(place, _)| place.as_ref().is_some_and(accepts_float))
+            })
+            .map(|(position, _)| position)
+            .collect();
+        if let [only] = widest[..] {
+            let chosen = selected.swap_remove(only);
+            selected.clear();
+            selected.push(chosen);
+        }
     }
 
     /// The call of the candidate `chosen` of `operator` with the
@@ -3062,13 +3260,13 @@ impl<'a> Typer<'a> {
             (None, _) => true,
         };
         if !result_fits || !among {
-            return Admits::No;
+            return Admits::Misfit;
         }
         // GEN-6: "A call is matched against each candidate's own
         // signature. One that names an option admits only the
         // candidates that declare it."
         let Some(bound) = bound(signature, public, given) else {
-            return Admits::No;
+            return Admits::Misfit;
         };
         let own = public.parameters.len();
         // GEN-13: a generic value parameter has an ordinary type, and
@@ -3088,7 +3286,7 @@ impl<'a> Typer<'a> {
                     || widening && is_integer_literal(&given.value) && accepts_float(ty)
             };
             if !admitted {
-                return Admits::No;
+                return Admits::Misfit;
             }
         }
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -3118,7 +3316,7 @@ impl<'a> Typer<'a> {
                 }
             };
             if !admitted {
-                return Admits::No;
+                return Admits::Misfit;
             }
         }
         // GEN-6: "A candidate states in `requires` the values of a
@@ -3928,6 +4126,30 @@ impl<'a> Typer<'a> {
     /// type as far as each is known; a `T` where a `T?` is expected
     /// (TYPE-14: "either a T or null"); or a struct where an abstract
     /// struct it inherits from is expected.
+    /// True when an argument of type `later` widens a generic parameter
+    /// that an earlier argument decided is `decided`.
+    ///
+    /// GEN-2: "One later argument changes what an earlier argument
+    /// decided: an abstract struct that the type decided inherits from
+    /// widens the parameter to that struct, so the order of two such
+    /// arguments does not matter."
+    fn widens(&self, decided: &Type, later: &Type) -> bool {
+        let Type::Named {
+            module,
+            declaration,
+            ..
+        } = later
+        else {
+            return false;
+        };
+        let declared = &self.program.modules[*module].declarations[*declaration];
+        declared.kind == DeclarationKind::Struct
+            && has_token(&declared.syntax, SyntaxKind::KwAbstract)
+            && whole(decided)
+            && !agree(later, decided)
+            && self.inherits(decided, later)
+    }
+
     fn admits(&self, expected: &Type, ty: &Type) -> bool {
         if open(expected) || open(ty) || agree(expected, ty) {
             return true;
@@ -4090,6 +4312,9 @@ struct Symbol {
     rule: &'static str,
     /// The type of the expression where no candidate is selected.
     unjudged: Type,
+    /// The type the symbol's place expects, when it is known: the
+    /// output requested of the candidates (GEN-5).
+    place: Option<Type>,
 }
 
 /// One argument of an operator's call, before a candidate is selected.
@@ -4141,7 +4366,12 @@ enum Key {
 #[derive(Clone, Copy, PartialEq)]
 enum Admits {
     Yes,
+    /// Its condition does not hold for the call (GEN-6).
     No,
+    /// It does not take the call's arguments or give the result asked
+    /// for: the types do not fit, or the call names an option it does
+    /// not declare.
+    Misfit,
     /// It cannot be told: a condition of the candidate reads an option
     /// whose value at the call is no constant this pass reads.
     Unknown,
@@ -4576,6 +4806,7 @@ fn instance<'s>(
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
+    widens: &dyn Fn(&Type, &Type) -> bool,
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
     if generics.is_empty() {
@@ -4608,17 +4839,31 @@ fn instance<'s>(
         };
         infer(result, place, generics, &mut found);
     }
+    // The generic parameters an argument decided: what the call writes,
+    // or its place expects, is not widened (GEN-2).
+    let mut by_argument = vec![false; generics.len()];
     for (index, parameter) in signature.parameters.iter().enumerate() {
         let argument = bound
             .iter()
             .position(|&place| place == Place::Parameter(index));
-        if let Some(position) = argument {
-            infer(
-                &parameter.ty,
-                &given[position].value.ty,
-                generics,
-                &mut found,
-            );
+        let Some(position) = argument else {
+            continue;
+        };
+        let actual = &given[position].value.ty;
+        // GEN-2: "an abstract struct that the type decided inherits
+        // from widens the parameter to that struct".
+        if let Some(generic) = bare_parameter(&parameter.ty, generics)
+            && by_argument[generic]
+            && let Some(Argument::Type(decided)) = &found[generic]
+            && widens(decided, actual)
+        {
+            found[generic] = Some(Argument::Type(actual.clone()));
+            continue;
+        }
+        let before: Vec<bool> = found.iter().map(Option::is_some).collect();
+        infer(&parameter.ty, actual, generics, &mut found);
+        for (generic, was) in before.into_iter().enumerate() {
+            by_argument[generic] |= !was && found[generic].is_some();
         }
     }
     // A generic value parameter's own type may name a type parameter:
@@ -4907,7 +5152,9 @@ fn holds_block(node: &SyntaxNode) -> bool {
 
 /// True when an integer literal was widened among the entries of a
 /// sequence or a tuple written out, at any depth. A literal widened
-/// inside a call among the entries is that call's, and is not counted.
+/// inside a call by name among the entries is that call's, and is not
+/// counted; one widened under a symbol that is core's own arithmetic
+/// is.
 fn widens_an_entry(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Widen(_) => true,
@@ -4926,7 +5173,15 @@ fn widens_an_entry(value: &Expr) -> bool {
                     .as_ref()
                     .is_some_and(|otherwise| widens_an_entry(otherwise))
         }
-        _ => false,
+        // A symbol among the entries is read with the entry's type as
+        // its place, so that core's own arithmetic over literals may
+        // widen them: the `1` of `[-1]`, the `1` and `2` of `[1 + 2]`,
+        // where an `f64` is asked for. That is the entry's widening.
+        _ => {
+            negated(value).is_some_and(widens_an_entry)
+                || arithmetic(value)
+                    .is_some_and(|(_, left, right)| widens_an_entry(left) || widens_an_entry(right))
+        }
     }
 }
 
@@ -5753,6 +6008,14 @@ fn constant_index(index: &Expr) -> Index {
     match &index.kind {
         ExprKind::Literal(Value::Int(value)) => return Index::Known(*value),
         ExprKind::GenericValue { .. } => return Index::Unevaluated,
+        // A call of an operator of which no candidate is selected: it
+        // has been reported, or is not judged, and nothing more is said
+        // of it (ERR-9).
+        ExprKind::Call {
+            callee: Callee::Unread,
+            form: Form::Binary(_) | Form::Unary(_),
+            ..
+        } => return Index::Unevaluated,
         _ => {}
     }
     // A symbol, as it is written or as core's own arithmetic.
@@ -5916,6 +6179,16 @@ fn applies(generics: &[GenericParameter], given: &[Argument]) -> bool {
                 (GenericKind::Type | GenericKind::Plain, Argument::Constant(_)) => false,
                 _ => true,
             })
+}
+
+/// The position among `generics` of the type parameter a type is, when
+/// it is one and nothing more: the `T` of `value: T`, and not of
+/// `values: list<T>`.
+fn bare_parameter(ty: &Type, generics: &[GenericParameter]) -> Option<usize> {
+    match ty {
+        Type::Parameter { at, .. } => generics.iter().position(|generic| generic.at == *at),
+        _ => None,
+    }
 }
 
 /// Finds what generic parameters stand for from a field's type,

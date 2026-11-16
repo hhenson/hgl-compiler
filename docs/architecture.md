@@ -550,22 +550,26 @@ Not read as calls:
 | An operand that is a generic parameter | Its constraints say what it admits | The symbol as written |
 | An operand of no known type | Nothing can be selected | The symbol as written |
 
-One more is left unjudged: `round == shape`, a struct and then the
-abstract struct it inherits from. Core's candidate, `eq_<T>(lhs: T, rhs:
-T)`, takes them with the parent first, as GEN-2 has the first argument
-decide `T`; whether the order of a comparison's operands is to matter is
-asked in hhenson/hgl_spec#51. It is a bool, and nothing is reported of
-it.
+A symbol is its call in every respect (owner's decisions of 2026-11-16
+on hhenson/hgl_spec#51):
 
-An operand is read before the candidates are, with nothing expected of
-it, and so a sequence written out beside a `list<f64>` is a `list<i64>`
-still; an argument of a call by name is read as its parameter's type.
-The type the symbol's place expects is not asked of the candidates
-either: the result is checked against it. `let x: f64 = 1 + 2` is so an
-`i64` where an `f64` is expected, where `add_(1, 2)` in that place asks
-its candidates for an `f64`. Whether a symbol is its call in these two
-respects as well is asked in hhenson/hgl_spec#51, and is not decided
-here.
+| Respect | So |
+| --- | --- |
+| Its operands are read as the call's arguments are | One with no type of its own, a `.member` or a sequence written out, is read again as the selected candidate's parameter: `xs == [1, 2]` beside a `list<f64>` |
+| The type its place expects is requested of the candidates (GEN-5) | `let x: f64 = n + 1` selects the candidate for an `i64` and an `f64`. A link inside a chain is an operand, and is asked for nothing. `count += 1.5` asks for the `var`'s type |
+| No candidate gives what the place asks | `operator.no_candidate`, as for the call: "`<=>` takes no `i64` and `f64` to give `bool`" |
+
+What an integer literal is at a call, by name or by symbol, is settled
+by the candidates' result and parameter types before their conditions
+(GEN-5). Where one that gives the output requested takes every literal
+as an `i64`, none is widened, so `n //{zero: .nan} 2` is rejected as
+`n //{zero: .nan} n` is. Where literals are widened and candidates tie,
+differing only in which, the one that widens every one is selected:
+`let x: f64 = 1 + 2` is the candidate for two `f64`.
+
+An abstract struct widens what an earlier argument decided (GEN-2):
+`round == shape` compares two `Shape`, as `shape == round` does. What
+the call writes, or its place expects, is not widened.
 
 A parameter that may be omitted comes last (UNIT-8): one with a default
 or a type written `T?` follows every parameter that has neither. The

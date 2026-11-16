@@ -515,7 +515,7 @@ fn only_a_var_is_assigned_and_with_its_own_type() {
             "m.hgl:6:5 name/binding.immutable EXPR-3",
             "m.hgl:7:5 name/binding.immutable EXPR-3",
             "m.hgl:9:13 type/type.mismatch EXPR-5",
-            "m.hgl:10:14 type/type.mismatch EXPR-5",
+            "m.hgl:10:11 operator/operator.no_candidate OPS-1",
             "m.hgl:11:12 type/type.mismatch EXPR-5",
         ]
     );
@@ -525,7 +525,9 @@ fn only_a_var_is_assigned_and_with_its_own_type() {
             "`fixed` is a `let` and cannot be assigned: only a `var` can",
             "`value` is a parameter and cannot be assigned: only a `var` can",
             "this is `f64`, and the type of the `var` is `i64`",
-            "this is `f64`, and the type of the `var` is `i64`",
+            // `count += 1.5` assigns what `count + 1.5` is, of which the
+            // `var`'s type is requested.
+            "`+` takes no `i64` and `f64` to give `i64`",
             "this is `i64`, and the type of the `var` is `f64`",
         ]
     );
@@ -1078,7 +1080,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
         "    let outside = pair[1 + 1]\n",
         "    let divided = pair[2 // 2]\n",
         "    let mixed = pair[a + 1]\n",
-        // EXPR-7: the index is an `i64`.
+        // EXPR-7: the index is an `i64`, which is so requested of the
+        // symbol: a `/` gives none, and neither does a `==`.
         "    let real = pair[0 / 1]\n",
         "    let truth = pair[0 == 0]\n",
         "    return first\n",
@@ -1093,8 +1096,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "m.hgl:11:23 type/tuple.index EXPR-7",
             "m.hgl:14:24 type/tuple.index EXPR-7",
             "m.hgl:16:22 type/tuple.index EXPR-7",
-            "m.hgl:17:21 type/type.mismatch EXPR-5",
-            "m.hgl:18:22 type/type.mismatch EXPR-5",
+            "m.hgl:17:23 operator/operator.no_candidate OPS-1",
+            "m.hgl:18:24 operator/operator.no_candidate OPS-2",
         ]
     );
     assert_eq!(
@@ -1106,8 +1109,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
             "a tuple's index is a constant, here one of 0 to 1: it selects the element's type",
-            "this is `f64`, and the index of a tuple is `i64`",
-            "this is `bool`, and the index of a tuple is `i64`",
+            "`/` takes no `i64` and `i64` to give `i64`",
+            "`==` takes no `i64` and `i64` to give `i64`",
         ]
     );
     assert_eq!(
@@ -3136,7 +3139,7 @@ fn only_cores_own_arithmetic_is_read_as_a_constant() {
         checked.summary(),
         [
             "m.hgl:6:24 type/tuple.index EXPR-7",
-            "m.hgl:8:24 type/type.mismatch EXPR-5",
+            "m.hgl:8:24 operator/operator.no_candidate OPS-1",
         ]
     );
     assert_eq!(locals(&checked, "uses")[2], "head: i64");
@@ -3162,9 +3165,15 @@ fn a_full_comparison_is_an_outcome_and_no_bool() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:7:22 type/type.mismatch EXPR-5",
-            "m.hgl:8:23 type/type.mismatch EXPR-5",
+            "m.hgl:7:24 operator/operator.no_candidate OPS-2",
+            "m.hgl:8:25 operator/operator.no_candidate OPS-2",
         ]
+    );
+    // GEN-5: the type the place expects is requested of the candidates,
+    // and none of `compare_` gives a bool.
+    assert_eq!(
+        messages(&checked)[0],
+        "`<=>` takes no `i64` and `f64` to give `bool`"
     );
     assert_eq!(
         locals(&checked, "uses")[3..7],
@@ -3178,27 +3187,37 @@ fn a_full_comparison_is_an_outcome_and_no_bool() {
 }
 
 /// OPS-2: "`==` and `!=` compare two values of one type." Core's
-/// candidate is `eq_<T>(lhs: T, rhs: T)`, and the first operand that
-/// says what `T` is decides it (GEN-2): a `Shape` and then a `Round`,
-/// which is a `Shape`, are compared. The other order is asked of the
-/// owner in hhenson/hgl_spec#51, and is neither rejected nor read as a
-/// call until it is answered. Two structs that are not one type are
-/// rejected in either order.
+/// candidate is `eq_<T>(lhs: T, rhs: T)`. GEN-2: the first argument
+/// that says what `T` is decides it, and "One later argument changes
+/// what an earlier argument decided: an abstract struct that the type
+/// decided inherits from widens the parameter to that struct, so the
+/// order of two such arguments does not matter. What the call writes,
+/// or its place expects, is not widened".
 #[test]
-fn equality_takes_a_struct_and_its_parent_in_the_order_core_declares() {
+fn an_abstract_parent_widens_what_an_earlier_argument_decided() {
     let checked = module(concat!(
         "abstract struct Shape { id: i64 }\n",
         "struct Round : Shape { radius: f64 }\n",
         "struct Square : Shape { side: f64 }\n",
+        "const fn same<T>(left: T, right: T) -> T => left\n",
         "const fn uses(shape: Shape, round: Round, square: Square) {\n",
         "    let parent_first = shape == round\n",
         "    let child_first = round != shape\n",
+        "    let either = same(round, shape)\n",
+        // Neither inherits from the other.
         "    let siblings = round == square\n",
+        // What the call writes, and what its place expects, stand.
+        "    let written = same<Round>(round, shape)\n",
+        "    let placed: Round = same(round, shape)\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:8:26 operator/operator.no_candidate OPS-2"]
+        [
+            "m.hgl:10:26 operator/operator.no_candidate OPS-2",
+            "m.hgl:11:38 type/type.mismatch EXPR-5",
+            "m.hgl:12:37 type/type.mismatch EXPR-5",
+        ]
     );
     let statements = &body(&checked, "uses").statements;
     let value = |index: usize| match &statements[index] {
@@ -3207,22 +3226,184 @@ fn equality_takes_a_struct_and_its_parent_in_the_order_core_declares() {
         } => value,
         other => panic!("a declaration with a value: {other:?}"),
     };
-    assert_eq!(
-        call_of(&checked, value(0)).0,
-        "eq_<T>(lhs: T, rhs: T) -> bool"
-    );
-    assert!(matches!(
-        value(1).kind,
-        ExprKind::Call {
-            callee: Callee::Unread,
-            form: Form::Binary(BinaryOperator::NotEqual),
+    // Each is the generic candidate, with `T` the `Shape`.
+    for (index, name) in [(0, "eq_"), (1, "ne_")] {
+        assert_eq!(
+            call_of(&checked, value(index)).0,
+            format!("{name}<T>(lhs: T, rhs: T) -> bool")
+        );
+        let ExprKind::Call {
+            callee: Callee::Candidate { generics, .. },
             ..
-        }
+        } = &value(index).kind
+        else {
+            panic!("a call of a candidate");
+        };
+        let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
+        assert_eq!(resolved, ["Shape"]);
+    }
+    assert_eq!(
+        locals(&checked, "uses")[3..7],
+        [
+            "parent_first: bool",
+            "child_first: bool",
+            "either: Shape",
+            "siblings: bool"
+        ]
+    );
+}
+
+/// The generics chapter: "A symbol is the call of its identity: its
+/// operands are read as that call's arguments are, the type its place
+/// expects is requested of the candidates (GEN-5) ... `n + 1` is
+/// `add_(n, 1)` wherever it stands." So a symbol and the call by name
+/// give one result in one place.
+#[test]
+fn a_symbol_is_its_call_in_its_place_and_in_its_operands() {
+    let checked = module(concat!(
+        "const fn uses(n: i64, xs: list<f64>) {\n",
+        // The place requests an `f64`: the candidate for an `i64` and
+        // an `f64` takes the `1` widened (EXPR-5).
+        "    let symbol: f64 = n + 1\n",
+        "    let named: f64 = add_(n, 1)\n",
+        // An operand with no type of its own is read as its parameter:
+        // a `list<f64>`.
+        "    let same = xs == [1, 2]\n",
+        "    let also = eq_(xs, [1, 2])\n",
+        // A link inside a chain is an operand, and is asked for
+        // nothing: `n + 1` is an `i64` here.
+        "    let chain: f64 = n + 1 + 2.5\n",
+        "    var total = 1.5\n",
+        "    total += 1\n",
+        "}\n",
+        // An operand that leaves a generic parameter for its place to
+        // say has no place that says: it is reported, as it is where it
+        // is an argument (GEN-8).
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn unresolved() {\n",
+        "    let bad = repeat(1) == repeat(2)\n",
+        "}\n",
     ));
     assert_eq!(
-        locals(&checked, "uses")[3..],
-        ["parent_first: bool", "child_first: bool", "siblings: bool"]
+        checked.summary(),
+        [
+            "m.hgl:13:15 type/generic.unresolved GEN-8",
+            "m.hgl:13:28 type/generic.unresolved GEN-8",
+        ]
     );
+    let statements = &body(&checked, "uses").statements;
+    let value = |index: usize| match &statements[index] {
+        Stmt::Declare {
+            value: Some(value), ..
+        }
+        | Stmt::Assign { value, .. } => value,
+        other => panic!("a statement with a value: {other:?}"),
+    };
+    for index in [0, 1] {
+        assert_eq!(
+            call_of(&checked, value(index)).0,
+            "add_(lhs: i64, rhs: f64) -> f64"
+        );
+    }
+    for index in [2, 3] {
+        assert_eq!(
+            call_of(&checked, value(index)).0,
+            "eq_<T>(lhs: T, rhs: T) -> bool"
+        );
+    }
+    assert_eq!(
+        call_of(&checked, value(4)).0,
+        "add_(lhs: i64, rhs: f64) -> f64"
+    );
+    let (_, inner, _) = value(4).kind.binary().expect("a symbol with two operands");
+    assert_eq!(
+        call_of(&checked, inner).0,
+        "add_(lhs: i64, rhs: i64) -> i64"
+    );
+    assert_eq!(
+        call_of(&checked, value(6)).0,
+        "add_(lhs: f64, rhs: i64) -> f64"
+    );
+}
+
+/// GEN-5: "A candidate that takes each integer literal as the `i64` it
+/// is outranks one for which a literal is widened to an `f64`". A
+/// literal under a symbol that is core's own arithmetic is still a
+/// literal among a sequence's entries: `[-1]` and `[1 + 2]` select the
+/// candidate for a `list<i64>`, as `[1]` does.
+#[test]
+fn a_literal_under_a_symbol_is_an_integer_first_among_entries() {
+    let checked = module(concat!(
+        "operator each<V>(values: V) -> V\n",
+        "impl const fn each(values: list<i64>) -> list<i64> => values\n",
+        "impl const fn each(values: list<f64>) -> list<f64> => values\n",
+        "const fn uses() {\n",
+        "    let plain = each([1])\n",
+        "    let minus = each([-1])\n",
+        "    let sum = each([1 + 2])\n",
+        "    let real = each([-1.5])\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "plain: list<i64>",
+            "minus: list<i64>",
+            "sum: list<i64>",
+            "real: list<f64>",
+        ]
+    );
+}
+
+/// GEN-5: "Whether a literal is widened is settled by the candidates'
+/// result and parameter types, before their conditions: where a
+/// candidate that gives the requested output takes every integer
+/// literal as an `i64`, none is widened, and the conditions select
+/// among the candidates that do. An option so does not change what a
+/// literal is. Among candidates that tie and differ only in which
+/// integer literals they take as an `f64`, the one that takes every one
+/// of them as an `f64` is selected."
+#[test]
+fn what_an_integer_literal_is_at_a_call_is_settled_by_types() {
+    let checked = module(concat!(
+        "const fn uses(n: i64) {\n",
+        // Three candidates give an `f64` with a literal widened: the
+        // one that widens both is selected.
+        "    let symbol: f64 = 1 + 2\n",
+        "    let named: f64 = add_(1, 2)\n",
+        // A division of two `i64` takes the `2` as the `i64` it is, and
+        // none admits `.nan` (NUM-12): the `2` is not then an `f64`.
+        "    let literal = n //{zero: .nan} 2\n",
+        "    let whole = n //{zero: .nan} n\n",
+        "    let call = floordiv_(n, 2, zero: .nan)\n",
+        // No candidate that gives an `f64` takes two `i64`.
+        "    let mixed: f64 = add_(n, 1)\n",
+        "    let plain = n // 2\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:21 operator/operator.no_candidate OPS-1",
+            "m.hgl:6:19 operator/operator.no_candidate OPS-1",
+            "m.hgl:7:16 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    let statements = &body(&checked, "uses").statements;
+    for index in [0, 1] {
+        let Stmt::Declare {
+            value: Some(value), ..
+        } = &statements[index]
+        else {
+            panic!("a declaration with a value");
+        };
+        assert_eq!(
+            call_of(&checked, value).0,
+            "add_(lhs: f64, rhs: f64) -> f64"
+        );
+    }
+    assert_eq!(locals(&checked, "uses")[6..], ["mixed: f64", "plain: i64"]);
 }
 
 /// EXPR-10: "A symbol operator may carry named configuration
