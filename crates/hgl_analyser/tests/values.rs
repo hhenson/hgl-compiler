@@ -2548,8 +2548,10 @@ fn an_option_that_selects_is_a_generic_value_parameter() {
         // The second has no default: it is admitted because the call
         // gives the option.
         "    let checked = ratio(a, b, zero: .error)\n",
-        // TYPE-7: an enum member written in full is the same constant.
+        // TYPE-7: an enum member written in full is the same constant,
+        // in parentheses or not (EXPR-1).
         "    let full = ratio(a, b, zero: Zero.error)\n",
+        "    let grouped = ratio(a, b, zero: (Zero.error))\n",
         "    let texts = ratio(text, 2)\n",
         "}\n",
     ));
@@ -2561,6 +2563,7 @@ fn an_option_that_selects_is_a_generic_value_parameter() {
             "nan: f64",
             "checked: result<f64, error>",
             "full: result<f64, error>",
+            "grouped: result<f64, error>",
             "texts: str",
         ]
     );
@@ -2646,6 +2649,34 @@ fn a_generic_value_parameters_type_may_be_generic() {
     assert_eq!(locals(&checked, "uses")[..2], ["whole: i64", "text: str"]);
 }
 
+/// GEN-2: "A call resolves a generic of its callee from what it writes
+/// ... then from its arguments". A generic value parameter the call
+/// gives by name is what it writes: an argument whose type says
+/// otherwise is then no argument for the candidate, and is not what
+/// decides.
+#[test]
+fn a_generic_value_given_by_name_is_not_overridden_by_an_argument() {
+    let checked = module(concat!(
+        "operator count<V>(value: V) -> i64\n",
+        "impl const fn count<const N: i64>(value: list<i64, N>) -> i64 => N\n",
+        "const fn uses(pair: list<i64, 2>) {\n",
+        // From the argument's type, and by name where they agree.
+        "    let inferred = count(pair)\n",
+        "    let agreed = count(pair, N: 2)\n",
+        // A list of two is no list of three.
+        "    let differs = count(pair, N: 3)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:19 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[1..3],
+        ["inferred: i64", "agreed: i64"]
+    );
+}
+
 /// GEN-2: a generic value parameter's default is written in its
 /// candidate's declaration, which may be in another file than the call.
 /// TYPE-7: an enum member written in full there, `Zero.ieee`, is the
@@ -2660,7 +2691,7 @@ fn a_default_is_read_where_its_candidate_is_declared() {
                 "module lib\n",
                 "export enum Zero { ieee, nan, error }\n",
                 "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
-                "impl const fn ratio<const zero: Zero = Zero.ieee>(lhs: f64, rhs: f64) -> f64\n",
+                "impl const fn ratio<const zero: Zero = (Zero.ieee)>(lhs: f64, rhs: f64) -> f64\n",
                 "    requires zero == .ieee => lhs\n",
                 // An option that is a parameter, under a name of its
                 // own (GEN-6).

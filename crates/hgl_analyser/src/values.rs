@@ -2066,6 +2066,11 @@ impl<'a> Typer<'a> {
     /// compare (GEN-6). An enum member is one however it is written
     /// (TYPE-7): `.nan`, `Zero.nan`, `alias::Zero.nan`.
     fn option_value(&self, node: &SyntaxNode) -> Option<OptionValue> {
+        // EXPR-1: "Parentheses select grouping": `(Zero.nan)` is
+        // `Zero.nan`.
+        if node.kind() == SyntaxKind::ParenExpr {
+            return self.option_value(&node.children().next()?);
+        }
         if node.kind() == SyntaxKind::MemberExpr
             && node
                 .children()
@@ -2090,6 +2095,9 @@ impl<'a> Typer<'a> {
     /// option's type being an enum: a member of any other would not be
     /// a value of it.
     fn default_value(&self, node: &SyntaxNode, ty: Option<&Type>) -> Option<OptionValue> {
+        if node.kind() == SyntaxKind::ParenExpr {
+            return self.default_value(&node.children().next()?, ty);
+        }
         let of_enum = match ty {
             Some(Type::Named {
                 module,
@@ -3876,6 +3884,15 @@ fn instance<'s>(
     }
     let bound = bound(signature, public, given)?;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
+    // GEN-2: what the call writes decides first. A generic value
+    // parameter it gives by name is that, whatever an argument's type
+    // would say of it: `pick(pair, N: 3)` for `value: list<i64, N>` asks
+    // for a list of three, and a list of two is then no argument for it.
+    for (position, place) in bound.iter().enumerate() {
+        if let Place::Generic(index) = *place {
+            found[index] = Some(Argument::Constant(constant_at(&given[position].node)));
+        }
+    }
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {
         let place = match result {
             Type::Nullable(_) => place,
@@ -3897,20 +3914,16 @@ fn instance<'s>(
         }
     }
     // GEN-6: "An option that selects among candidates is a generic
-    // value parameter". No argument's type says what one is: it is what
-    // the call gives it by name, or its default. GEN-6: "a candidate
-    // whose option has none is admitted only when the call gives it."
+    // value parameter". One that neither the call nor an argument's
+    // type says anything of takes its default (GEN-2). GEN-6: "a
+    // candidate whose option has none is admitted only when the call
+    // gives it."
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
             continue;
         }
-        let written = bound
-            .iter()
-            .position(|&place| place == Place::Generic(index))
-            .map(|position| given[position].node.clone())
-            .or_else(|| generic_default(&candidate.syntax, generic));
-        if let Some(written) = written {
-            found[index] = Some(Argument::Constant(constant_at(&written)));
+        if let Some(default) = generic_default(&candidate.syntax, generic) {
+            found[index] = Some(Argument::Constant(constant_at(&default)));
         }
     }
     let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
