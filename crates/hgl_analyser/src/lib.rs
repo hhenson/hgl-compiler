@@ -373,6 +373,30 @@ fn error(
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
 }
 
+/// Core's module as the pinned `hgl_core` declares it, built into the
+/// compiler: each file's name for diagnostics, and its text.
+///
+/// UNIT-11: every module binds core's public declarations with no
+/// `use`. Core is the part of the language every program has, so a
+/// program is always analysed with core's module: its own where it
+/// holds a `module core`, and this one where it does not. Whoever calls
+/// [`analyse`] parses these files with the program's and passes them
+/// along; the analyser reads only what it is given.
+///
+/// `include_str!` puts a file's text in the compiler when the compiler
+/// is built, so the module is the one at the `spec/hgl_core` pin. A
+/// test fails when the pin adds a file this list does not have.
+pub const CORE_FILES: [(&str, &str); 2] = [
+    (
+        "<core>/core/core.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
+    ),
+    (
+        "<core>/native/scalar_operators.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/scalar_operators.hgl"),
+    ),
+];
+
 /// The names `inject` may name (TIME-8): "The injectables are `out`,
 /// `logger`, `clock`, and `scheduler`, and the proposed `alarm` and
 /// `global_state` below; `inject` names no other."

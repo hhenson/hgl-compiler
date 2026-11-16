@@ -145,30 +145,8 @@ struct TestArgs {
     limits: LimitArgs,
 }
 
-/// Core's module as the pinned `hgl_core` declares it, built into the
-/// compiler: each file's name for diagnostics, and its text.
-///
-/// UNIT-11: every module binds core's public declarations with no
-/// `use`. Core is the part of the language every program has, so a
-/// program is always checked with core's module: its own where its
-/// source roots hold one, and this one where they do not. `include_str!` puts the file's text in
-/// the compiler when the compiler is built, so the module supplied is
-/// the one at the `spec/hgl_core` pin. The test
-/// `the_core_supplied_is_every_file_of_the_pinned_core` fails when the
-/// pin adds a file this list does not have.
-const CORE: [(&str, &str); 2] = [
-    (
-        "<core>/core/core.hgl",
-        include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
-    ),
-    (
-        "<core>/native/scalar_operators.hgl",
-        include_str!("../../../spec/hgl_core/hgl/native/scalar_operators.hgl"),
-    ),
-];
-
 /// The path of core's module (UNIT-11).
-const CORE_MODULE: &str = "core";
+const CORE_MODULE: &str = Program::CORE;
 
 /// The compiler's limits, for every command that parses. They are the
 /// compiler's and not the language's: source past one is reported, and the
@@ -494,7 +472,7 @@ fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> 
     });
     let mut supplied = 0;
     if !has_core {
-        for (name, text) in CORE {
+        for (name, text) in hgl_analyser::CORE_FILES {
             let file = match sources.add(name, text) {
                 Ok(file) => file,
                 Err(error) => {
@@ -875,51 +853,4 @@ fn temporal_value(value: &literal::TemporalLiteral<'_>) -> String {
         fields.push(format!("zone {zone}"));
     }
     fields.join(", ")
-}
-
-// `#[cfg(test)]` builds what follows only when the tests are built.
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::fs;
-    use std::path::Path;
-
-    use walkdir::WalkDir;
-
-    use super::CORE;
-
-    /// The module the compiler supplies is the pinned core's, whole:
-    /// every `.hgl` file under `spec/hgl_core/hgl`, with its text as it
-    /// stands there. A pin that adds a file fails this until `CORE`
-    /// lists it.
-    #[test]
-    fn the_core_supplied_is_every_file_of_the_pinned_core() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
-        let mut pinned = BTreeMap::new();
-        for entry in WalkDir::new(&root) {
-            let entry = entry.expect("the pinned core is read");
-            let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "hgl") {
-                // Named as `CORE` names it, with `/` on every system.
-                let relative = path
-                    .strip_prefix(&root)
-                    .expect("the file is under the root");
-                let parts: Vec<String> = relative
-                    .iter()
-                    .map(|part| part.to_string_lossy().into_owned())
-                    .collect();
-                let text = fs::read_to_string(path).expect("the file is text");
-                pinned.insert(format!("<core>/{}", parts.join("/")), text);
-            }
-        }
-        let supplied: BTreeMap<String, String> = CORE
-            .iter()
-            .map(|(name, text)| (name.to_string(), text.to_string()))
-            .collect();
-        assert_eq!(
-            supplied.keys().collect::<Vec<_>>(),
-            pinned.keys().collect::<Vec<_>>()
-        );
-        assert_eq!(supplied, pinned);
-    }
 }

@@ -1,34 +1,66 @@
 //! Calls through core's own module, as the pinned `hgl_core` declares
 //! it: `spec/hgl_core/hgl/core/core.hgl` and the native candidates in
-//! `spec/hgl_core/hgl/native/scalar_operators.hgl`. The prelude binds
-//! its public declarations in every module (UNIT-11).
+//! `spec/hgl_core/hgl/native/scalar_operators.hgl`, which are built into
+//! the compiler. The prelude binds its public declarations in every
+//! module (UNIT-11).
 //!
 //! These tests hold the compiler to core's declarations as they are
 //! written, so they fail when a pin moves them: that is their purpose.
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use common::{Checked, check};
 
-/// Checks one file, `m.hgl`, of module `m`, in a program that has
-/// core's module. The `module` line is added, so the text given starts
-/// on line 2.
+/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
+/// so the text given starts on line 2. The program has core's module,
+/// as every program does: `check` supplies the one the compiler is
+/// built with.
 fn with_core(text: &str) -> Checked {
+    check(&[("m.hgl", &format!("module m\n{text}"))])
+}
+
+/// The module the compiler supplies is the pinned core's, whole: every
+/// `.hgl` file under `spec/hgl_core/hgl`, with its text as it stands
+/// there. A pin that adds a file fails this until
+/// `hgl_analyser::CORE_FILES` lists it.
+#[test]
+fn the_core_supplied_is_every_file_of_the_pinned_core() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/hgl");
-    let read = |path: &str| {
-        fs::read_to_string(root.join(path))
-            .unwrap_or_else(|error| panic!("the pinned core has {path}: {error}"))
-    };
-    let core = read("core/core.hgl");
-    let native = read("native/scalar_operators.hgl");
-    check(&[
-        ("core.hgl", &core),
-        ("m.hgl", &format!("module m\n{text}")),
-        ("scalar_operators.hgl", &native),
-    ])
+    let mut pinned = BTreeMap::new();
+    let mut directories = vec![root.clone()];
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(&directory).expect("the pinned core is read") {
+            let path = entry.expect("the pinned core is read").path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "hgl") {
+                // Named as `CORE_FILES` names it, with `/` on every
+                // system.
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("the file is under the root");
+                let parts: Vec<String> = relative
+                    .iter()
+                    .map(|part| part.to_string_lossy().into_owned())
+                    .collect();
+                let text = fs::read_to_string(&path).expect("the file is text");
+                pinned.insert(format!("<core>/{}", parts.join("/")), text);
+            }
+        }
+    }
+    let supplied: BTreeMap<String, String> = hgl_analyser::CORE_FILES
+        .iter()
+        .map(|(name, text)| (name.to_string(), text.to_string()))
+        .collect();
+    assert_eq!(
+        supplied.keys().collect::<Vec<_>>(),
+        pinned.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(supplied, pinned);
 }
 
 /// The locals of `name` of module `m` as `local: type`, parameters

@@ -1155,18 +1155,18 @@ fn a_value_functions_signature_is_of_ordinary_values() {
 fn a_const_option_compared_in_a_constraint_is_no_type() {
     let checked = module(concat!(
         "export enum Zero { ieee, nan, error }\n",
-        "operator div_<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
         // The specification's example: temporal candidates.
-        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
+        "native impl fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan}\n",
-        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
+        "native impl fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> result<f64, error>\n",
         "    requires zero == .error\n",
         // Value candidates, HGL and native: no marker.
-        "native impl const fn div_(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
         "    requires zero in {.ieee, .nan}\n",
-        "impl const fn div_(lhs: str, rhs: str, zero: Zero) -> str requires zero == .nan => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: str, zero: Zero) -> str requires zero == .nan => lhs\n",
         // The constant may stand on either side of `==`.
-        "impl const fn div_(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
+        "impl const fn ratio(lhs: bool, rhs: bool, zero: Zero) -> bool requires .nan == zero => lhs\n",
         // A const parameter of a function that is no candidate.
         "fn scaled(value: f64, const mode: Zero) -> f64 requires mode == .ieee => value\n",
         // An option of the candidate's own, which its operator does not
@@ -1193,27 +1193,27 @@ fn a_const_option_compared_in_a_constraint_is_no_type() {
 fn another_parameter_in_a_constraint_is_rejected() {
     let checked = module(concat!(
         "export enum Zero { ieee, nan, error }\n",
-        "operator div_<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R, const zero: Zero = .ieee) -> O\n",
         "operator plain<T>(value: T, mode: Zero) -> T\n",
         // A temporal input: the specification's deliberate rejection.
-        "native impl fn div_(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
+        "native impl fn ratio(lhs: f64, rhs: f64, const zero: Zero) -> f64\n",
         "    requires rhs == 0.0\n",
         // A parameter of a value candidate that is no option.
-        "native impl const fn div_(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: i64, rhs: i64, zero: Zero) -> f64\n",
         "    requires lhs == 0\n",
         // A value function that is no candidate.
         "const fn unmarked(value: f64, mode: Zero) -> f64 requires mode == .ieee => value\n",
         // A candidate whose operator does not mark the parameter.
         "impl const fn plain(value: i64, mode: Zero) -> i64 requires mode == .nan => value\n",
         // `is` compares types, and a set holds the constants.
-        "native impl const fn div_(lhs: str, rhs: str, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: str, rhs: str, zero: Zero) -> f64\n",
         "    requires zero is Zero\n",
-        "native impl const fn div_(lhs: bool, rhs: bool, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: bool, rhs: bool, zero: Zero) -> f64\n",
         "    requires .ieee in {zero}\n",
         // What an option is compared with is constants, not types.
-        "native impl const fn div_(lhs: date, rhs: date, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: date, rhs: date, zero: Zero) -> f64\n",
         "    requires zero == i64\n",
-        "native impl const fn div_(lhs: time, rhs: time, zero: Zero) -> f64\n",
+        "native impl const fn ratio(lhs: time, rhs: time, zero: Zero) -> f64\n",
         "    requires zero in {i64, f64}\n",
     ));
     assert_eq!(

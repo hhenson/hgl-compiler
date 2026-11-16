@@ -2024,18 +2024,18 @@ fn a_calls_generic_arguments_are_checked_against_its_callee() {
 #[test]
 fn an_operators_generic_arguments_request_its_output() {
     let checked = module(concat!(
-        "operator convert<T, V>(value: V) -> T\n",
-        "impl const fn convert(value: i64) -> f64 => 1.0\n",
-        "impl const fn convert(value: i64) -> str => \"x\"\n",
-        "impl const fn convert(value: bool) -> f64 => 1.0\n",
+        "operator change<T, V>(value: V) -> T\n",
+        "impl const fn change(value: i64) -> f64 => 1.0\n",
+        "impl const fn change(value: i64) -> str => \"x\"\n",
+        "impl const fn change(value: bool) -> f64 => 1.0\n",
         "const fn uses(count: i64, flag: bool) {\n",
-        "    let real = convert<f64>(count)\n",
-        "    let text = convert<str>(count)\n",
-        "    let truth = convert<f64>(flag)\n",
+        "    let real = change<f64>(count)\n",
+        "    let text = change<str>(count)\n",
+        "    let truth = change<f64>(flag)\n",
         // What is written wins over what the place expects.
-        "    let wrong: str = convert<f64>(count)\n",
-        "    let none = convert<bool>(count)\n",
-        "    let many = convert<f64, i64, str>(count)\n",
+        "    let wrong: str = change<f64>(count)\n",
+        "    let none = change<bool>(count)\n",
+        "    let many = change<f64, i64, str>(count)\n",
         "}\n",
     ));
     assert_eq!(

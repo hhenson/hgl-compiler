@@ -797,9 +797,14 @@ A module the compiler supplied is not counted in `hgl check`'s summary
 or listed by `--modules`; a diagnostic in it names its file as
 `<core>/...`. It is read under the default limits whatever
 `--nesting-limit` and `--tree-depth-limit` say: those are for the
-program's own source. A test in `hgl_cli` holds the built-in files to the pin:
-a pin that adds a file to core fails it until the list in
-`crates/hgl_cli/src/main.rs` has the file.
+program's own source.
+
+The files are `hgl_analyser::CORE_FILES`. The analyser reads only what
+it is given, so whoever calls it parses these with the program's files
+and passes them along: `hgl` does, and so does the helper the
+analyser's own tests check a program with, so a test's program has
+core as every program does. A test holds the list to the pin: a pin
+that adds a file to core fails it until the list has the file.
 
 ## Planned order
 
