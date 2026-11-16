@@ -684,12 +684,35 @@ impl<'a> Typer<'a> {
                     .collect();
                 (!sets.is_empty()).then(|| sets.concat())
             }
-            SyntaxKind::CallExpr => {
-                let callee = header.children().next()?;
-                let name = match callee.kind() {
-                    SyntaxKind::NameExpr => name_token(&callee)?,
+            // `valid(a)`, and the same written with its generic
+            // argument, `valid<i64>(a)`, which is the selector it is
+            // without one (TIME-9).
+            SyntaxKind::CallExpr
+            | SyntaxKind::TypedConstructor
+            | SyntaxKind::UndecidedConstructor => {
+                let name = match header.kind() {
+                    SyntaxKind::CallExpr => {
+                        let callee = header.children().next()?;
+                        match callee.kind() {
+                            SyntaxKind::NameExpr => name_token(&callee)?,
+                            _ => return None,
+                        }
+                    }
+                    _ if child(header, SyntaxKind::QualifiedName).is_none() => name_token(header)?,
                     _ => return None,
                 };
+                // GEN-14: a form that reads two ways is the call only
+                // where the resolver decided so.
+                if header.kind() == SyntaxKind::UndecidedConstructor {
+                    let at = self.at(header);
+                    let call =
+                        self.module.decisions.iter().any(|decision| {
+                            decision.at == at && decision.constructor == Some(true)
+                        });
+                    if !call {
+                        return None;
+                    }
+                }
                 if name.text() != "valid" || !self.is_the_languages(&name) {
                     return None;
                 }
