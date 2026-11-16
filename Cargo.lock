@@ -184,6 +184,7 @@ dependencies = [
  "clap",
  "hgl_analyser",
  "hgl_diagnostics",
+ "hgl_hgraph",
  "hgl_lexer",
  "hgl_parser",
  "hgl_runner",
@@ -196,6 +197,17 @@ name = "hgl_diagnostics"
 version = "0.1.0"
 dependencies = [
  "codespan-reporting",
+ "hgl_source",
+]
+
+[[package]]
+name = "hgl_hgraph"
+version = "0.1.0"
+dependencies = [
+ "hgl_analyser",
+ "hgl_diagnostics",
+ "hgl_lexer",
+ "hgl_parser",
  "hgl_source",
 ]
 

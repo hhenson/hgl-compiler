@@ -17,7 +17,7 @@ syntax tree ---------> formatter (planned) ---------> source text
 analysed program ----> error reporting (`check`)
     |  optimiser (planned)
 analysed program
-    |  one transpiler per target (planned)
+    |  one transpiler per target (`hgl_hgraph`)
 target output
 ```
 
@@ -40,10 +40,10 @@ Rules for every stage:
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
-| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| transpilers | Analysed program to one target each | planned |
+| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring | first slice: scalar nodes, value functions, graphs that call nodes, tests with dense evals |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -1198,7 +1198,9 @@ does not (ERR-1). The catalogue lists a warning by its code alone
 counts it after the errors, and no `# expect-error` names one (ERR-10).
 
 A diagnostic has a category from the specification's list, a code, a primary
-location, and the rule it enforces. It may point at related places as
+location, and the rule it enforces. The list's `build` is for
+infrastructure, a transpiler's report of what its target does not write
+among them: it is no source category, and no annotation names it. It may point at related places as
 well, such as the first of two declarations. A code is *catalogued* (it appears in the
 specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
@@ -1222,16 +1224,89 @@ names one (LEX-12, LEX-25):
 | Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
 | Backslash directly before a line break in a text block | `string.unknown_escape` |
 
-## Adding a transpiler (planned)
+## Transpilers
 
 A transpiler is a crate that depends on the analysed-program crate and the
-diagnostics crate, and on no other transpiler. `hgl_cli` selects one by
-target name. The front end does not change.
+diagnostics crate, and on no other transpiler. `hgl emit --target NAME
+--out DIR` selects one by name and writes what it gives. The front end
+does not change, and no stage before a transpiler knows a target.
+
+A transpiler is given a program the analyser accepted. What it cannot
+write is no fault of the source, so it is reported in the category
+`build`, which no `# expect-error` names, with a code of the target's
+own. `hgl emit` then writes nothing: half a program is of no use to run.
+
+### hgraph
 
 First target (owner decision, 2026-11-13): Python wiring for
 [hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
+
+`hgl_hgraph` writes every file under one Python package, `_hgl`, so
+that a program's modules are in a namespace of their own: a module named
+`hgraph`, or as a module of Python's library is, takes the place of
+nothing Python or hgraph imports. Each module but core is a package
+under it, each part of its path with `_m_` before it: `examples.tests`
+is `_hgl/_m_examples/_m_tests/__init__.py`. A package holds a module's
+declarations and the packages of the modules under it side by side, and
+the `_m_` keeps the two apart, so `module demo` may declare a `util`
+beside `module demo.util`. Beside the modules are the support files a
+generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
+
+| HGL | Python |
+| --- | --- |
+| `const fn` | A plain function |
+| A node, a `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` where it has no result. hgraph is imported as `_hg` |
+| A `when` header's selectors | The node's `active=` is every input a handler subscribes to and its `valid=` the inputs every handler requires (TIME-3, TIME-4). A handler is guarded by what it asks beyond those: that one of its own inputs ticked, that the inputs only it requires are valid, and the rest of its condition. Handlers are tried in the order written |
+| `inject out` | `_output: _hg.TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
+| A graph | `@_hg.graph` |
+| A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
+| A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
+| A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
+| A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
+| A sequence that is a set | `_py.frozenset((1, 2))` |
+| `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
+| `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
+| `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
+| A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
+| A named test | A function `test_name` |
+| `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
+| A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
+| A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
+
+Core's native functions are the target's to provide (NATIVE-7):
+`_hgl/_core_native.py` is that provider, written by hand in the crate and
+copied out beside the modules. It holds the `i64` operations to core's
+numeric contract, which neither wraps nor promotes. The transpiler reads
+the names it defines, and a candidate it has no function for is reported.
+
+`_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
+for each input through hgraph's own `eval_node` and ends the result at
+its last publication (TST-6).
+
+Reported as not written yet (`target.unsupported`): a type other than
+the four scalars above, a nullable among them; structs, enums, operators
+and their candidates declared in a program; generic temporal functions;
+a default of a value function's parameter, whose value the analysed
+program does not hold yet; a pack parameter; a node that no input wakes, `modified([])`;
+`out` or an input read in `start` or `stop`, which hgraph gives neither;
+`cache`, the `inject` of a capability, and sources; in a graph, a call
+lifted over connections, an `if`, and any expression but a name, a
+literal and a call; a temporal function called in a test outside an
+`eval`, and an `eval` of a value function, which is lifted; loops and
+`switch`;
+durations, dates and times; timed traces and a published null in a
+trace; and a candidate of core the provider has no function for.
+
+The crate's tests compare the Python written for a small module with
+what is expected, and check that core's dense scalar eval cases are
+written whole. One more test runs the generated tests on hgraph: it
+needs a Python that has hgraph, named by the environment variable
+`HGL_HGRAPH_PYTHON`, and is run with `cargo test -p hgl_hgraph --
+--ignored`. With hgraph 0.8.19 the eight tests of core's
+`scalar_eval.hgl` pass, and so do the five of `scalar_endpoints.hgl`
+that publish no null. That is a run by hand, and no conformance claim.
 
 ## Finding source files
 
@@ -1277,7 +1352,8 @@ that adds a file to core fails it until the list has the file.
    `# expect-error` matching and `hgl test` for rejection cases (done);
    name resolution (done); the checks the parser left (FN-8, NATIVE-3;
    done); types for the scalar slice.
-4. Transpiler for hgraph; `hgl test` running the core conformance cases.
+4. Transpiler for hgraph (first slice done); `hgl test` running the core
+   conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
 
 ## Specification pin
