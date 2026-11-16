@@ -1756,7 +1756,7 @@ impl<'a> Typer<'a> {
                 // GEN-7: `-value` under `requires neg_(T) -> T`.
                 if config.is_none()
                     && let Some(operator) = identity
-                    && let Some(result) = self.required(operator, &[&only], expected, None)
+                    && let Some(result) = self.required(operator, &[&only], (None, expected), None)
                 {
                     return self.call_required(operator, result, vec![only], symbol.form);
                 }
@@ -2008,7 +2008,7 @@ impl<'a> Typer<'a> {
         if !configured
             && !faulty
             && let Some(operator) = identity
-            && let Some(result) = self.required(operator, &[&left, &right], place, None)
+            && let Some(result) = self.required(operator, &[&left, &right], (None, place), None)
         {
             return self.call_required(operator, result, vec![left, right], symbol.form);
         }
@@ -3457,18 +3457,9 @@ impl<'a> Typer<'a> {
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
-        // GEN-7: "A generic body is checked under its stated
-        // requirements": what the enclosing declaration requires of its
-        // generic parameters is callable in its body.
-        let supplied = generics.map(|_| found.as_slice());
-        if let Some(result) = self.required(
-            operator,
-            &given.iter().collect::<Vec<_>>(),
-            expected,
-            supplied,
-        ) {
-            return self.call_required(operator, result, given, Form::Named);
-        }
+        // The generic arguments the call writes, for a requirement to
+        // agree with (GEN-8).
+        let written_generics: Option<Vec<Option<Argument>>> = generics.map(|_| found.clone());
 
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12), and its defaults: see
@@ -3517,6 +3508,19 @@ impl<'a> Typer<'a> {
                 "GEN-13",
             ));
             return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        // GEN-7: "A generic body is checked under its stated
+        // requirements": what the enclosing declaration requires of its
+        // generic parameters is callable in its body. The requirement
+        // is of the call as it asks: one that gives another output than
+        // the call requests, its defaults included, is not this call.
+        if let Some(result) = self.required(
+            operator,
+            &given.iter().collect::<Vec<_>>(),
+            (requested.as_ref(), expected),
+            written_generics.as_deref(),
+        ) {
+            return self.call_required(operator, result, given, Form::Named);
         }
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
@@ -4524,15 +4528,19 @@ impl<'a> Typer<'a> {
     /// A requirement speaks for types of which one names a generic
     /// parameter of the declaration, its result's among them: any
     /// other call selects its candidate here, as it does in a body
-    /// that has no generic parameter. `expected` is the type the
-    /// call's place expects, and `written` the operator's generic
-    /// arguments as far as the call writes them, `make<T>()`: the
-    /// requirement is then one those agree with (GEN-8).
+    /// that has no generic parameter. `requested` is the output the
+    /// call itself asks for, through the generic arguments it writes
+    /// and the operator's defaults (GEN-8): a requirement that gives
+    /// another is not this call. `expected` is the type the call's
+    /// place expects, which chooses among requirements supplied alike.
+    /// `written` is the operator's generic arguments as far as the call
+    /// writes them, `make<T>()`: the requirement is one those agree
+    /// with.
     fn required(
         &mut self,
         operator: OperatorRef,
         given: &[&Given],
-        expected: Option<&Type>,
+        (requested, expected): (Option<&Type>, Option<&Type>),
         written: Option<&[Option<Argument>]>,
     ) -> Option<Required> {
         let own: Vec<Location> = self
@@ -4602,6 +4610,14 @@ impl<'a> Typer<'a> {
             if requirement.operator != operator
                 || requirement.operands.len() != ordered.len()
                 || !generic
+            {
+                continue;
+            }
+            // GEN-8: what the call requests is what it gets. Under
+            // `requires window(T) -> list<T, 5>`, a `window(value)` that
+            // takes the operator's default of three is another call.
+            if let (Some(requested), Some(result)) = (requested, &requirement.result)
+                && !self.admits(requested, result)
             {
                 continue;
             }
