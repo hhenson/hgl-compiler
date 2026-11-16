@@ -489,7 +489,7 @@ hook is a `Stmt::Hook` with its condition and its statements.
 | `valid(value)`, `modified(value)`, `scheduled()` | A bool: an operation on the endpoint, which is the language's own and no call of a function | TIME-9 |
 | `delta_value(value)`, `last_modified(value)` | The input's type; a `datetime?` | TIME-9 and core's endpoint contract |
 | `valid()`, `valid(a, b)`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
-| `modified()`, `modified(a, b)` | A selector of a `when` header: a subscription to every temporal input, or to those named | TIME-3 |
+| `modified()`, `modified(a, b)`, `modified([])` | A selector of a `when` header: a subscription to every temporal input, to those named, to none | TIME-3 |
 | `out` | The node's result: read, or assigned | TIME-7 |
 | `return`, `return value` | Ends the evaluation; the value is of the result's type and is published | FN-7 |
 | A call | Of a value function or an operator's value candidate | FN-3 |
@@ -500,6 +500,7 @@ What is rejected there:
 | --- | --- | --- |
 | An endpoint operation given a state, a `const` parameter or an expression | `endpoint.argument` | TIME-9 |
 | A sequence that names inputs, `valid([a, b])`, or any sequence given to another operation | `endpoint.argument` | TIME-3, TIME-9 |
+| `modified([])` in a node that injects neither `scheduler` nor `alarm`, or whose `start` does not call `schedule` on the one injected: by its name, by a local it is bound to, or as a block's value. What a function given the capability does is not followed, so a wake asked for only there is not found | `modified.no_driver` | TIME-3 |
 | A second input given to any operation but the selectors `valid` and `modified` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |

@@ -26,7 +26,7 @@
 //! known is reported once, where it was found, and never again where it
 //! is used (ERR-9).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_lexer::literal::{
@@ -218,11 +218,19 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
-    /// The locals a capability has been bound to: `let bound = clock`
-    /// (TIME-8: "Binding one to a `let` ... [is a use]"). The local is
-    /// then the capability under another name, and is held to the same
-    /// rule, whether or not core has given the capability a type.
-    aliases: HashSet<LocalId>,
+    /// The locals a capability has been bound to, each with the
+    /// capability it is: `let bound = clock` (TIME-8: "Binding one to a
+    /// `let` ... [is a use]"). The local is then the capability under
+    /// another name, and is held to the same rule, whether or not core
+    /// has given the capability a type.
+    aliases: HashMap<LocalId, LocalId>,
+    /// True once `start` has asked for a wake on the node's scheduler
+    /// or alarm (TIME-3).
+    driven: bool,
+    /// Where the node writes `modified([])`, which stands only in a
+    /// node that is so woken (TIME-3). The hooks may be written in any
+    /// order, so each is judged when the whole node has been read.
+    undriven: Vec<Location>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
     /// How many requirements deep a candidate's condition is being
@@ -284,7 +292,9 @@ impl<'a> Typer<'a> {
             hook: None,
             out: None,
             present: Vec::new(),
-            aliases: HashSet::new(),
+            aliases: HashMap::new(),
+            driven: false,
+            undriven: Vec::new(),
             initializing: false,
             requiring: 0,
             identities: HashMap::new(),
@@ -386,6 +396,28 @@ impl<'a> Typer<'a> {
                     statements.push(self.hook(&statement));
                 }
                 _ => statements.push(self.unread(&statement)),
+            }
+        }
+        // TIME-3: "`modified([])` subscribes to no input: it stands
+        // only in a node that injects `scheduler` or `alarm` and
+        // schedules a wake on it in `start`, which is then what wakes
+        // the handler."
+        if !self.driven {
+            for selector in std::mem::take(&mut self.undriven) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::MODIFIED_NO_DRIVER,
+                        selector,
+                        "`modified([])` subscribes to no input, and nothing else wakes this node"
+                            .to_string(),
+                        "TIME-3",
+                    )
+                    .with_note(
+                        "inject `scheduler` or `alarm` and schedule a wake on it in `start`: \
+                         `start { schedule(scheduler, delay) }`",
+                    ),
+                );
             }
         }
         Some(Body {
@@ -689,12 +721,27 @@ impl<'a> Typer<'a> {
                 "TIME-9",
             ));
         }
-        // The endpoints named, each by its name. `valid([])` names
-        // none (TIME-3); any other sequence is no endpoint, and is
-        // reported as one.
-        let none = operation == EndpointOperation::Valid
-            && matches!(arguments.as_slice(), [only]
+        // The endpoints named, each by its name. `valid([])` and
+        // `modified([])` name none (TIME-3); any other sequence is no
+        // endpoint, and is reported as one.
+        let none = matches!(
+            operation,
+            EndpointOperation::Valid | EndpointOperation::Modified
+        ) && matches!(arguments.as_slice(), [only]
                 if only.kind() == SyntaxKind::SequenceExpr && only.children().next().is_none());
+        // TIME-3: "`modified([])` subscribes to no input: it stands
+        // only in a node that injects `scheduler` or `alarm` and
+        // schedules a wake on it in `start`, which is then what wakes
+        // the handler."
+        if none && operation == EndpointOperation::Modified {
+            // The selector: `modified([])`, its name to its `)`.
+            let selector = list.parent().map_or(at, |call| self.at(&call));
+            // Once, where an argument is read a second time for the
+            // candidate it is given to.
+            if !self.undriven.contains(&selector) {
+                self.undriven.push(selector);
+            }
+        }
         let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
             None
         } else if none {
@@ -1017,11 +1064,8 @@ impl<'a> Typer<'a> {
         let assigned = value.is_some() || matches!(ty, Type::Nullable(_));
         let local = self.declare(name.text(), at, kind, ty, assigned);
         // TIME-8: a local a capability is bound to is that capability.
-        if value
-            .as_ref()
-            .is_some_and(|value| self.gives_capability(value))
-        {
-            self.aliases.insert(local);
+        if let Some(capability) = value.as_ref().and_then(|value| self.capability_of(value)) {
+            self.aliases.insert(local, capability);
         }
         // EXPR-3: "Initialization fixes a binding's value/connection
         // category".
@@ -1155,8 +1199,10 @@ impl<'a> Typer<'a> {
         }
         // TIME-8: a `var` a capability is assigned to is that
         // capability from there.
-        if operator.is_none() && self.gives_capability(&value) {
-            self.aliases.insert(local);
+        if operator.is_none()
+            && let Some(capability) = self.capability_of(&value)
+        {
+            self.aliases.insert(local, capability);
         }
         Stmt::Assign {
             local,
@@ -1599,28 +1645,37 @@ impl<'a> Typer<'a> {
     /// injects, other than `out`, which is its result; a parameter of a
     /// capability's type; or a local one of those has been bound to.
     fn is_capability(&self, local: LocalId) -> bool {
-        (self.locals[local].kind == LocalKind::Inject && Some(local) != self.out)
-            || self.program.is_capability_type(&self.locals[local].ty)
-            || self.aliases.contains(&local)
+        self.capability(local).is_some()
     }
 
-    /// True when the value of `value` is a capability: a read of one,
-    /// or a block or an `if` whose value is one.
-    fn gives_capability(&self, value: &Expr) -> bool {
+    /// The capability `local` is: itself, when the node injects it or it
+    /// is a parameter of a capability's type; and for a local one of
+    /// those has been bound to, that one.
+    fn capability(&self, local: LocalId) -> Option<LocalId> {
+        if let Some(capability) = self.aliases.get(&local) {
+            return Some(*capability);
+        }
+        let own = (self.locals[local].kind == LocalKind::Inject && Some(local) != self.out)
+            || self.program.is_capability_type(&self.locals[local].ty);
+        own.then_some(local)
+    }
+
+    /// The capability the value of `value` is: of a read of one, that
+    /// one; of a block or an `if`, the one its value is.
+    fn capability_of(&self, value: &Expr) -> Option<LocalId> {
         match &value.kind {
-            ExprKind::Local(local) => self.is_capability(*local),
+            ExprKind::Local(local) => self.capability(*local),
             ExprKind::Block {
                 value: Some(value), ..
-            } => self.gives_capability(value),
+            } => self.capability_of(value),
             ExprKind::If {
                 then, otherwise, ..
-            } => {
-                self.gives_capability(then)
-                    || otherwise
-                        .as_ref()
-                        .is_some_and(|otherwise| self.gives_capability(otherwise))
-            }
-            _ => false,
+            } => self.capability_of(then).or_else(|| {
+                otherwise
+                    .as_ref()
+                    .and_then(|otherwise| self.capability_of(otherwise))
+            }),
+            _ => None,
         }
     }
 
@@ -2802,6 +2857,75 @@ impl<'a> Typer<'a> {
     /// itself an expression are for later parts: their arguments are
     /// read, and the call has no type.
     fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
+        let read = self.call_read(node, expected);
+        let callee = node
+            .children()
+            .next()
+            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+            .and_then(|callee| name_token(&callee));
+        if let Some(callee) = callee {
+            self.note_wake(&callee, &read.0);
+        }
+        read
+    }
+
+    /// Notes a call in `start` that asks for a wake on the node's
+    /// scheduler or alarm (TIME-3: the node "schedules a wake on it in
+    /// `start`").
+    ///
+    /// That is `schedule(scheduler, ...)`, written in `start` itself,
+    /// the capability given first: by its name, by a local it is bound
+    /// to, or as the value of a block (TIME-8, CTRL-10). The operation
+    /// is core's. Core does not declare it yet, so a `schedule` that
+    /// nothing declares is taken for it; one a module declares for
+    /// itself is that module's function, and no wake. What a function
+    /// given the capability does with it is not followed: a wake asked
+    /// for only there is not one this finds.
+    fn note_wake(&mut self, callee: &SyntaxToken, kind: &ExprKind) {
+        if self.hook != Some(Hook::Start) || self.driven || callee.text() != "schedule" {
+            return;
+        }
+        let ExprKind::Call {
+            callee: called,
+            arguments,
+            ..
+        } = kind
+        else {
+            return;
+        };
+        // Whose `schedule` it is: core's, or nobody's yet. A call that
+        // is not read may be of a local that holds a function, which is
+        // bound, and is not the name the prelude is waited on for.
+        let core = self.program.core();
+        let cores = match called {
+            Callee::Unread => !self
+                .bindings
+                .contains_key(&(self.file, callee.span().start)),
+            Callee::Function { module, .. } => Some(*module) == core,
+            Callee::Candidate { operator, .. } | Callee::Required { operator } => {
+                Some(operator.0) == core
+            }
+        };
+        if !cores {
+            return;
+        }
+        // The first argument: the one given to the first parameter, or
+        // where the call is not read, the first written.
+        let first = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0))
+            .or_else(|| arguments.first());
+        self.driven = first
+            .and_then(|argument| self.capability_of(&argument.value))
+            .is_some_and(|capability| {
+                let local = &self.locals[capability];
+                local.kind == LocalKind::Inject
+                    && matches!(local.name.as_str(), "scheduler" | "alarm")
+            });
+    }
+
+    /// A call, as the form or the function its callee names.
+    fn call_read(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let (Some(callee), Some(list)) = (node.children().next(), child(node, SyntaxKind::ArgList))
         else {
             return (ExprKind::Unread, Type::Unknown);
@@ -5496,6 +5620,9 @@ impl<'a> Typer<'a> {
         self.diagnostics.truncate(mark.diagnostics);
         self.locals.truncate(mark.locals);
         self.declared.retain(|_, local| *local < mark.locals);
+        // What was noted of a local that is taken back goes with it:
+        // its number is given to the next local declared.
+        self.aliases.retain(|local, _| *local < mark.locals);
         self.present.truncate(mark.present);
         if keep_flow {
             self.assigned.truncate(mark.locals);
@@ -5559,12 +5686,16 @@ impl<'a> Typer<'a> {
             // pass kept them, the name being a function or an operator.
             _ => {
                 let generics = self.calls.get(&(self.file, start)).copied();
-                match (generics, self.declarations(&name)) {
+                let read = match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {
                         self.call_named(&name, &list, found, expected, Some(generics))
                     }
                     _ => self.unread_call(&list),
-                }
+                };
+                // `schedule<duration>(scheduler, delay)` asks for a wake
+                // as the call without its generic arguments does.
+                self.note_wake(&name, &read.0);
+                read
             }
         }
     }

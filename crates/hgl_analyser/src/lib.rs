@@ -204,6 +204,9 @@ pub mod codes {
     /// A payload read under manual admission that no guard dominates
     /// (TIME-4).
     pub const PAYLOAD_UNGUARDED: &str = "payload.unguarded";
+    /// `modified([])` in a node that injects neither `scheduler` nor
+    /// `alarm`, or whose `start` schedules no wake on it (TIME-3).
+    pub const MODIFIED_NO_DRIVER: &str = "modified.no_driver";
     /// A temporal connection where composition requires a constant
     /// (FN-3).
     pub const CONNECTION_AS_CONSTANT: &str = "connection.as_constant";
