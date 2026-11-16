@@ -372,6 +372,33 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    }\n",
         "    when modified([]) { return a }\n",
         "}\n",
+        // As the value of a block (CTRL-10), with `start` written after
+        // the handler it wakes, and through a helper the scheduler is
+        // given to.
+        "const fn armed(scheduler: i64) -> i64 => scheduler\n",
+        "fn late(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    when modified([]) { return a }\n",
+        "    start { schedule({ scheduler }, 1s) }\n",
+        "}\n",
+        "fn helped(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start { armed(scheduler) }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+        // A local of another block that has the alias's name is another
+        // binding, and no scheduler.
+        "fn reused(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start {\n",
+        "        if true { let timer = scheduler }\n",
+        "        if true {\n",
+        "            let timer = 1s\n",
+        "            schedule(timer, 1s)\n",
+        "        }\n",
+        "    }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
         // Nothing injected that wakes it.
         "fn dormant(a: f64) -> f64 {\n",
         "    when modified([]) && valid([]) { return 0.0 }\n",
@@ -401,10 +428,11 @@ fn an_empty_subscription_needs_what_wakes_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:27:10 phase/modified.no_driver TIME-3",
-            "m.hgl:31:10 phase/modified.no_driver TIME-3",
-            "m.hgl:36:10 phase/modified.no_driver TIME-3",
-            "m.hgl:44:10 phase/modified.no_driver TIME-3",
+            "m.hgl:46:10 phase/modified.no_driver TIME-3",
+            "m.hgl:49:10 phase/modified.no_driver TIME-3",
+            "m.hgl:53:10 phase/modified.no_driver TIME-3",
+            "m.hgl:58:10 phase/modified.no_driver TIME-3",
+            "m.hgl:66:10 phase/modified.no_driver TIME-3",
         ]
     );
 }

@@ -500,7 +500,7 @@ What is rejected there:
 | --- | --- | --- |
 | An endpoint operation given a state, a `const` parameter or an expression | `endpoint.argument` | TIME-9 |
 | A sequence that names inputs, `valid([a, b])`, or any sequence given to another operation | `endpoint.argument` | TIME-3, TIME-9 |
-| `modified([])` in a node that injects neither `scheduler` nor `alarm`, or whose `start` holds no `schedule(scheduler, ...)` on the one injected | `modified.no_driver` | TIME-3 |
+| `modified([])` in a node that injects neither `scheduler` nor `alarm`, or whose `start` does not call `schedule` on the one injected: by its name, by a local it is bound to, or as a block's value. A declared function given it is taken to schedule: what it does is not followed | `modified.no_driver` | TIME-3 |
 | A second input given to any operation but the selectors `valid` and `modified` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
