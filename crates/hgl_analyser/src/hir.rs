@@ -196,6 +196,16 @@ pub enum Stmt {
         /// Where the statement is written.
         at: Location,
     },
+    /// `yield time: value`, in a source: it "writes its output and sets
+    /// its next evaluation" (SOURCE-1).
+    Yield {
+        /// When the value is published.
+        time: Expr,
+        /// The value published, of the source's result type.
+        value: Expr,
+        /// Where the statement is written.
+        at: Location,
+    },
     /// An expression evaluated for what it does.
     Expr(Expr),
     /// `for item in items { ... }`, or `for key, value in entries { ... }`

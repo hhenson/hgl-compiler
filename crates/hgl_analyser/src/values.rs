@@ -99,16 +99,14 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 // FN-2: a node, whose hooks are read as value code
                 // (FN-3: "In a hook a temporal parameter is a value of
                 // its declared type, read as in a value function"). A
-                // source has a shape of its own (SOURCE-1), which the
-                // phase pass holds it to; its body is not read yet.
+                // source is a node of another shape (SOURCE-1), which
+                // the phase pass holds it to.
                 (
                     DeclarationKind::Function(Role::Temporal)
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
-                ) if module.phases.get(position) == Some(&Some(Phase::Node))
-                    && !crate::phases::is_source(declaration) =>
-                {
-                    Typer::new(
+                ) if module.phases.get(position) == Some(&Some(Phase::Node)) => {
+                    let typer = Typer::new(
                         program,
                         module,
                         declaration,
@@ -119,8 +117,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                             calls: &calls,
                         },
                         diagnostics,
-                    )
-                    .node()
+                    );
+                    if crate::phases::is_source(declaration) {
+                        typer.source()
+                    } else {
+                        typer.node()
+                    }
                 }
                 // FN-2: a graph, whose body describes composition.
                 (
@@ -224,6 +226,10 @@ struct Typer<'a> {
     /// another name, and is held to the same rule, whether or not core
     /// has given the capability a type.
     aliases: HashMap<LocalId, LocalId>,
+    /// True while the statements of a source that yield are read
+    /// (SOURCE-1): there a `yield` is a statement, a `return` with no
+    /// value ends the source, and a `while` may have no condition.
+    generating: bool,
     /// The locals a capture is bound to, each with what its `.value`
     /// is (ERR-7: "What it gives is bound with `let` and read through
     /// two connections").
@@ -302,6 +308,7 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             aliases: HashMap::new(),
+            generating: false,
             captures: HashMap::new(),
             callable: None,
             driven: false,
@@ -444,6 +451,74 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The body of a source (SOURCE-1): "a node that produces its
+    /// output and has no temporal parameters ... It declares `cache`
+    /// and `state` (TIME-6), which are what it keeps from one `yield` to
+    /// the next ... A source with no declaration and no hook has a body
+    /// of statements, `yield` among them. One with an `inject`, a
+    /// `cache`, a `state`, a `start`, or a `stop` has its declarations,
+    /// then `start`, then one block that holds every `yield`, then
+    /// `stop`".
+    ///
+    /// Its declarations and its hooks are read as a node's are. Every
+    /// other statement is one that yields, or stands with those that
+    /// do: it is read as value code is (FN-3: "A runtime body calls only
+    /// value functions"). Which statements may stand where is the phase
+    /// pass's to say.
+    fn source(mut self) -> Option<Body> {
+        let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
+        let mut statements = Vec::new();
+        for statement in block.children() {
+            match statement.kind() {
+                SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
+                    self.initializing = statement.kind() == SyntaxKind::StateDecl;
+                    statements.push(self.local(&statement));
+                    self.initializing = false;
+                }
+                SyntaxKind::InjectDecl => statements.extend(self.inject(&statement)),
+                SyntaxKind::LifecycleBlock => statements.push(self.hook(&statement)),
+                // "A source has no `when`": it is reported, and not
+                // read.
+                SyntaxKind::WhenStmt => statements.push(self.unread(&statement)),
+                _ => {
+                    // Each pass of the source begins here: nothing has
+                    // returned.
+                    self.returned = false;
+                    self.generating = true;
+                    statements.push(self.statement(&statement));
+                    self.generating = false;
+                }
+            }
+        }
+        Some(Body {
+            locals: self.locals,
+            statements,
+        })
+    }
+
+    /// `yield time: value` (SOURCE-1): it "writes its output and sets
+    /// its next evaluation". The value is of the source's result type.
+    /// What the time may be is proposed (SOURCE-2), and is not judged.
+    fn yield_statement(&mut self, node: &SyntaxNode) -> Stmt {
+        let at = self.at(node);
+        let mut parts = node.children();
+        let (Some(time), Some(value)) = (parts.next(), parts.next()) else {
+            return self.unread(node);
+        };
+        let time = self.expression(&time, None);
+        let result = self.signature.result.clone();
+        let value = match &result {
+            Some(result) => {
+                let value = self.expression(&value, Some(result));
+                self.fit(value, result, "the source's result")
+            }
+            // A source with no result has nothing for a value to be:
+            // it is read for what it reports itself.
+            None => self.expression(&value, Some(&Type::Unknown)),
+        };
+        Stmt::Yield { time, value, at }
     }
 
     /// `inject name, ...`: each name is a capability of the node
@@ -943,6 +1018,23 @@ impl<'a> Typer<'a> {
         match node.kind() {
             SyntaxKind::LocalDecl => self.local(node),
             SyntaxKind::AssignStmt => self.assignment(node),
+            // A `yield` is a statement of a source's own (SOURCE-1). In
+            // a hook it is reported by the phase pass, and not read.
+            SyntaxKind::YieldStmt if self.generating => self.yield_statement(node),
+            // SOURCE-1 has `yield` write a source's output: what a
+            // `return` is there is proposed (SOURCE-4), and is not
+            // judged. Its value is read for what it reports itself.
+            SyntaxKind::ReturnStmt if self.generating => {
+                let value = node
+                    .children()
+                    .next()
+                    .map(|value| self.expression(&value, Some(&Type::Unknown)));
+                self.returned = true;
+                Stmt::Return {
+                    value,
+                    at: self.at(node),
+                }
+            }
             SyntaxKind::ReturnStmt => {
                 let value = node.children().next().map(|value| self.returned(&value));
                 let at = self.at(node);
@@ -1899,6 +1991,10 @@ impl<'a> Typer<'a> {
             // and so neither is what a dictionary holds.
             SyntaxKind::SequenceExpr => Some("an entry of a list or a set"),
             SyntaxKind::ReturnStmt => Some("what is returned"),
+            // `yield time: value`: the value is what the source
+            // publishes.
+            SyntaxKind::YieldStmt => (parent.children().nth(1).as_ref() == Some(&used))
+                .then_some("what the node publishes"),
             // `out = clock` publishes it; `kept = clock`, of a `state`
             // or a `cache`, keeps it.
             SyntaxKind::AssignStmt => {
@@ -3257,6 +3353,8 @@ impl<'a> Typer<'a> {
                     name.text(),
                     if self.hook.is_some() {
                         "hook"
+                    } else if self.generating {
+                        "source"
                     } else {
                         "value function"
                     }
@@ -3647,6 +3745,8 @@ impl<'a> Typer<'a> {
         if !self.graph {
             let place = if self.hook.is_some() {
                 "a hook"
+            } else if self.generating {
+                "a source"
             } else {
                 "a value function"
             };
@@ -3856,6 +3956,7 @@ impl<'a> Typer<'a> {
                 Some(Hook::When) => None,
                 Some(Hook::Start) => Some("in `start`"),
                 Some(Hook::Stop) => Some("in `stop`"),
+                None if self.generating => Some("in a source"),
                 None => Some("outside a `when`"),
             }
         };
@@ -9085,6 +9186,8 @@ impl<'a> Typer<'a> {
             .find(|part| part.kind() != SyntaxKind::Block);
         let condition = match condition {
             Some(condition) => Some(self.condition(&condition)),
+            // CTRL-15: "the form with no condition is a source's".
+            None if self.generating => None,
             None => {
                 let keyword = tokens(node)
                     .next()

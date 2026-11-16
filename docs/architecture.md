@@ -489,8 +489,21 @@ another shape (SOURCE-1), and is held to it:
 
 A source with no declaration and no hook has a body of statements, and
 only the first three rows apply. The block is `{ ... }`, a `while` or a
-`for`. A source's body is not read yet: what its statements and each
-`yield` are is for a later part.
+`for`.
+
+A source's body is read into the same typed form (`Typer::source`). Its
+declarations and its hooks are read as a node's are. Every other
+statement is read as value code, with three things of a source's own:
+
+| In a source | Read as | Rule |
+| --- | --- | --- |
+| `yield time: value` | `Stmt::Yield`: the value is of the result's type, and is not a capability. What the time may be is proposed, and is not judged | SOURCE-1, SOURCE-2 |
+| `return` with no value | Ends the source. One with a value is read and not judged: what it is there is proposed | SOURCE-4 |
+| `while { }` with no condition | A loop with none | CTRL-15 |
+
+A temporal function called there is `call.role`, a `?`
+`result.propagation_phase`, and a `capture` `capture.phase`, as in a
+hook.
 
 A node's body is then read into the same typed form as a value
 function's (`hir::Body`): a `state` or a `cache` is a local that is
