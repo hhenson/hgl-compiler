@@ -3381,23 +3381,48 @@ impl<'a> Typer<'a> {
         left: &SyntaxNode,
         right: &SyntaxNode,
     ) -> (ExprKind, Type) {
-        // The side read first is one that gives a trace: the left,
-        // where both do.
+        // The operands are read in the order written (EXPR-13): a block
+        // in one may assign what the other reads (CTRL-10). Where only
+        // the right one gives a trace, what it is of is learned from a
+        // reading that is taken back, and the left is then read as a
+        // trace of that before the right is read where it stands.
         let left_leads = self.gives_trace(left);
-        let (lead, other) = if left_leads {
+        let (left, right) = if left_leads {
+            let left = self.expression(left, None);
+            // An eval of a target with no result has been reported,
+            // and what it is compared with is not judged (ERR-9).
+            let expected = match &left.ty {
+                ty @ Type::Trace { .. } => ty.clone(),
+                _ => Type::Unknown,
+            };
+            let right = self.expression(right, Some(&expected));
+            let right = self.fit(right, &expected, "the trace it is compared with");
             (left, right)
         } else {
-            (right, left)
+            let expected = if self.may_reread() {
+                let mark = self.mark();
+                let probe = self.expression(right, None);
+                self.take_back(mark, false);
+                match probe.ty {
+                    ty @ Type::Trace { .. } => ty,
+                    _ => Type::Unknown,
+                }
+            } else {
+                Type::Unknown
+            };
+            let left = self.expression(left, Some(&expected));
+            let right = self.expression(right, None);
+            // The right says what the left is to be, now that it is
+            // read where it stands.
+            let expected = match &right.ty {
+                ty @ Type::Trace { .. } => ty.clone(),
+                _ => Type::Unknown,
+            };
+            let left = self.fit(left, &expected, "the trace it is compared with");
+            (left, right)
         };
-        let lead_read = self.expression(lead, None);
-        // An eval of a target with no result has been reported, and
-        // what it is compared with is not judged (ERR-9).
-        let other_expected = match &lead_read.ty {
-            ty @ Type::Trace { .. } => ty.clone(),
-            _ => Type::Unknown,
-        };
-        let other_read = self.expression(other, Some(&other_expected));
-        let other_read = self.fit(other_read, &other_expected, "the trace it is compared with");
+        // TST-7: "Within one eval all inputs and expectation use the
+        // same dense/timed style", reported at the later trace.
         if let (
             Type::Trace {
                 style: Some(first), ..
@@ -3405,22 +3430,11 @@ impl<'a> Typer<'a> {
             Type::Trace {
                 style: Some(later), ..
             },
-        ) = (&lead_read.ty, &other_read.ty)
+        ) = (&left.ty, &right.ty)
             && first != later
         {
-            // "the later trace": the right one.
-            let (at, first, later) = if left_leads {
-                (other_read.at, *first, *later)
-            } else {
-                (lead_read.at, *later, *first)
-            };
-            self.trace_style(at, first, later);
+            self.trace_style(right.at, *first, *later);
         }
-        let (left, right) = if left_leads {
-            (lead_read, other_read)
-        } else {
-            (other_read, lead_read)
-        };
         let kind = ExprKind::TraceCompare {
             left: Box::new(left),
             right: Box::new(right),

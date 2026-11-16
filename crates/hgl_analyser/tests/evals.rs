@@ -140,6 +140,34 @@ fn an_eval_is_the_call_of_its_target_with_traces() {
     assert!(cells[0].time.is_none(), "a dense cell has no time");
 }
 
+/// EXPR-13: operands are evaluated in the order written, and CTRL-10
+/// has a block among them assign what a later one reads. A trace
+/// written out on the left of an eval takes its type from the eval,
+/// and is still read before it.
+#[test]
+fn a_trace_comparison_reads_its_operands_in_order() {
+    let checked = module(concat!(
+        "test ordered {\n",
+        // Read on the left before the right assigns it.
+        "    var first: i64\n",
+        "    assert [first] == eval(pass, value: [{\n",
+        "        first = 7\n",
+        "        7\n",
+        "    }])\n",
+        // Assigned on the left, and read on the right.
+        "    var second: i64\n",
+        "    assert [{\n",
+        "        second = 7\n",
+        "        7\n",
+        "    }] == eval(pass, value: [second])\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:33:13 name/binding.unassigned EXPR-3"]
+    );
+}
+
 /// TST-5: "Its first argument names a function of a module ... An
 /// operator is no target: a function wraps it". TST-8: "binding or
 /// comparing it rejects". TST-7: "Keys strictly increase; no `_` occurs
