@@ -200,6 +200,24 @@ impl Diagnostic {
         }
     }
 
+    /// Creates a warning: a diagnostic that does not reject the source
+    /// (ERR-1). It is added to as an error is.
+    ///
+    /// The catalogue lists a warning by its code alone. `category` says
+    /// which part of the language it concerns, as an error's does; it is
+    /// not shown with the warning.
+    pub fn warning(
+        category: Category,
+        code: Code,
+        primary: Location,
+        message: impl Into<String>,
+    ) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Warning,
+            ..Diagnostic::error(category, code, primary, message)
+        }
+    }
+
     /// Records the specification rule behind the diagnostic.
     pub fn with_rule(mut self, rule: &'static str) -> Diagnostic {
         self.rule = Some(rule);

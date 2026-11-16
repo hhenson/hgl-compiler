@@ -48,7 +48,7 @@ use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack,
     Scalar, Signature, Type,
 };
-use crate::{RESULT_FORMS, codes, error};
+use crate::{RESULT_FORMS, codes, error, warning};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -232,12 +232,13 @@ struct Typer<'a> {
     /// callable: `required` in `capture(required, value)`. The call it
     /// names is read from the same list, less this argument.
     callable: Option<SyntaxNode>,
-    /// True once `start` has asked for a wake on the node's scheduler
-    /// or alarm (TIME-3).
+    /// True once `start` has used the node's scheduler or alarm, which
+    /// may then wake it (TIME-3).
     driven: bool,
-    /// Where the node writes `modified([])`, which stands only in a
-    /// node that is so woken (TIME-3). The hooks may be written in any
-    /// order, so each is judged when the whole node has been read.
+    /// Where the node writes `modified([])`, which subscribes to no
+    /// input: the node's scheduler or alarm is what wakes the handler
+    /// (TIME-3). The hooks may be written in any order, so each is
+    /// judged when the whole node has been read.
     undriven: Vec<Location>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
@@ -408,24 +409,33 @@ impl<'a> Typer<'a> {
                 _ => statements.push(self.unread(&statement)),
             }
         }
-        // TIME-3: "`modified([])` subscribes to no input: it stands
-        // only in a node that injects `scheduler` or `alarm` and
-        // schedules a wake on it in `start`, which is then what wakes
-        // the handler."
-        if !self.driven {
+        // TIME-3: "`modified([])` subscribes to no input: the node's
+        // scheduler or alarm is then what wakes the handler. Where the
+        // node injects neither, or its `start` does not use the one it
+        // injects, nothing wakes it: the node is dormant, and the
+        // selector is warned of (`node.no_activation`, ERR-10) ... A
+        // node that is dormant by design acknowledges the warning."
+        if !self.driven && !self.acknowledges(codes::NODE_NO_ACTIVATION) {
             for selector in std::mem::take(&mut self.undriven) {
                 self.diagnostics.emit(
-                    error(
+                    warning(
                         Category::Phase,
-                        codes::MODIFIED_NO_DRIVER,
+                        codes::NODE_NO_ACTIVATION,
                         selector,
-                        "`modified([])` subscribes to no input, and nothing else wakes this node"
-                            .to_string(),
+                        format!(
+                            "`modified([])` subscribes to no input, and nothing else wakes \
+                             `{}`: the node is dormant",
+                            self.declaration.name
+                        ),
                         "TIME-3",
                     )
                     .with_note(
-                        "inject `scheduler` or `alarm` and schedule a wake on it in `start`: \
-                         `start { schedule(scheduler, delay) }`",
+                        "a scheduler or an alarm the node injects and uses in `start` wakes \
+                         it: `start { schedule(scheduler, delay) }`",
+                    )
+                    .with_note(
+                        "a node that is dormant by design says so: \
+                         `@suppress_warning(\"node.no_activation\")` before the function",
                     ),
                 );
             }
@@ -1780,6 +1790,22 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// True when the function acknowledges the warning `code` (ERR-10):
+    /// "At a named function, `@suppress_warning(\"node.no_activation\")`
+    /// acknowledges the dormant-node warning for that declaration."
+    fn acknowledges(&self, code: &str) -> bool {
+        self.declaration
+            .syntax
+            .children()
+            .filter(|annotation| annotation.kind() == SyntaxKind::WarningAnnotation)
+            .filter_map(|annotation| {
+                tokens(&annotation).find(|token| token.kind() == SyntaxKind::Str)
+            })
+            // The string's value, not its spelling: an escape, or a
+            // text block, that says the code names the same warning.
+            .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
+    }
+
     /// TIME-8: a capability is not "a capture of an anonymous function
     /// (FN-14)". FN-14 has the resolver reject the use of an injected
     /// capability by its own name (`name.captured`); a `let` it is
@@ -1954,6 +1980,19 @@ impl<'a> Typer<'a> {
                 at,
                 "`out` is neither read nor written in `start`".to_string(),
             );
+        }
+        // TIME-3: the node's scheduler or alarm used in `start` is what
+        // may wake a handler that subscribes to no input. "Any use in
+        // `start` counts; what a function given the capability does
+        // with it is not followed."
+        if self.hook == Some(Hook::Start)
+            && self.capability(local).is_some_and(|capability| {
+                let injected = &self.locals[capability];
+                injected.kind == LocalKind::Inject
+                    && matches!(injected.name.as_str(), "scheduler" | "alarm")
+            })
+        {
+            self.driven = true;
         }
         // TIME-8: "A capability is used within the node that injects it
         // and is not retained". An injected capability other than `out`,
@@ -2988,16 +3027,7 @@ impl<'a> Typer<'a> {
     /// itself an expression are for later parts: their arguments are
     /// read, and the call has no type.
     fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
-        let read = self.call_read(node, expected);
-        let callee = node
-            .children()
-            .next()
-            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-            .and_then(|callee| name_token(&callee));
-        if let Some(callee) = callee {
-            self.note_wake(&callee, &read.0);
-        }
-        read
+        self.call_read(node, expected)
     }
 
     /// TIME-8: "giving one to a parameter of its type [is a use]". A
@@ -3080,61 +3110,6 @@ impl<'a> Typer<'a> {
                 .with_note("a parameter that takes any type takes no capability"),
             );
         }
-    }
-
-    /// Notes a call in `start` that asks for a wake on the node's
-    /// scheduler or alarm (TIME-3: the node "schedules a wake on it in
-    /// `start`").
-    ///
-    /// That is `schedule(scheduler, ...)`, written in `start` itself,
-    /// the capability given first: by its name, by a local it is bound
-    /// to, or as the value of a block (TIME-8, CTRL-10). The operation
-    /// is core's. Core does not declare it yet, so a `schedule` that
-    /// nothing declares is taken for it; one a module declares for
-    /// itself is that module's function, and no wake. What a function
-    /// given the capability does with it is not followed: a wake asked
-    /// for only there is not one this finds.
-    fn note_wake(&mut self, callee: &SyntaxToken, kind: &ExprKind) {
-        if self.hook != Some(Hook::Start) || self.driven || callee.text() != "schedule" {
-            return;
-        }
-        let ExprKind::Call {
-            callee: called,
-            arguments,
-            ..
-        } = kind
-        else {
-            return;
-        };
-        // Whose `schedule` it is: core's, or nobody's yet. A call that
-        // is not read may be of a local that holds a function, which is
-        // bound, and is not the name the prelude is waited on for.
-        let core = self.program.core();
-        let cores = match called {
-            Callee::Unread => !self
-                .bindings
-                .contains_key(&(self.file, callee.span().start)),
-            Callee::Function { module, .. } => Some(*module) == core,
-            Callee::Candidate { operator, .. } | Callee::Required { operator } => {
-                Some(operator.0) == core
-            }
-        };
-        if !cores {
-            return;
-        }
-        // The first argument: the one given to the first parameter, or
-        // where the call is not read, the first written.
-        let first = arguments
-            .iter()
-            .find(|argument| argument.parameter == Some(0))
-            .or_else(|| arguments.first());
-        self.driven = first
-            .and_then(|argument| self.capability_of(&argument.value))
-            .is_some_and(|capability| {
-                let local = &self.locals[capability];
-                local.kind == LocalKind::Inject
-                    && matches!(local.name.as_str(), "scheduler" | "alarm")
-            });
     }
 
     /// A call, as the form or the function its callee names.
@@ -6619,16 +6594,12 @@ impl<'a> Typer<'a> {
             // pass kept them, the name being a function or an operator.
             _ => {
                 let generics = self.calls.get(&(self.file, start)).copied();
-                let read = match (generics, self.declarations(&name)) {
+                match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {
                         self.call_named(&name, &list, found, expected, Some(generics))
                     }
                     _ => self.unread_call(&list),
-                };
-                // `schedule<duration>(scheduler, delay)` asks for a wake
-                // as the call without its generic arguments does.
-                self.note_wake(&name, &read.0);
-                read
+                }
             }
         }
     }

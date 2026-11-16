@@ -514,12 +514,21 @@ What is rejected there:
 | --- | --- | --- |
 | An endpoint operation given a state, a `const` parameter or an expression | `endpoint.argument` | TIME-9 |
 | A sequence that names inputs, `valid([a, b])`, or any sequence given to another operation | `endpoint.argument` | TIME-3, TIME-9 |
-| `modified([])` in a node that injects neither `scheduler` nor `alarm`, or whose `start` does not call `schedule` on the one injected: by its name, by a local it is bound to, or as a block's value. What a function given the capability does is not followed, so a wake asked for only there is not found | `modified.no_driver` | TIME-3 |
 | A second input given to any operation but the selectors `valid` and `modified` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
 | A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
+
+`modified([])` subscribes to no input, so only the node's scheduler or
+alarm wakes the handler (TIME-3). Where the node injects neither, or its
+`start` does not use the one it injects, the selector is warned of,
+`node.no_activation`, and the source is accepted. Any use in `start`
+counts, by the capability's name or by a local it is bound to: what a
+function given it does is not followed. The hooks may be written in any
+order, so the warning is given once the whole node is read. A node that
+is dormant by design acknowledges it with
+`@suppress_warning("node.no_activation")` before the function (ERR-10).
 
 A `when` reads an input's payload only where the input is valid
 (TIME-1). Its header says which are (TIME-3):
@@ -1111,6 +1120,11 @@ and exact; it is revisited if a suite grows large enough to notice.
 
 ## Diagnostics
 
+A diagnostic is an error, which rejects the source, or a warning, which
+does not (ERR-1). The catalogue lists a warning by its code alone
+(`catalogue::WARNING_CODES`): it is printed `warning[code]`, `hgl check`
+counts it after the errors, and no `# expect-error` names one (ERR-10).
+
 A diagnostic has a category from the specification's list, a code, a primary
 location, and the rule it enforces. It may point at related places as
 well, such as the first of two declarations. A code is *catalogued* (it appears in the
@@ -1120,9 +1134,9 @@ condition but names no code). Only a catalogued code may satisfy
 reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
-the limit is the compiler's, not the language's. The analyser reports 70
-codes, all catalogued (`hgl_analyser::codes`), and its tests check each
-diagnostic's category and code against the catalogue.
+the limit is the compiler's, not the language's. The analyser's codes
+are all catalogued (`hgl_analyser::codes`), one of them a warning, and its
+tests check each diagnostic's category and code against the catalogue.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.

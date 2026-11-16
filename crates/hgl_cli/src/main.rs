@@ -532,13 +532,18 @@ fn check(arguments: &CheckArgs) -> ExitCode {
     if arguments.modules {
         print!("{}", list_modules(&sources, &program, supplied > 0));
     }
-    let errors = diagnostics
-        .as_slice()
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == Severity::Error)
-        .count();
+    let of = |severity: Severity| {
+        diagnostics
+            .as_slice()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == severity)
+            .count()
+    };
+    let (errors, warnings) = (of(Severity::Error), of(Severity::Warning));
+    // A warning does not reject the source (ERR-1): it is counted
+    // after the errors, where there is one.
     println!(
-        "checked {} in {}: {}",
+        "checked {} in {}: {}{}",
         count(parsed.len().saturating_sub(supplied), "file"),
         count(
             program.modules.len().saturating_sub(supplied_modules),
@@ -547,6 +552,10 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         match errors {
             0 => "no errors".to_string(),
             errors => count(errors, "error"),
+        },
+        match warnings {
+            0 => String::new(),
+            warnings => format!(", {}", count(warnings, "warning")),
         }
     );
     println!(

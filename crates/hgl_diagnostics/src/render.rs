@@ -154,12 +154,18 @@ fn translate(diagnostic: &Diagnostic) -> cs::Diagnostic<usize> {
         ));
     }
     notes.extend(diagnostic.notes.iter().cloned());
-    cs::Diagnostic::new(severity)
-        .with_code(format!(
+    // An error is `category/code`, as an annotation names it (TST-12).
+    // A warning is its code: the catalogue gives it no category.
+    let code = match diagnostic.severity {
+        Severity::Error => format!(
             "{}/{}",
             diagnostic.category.as_str(),
             diagnostic.code.as_str()
-        ))
+        ),
+        Severity::Warning => diagnostic.code.as_str().to_string(),
+    };
+    cs::Diagnostic::new(severity)
+        .with_code(code)
         .with_message(&diagnostic.message)
         .with_labels(labels)
         .with_notes(notes)

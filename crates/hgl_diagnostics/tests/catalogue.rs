@@ -90,6 +90,29 @@ fn the_source_codes_are_the_chapters_rows() {
     assert_eq!(known, source_rows);
 }
 
+/// ERR-10: "Other strings are checked against the warning catalog". The
+/// crate's list is the chapter's warning rows, in order, and no warning
+/// is a source code.
+#[test]
+fn the_warning_codes_are_the_chapters_rows() {
+    let chapter = chapter();
+    let warnings: Vec<String> = chapter
+        .lines()
+        .skip_while(|line| !line.starts_with("| Warning code"))
+        .take_while(|line| line.starts_with('|'))
+        .filter_map(|line| {
+            let cell = line.strip_prefix('|')?.split('|').next()?.trim();
+            Some(cell.strip_prefix('`')?.strip_suffix('`')?.to_string())
+        })
+        .collect();
+    assert!(!warnings.is_empty());
+    assert_eq!(catalogue::WARNING_CODES, warnings);
+    for code in warnings {
+        assert!(catalogue::is_warning(&code));
+        assert_eq!(catalogue::category_of(&code), None, "{code}");
+    }
+}
+
 /// "The source and execution catalogs are disjoint."
 #[test]
 fn no_execution_code_is_a_source_code() {

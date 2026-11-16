@@ -46,6 +46,9 @@ pub struct Checked {
     /// True when the program was given no `module core` of its own and
     /// was analysed with the one the compiler is built with.
     pub core_supplied: bool,
+    /// True when the analyser reported an error. A warning does not
+    /// reject the source (ERR-1).
+    pub rejected: bool,
 }
 
 impl Checked {
@@ -164,6 +167,7 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
             // not."
             let code = diagnostic.code.as_str();
             let local = !diagnostic.code.is_catalogued();
+            let warned = diagnostic.severity == hgl_diagnostics::Severity::Warning;
             if local {
                 assert!(
                     hgl_analyser::codes::local::ALL.contains(&code),
@@ -173,6 +177,11 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
                     catalogue::category_of(code).is_none(),
                     "`{code}` is not marked local when the catalogue has it"
                 );
+            } else if warned {
+                assert!(
+                    catalogue::is_warning(code),
+                    "`{code}` is a row of the warning catalogue"
+                );
             } else {
                 assert!(
                     catalogue::contains(diagnostic.category, code),
@@ -180,13 +189,16 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
                     diagnostic.category.as_str()
                 );
             }
+            // A warning is written `warning/code`: the catalogue gives
+            // it no category.
+            let category = if warned {
+                "warning"
+            } else {
+                diagnostic.category.as_str()
+            };
             Finding {
                 at: format!("{}:{}", source.name(), source.line_col(span.start)),
-                code: format!(
-                    "{}{}/{code}",
-                    if local { "local:" } else { "" },
-                    diagnostic.category.as_str()
-                ),
+                code: format!("{}{category}/{code}", if local { "local:" } else { "" }),
                 rule: diagnostic
                     .rule
                     .expect("every analyser diagnostic cites a rule"),
@@ -195,6 +207,7 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
         })
         .collect();
     diagnostics.sort_by_location();
+    let rejected = diagnostics.has_errors();
     let report = if diagnostics.is_empty() {
         String::new()
     } else {
@@ -207,6 +220,7 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
         report,
         sources,
         core_supplied: !own_core,
+        rejected,
     }
 }
 
