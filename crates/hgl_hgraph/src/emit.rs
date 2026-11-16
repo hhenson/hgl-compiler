@@ -1311,12 +1311,25 @@ impl Emitter<'_> {
             // code null when it is left out.
             ExprKind::Error { message, code } => {
                 self.natives = true;
-                let message = self.expression(function, message);
-                let code = match code {
-                    Some(code) => self.expression(function, code),
-                    None => "None".to_string(),
-                };
-                format!("_core.Error(message={message}, code={code})")
+                // EXPR-2: arguments are evaluated in the order
+                // written, and Python evaluates keyword arguments in
+                // theirs. With `code` written first, a `?` in it is
+                // met before one in `message`.
+                let code_first = code
+                    .as_ref()
+                    .is_some_and(|code| code.at.span.start < message.at.span.start);
+                let mut written = Vec::new();
+                if !code_first {
+                    written.push(format!("message={}", self.expression(function, message)));
+                }
+                written.push(match code {
+                    Some(code) => format!("code={}", self.expression(function, code)),
+                    None => "code=None".to_string(),
+                });
+                if code_first {
+                    written.push(format!("message={}", self.expression(function, message)));
+                }
+                format!("_core.Error({})", written.join(", "))
             }
             ExprKind::ErrorPart { base, part } => {
                 let base = self.expression(function, base);

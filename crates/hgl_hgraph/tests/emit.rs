@@ -1329,6 +1329,15 @@ const RESULTS: &str = concat!(
     "\n",
     "const fn plain(reason: str) -> error => error(message: reason)\n",
     "\n",
+    "const fn fail(text: str) -> result<str, str> => err(text)\n",
+    "const fn ordered() -> result<error, str> =>\n",
+    "    ok(error(code: fail(\"code\")?, message: fail(\"message\")?))\n",
+    "const fn met() -> str {\n",
+    "    let outcome = ordered()\n",
+    "    if is_err(outcome) { return outcome.error }\n",
+    "    return \"none\"\n",
+    "}\n",
+    "\n",
     "fn ratios(a: f64, b: f64) -> f64 {\n",
     "    when { return checked(a, b)? }\n",
     "}\n",
@@ -1351,6 +1360,8 @@ const RESULTS: &str = concat!(
     "    assert failing(\"no\") != failing(\"yes\")\n",
     "    assert failing(\"no\") == failing(\"no\")\n",
     "    assert plain(\"no\") == plain(\"no\")\n",
+    // EXPR-2: the failure met first is the one written first.
+    "    assert met() == \"code\"\n",
     "    assert eval(ratios, a: [6.0], b: [4.0]) == [1.5]\n",
     "}\n",
 );
@@ -1407,6 +1418,11 @@ fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
         "        return outcome.value\n",
         "    return _core.Err(_core.Error(message=reason, code=\"demo.failed\"))\n",
         "    return _core.Error(message=reason, code=None)\n",
+        // The parts of an error are evaluated in the order written.
+        concat!(
+            "        return _core.Ok(_core.Error(code=_core.propagated(fail(text=\"code\")), ",
+            "message=_core.propagated(fail(text=\"message\"))))\n",
+        ),
         // In a `when` a failure fails the node.
         "    return _core.succeeded(checked(a=a.value, b=b.value))\n",
     ] {
@@ -1416,7 +1432,7 @@ fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
         );
     }
     // A function with no `?` catches nothing.
-    assert_eq!(python.matches("except _core.Propagated").count(), 1);
+    assert_eq!(python.matches("except _core.Propagated").count(), 2);
 }
 
 /// A program with forms that are not written: a loop in two of its
