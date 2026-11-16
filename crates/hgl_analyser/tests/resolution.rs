@@ -120,9 +120,9 @@ fn members_and_labels_are_not_looked_up() {
         "enum Side { buy, sell = 2 }\n",
         "const fn spread(quote: Quote, side: Side) -> f64 {\n",
         "    let made = Quote(bid: 1.0, ask: 2.0)\n",
-        "    let scaled = quote.ask /{zero: quote.bid} made.bid\n",
+        "    let near = quote.ask =={abs: quote.bid} made.bid\n",
         "    if side == Side.buy { return quote.bid.abs() }\n",
-        "    return scaled\n",
+        "    return quote.ask\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
@@ -134,7 +134,7 @@ fn members_and_labels_are_not_looked_up() {
     assert_eq!(
         names,
         [
-            "Quote", "Side", "Quote", "quote", "quote", "made", "side", "Side", "quote", "scaled"
+            "Quote", "Side", "Quote", "quote", "quote", "made", "side", "Side", "quote", "quote"
         ]
     );
 }

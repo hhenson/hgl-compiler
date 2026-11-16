@@ -8,7 +8,8 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt};
+use hgl_analyser::Detail;
+use hgl_analyser::hir::{BinaryOperator, Body, Callee, Expr, ExprKind, Form, Stmt, UnaryOperator};
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -47,6 +48,31 @@ fn locals(checked: &Checked, name: &str) -> Vec<String> {
         .iter()
         .map(|local| format!("{}: {}", local.name, local.ty))
         .collect()
+}
+
+/// The call an expression is, as `operator(candidate's signature)`:
+/// `add_(lhs: i64, rhs: f64) -> f64`. With it, how the call is written.
+fn call_of(checked: &Checked, value: &Expr) -> (String, Form) {
+    let ExprKind::Call {
+        callee:
+            Callee::Candidate {
+                operator,
+                module,
+                declaration,
+                ..
+            },
+        form,
+        ..
+    } = &value.kind
+    else {
+        panic!("a call of a candidate: {:?}", value.kind);
+    };
+    let modules = &checked.program.modules;
+    let Detail::Callable(signature) = &modules[*module].details[*declaration] else {
+        panic!("a candidate has a signature");
+    };
+    let name = &modules[operator.0].declarations[operator.1].name;
+    (format!("{name}{signature}"), *form)
 }
 
 // ---- Literals ----
@@ -113,7 +139,7 @@ fn an_operator_has_the_type_cores_contract_gives() {
         "    let less = a < b\n",
         "    let same = a == 1\n",
         "    let both = a < 1 && !(b >= 2.0) || true\n",
-        // OPS-3: a `CmpResult`, which no HGL source declares yet.
+        // OPS-3: `<=>` returns core's `CmpResult`.
         "    let outcome = a <=> b\n",
         "    let joined = \"a\" + \"b\"\n",
         "    let grouped = (a + 1) * 2\n",
@@ -140,7 +166,7 @@ fn an_operator_has_the_type_cores_contract_gives() {
             "less: bool",
             "same: bool",
             "both: bool",
-            "outcome: _",
+            "outcome: CmpResult",
             "joined: str",
             "grouped: i64",
             "least: i64",
@@ -617,7 +643,6 @@ fn a_form_not_read_yet_is_not_reported() {
         // entries of its arguments are expected to be: the `null` and
         // the `[]` inside are not reported.
         "    let nested = missing((null, 1), [[]], [(null, [])])\n",
-        "    let configured = a /{zero: .ieee} 2\n",
         "    var total: i64\n",
         "    if (a > 1) {\n        total = 1\n    } else {\n        total = 2\n    }\n",
         "    let after: str = total + prelude\n",
@@ -633,7 +658,6 @@ fn a_form_not_read_yet_is_not_reported() {
             "a: i64",
             "prelude: _",
             "nested: _",
-            "configured: _",
             "total: i64",
             "after: str",
         ]
@@ -2857,4 +2881,338 @@ fn a_default_is_read_where_its_candidate_is_declared() {
         locals(&checked, "uses")[3..],
         ["real: f64", "whole: i64", "words: str"]
     );
+}
+
+// ---- Symbols ----
+
+/// The generics chapter: "Syntax binds these core identities
+/// independently of local same-named functions": `+` is `add_` and a
+/// unary `-` is `neg_`. A symbol is recorded as the call of the
+/// candidate selected for its operands (GEN-5), marked as written with
+/// the symbol. `name += value` assigns what `name + value` is.
+#[test]
+fn a_symbol_is_the_call_of_the_operator_it_stands_for() {
+    let checked = module(concat!(
+        // A function of the module named as core's operator is, were
+        // one admitted, is not what the symbol stands for.
+        "const fn uses(a: i64, b: f64) {\n",
+        "    let sum = a + b\n",
+        "    let minus = -a\n",
+        "    let same = a == 1\n",
+        "    var total = a\n",
+        "    total += 2\n",
+        "    let both = a < 1 && b > 2.0\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let statements = &body(&checked, "uses").statements;
+    let value = |index: usize| match &statements[index] {
+        Stmt::Declare {
+            value: Some(value), ..
+        }
+        | Stmt::Assign { value, .. } => value,
+        other => panic!("a statement with a value: {other:?}"),
+    };
+    assert_eq!(
+        call_of(&checked, value(0)),
+        (
+            "add_(lhs: i64, rhs: f64) -> f64".to_string(),
+            Form::Binary(BinaryOperator::Add)
+        )
+    );
+    assert_eq!(
+        call_of(&checked, value(1)),
+        (
+            "neg_(value: i64) -> i64".to_string(),
+            Form::Unary(UnaryOperator::Negate)
+        )
+    );
+    assert_eq!(
+        call_of(&checked, value(2)),
+        (
+            "eq_(lhs: i64, rhs: i64, abs: f64 = ..., rel: f64 = ...) -> bool".to_string(),
+            Form::Binary(BinaryOperator::Equal)
+        )
+    );
+    // `total += 2`: the local's value is the left operand.
+    assert_eq!(
+        call_of(&checked, value(4)),
+        (
+            "add_(lhs: i64, rhs: i64) -> i64".to_string(),
+            Form::Binary(BinaryOperator::Add)
+        )
+    );
+    let ExprKind::Call { arguments, .. } = &value(4).kind else {
+        panic!("a call");
+    };
+    let places: Vec<Option<usize>> = arguments.iter().map(|given| given.parameter).collect();
+    assert_eq!(places, [Some(0), Some(1)]);
+    // EXPR-6: `&&` is read as it is written; its operands are calls.
+    let (operator, left, right) = value(5).kind.binary().expect("a symbol with two operands");
+    assert_eq!(operator, BinaryOperator::And);
+    assert!(matches!(value(5).kind, ExprKind::Binary { .. }));
+    assert_eq!(
+        call_of(&checked, left).1,
+        Form::Binary(BinaryOperator::Less)
+    );
+    assert_eq!(
+        call_of(&checked, right).1,
+        Form::Binary(BinaryOperator::Greater)
+    );
+}
+
+/// GEN-4: "an `impl const fn` a value candidate" of the operator it
+/// names. A symbol selects among every candidate of its operator, so a
+/// module that declares one for its own type gives the symbol that
+/// type's meaning. GEN-5: "No match rejects".
+#[test]
+fn a_symbol_selects_a_candidate_a_module_declares() {
+    let checked = module(concat!(
+        "struct Money { amount: i64 }\n",
+        "impl const fn add_(lhs: Money, rhs: Money) -> Money =>\n",
+        "    Money(amount: lhs.amount + rhs.amount)\n",
+        "impl const fn neg_(value: Money) -> Money => Money(amount: -value.amount)\n",
+        "const fn uses(a: Money, b: Money) {\n",
+        "    let sum = a + b\n",
+        "    let owed = -a\n",
+        "    var total = a\n",
+        "    total += b\n",
+        // No candidate of `sub_` takes two `Money`.
+        "    let less = a - b\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:11:18 operator/operator.no_candidate OPS-1"]
+    );
+    assert_eq!(messages(&checked), ["`-` takes no `Money` and `Money`"]);
+    assert_eq!(
+        locals(&checked, "uses")[2..5],
+        ["sum: Money", "owed: Money", "total: Money"]
+    );
+}
+
+/// EXPR-7: "A tuple's index is a constant within its length". EXPR-5: an
+/// integer literal, under a minus or not, is an `f64` where one is
+/// expected. Both read `1 - 1` and `-1` as core's own arithmetic. A
+/// symbol that is the call of a module's own candidate, or that has
+/// configuration, computes what this pass does not know: it is no
+/// constant index and no integer literal.
+#[test]
+fn only_cores_own_arithmetic_is_read_as_a_constant() {
+    let checked = module(concat!(
+        "impl const fn add_(lhs: i64, rhs: i64, offset: i64) -> i64 => lhs + rhs + offset\n",
+        "impl const fn neg_(value: i64, twice: bool) -> i64 => -value\n",
+        "const fn uses(pair: tuple<i64, str>, n: i64) {\n",
+        "    let head = pair[1 - 1]\n",
+        "    let shifted = pair[0 +{offset: n} 0]\n",
+        "    let real: f64 = -1\n",
+        "    let flipped: f64 = -{twice: true} 1\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:24 type/tuple.index EXPR-7",
+            "m.hgl:8:24 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[2], "head: i64");
+}
+
+/// EXPR-11: "`<=>` is full comparison ... It returns core's `CmpResult`,
+/// an ordinary enum, rather than a bool; `==`, `!=`, `<`, `<=`, `>`, and
+/// `>=` return a bool." NUM-6: "An outcome has no implicit bool or
+/// numeric conversion."
+#[test]
+fn a_full_comparison_is_an_outcome_and_no_bool() {
+    let checked = module(concat!(
+        "const fn uses(a: i64, b: f64, text: str) {\n",
+        "    let outcome = a <=> b\n",
+        "    let words = text <=> \"b\"\n",
+        "    let less: bool = a < b\n",
+        // An outcome is an enum's member, and is compared as one.
+        "    let is_less = outcome == .less\n",
+        "    let flag: bool = a <=> b\n",
+        "    let number: i64 = a <=> b\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:22 type/type.mismatch EXPR-5",
+            "m.hgl:8:23 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[3..7],
+        [
+            "outcome: CmpResult",
+            "words: CmpResult",
+            "less: bool",
+            "is_less: bool"
+        ]
+    );
+}
+
+/// OPS-2: "`==` and `!=` compare two values of one type." Core's
+/// candidate is `eq_<T>(lhs: T, rhs: T)`, and the first operand that
+/// says what `T` is decides it (GEN-2): a `Shape` and then a `Round`,
+/// which is a `Shape`, are compared. The other order is asked of the
+/// owner in hhenson/hgl_spec#51, and is neither rejected nor read as a
+/// call until it is answered. Two structs that are not one type are
+/// rejected in either order.
+#[test]
+fn equality_takes_a_struct_and_its_parent_in_the_order_core_declares() {
+    let checked = module(concat!(
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "struct Square : Shape { side: f64 }\n",
+        "const fn uses(shape: Shape, round: Round, square: Square) {\n",
+        "    let parent_first = shape == round\n",
+        "    let child_first = round != shape\n",
+        "    let siblings = round == square\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:8:26 operator/operator.no_candidate OPS-2"]
+    );
+    let statements = &body(&checked, "uses").statements;
+    let value = |index: usize| match &statements[index] {
+        Stmt::Declare {
+            value: Some(value), ..
+        } => value,
+        other => panic!("a declaration with a value: {other:?}"),
+    };
+    assert_eq!(
+        call_of(&checked, value(0)).0,
+        "eq_<T>(lhs: T, rhs: T) -> bool"
+    );
+    assert!(matches!(
+        value(1).kind,
+        ExprKind::Call {
+            callee: Callee::Unread,
+            form: Form::Binary(BinaryOperator::NotEqual),
+            ..
+        }
+    ));
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        ["parent_first: bool", "child_first: bool", "siblings: bool"]
+    );
+}
+
+/// EXPR-10: "A symbol operator may carry named configuration
+/// immediately after its token: `a /{zero: .ieee} b` ... Bind these
+/// arguments to the same core identity as the named arguments of a call
+/// of it ... An entry finds what it names as a named argument does
+/// (GEN-8)". EXPR-12: an entry that selects the result type does so
+/// when the source is checked. NUM-9: a division under `zero: .error`
+/// is a `result`. NUM-8: "A configuration selects the same nominal
+/// operator ... an omitted option takes the default they declare".
+#[test]
+fn a_symbols_configuration_is_its_calls_named_arguments() {
+    let checked = module(concat!(
+        "const fn uses(a: f64, b: f64, n: i64) {\n",
+        "    let plain = a / b\n",
+        "    let nan = a /{zero: .nan} b\n",
+        "    let checked = a /{zero: .error} b\n",
+        "    let whole = n //{zero: .error} 2\n",
+        // NUM-4: the tolerances of a comparison of numbers.
+        "    let near = a =={abs: 0.01} b\n",
+        "    let far = a !={abs: 0.01, rel: 0.1} b\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        [
+            "plain: f64",
+            "nan: f64",
+            "checked: result<f64, error>",
+            "whole: result<i64, error>",
+            "near: bool",
+            "far: bool",
+        ]
+    );
+    let statements = &body(&checked, "uses").statements;
+    let Stmt::Declare {
+        value: Some(near), ..
+    } = &statements[4]
+    else {
+        panic!("a declaration with a value");
+    };
+    // EXPR-13: "left operand, configuration entries in their written
+    // order, then right operand".
+    let ExprKind::Call { arguments, .. } = &near.kind else {
+        panic!("a call: {:?}", near.kind);
+    };
+    let places: Vec<Option<usize>> = arguments.iter().map(|given| given.parameter).collect();
+    assert_eq!(places, [Some(0), Some(2), Some(1)]);
+    // What a generic value parameter is given is a constant of the
+    // call, and no argument of it.
+    let Stmt::Declare {
+        value: Some(checked_division),
+        ..
+    } = &statements[2]
+    else {
+        panic!("a declaration with a value");
+    };
+    let ExprKind::Call {
+        callee: Callee::Candidate { generics, .. },
+        arguments,
+        ..
+    } = &checked_division.kind
+    else {
+        panic!("a call of a candidate");
+    };
+    assert_eq!(arguments.len(), 2);
+    let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
+    assert_eq!(resolved, [".error"]);
+}
+
+/// EXPR-10: "reject unsupported configuration". An entry is checked as
+/// a named argument is (EXPR-2, GEN-6, GEN-8): its name is an option a
+/// candidate declares, given once; a candidate that does not declare it
+/// is not for the symbol; and what selects is a compile-time constant.
+#[test]
+fn a_symbols_configuration_is_checked_as_named_arguments_are() {
+    let checked = module(concat!(
+        "const fn uses(a: f64, b: f64, n: i64, policy: ZeroPolicy) {\n",
+        "    let unknown = a /{zeo: .nan} b\n",
+        "    let twice = a /{zero: .nan, zero: .ieee} b\n",
+        "    let operand = a /{rhs: 2.0} b\n",
+        // An `i64` cannot hold a NaN (NUM-12).
+        "    let none = n //{zero: .nan} n\n",
+        // No candidate of `add_` declares `zero`.
+        "    let absent = a +{zero: .nan} b\n",
+        "    let runtime = a /{zero: policy} b\n",
+        "    let minus = -{zero: .nan} a\n",
+        // A tolerance is an `f64` (NUM-11).
+        "    let mistyped = a =={abs: \"wide\"} b\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:23 name/argument.unknown EXPR-10",
+            "m.hgl:4:33 name/argument.duplicate EXPR-10",
+            "m.hgl:5:23 name/argument.duplicate EXPR-10",
+            "m.hgl:6:18 operator/operator.no_candidate OPS-1",
+            "m.hgl:7:22 name/argument.unknown EXPR-10",
+            "m.hgl:8:29 type/generic.argument_constant GEN-8",
+            "m.hgl:9:19 name/argument.unknown EXPR-10",
+            "m.hgl:10:22 operator/operator.no_candidate OPS-2",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[3],
+        "`//` takes no `i64` and `i64` with `zero: .nan`"
+    );
+    assert_eq!(
+        messages(&checked)[7],
+        "`==` takes no `f64` and `f64` with `abs: str`"
+    );
+    assert_eq!(messages(&checked)[0], "`/` has no option `zeo`");
 }

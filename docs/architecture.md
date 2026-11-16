@@ -455,7 +455,8 @@ The pass is built form by form. So far it reads:
 | A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime` |
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
 | A name | UNIT-10, GEN-13 | A parameter, a local, or a generic value parameter, with its type |
-| An operator | NUM-1, OPS-1, OPS-2, OPS-5 | By core's contracts. `+ - * // %` of two `i64` are `i64`, with an `f64` they are `f64`; `/` is `f64`. Strings, durations and instants take the operators of core's table, in either order where the operation commutes. Two of one ordered type are compared, and two values of one type are equal or not. Any other pairing is rejected. The Boolean connectives and `!` take bools |
+| A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
+| `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
@@ -473,16 +474,14 @@ widened (EXPR-5). A value that has a type is not converted: an `i64`
 binding where an `f64` is expected is rejected.
 
 What the pass does not read yet has no type, and nothing is reported of
-it or of what uses it (ERR-9): an operator given configuration, a pair
-sequence, a call of a name left for the prelude
-or of an operator that has a pack or a generic value candidate, a generic
-function's parameter and result types, the payload of a nullable or a
-result. The arguments of a call that is not
+it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
+pair sequence, a call of a name left for the prelude or of an operator
+that has a pack, a generic function's parameter and result types, the
+payload of a nullable or a result. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
 taken to be assigned. An operand that is a generic parameter, or
 nullable, is not judged: its constraints, or its guard, say what it
-admits. The type of a `<=>` outcome is core's `CmpResult`, which no HGL
-source declares yet, and is not known here.
+admits.
 
 A generic application that has been reported, `Box<7>(value: 1)`, makes
 a value whose type is not known: nothing more is reported of it.
@@ -492,13 +491,60 @@ Each rejection has a row of the catalogue: `type.mismatch`,
 `binding.unassigned`, `binding.immutable`, the five `argument.` codes,
 `call.role`, `struct.abstract`, `member.unknown` and `operator.no_candidate`.
 
-The operator table is built into the pass for now. It stands in for
-core's operator declarations, which are in no HGL source yet. The owner's
-direction (2026-11-15) is that an operator is resolved as any function
-is: a symbol names a core operator, and its type comes from the
-candidate selected among that operator's implementations (GEN-4). When
-core declares them the table goes, and the typed body records the
-operator and the candidate selected.
+#### Symbols
+
+The compiler has no table of what an operator admits. A symbol stands
+for an operator of core's module (the generics chapter: "Syntax binds
+these core identities independently of local same-named functions"),
+and is read as the call of it (owner's direction of 2026-11-15 and
+2026-11-16):
+
+| Written | Read as | Recorded as |
+| --- | --- | --- |
+| `a + b` | `add_(a, b)` | The call of the candidate selected, marked as written with `+` |
+| `-a` | `neg_(a)` | The same, marked as written with `-` |
+| `a /{zero: .error} b` | `div_(a, b, zero: .error)` | The same: the entry is a generic value parameter's constant, and no argument |
+| `a =={abs: 0.01} b` | `eq_(a, b, abs: 0.01)` | The same, with its arguments in the order they are evaluated (EXPR-13): `a`, `0.01`, `b` |
+| `total += b` | `total = total + b` | An assignment of that call, marked as written `+=` |
+
+So what `+` admits is what the candidates of `add_` declare: core's,
+for numbers, strings, durations and instants, and a module's own, `impl
+const fn add_(lhs: Money, rhs: Money) -> Money`. No candidate for the
+operands is `operator.no_candidate`, citing OPS-1, or OPS-2 for a
+comparison, and written with the symbol: "`+` takes no `str` and
+`i64`".
+
+A configuration's entry is checked as a call's named argument is
+(EXPR-10): its name is an option a candidate declares, or it is
+`argument.unknown`; given once, or `argument.duplicate`; a candidate
+that does not declare it is not for the symbol; and what selects is a
+compile-time constant (GEN-8).
+
+Not read as calls:
+
+| Form | Why | What stands |
+| --- | --- | --- |
+| `&&`, `\|\|`, `!` | Their candidates take a pack, `all_(values: ...bool)`, and a connective does not evaluate its right operand where the left decides (EXPR-6) | The symbol as written, with bool operands |
+| An operand that is nullable | "null presence checks ... have their own language rules" | The symbol as written; a comparison is a bool |
+| An operand that is a generic parameter | Its constraints say what it admits | The symbol as written |
+| An operand of no known type | Nothing can be selected | The symbol as written |
+
+One more is left unjudged: `round == shape`, a struct and then the
+abstract struct it inherits from. Core's candidate, `eq_<T>(lhs: T, rhs:
+T)`, takes them with the parent first, as GEN-2 has the first argument
+decide `T`; whether the order of a comparison's operands is to matter is
+asked in hhenson/hgl_spec#51. It is a bool, and nothing is reported of
+it.
+
+An operand is read before the candidates are, with nothing expected of
+it, and so a sequence written out beside a `list<f64>` is a `list<i64>`
+still; an argument of a call by name is read as its parameter's type.
+The type the symbol's place expects is not asked of the candidates
+either: the result is checked against it. `let x: f64 = 1 + 2` is so an
+`i64` where an `f64` is expected, where `add_(1, 2)` in that place asks
+its candidates for an `f64`. Whether a symbol is its call in these two
+respects as well is asked in hhenson/hgl_spec#51, and is not decided
+here.
 
 A parameter that may be omitted comes last (UNIT-8): one with a default
 or a type written `T?` follows every parameter that has neither. The
@@ -656,8 +702,7 @@ that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
 candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
 analyser has no local code.
-A symbol such as `+` is not yet a call of core's operator: see the
-operator table above.
+A symbol selects as a call by name does: see "Symbols" above.
 
 ### Order
 
