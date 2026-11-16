@@ -344,7 +344,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
 | TST-2 | analyser | done | Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
-| TST-3 | analyser | planned | A test is a composition block (`test.statement_phase`); eval traces stay test-local |
+| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Left: its block read as composition; eval traces stay test-local |
 | TST-4 | analyser | planned | `assert` needs a wiring-time bool |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | planned | Eval target selection and argument binding |
@@ -353,7 +353,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-7 | runner | planned | Sparse expectations match the actual ticks and times |
 | TST-8 | runner | planned | Eval builds core replay, the target and core record; fresh state for each invocation |
 | TST-9 | runner | planned | Arguments and profile admission validated before the graph starts |
-| TST-10 | analyser | planned | `assert raises` takes one literal catalogued execution code (`test.raises_code`) |
+| TST-10 | analyser | done | `assert raises` takes one string literal whose value is an execution code of the catalogue (`test.raises_code`) |
 | TST-10 | runner | planned | The block runs once; a matching escaping error passes after cleanup |
 | TST-11 | runner | planned | What cannot satisfy `raises` |
 | TST-12 | runner | done | `# expect-error` annotations read from line comments; the owner of each case |

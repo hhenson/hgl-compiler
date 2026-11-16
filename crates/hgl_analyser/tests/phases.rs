@@ -354,3 +354,72 @@ fn a_source_has_its_own_shape() {
             .all(|phase| phase.map(|phase| phase.as_str()) == Some("node"))
     );
 }
+
+/// TST-3: "A test is a composition-phase block with assertions. It
+/// cannot itself declare state/cache, inject, lifecycle hooks, when,
+/// yield, or return." TST-10: "`assert raises(\"code\")` requires one
+/// literal catalogued execution code."
+#[test]
+fn a_test_is_a_composition_block_with_assertions() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn forward(value: i64) -> i64 {\n",
+            "    when { return value }\n",
+            "}\n",
+            // Assertions, bindings, and a block that is expected to fail.
+            "test accepted {\n",
+            "    let outcome = eval(forward, value: [7, _, 9])\n",
+            "    assert outcome == [7, _, 9]\n",
+            "    assert raises(\"value.missing_key\") {\n",
+            "        let inner = eval(forward, value: [1])\n",
+            "    }\n",
+            "}\n",
+            "test shaped {\n",
+            "    state seen: i64 = 0\n",
+            "    cache step: i64 = 1\n",
+            "    inject logger\n",
+            "    start { }\n",
+            "    when { }\n",
+            "    stop { }\n",
+            "    yield 1s: 1\n",
+            "    return\n",
+            // In a block of the test, and in the block of a `raises`.
+            "    if true { return }\n",
+            "    assert raises(\"value.missing_key\") {\n",
+            "        state inner: i64 = 0\n",
+            "    }\n",
+            "}\n",
+            // The code: a source code, a name the catalogue has not, a
+            // value that is no literal, and none.
+            "test coded {\n",
+            "    let code = \"value.missing_key\"\n",
+            "    assert raises(\"type.mismatch\") { }\n",
+            "    assert raises(\"value.banana\") { }\n",
+            "    assert raises(code) { }\n",
+            "    assert raises(1) { }\n",
+            "    assert raises(\"value\\u{2e}missing_key\") { }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:5 phase/test.statement_phase TST-3",
+            "m.hgl:14:5 phase/test.statement_phase TST-3",
+            "m.hgl:15:5 phase/test.statement_phase TST-3",
+            "m.hgl:16:5 phase/test.statement_phase TST-3",
+            "m.hgl:17:5 phase/test.statement_phase TST-3",
+            "m.hgl:18:5 phase/test.statement_phase TST-3",
+            "m.hgl:19:5 phase/test.statement_phase TST-3",
+            "m.hgl:20:5 phase/test.statement_phase TST-3",
+            "m.hgl:21:15 phase/test.statement_phase TST-3",
+            "m.hgl:23:9 phase/test.statement_phase TST-3",
+            "m.hgl:28:19 type/test.raises_code TST-10",
+            "m.hgl:29:19 type/test.raises_code TST-10",
+            "m.hgl:30:19 type/test.raises_code TST-10",
+            "m.hgl:31:19 type/test.raises_code TST-10",
+        ]
+    );
+}

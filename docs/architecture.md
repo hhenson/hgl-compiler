@@ -476,6 +476,14 @@ on hhenson/hgl_spec#57): what it needs of one is its argument, a value
 the node reads or the capability itself, given to a parameter of the
 capability's type (TIME-8).
 
+A named test is a composition block with assertions (TST-3), and the
+same pass holds it to that: a `state`, a `cache`, an `inject`, a hook, a
+`yield` or a `return` in it, at any depth but inside an anonymous
+function, is `test.statement_phase`. `assert raises("code")` names one
+execution code of the catalogue, as a string literal written out
+(TST-10, `catalogue::EXECUTION_CODES`); anything else is
+`test.raises_code`. A test's block is not read further yet.
+
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:
 

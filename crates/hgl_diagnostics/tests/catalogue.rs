@@ -127,7 +127,10 @@ fn no_execution_code_is_a_source_code() {
         })
         .collect();
     assert!(!execution.is_empty());
+    // The crate's list is the chapter's execution rows, in order.
+    assert_eq!(catalogue::EXECUTION_CODES, execution);
     for code in execution {
+        assert!(catalogue::is_execution(&code));
         assert_eq!(catalogue::category_of(&code), None, "{code}");
     }
 }

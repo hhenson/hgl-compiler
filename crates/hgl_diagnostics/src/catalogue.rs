@@ -162,6 +162,26 @@ pub fn contains(category: Category, code: &str) -> bool {
         .any(|&(listed_category, listed_code)| listed_category == category && listed_code == code)
 }
 
+/// Every execution code of the catalogue, in the specification's
+/// order: a failure of a running program that has a stable code. An
+/// `assert raises("code")` names one (TST-10). "The source and
+/// execution catalogs are disjoint."
+pub const EXECUTION_CODES: &[&str] = &[
+    "value.missing_key",
+    "value.unset_read",
+    "value.capability",
+    "value.byte_range",
+    "numeric.division_by_zero",
+    "yield.negative_duration",
+    "yield.non_increasing_time",
+    "eval.input_delta_profile",
+];
+
+/// True when the catalogue lists `code` as an execution code.
+pub fn is_execution(code: &str) -> bool {
+    EXECUTION_CODES.contains(&code)
+}
+
 /// Every warning of the catalogue, in the specification's order. A
 /// warning has a code and no category, and does not reject the source
 /// (ERR-1); no `expect-error` annotation names one (ERR-10).
