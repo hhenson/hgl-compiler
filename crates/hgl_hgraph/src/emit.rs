@@ -353,10 +353,10 @@ struct Emitter<'a> {
     /// The lifted nodes the piece being written uses, which are
     /// written before it.
     prelude: String,
-    /// Those lifted nodes: the text of each with `{NAME}` for its
-    /// name, and its name. One lifted the same way twice in a piece is
+    /// Those lifted nodes: the text of each before its name and after
+    /// it, and its name. One lifted the same way twice in a piece is
     /// written once.
-    lifts: Vec<(String, String)>,
+    lifts: Vec<((String, String), String)>,
     /// How many lifted nodes the module has been given names for.
     lifted: usize,
     /// The Python names of the candidates the module has written.
@@ -1391,10 +1391,14 @@ impl Emitter<'_> {
     }
 
     /// Gives a lifted node a name and writes it before the piece being
-    /// written. `text` is the node with `{NAME}` where its name goes,
-    /// and `of` what it lifts, for the name. A node lifted the same way
-    /// twice in a piece is written once.
-    fn lifted_node(&mut self, of: &str, text: String) -> String {
+    /// written. `before` is the node's text up to its name and `after`
+    /// the text from there on; `of` is what it lifts, for the name. A
+    /// node lifted the same way twice in a piece is written once.
+    ///
+    /// The text is in two parts, and the name is not put in for a mark
+    /// in it: a mark could as well be in a string a program wrote.
+    fn lifted_node(&mut self, of: &str, before: String, after: String) -> String {
+        let text = (before, after);
         if let Some((_, known)) = self.lifts.iter().find(|(written, _)| *written == text) {
             return known.clone();
         }
@@ -1403,7 +1407,9 @@ impl Emitter<'_> {
         self.lifted += 1;
         self.hgraph = true;
         self.prelude.push_str("\n\n");
-        self.prelude.push_str(&text.replace("{NAME}", &python));
+        self.prelude.push_str(&text.0);
+        self.prelude.push_str(&python);
+        self.prelude.push_str(&text.1);
         self.lifts.push((text, python.clone()));
         python
     }
@@ -1495,18 +1501,21 @@ impl Emitter<'_> {
             format!("(valid={})", tuple(&required))
         };
         let call = format!("{called}({})", passed.join(", "));
-        let text = match (result, returns) {
-            (Some(_), returns) => format!(
-                "@_hg.compute_node{options}\ndef {{NAME}}({}) -> {}:\n    return {call}\n",
-                parameters.join(", "),
-                returns.unwrap_or_else(|| "_py.object".to_string()),
+        let (decorator, after) = match (result, returns) {
+            (Some(_), returns) => (
+                "compute_node",
+                format!(
+                    "({}) -> {}:\n    return {call}\n",
+                    parameters.join(", "),
+                    returns.unwrap_or_else(|| "_py.object".to_string()),
+                ),
             ),
-            (None, _) => format!(
-                "@_hg.sink_node{options}\ndef {{NAME}}({}):\n    {call}\n",
-                parameters.join(", "),
+            (None, _) => (
+                "sink_node",
+                format!("({}):\n    {call}\n", parameters.join(", ")),
             ),
         };
-        self.lifted_node(&of, text)
+        self.lifted_node(&of, format!("@_hg.{decorator}{options}\ndef "), after)
     }
 
     /// The arguments a call gives, each by its parameter's name, and
