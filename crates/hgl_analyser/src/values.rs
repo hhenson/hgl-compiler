@@ -5152,7 +5152,9 @@ fn holds_block(node: &SyntaxNode) -> bool {
 
 /// True when an integer literal was widened among the entries of a
 /// sequence or a tuple written out, at any depth. A literal widened
-/// inside a call among the entries is that call's, and is not counted.
+/// inside a call by name among the entries is that call's, and is not
+/// counted; one widened under a symbol that is core's own arithmetic
+/// is.
 fn widens_an_entry(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Widen(_) => true,
@@ -5171,7 +5173,15 @@ fn widens_an_entry(value: &Expr) -> bool {
                     .as_ref()
                     .is_some_and(|otherwise| widens_an_entry(otherwise))
         }
-        _ => false,
+        // A symbol among the entries is read with the entry's type as
+        // its place, so that core's own arithmetic over literals may
+        // widen them: the `1` of `[-1]`, the `1` and `2` of `[1 + 2]`,
+        // where an `f64` is asked for. That is the entry's widening.
+        _ => {
+            negated(value).is_some_and(widens_an_entry)
+                || arithmetic(value)
+                    .is_some_and(|(_, left, right)| widens_an_entry(left) || widens_an_entry(right))
+        }
     }
 }
 
