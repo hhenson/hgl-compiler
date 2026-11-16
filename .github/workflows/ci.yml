@@ -12,7 +12,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      # `hgl` is built with core's module from the pinned hgl_core
+      # submodule, so the build needs the submodules too.
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
       # rust-toolchain.toml selects the compiler; rustup installs it on the
       # first cargo command.
       - run: cargo --version

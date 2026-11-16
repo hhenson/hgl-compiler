@@ -353,3 +353,39 @@ fn core_is_supplied_when_the_roots_hold_none() {
     );
     assert!(stdout.contains("module core\n"), "{stdout}");
 }
+
+/// The limits given to `hgl check` are for the program's own source.
+/// Core's module, which the compiler supplies, is read under the default
+/// ones: a limit too small for core's files reports nothing of them,
+/// and a program the limit cuts down to no module is still counted.
+#[test]
+fn a_limit_is_for_the_programs_source_and_not_for_the_core_supplied() {
+    let directory = scratch("core_limits");
+    write(
+        &directory,
+        "use.hgl",
+        concat!(
+            "module examples.core_limits\n",
+            "const fn uses(a: f64, b: f64) -> f64 => div_(a, b)\n",
+        ),
+    );
+    let root = argument(&directory);
+
+    // Too small for any file: the program's is not built at all.
+    let shallow = hgl(&["check", "--tree-depth-limit", "1", &root]);
+    let stdout = text(&shallow.stdout);
+    let stderr = text(&shallow.stderr);
+    assert_eq!(shallow.status.code(), Some(1), "{stderr}");
+    assert!(
+        stdout.contains("checked 1 file in 0 modules: 1 error\n"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("syntax.nesting_limit"), "{stderr}");
+    assert!(!stderr.contains("<core>"), "{stderr}");
+
+    // Too small for the nesting core's own files have.
+    let flat = hgl(&["check", "--nesting-limit", "1", &root]);
+    let stderr = text(&flat.stderr);
+    assert_eq!(flat.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("<core>"), "{stderr}");
+}

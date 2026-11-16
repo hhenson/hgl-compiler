@@ -233,16 +233,30 @@ fn main() -> ExitCode {
         // A command that analyses needs the analyser's stack too, which
         // is the larger.
         Command::Check(arguments) => {
-            let limits = arguments.limits.limits();
-            let stack = limits.stack_size().max(hgl_analyser::stack_size(limits));
+            let stack = analysis_stack(arguments.limits.limits(), &arguments.core);
             on_stack_of(stack, move || check(&arguments))
         }
         Command::Test(arguments) => {
-            let limits = arguments.limits.limits();
-            let stack = limits.stack_size().max(hgl_analyser::stack_size(limits));
+            let stack = analysis_stack(arguments.limits.limits(), &arguments.core);
             on_stack_of(stack, move || test(&arguments))
         }
     }
+}
+
+/// The stack a command that analyses needs: the parser's or the
+/// analyser's, whichever is the larger, for trees as deep as `limits`
+/// admit. Core's module, when the compiler supplies it, is read under
+/// the default limits, so the stack is for those at least.
+fn analysis_stack(limits: Limits, core: &CoreArgs) -> usize {
+    let deepest = if core.no_core {
+        limits
+    } else {
+        Limits {
+            nesting: limits.nesting.max(Limits::DEFAULT.nesting),
+            tree_depth: limits.tree_depth.max(Limits::DEFAULT.tree_depth),
+        }
+    };
+    deepest.stack_size().max(hgl_analyser::stack_size(deepest))
 }
 
 /// Runs `work` on a thread of its own with `stack` bytes of stack, and
@@ -472,22 +486,23 @@ fn parse_program(roots: &[PathBuf], limits: Limits, supply_core: bool) -> Result
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
     let mut files = Vec::new();
-    let parse_file = |sources: &SourceMap, file: FileId, diagnostics: &mut Diagnostics| {
-        let tokens = lex(sources, file, diagnostics);
-        literal::validate_literals(sources, file, &tokens, diagnostics);
-        let parse = hgl_parser::parse(
-            sources,
-            file,
-            &tokens,
-            Entry::SourceFile,
-            limits,
-            diagnostics,
-        );
-        ParsedFile::new(file, parse.syntax())
-    };
+    let parse_file =
+        |sources: &SourceMap, file: FileId, limits: Limits, diagnostics: &mut Diagnostics| {
+            let tokens = lex(sources, file, diagnostics);
+            literal::validate_literals(sources, file, &tokens, diagnostics);
+            let parse = hgl_parser::parse(
+                sources,
+                file,
+                &tokens,
+                Entry::SourceFile,
+                limits,
+                diagnostics,
+            );
+            ParsedFile::new(file, parse.syntax())
+        };
     for path in &paths {
         let file = load_into(&mut sources, path)?;
-        files.push(parse_file(&sources, file, &mut diagnostics));
+        files.push(parse_file(&sources, file, limits, &mut diagnostics));
     }
     // A program that brings its own `module core` is checked with that
     // one: this is how core itself is checked.
@@ -507,7 +522,15 @@ fn parse_program(roots: &[PathBuf], limits: Limits, supply_core: bool) -> Result
                     return Err(ExitCode::from(EXIT_FAILED));
                 }
             };
-            files.push(parse_file(&sources, file, &mut diagnostics));
+            // The limits given are for the program's own source. Core's
+            // files are the compiler's, and are read under the default
+            // ones whatever the program is held to.
+            files.push(parse_file(
+                &sources,
+                file,
+                Limits::DEFAULT,
+                &mut diagnostics,
+            ));
             supplied += 1;
         }
     }
@@ -547,8 +570,10 @@ fn check(arguments: &CheckArgs) -> ExitCode {
     };
     let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     // The module the compiler supplied is not counted or listed: the
-    // counts and the listing are of what the source roots hold.
-    let supplied_modules = usize::from(supplied > 0);
+    // counts and the listing are of what the source roots hold. It is
+    // in the program only when its files were read whole: under a
+    // parser limit too small for them, no module is made of them.
+    let supplied_modules = usize::from(supplied > 0 && program.module(CORE_MODULE).is_some());
 
     if arguments.modules {
         print!("{}", list_modules(&sources, &program, supplied > 0));
@@ -560,8 +585,11 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         .count();
     println!(
         "checked {} in {}: {}",
-        count(parsed.len() - supplied, "file"),
-        count(program.modules.len() - supplied_modules, "module"),
+        count(parsed.len().saturating_sub(supplied), "file"),
+        count(
+            program.modules.len().saturating_sub(supplied_modules),
+            "module"
+        ),
         match errors {
             0 => "no errors".to_string(),
             errors => count(errors, "error"),

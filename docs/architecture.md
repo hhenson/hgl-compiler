@@ -795,7 +795,9 @@ whether or not its roots hold it:
 
 A module the compiler supplied is not counted in `hgl check`'s summary
 or listed by `--modules`; a diagnostic in it names its file as
-`<core>/...`. A test in `hgl_cli` holds the built-in files to the pin:
+`<core>/...`. It is read under the default limits whatever
+`--nesting-limit` and `--tree-depth-limit` say: those are for the
+program's own source. A test in `hgl_cli` holds the built-in files to the pin:
 a pin that adds a file to core fails it until the list in
 `crates/hgl_cli/src/main.rs` has the file.
 
