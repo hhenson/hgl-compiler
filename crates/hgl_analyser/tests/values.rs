@@ -2883,6 +2883,128 @@ fn a_default_is_read_where_its_candidate_is_declared() {
     );
 }
 
+// ---- A function's generic value parameters ----
+
+/// The generic arguments a call of a function resolved, as written:
+/// `["5"]`.
+fn generics_of(value: &Expr) -> Vec<String> {
+    let ExprKind::Call {
+        callee: Callee::Function { generics, .. },
+        ..
+    } = &value.kind
+    else {
+        panic!("a call of a function: {:?}", value.kind);
+    };
+    generics.iter().map(|generic| generic.to_string()).collect()
+}
+
+/// GEN-8: "A call may give a generic value parameter of its callee by
+/// name, among its named arguments ... A name binds the callee's
+/// generic value parameter of that name, or else its parameter of that
+/// name ... A generic value parameter the call does not give takes its
+/// default, when it has one." GEN-2: "A generic value parameter of a
+/// function or a candidate may have a default".
+#[test]
+fn a_functions_generic_value_parameter_is_given_by_name_or_defaulted() {
+    let checked = module(concat!(
+        "const fn scale<const factor: i64 = 3>(value: i64) -> i64 => value * factor\n",
+        "const fn pick<T, const fallback: T>(value: i64) -> T => fallback\n",
+        "const fn uses<const M: i64>(n: i64) {\n",
+        "    let plain = scale(n)\n",
+        "    let wide = scale(n, factor: 5)\n",
+        "    let written = scale<7>(n)\n",
+        // A constant expression, and a generic value parameter in scope.
+        "    let sum = scale(n, factor: 2 + 2)\n",
+        "    let passed = scale(n, factor: M)\n",
+        // What `fallback` is given says what `T` is.
+        "    let text = pick(1, fallback: \"none\")\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let statements = &body(&checked, "uses").statements;
+    let resolved: Vec<Vec<String>> = statements
+        .iter()
+        .map(|statement| match statement {
+            Stmt::Declare {
+                value: Some(value), ..
+            } => generics_of(value),
+            other => panic!("a declaration with a value: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        [
+            vec!["3"],
+            vec!["5"],
+            vec!["7"],
+            vec!["2 + 2"],
+            vec!["M"],
+            vec!["str", "\"none\""],
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[6], "text: str");
+    // What gives a generic value parameter is no argument of the call.
+    let Stmt::Declare {
+        value: Some(wide), ..
+    } = &statements[1]
+    else {
+        panic!("a declaration with a value");
+    };
+    let ExprKind::Call { arguments, .. } = &wide.kind else {
+        panic!("a call");
+    };
+    assert_eq!(arguments.len(), 1);
+}
+
+/// GEN-8: "The value a call gives a generic value parameter is a
+/// compile-time constant ... Any other rejects." GEN-13: it is of the
+/// parameter's ordinary type, and so is a default the call takes.
+/// EXPR-2: a parameter is given once.
+#[test]
+fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
+    let checked = module(concat!(
+        "const fn scale<const factor: i64 = 3>(value: i64) -> i64 => value * factor\n",
+        "const fn hold<T, const fallback: T = 2>(value: T) -> T => fallback\n",
+        "const fn sized<const N: i64 = 2>(items: list<i64, N>) -> i64 => N\n",
+        "const fn uses(n: i64, count: i64) {\n",
+        // A parameter is known only when the program runs.
+        "    let runtime = scale(n, factor: count)\n",
+        "    let mistyped = scale(n, factor: \"wide\")\n",
+        "    let twice = scale<4>(n, factor: 5)\n",
+        "    let again = scale(n, factor: 4, factor: 5)\n",
+        // No generic value parameter and no parameter has the name.
+        "    let unknown = scale(n, length: 5)\n",
+        // The default, `2`, is an `f64` beside one and no `str`.
+        "    let real = hold(1.5)\n",
+        "    let text = hold(\"a\")\n",
+        // What `fallback` is given says `T` is an `i64`, before the
+        // argument is held to it: a `null` is no `i64`.
+        "    let absent = hold(null, fallback: 1)\n",
+        // The default says what `N` is before the entries are counted.
+        "    let pair = sized([1, 2])\n",
+        "    let triple = sized([1, 2, 3])\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:36 type/generic.argument_constant GEN-8",
+            "m.hgl:7:37 type/type.mismatch EXPR-5",
+            "m.hgl:8:29 name/argument.duplicate EXPR-2",
+            "m.hgl:9:37 name/argument.duplicate EXPR-2",
+            "m.hgl:10:28 name/argument.unknown EXPR-2",
+            "m.hgl:12:16 type/type.mismatch GEN-13",
+            "m.hgl:13:23 type/type.mismatch TYPE-14",
+            "m.hgl:15:24 type/type.mismatch TYPE-10",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[5],
+        "this call leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
+    );
+    assert_eq!(locals(&checked, "uses")[7], "real: f64");
+}
+
 // ---- Symbols ----
 
 /// The generics chapter: "Syntax binds these core identities
