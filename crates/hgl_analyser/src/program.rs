@@ -37,7 +37,8 @@ impl Program {
     /// The type of the capability `inject` names, when core declares
     /// it. TIME-8: "`inject` binds each of the others to a local of its
     /// capability's type, which core declares and names as the
-    /// capability with a capital".
+    /// capability with a capital". Core's CAP-1: "Each capability but
+    /// `out` has a native type of core's module".
     pub fn capability_type(&self, capability: &str) -> Option<Type> {
         let (_, name) = CAPABILITY_TYPES
             .iter()
