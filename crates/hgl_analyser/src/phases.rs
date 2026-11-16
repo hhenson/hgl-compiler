@@ -46,7 +46,7 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
     // They do not alone classify a body as runtime." Only these do, in
     // any position: `descendants` walks every node under the
     // declaration.
-    let runtime = declaration.syntax.descendants().any(|node| {
+    let runtime = own_nodes(&declaration.syntax).iter().any(|node| {
         matches!(
             node.kind(),
             SyntaxKind::StateDecl
@@ -58,6 +58,25 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
         )
     });
     Some(if runtime { Phase::Node } else { Phase::Graph })
+}
+
+/// Every node of a function's own body: what stands under `root`,
+/// but for what an anonymous function inside it holds. That is a
+/// function of its own (FN-14), a value helper that may inject a
+/// capability (FN-9), and what it holds is not `root`'s.
+fn own_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
+    fn collect(node: &SyntaxNode, found: &mut Vec<SyntaxNode>) {
+        for child in node.children() {
+            if child.kind() == SyntaxKind::FnExpr {
+                continue;
+            }
+            found.push(child.clone());
+            collect(&child, found);
+        }
+    }
+    let mut found = Vec::new();
+    collect(root, &mut found);
+    found
 }
 
 /// True for a construct only a node's body holds, one of its
@@ -148,10 +167,8 @@ fn node_body(
 ) {
     // A source is a node of another shape, with statements and `yield`
     // (SOURCE-1), whose contract is proposed: it is not checked here.
-    let source = declaration
-        .syntax
-        .descendants()
-        .any(|node| node.kind() == SyntaxKind::YieldStmt);
+    let own = own_nodes(&declaration.syntax);
+    let source = own.iter().any(|node| node.kind() == SyntaxKind::YieldStmt);
     if source {
         return;
     }
@@ -160,11 +177,11 @@ fn node_body(
     // has the declarations and the lifecycle hooks at the same level:
     // they "precede executable hooks", and "At most one start and one
     // stop are admitted."
-    for node in declaration.syntax.descendants() {
+    for node in &own {
         if !is_node_construct(node.kind()) || node.parent() == body {
             continue;
         }
-        let Some((word, at)) = keyword(&node, file) else {
+        let Some((word, at)) = keyword(node, file) else {
             continue;
         };
         diagnostics.emit(error(

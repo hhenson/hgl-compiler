@@ -153,6 +153,15 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
             "    inject out, logger\n",
             "    when { }\n",
             "}\n",
+            // An anonymous function is a function of its own (FN-14): a
+            // value helper may inject a capability (FN-9), and that is
+            // no declaration of the node's inside a block.
+            "fn helped(value: i64) -> i64 {\n",
+            "    start {\n",
+            "        let helper = fn() { inject logger }\n",
+            "    }\n",
+            "    when { return value }\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
