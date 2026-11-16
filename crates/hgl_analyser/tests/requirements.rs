@@ -106,6 +106,10 @@ fn a_generic_body_calls_what_its_requirements_state() {
         "    requires mul_(T, f64) -> T && add_(list<T>, list<T>) -> list<T> {\n",
         "    let one = mul_(a, by)\n",
         "    let ones: list<T> = [one]\n",
+        // A sequence written out has no type of its own: it is read as
+        // the type the requirement supplies in its place.
+        "    let pair = [one] + [one]\n",
+        "    let joined = add_(rhs: [a], lhs: ones)\n",
         "    return ones + ones\n",
         "}\n",
         // EXPR-2: "Named arguments use the selected public callable's
@@ -125,7 +129,10 @@ fn a_generic_body_calls_what_its_requirements_state() {
     assert_eq!(callees(&checked, "twice"), ["add_"]);
     assert_eq!(callees(&checked, "sum"), ["add_"]);
     assert_eq!(callees(&checked, "difference"), ["neg_", "sub_", "sub_"]);
-    assert_eq!(callees(&checked, "scaled"), ["mul_", "add_"]);
+    assert_eq!(
+        callees(&checked, "scaled"),
+        ["mul_", "add_", "add_", "add_"]
+    );
     assert_eq!(callees(&checked, "named"), ["sub_", "sub_", "sub_"]);
     // Each argument is recorded with the operator's parameter it is
     // given to: `sub_(rhs: b, lhs: a)` gives `b` to the second.
@@ -147,7 +154,15 @@ fn a_generic_body_calls_what_its_requirements_state() {
         locals(&checked, "difference")[2..],
         ["negated: T", "whole: T"]
     );
-    assert_eq!(locals(&checked, "scaled")[2..], ["one: T", "ones: list<T>"]);
+    assert_eq!(
+        locals(&checked, "scaled")[2..],
+        [
+            "one: T",
+            "ones: list<T>",
+            "pair: list<T>",
+            "joined: list<T>"
+        ]
+    );
     assert_eq!(locals(&checked, "loose")[1..], ["unknown: _"]);
 }
 
@@ -171,6 +186,9 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
         "    requires add_(T, T) -> T || sub_(T, T) -> T => add_(a, a)\n",
         // The arrow's type is the call's.
         "const fn wrong<T>(a: T) -> i64 requires add_(T, T) -> T => add_(a, a)\n",
+        // A sequence that is not of the type supplied.
+        "const fn lists<T>(a: T) -> list<T>\n",
+        "    requires add_(list<T>, list<T>) -> list<T> => [a] + [1]\n",
         // A name the operator does not declare is a candidate's option,
         // which no requirement speaks for.
         "const fn option<T>(a: T) -> T\n",
@@ -191,10 +209,11 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
             "m.hgl:4:66 operator/operator.no_candidate GEN-5",
             "m.hgl:6:52 operator/operator.no_candidate GEN-5",
             "m.hgl:7:60 type/type.mismatch EXPR-5",
-            "m.hgl:9:33 operator/operator.no_candidate GEN-5",
-            "m.hgl:10:40 operator/operator.no_candidate OPS-1",
-            "m.hgl:11:43 operator/operator.no_candidate OPS-2",
-            "m.hgl:12:33 operator/operator.no_candidate OPS-1",
+            "m.hgl:9:55 operator/operator.no_candidate OPS-1",
+            "m.hgl:11:33 operator/operator.no_candidate GEN-5",
+            "m.hgl:12:40 operator/operator.no_candidate OPS-1",
+            "m.hgl:13:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:14:33 operator/operator.no_candidate OPS-1",
         ]
     );
 }
