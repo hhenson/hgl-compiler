@@ -162,6 +162,12 @@ fn a_capability_type_is_a_value_functions_parameter() {
         "    clock\n",
         "}\n",
         "const fn dropped(clock: Clock) => clock\n",
+        // A parameter of a capability's type captured by an anonymous
+        // function is retained by it.
+        "const fn closed(clock: Clock) -> i64 {\n",
+        "    let reader = fn() => clock.now\n",
+        "    return 0\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -178,6 +184,7 @@ fn a_capability_type_is_a_value_functions_parameter() {
             "m.hgl:21:5 injectable/capability.as_value TIME-8",
             "m.hgl:24:27 injectable/capability.as_value TIME-8",
             "m.hgl:24:43 injectable/capability.as_value TIME-8",
+            "m.hgl:34:26 injectable/capability.as_value TIME-8",
         ]
     );
 }

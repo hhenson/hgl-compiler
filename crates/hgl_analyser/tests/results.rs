@@ -205,6 +205,13 @@ fn a_guard_proves_a_results_tag() {
         "    if is_err(other) { return 0 }\n",
         "    return other.value\n",
         "}\n",
+        // A nullable result proved present is tested as its result, and
+        // the two guards compose (ERR-12).
+        "const fn maybe(outcome: result<i64, str>?) -> i64 {\n",
+        "    if outcome == null { return 0 }\n",
+        "    if is_err(outcome) { return 0 }\n",
+        "    return outcome.value\n",
+        "}\n",
         // Any other type rejects, and a result has two parts.
         "const fn tests(value: i64, outcome: result<i64, str>) -> bool {\n",
         "    let odd = if is_ok(outcome) { outcome.payload } else { 0 }\n",
@@ -220,8 +227,8 @@ fn a_guard_proves_a_results_tag() {
             "m.hgl:13:36 type/result.required_variant ERR-3",
             "m.hgl:14:28 type/result.required_variant ERR-3",
             "m.hgl:16:43 type/result.required_variant ERR-3",
-            "m.hgl:21:43 name/member.unknown ERR-3",
-            "m.hgl:22:18 type/type.mismatch ERR-3",
+            "m.hgl:26:43 name/member.unknown ERR-3",
+            "m.hgl:27:18 type/type.mismatch ERR-3",
         ]
     );
     assert_eq!(

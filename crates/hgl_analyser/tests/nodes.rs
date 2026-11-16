@@ -373,14 +373,20 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    when modified([]) { return a }\n",
         "}\n",
         // As the value of a block (CTRL-10), with `start` written after
-        // the handler it wakes, and through a helper the scheduler is
-        // given to.
+        // the handler it wakes; and written with a generic argument.
         "const fn armed(scheduler: i64) -> i64 => scheduler\n",
         "fn late(a: f64) -> f64 {\n",
         "    inject scheduler\n",
         "    when modified([]) { return a }\n",
         "    start { schedule({ scheduler }, 1s) }\n",
         "}\n",
+        "fn typed(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start { schedule<duration>(scheduler, 1s) }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+        // What a function given the scheduler does is not followed: the
+        // wake is `schedule`, written in `start`.
         "fn helped(a: f64) -> f64 {\n",
         "    inject scheduler\n",
         "    start { armed(scheduler) }\n",
@@ -428,11 +434,12 @@ fn an_empty_subscription_needs_what_wakes_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:46:10 phase/modified.no_driver TIME-3",
-            "m.hgl:49:10 phase/modified.no_driver TIME-3",
-            "m.hgl:53:10 phase/modified.no_driver TIME-3",
+            "m.hgl:40:10 phase/modified.no_driver TIME-3",
+            "m.hgl:51:10 phase/modified.no_driver TIME-3",
+            "m.hgl:54:10 phase/modified.no_driver TIME-3",
             "m.hgl:58:10 phase/modified.no_driver TIME-3",
-            "m.hgl:66:10 phase/modified.no_driver TIME-3",
+            "m.hgl:63:10 phase/modified.no_driver TIME-3",
+            "m.hgl:71:10 phase/modified.no_driver TIME-3",
         ]
     );
 }
@@ -472,6 +479,9 @@ fn a_capability_is_used_and_not_retained() {
         "        let stored = [again]\n",
         "        var moving = if value > 0 { clock } else { bound }\n",
         "        let moved = (moving, 1)\n",
+        // FN-14 lets an anonymous function use a `let` around it: one
+        // a capability is bound to is a capture of the capability.
+        "        let reader = fn() => again\n",
         "        return clock\n",
         "    }\n",
         "}\n",
@@ -496,8 +506,9 @@ fn a_capability_is_used_and_not_retained() {
             "m.hgl:18:15 injectable/capability.as_value TIME-8",
             "m.hgl:20:23 injectable/capability.as_value TIME-8",
             "m.hgl:22:22 injectable/capability.as_value TIME-8",
-            "m.hgl:23:16 injectable/capability.as_value TIME-8",
-            "m.hgl:27:23 injectable/inject.alarm_and_scheduler TIME-8",
+            "m.hgl:23:30 injectable/capability.as_value TIME-8",
+            "m.hgl:24:16 injectable/capability.as_value TIME-8",
+            "m.hgl:28:23 injectable/inject.alarm_and_scheduler TIME-8",
         ]
     );
 }
