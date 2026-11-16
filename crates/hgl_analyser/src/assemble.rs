@@ -89,6 +89,7 @@ pub(crate) fn assemble<'a>(
             details: Vec::new(),
             bodies: Vec::new(),
             test_bodies: Vec::new(),
+            defaults: Vec::new(),
             phases: Vec::new(),
             written: Vec::new(),
             call_arguments: Vec::new(),
