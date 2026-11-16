@@ -38,7 +38,7 @@ use hgl_source::FileId;
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local,
-    LocalId, Stmt, UnaryOperator, Value,
+    LocalId, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
@@ -307,7 +307,7 @@ impl<'a> Typer<'a> {
             at,
             kind,
             ty,
-            connection: false,
+            category: ValueCategory::Value,
         });
         self.assigned.push(assigned);
         self.declared.insert(at, local);
@@ -336,7 +336,11 @@ impl<'a> Typer<'a> {
     fn graph(mut self) -> Option<Body> {
         self.graph = true;
         for (local, parameter) in self.signature.parameters.iter().enumerate() {
-            self.locals[local].connection = !parameter.constant;
+            self.locals[local].category = if parameter.constant {
+                ValueCategory::Value
+            } else {
+                ValueCategory::Connection
+            };
         }
         self.body()
     }
@@ -939,10 +943,10 @@ impl<'a> Typer<'a> {
         let local = self.declare(name.text(), at, kind, ty, assigned);
         // EXPR-3: "Initialization fixes a binding's value/connection
         // category".
-        self.locals[local].connection = self.graph
-            && value
-                .as_ref()
-                .is_some_and(|value| self.is_connection(value));
+        self.locals[local].category = match &value {
+            Some(value) if self.graph => self.category(value),
+            _ => ValueCategory::Value,
+        };
         Stmt::Declare { local, value }
     }
 
@@ -1141,65 +1145,77 @@ impl<'a> Typer<'a> {
         Expr { kind, ty, at }
     }
 
-    /// True when a value read in a graph is a connection (FN-3): a
+    /// What a value read in a graph is (FN-3). A connection: a
     /// temporal parameter, a local given one, the result of a temporal
     /// function or candidate, or of a call given one, which is lifted
     /// (FN-6). Any other is an ordinary value, known while the graph is
-    /// built.
-    fn is_connection(&self, value: &Expr) -> bool {
+    /// built, but for what an operation the graph requires gives
+    /// (GEN-7): which candidate that is is selected where the generic
+    /// parameters are known, and in composition it may be a temporal
+    /// one (GEN-5), so with no connection among its arguments what it
+    /// gives is not settled here.
+    fn category(&self, value: &Expr) -> ValueCategory {
+        use ValueCategory::{Connection, Unsettled, Value};
         let program = self.program;
-        let any = |values: &[Expr]| values.iter().any(|value| self.is_connection(value));
+        // Several values taken together: a connection where one is, and
+        // not settled where one is not and none is a connection.
+        let join = |one: ValueCategory, other: ValueCategory| match (one, other) {
+            (Connection, _) | (_, Connection) => Connection,
+            (Unsettled, _) | (_, Unsettled) => Unsettled,
+            _ => Value,
+        };
+        let all = |values: &mut dyn Iterator<Item = &Expr>| {
+            values.map(|value| self.category(value)).fold(Value, join)
+        };
         match &value.kind {
-            ExprKind::Local(local) => self.locals[*local].connection,
+            ExprKind::Local(local) => self.locals[*local].category,
             ExprKind::Call {
                 callee, arguments, ..
             } => {
-                let temporal = match callee {
+                let given = all(&mut arguments.iter().map(|argument| &argument.value));
+                match callee {
                     Callee::Function {
                         module,
                         declaration,
                         ..
-                    } => matches!(
+                    } if matches!(
                         program.modules[*module].declarations[*declaration].kind,
                         DeclarationKind::Function(Role::Temporal)
                             | DeclarationKind::NativeFunction(Role::Temporal)
-                    ),
+                    ) =>
+                    {
+                        Connection
+                    }
                     Callee::Candidate {
                         module,
                         declaration,
                         ..
-                    } => matches!(
+                    } if matches!(
                         program.modules[*module].declarations[*declaration]
                             .kind
                             .candidate(),
                         Some((Role::Temporal, _))
-                    ),
-                    // What a requirement names is a value operation
-                    // (GEN-16): lifted when it is given a connection.
-                    Callee::Required { .. } | Callee::Unread => false,
-                };
-                temporal
-                    || arguments
-                        .iter()
-                        .any(|argument| self.is_connection(&argument.value))
+                    ) =>
+                    {
+                        Connection
+                    }
+                    Callee::Required { .. } => join(given, Unsettled),
+                    _ => given,
+                }
             }
-            ExprKind::Construct { arguments, .. } => arguments
-                .iter()
-                .any(|argument| self.is_connection(&argument.value)),
-            ExprKind::Unary { operand, .. } => self.is_connection(operand),
-            ExprKind::Binary { left, right, .. } => {
-                self.is_connection(left) || self.is_connection(right)
+            ExprKind::Construct { arguments, .. } => {
+                all(&mut arguments.iter().map(|argument| &argument.value))
             }
-            ExprKind::Widen(inner) => self.is_connection(inner),
-            ExprKind::Field { base, .. } => self.is_connection(base),
-            ExprKind::Index { base, index } => {
-                self.is_connection(base) || self.is_connection(index)
-            }
-            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => any(entries),
+            ExprKind::Unary { operand, .. } => self.category(operand),
+            ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
+            ExprKind::Widen(inner) => self.category(inner),
+            ExprKind::Field { base, .. } => self.category(base),
+            ExprKind::Index { base, index } => join(self.category(base), self.category(index)),
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => all(&mut entries.iter()),
             ExprKind::Block {
                 value: Some(value), ..
-            } => self.is_connection(value),
-            _ => false,
+            } => self.category(value),
+            _ => Value,
         }
     }
 
@@ -1224,9 +1240,13 @@ impl<'a> Typer<'a> {
                 declaration,
                 ..
             } => (*module, *declaration),
-            // A requirement is supplied with types, and no `const`
-            // parameter is among them.
-            Callee::Required { .. } | Callee::Unread => return,
+            // An operation the body requires: the operator's own
+            // signature says which of its parameters is `const`
+            // (GEN-4).
+            Callee::Required {
+                operator: (module, declaration),
+            } => (*module, *declaration),
+            Callee::Unread => return,
         };
         let Some(Detail::Callable(signature)) =
             self.program.modules[module].details.get(declaration)
@@ -1240,7 +1260,8 @@ impl<'a> Typer<'a> {
             let Some(parameter) = parameter else {
                 continue;
             };
-            if parameter.constant && self.is_connection(&argument.value) {
+            // What is not settled is not judged: it may be a value.
+            if parameter.constant && self.category(&argument.value) == ValueCategory::Connection {
                 self.diagnostics.emit(error(
                     Category::Phase,
                     codes::CONNECTION_AS_CONSTANT,

@@ -544,7 +544,8 @@ form. Every value in it is one of two things (FN-3, EXPR-3, EXPR-4):
 | A call of a temporal function, or of an operator's temporal candidate | A connection |
 | A call of a value function or a value candidate with a connection among its arguments | A connection: the call is lifted (FN-6) |
 | The same with ordinary values alone | An ordinary value: the call is made while the graph is built |
-| A local | What its first value is; `hir::Local::connection` says which |
+| A call of an operation the graph requires (GEN-7), given no connection | Not settled: a temporal candidate would make it a connection and a value candidate a value, and which it is is selected where the generic parameters are known. It is not judged where a constant is required |
+| A local | What its first value is; `hir::Local::category` says which of the three |
 
 The types are the ones a value function has, so a symbol and a call
 select as they do there, with two differences (FN-4, GEN-5): a call

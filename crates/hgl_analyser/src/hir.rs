@@ -119,11 +119,26 @@ pub struct Local {
     pub kind: LocalKind,
     /// Its type; [`Type::Unknown`] when nothing says.
     pub ty: Type,
-    /// True for a connection of a graph: a temporal parameter, or a
-    /// local whose first value is one (EXPR-3: "Initialization fixes a
-    /// binding's value/connection category"). False for an ordinary
-    /// value, as every local of a value function and of a hook is.
-    pub connection: bool,
+    /// Whether it is a connection of a graph or an ordinary value
+    /// (EXPR-3: "Initialization fixes a binding's value/connection
+    /// category").
+    pub category: ValueCategory,
+}
+
+/// What a value of a body is (FN-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueCategory {
+    /// An ordinary value, known while the graph is built. Every local
+    /// of a value function and of a hook is one.
+    Value,
+    /// A connection of a graph: a temporal parameter, or what a
+    /// temporal or lifted call gives.
+    Connection,
+    /// One or the other, which is not known until the graph's generic
+    /// parameters are: what an operation the graph requires gives when
+    /// it is given no connection (GEN-7). A temporal candidate would
+    /// make it a connection, and a value candidate a value (GEN-5).
+    Unsettled,
 }
 
 /// One statement.
