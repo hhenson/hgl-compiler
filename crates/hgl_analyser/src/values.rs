@@ -3499,6 +3499,8 @@ impl<'a> Typer<'a> {
                 .get(*local)
                 .is_some_and(|parameter| parameter.constant),
             ExprKind::Widen(inner) => self.is_fixed(inner),
+            // `Side(N)`, of what is fixed: the member is fixed too.
+            ExprKind::EnumFrom { value, .. } => self.is_fixed(value),
             ExprKind::Unary { operand, .. } => self.is_fixed(operand),
             ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
             // A symbol over constants: `-1`, `1 + 2`.
@@ -3827,35 +3829,54 @@ impl<'a> Typer<'a> {
             Some(Detail::Enum(read)) => Some(&read.members),
             _ => None,
         };
-        let missing = match (constant_of(&argument), members) {
+        // The member a constant names, `Ok`, or what the enum has none
+        // of, `Err`; `None` for a value of the run.
+        let named: Option<Result<usize, String>> = match (constant_of(&argument), members) {
             (Some(OptionValue::Literal(Value::Int(given))), Some(members))
                 if members.iter().all(|member| member.value.is_some()) =>
             {
-                (!members.iter().any(|member| member.value == Some(given)))
-                    .then(|| format!("no member numbered {given}"))
+                Some(
+                    members
+                        .iter()
+                        .position(|member| member.value == Some(given))
+                        .ok_or_else(|| format!("no member numbered {given}")),
+                )
             }
-            (Some(OptionValue::Literal(Value::Str(given))), Some(members)) => {
-                (!members.iter().any(|member| member.name == given))
-                    .then(|| format!("no member named `{given}`"))
-            }
+            (Some(OptionValue::Literal(Value::Str(given))), Some(members)) => Some(
+                members
+                    .iter()
+                    .position(|member| member.name == given)
+                    .ok_or_else(|| format!("no member named `{given}`")),
+            ),
             _ => None,
         };
-        if let Some(missing) = missing {
-            self.diagnostics.emit(
-                error(
-                    Category::Name,
-                    codes::MEMBER_UNKNOWN,
-                    value.at,
-                    format!("`{}` has {missing}", name.text()),
-                    "TYPE-7",
-                )
-                .with_note("a member's name is matched exactly"),
-            );
-        }
-        let kind = ExprKind::EnumFrom {
-            module,
-            declaration,
-            value: Box::new(value),
+        let kind = match named {
+            // A constant that names a member is that member: `Side(0)`
+            // is `Side.buy`, wherever a member is looked for, a `switch`
+            // label and a `const` argument among them.
+            Some(Ok(member)) => ExprKind::EnumMember {
+                module,
+                declaration,
+                member,
+            },
+            Some(Err(missing)) => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Name,
+                        codes::MEMBER_UNKNOWN,
+                        value.at,
+                        format!("`{}` has {missing}", name.text()),
+                        "TYPE-7",
+                    )
+                    .with_note("a member's name is matched exactly"),
+                );
+                ExprKind::Unread
+            }
+            None => ExprKind::EnumFrom {
+                module,
+                declaration,
+                value: Box::new(value),
+            },
         };
         (kind, ty)
     }

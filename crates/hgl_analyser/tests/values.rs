@@ -3904,4 +3904,37 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
             "spoken: Side",
         ]
     );
+
+    // A constant that names a member is that member, wherever one is
+    // looked for: a `switch` label (CTRL-6), a `switch` that covers the
+    // enum (CTRL-5), and a `const` argument (FN-1).
+    let members = module(concat!(
+        "enum Side { buy, sell }\n",
+        "native const fn priced(const side: Side) -> i64\n",
+        "const fn covered(side: Side) -> i64 {\n",
+        "    switch side {\n",
+        "        case Side(0): return 1\n",
+        "        case Side(\"sell\"): return 2\n",
+        "    }\n",
+        "}\n",
+        "const fn doubled(side: Side) -> i64 {\n",
+        "    switch side {\n",
+        "        case Side(0): return 1\n",
+        "        case .buy: return 2\n",
+        "        default: return 3\n",
+        "    }\n",
+        "}\n",
+        "const fn fixed<const N: i64>(code: i64) -> i64 {\n",
+        "    let one = priced(Side(1))\n",
+        "    let two = priced(Side(N))\n",
+        "    return priced(Side(code))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        members.summary(),
+        [
+            "m.hgl:13:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:20:19 type/argument.constant FN-1",
+        ]
+    );
 }
