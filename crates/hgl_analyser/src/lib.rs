@@ -201,6 +201,9 @@ pub mod codes {
     /// A temporal connection where composition requires a constant
     /// (FN-3).
     pub const CONNECTION_AS_CONSTANT: &str = "connection.as_constant";
+    /// A connection assigned to a `var` that holds an ordinary value,
+    /// or the reverse (EXPR-4, CTRL-14).
+    pub const BINDING_CATEGORY: &str = "binding.category";
     /// A state initializer reads a temporal input (TIME-5).
     pub const STATE_INPUT_READ: &str = "state.input_read";
     /// A window's size is neither a tick count nor a duration, or its

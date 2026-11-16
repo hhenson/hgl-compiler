@@ -134,10 +134,13 @@ pub enum ValueCategory {
     /// A connection of a graph: a temporal parameter, or what a
     /// temporal or lifted call gives.
     Connection,
-    /// One or the other, which is not known until the graph's generic
-    /// parameters are: what an operation the graph requires gives when
-    /// it is given no connection (GEN-7). A temporal candidate would
-    /// make it a connection, and a value candidate a value (GEN-5).
+    /// One or the other, which is not known here. What an operation
+    /// the graph requires gives when it is given no connection (GEN-7):
+    /// a temporal candidate would make it a connection, and a value
+    /// candidate a value (GEN-5), and which it is is selected where the
+    /// graph's generic parameters are known. And a `var` of a graph
+    /// declared with no value, until an assignment gives it one
+    /// (EXPR-3).
     Unsettled,
 }
 

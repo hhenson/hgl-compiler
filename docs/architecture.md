@@ -558,10 +558,37 @@ nothing is reported of it. A connection given to a `const` parameter is
 `generic.argument_constant`, and one that is a tuple's index
 `tuple.index`.
 
-Not read yet in a graph: `if`, `switch`, `for` and `while`, whose
-meaning in composition is its own (CTRL-1 to CTRL-8); whether a graph
-that declares a result gives one on every path; a `var` reassigned from
-a connection to an ordinary value.
+An `if` in a graph is read as a value function's is, and then told
+apart by what its condition is (CTRL-1, CTRL-13; owner's decisions of
+2026-11-16 on hhenson/hgl_spec#61):
+
+| Condition | The `if` | With no `else`, its value used |
+| --- | --- | --- |
+| An ordinary `bool`: a `const` parameter, a literal | One branch is composed while the graph is built | A `T?` where the branch is an ordinary value; a connection of `T` where it is one |
+| A connection of `bool` | Each branch is a child graph, selected at runtime | A connection of `T` that never ticks while the condition is false (CTRL-3) |
+| Any other type, `bool?` included | `type.mismatch` | |
+
+With both branches it has their one type, and is a connection when its
+condition or either branch is one.
+
+A `var` of a graph keeps the category of its first value (CTRL-14,
+EXPR-3, EXPR-4):
+
+| Written | What is done |
+| --- | --- |
+| `var level = 1.0` then `level = price` | `binding.category`: a connection to a `var` that holds an ordinary value. The reverse likewise |
+| `var level = 1.0` then, `rising` a connection, `if rising { level = 4.0 }` | `binding.category`: its value would be chosen at runtime |
+| `var chosen = price` then `if rising { chosen = scale(price) }` | One connection after the `if` |
+| `var chosen: f64`, assigned in every branch | Takes the category of its first assignment. Assigned in one branch only and then read: `binding.unassigned` |
+| A `var` declared in the branch | The branch's own |
+
+A `return` with a value in a branch selected at runtime makes the
+graph's result the continuation's where the branch is not selected, so
+a graph that can then reach its end with no value is `return.missing`.
+
+Not read yet in a graph: `switch`, `for` and `while` (CTRL-15); whether
+a graph that returns nowhere under a temporal condition gives a result
+on every path.
 
 ### Value expressions
 
