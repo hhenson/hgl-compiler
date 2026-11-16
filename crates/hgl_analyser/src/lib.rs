@@ -29,6 +29,8 @@
 //! * `forms` rejects the forms of a declaration that the grammar admits
 //!   and a rule does not: a pack with a default, a hook a native
 //!   implementation cannot have (FN-8, NATIVE-3);
+//! * `phases` says of each temporal function whether its body describes
+//!   composition, a graph, or runtime, a node (FN-2);
 //! * `read` turns every written type into a [`Type`], records each
 //!   declaration's signature or fields, rejects a type made of what its
 //!   place does not admit (UNIT-4, TYPE-10, TYPE-11, TYPE-12, TYPE-14,
@@ -68,6 +70,7 @@ mod declared;
 mod forms;
 pub mod hir;
 mod imports;
+mod phases;
 mod program;
 mod read;
 mod resolve;
@@ -81,7 +84,7 @@ use hgl_source::{FileId, Span};
 
 pub use program::{
     Binding, Decision, Declaration, DeclarationKind, Import, ImportKind, LocalKind, Module,
-    ModuleFile, NameUse, OperatorRef, PreludeName, Program, Role, Test,
+    ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, Role, Test,
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
@@ -366,6 +369,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     imports::resolve(&mut program, diagnostics);
     resolve::resolve(&mut program, diagnostics);
     forms::check(&program, diagnostics);
+    phases::classify(&mut program);
     read::read(&mut program, diagnostics);
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);

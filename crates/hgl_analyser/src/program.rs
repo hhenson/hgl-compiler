@@ -91,6 +91,11 @@ pub struct Module {
     /// `declarations`, in the same order, `None` for a declaration that
     /// is no value function or has no body.
     pub bodies: Vec<Option<Body>>,
+    /// What the body of each temporal function describes (FN-2): one
+    /// entry for each of `declarations`, in the same order, `None` for
+    /// a declaration that is no temporal function or has no body
+    /// written in HGL.
+    pub phases: Vec<Option<Phase>>,
     /// The module's declaration scope: for each name, the positions in
     /// `declarations` of what it is bound to. One, or the two of a
     /// temporal and value pair (FN-4).
@@ -153,6 +158,29 @@ pub enum ImportKind {
     Selective,
     /// `use m as name`: a qualifier for `name::declaration`.
     Alias,
+}
+
+/// What the body of a temporal function describes (FN-2). It follows
+/// from the body alone: "Generic selection, target choice, and optimizer
+/// decisions cannot change the role."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Phase {
+    /// Composition: the function is a graph. Its body describes typed
+    /// connections and reads no payload.
+    Graph,
+    /// Runtime: the function is a node. Its body holds state and hooks
+    /// that run when the node is evaluated.
+    Node,
+}
+
+impl Phase {
+    /// `graph` or `node`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Graph => "graph",
+            Phase::Node => "node",
+        }
+    }
 }
 
 /// The two roles of a function (FN-1). A temporal and a value function
