@@ -19,8 +19,8 @@ use hgl_analyser::hir::{
     Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Declaration, DeclarationKind, Detail, LocalKind, Parameter, Phase, Program, Role, Scalar,
-    Signature, Type,
+    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
+    Parameter, Phase, Program, Role, Scalar, Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -105,6 +105,16 @@ enum Bound {
     Input(Type),
     /// By a value known where the graph is built, of this type.
     Configuration(Type),
+}
+
+/// What a lifted node calls.
+#[derive(Clone, Copy)]
+enum Lifts<'a> {
+    /// A function of the program, or a candidate with a body.
+    Function,
+    /// A native candidate of core: the provider's function for it, and
+    /// what the call configures it with, each as `name=value`.
+    Native(&'a str, &'a [String]),
 }
 
 /// Names as a Python tuple of strings: `("a", "b")`.
@@ -1356,6 +1366,43 @@ impl Emitter<'_> {
         }
     }
 
+    /// The generic values a call gives a native candidate, each as
+    /// `name=value` for the provider's function.
+    ///
+    /// NUM-9: "`zero` is a generic value parameter of the candidates
+    /// that declare it, and a call gives it a compile-time constant."
+    /// A value of an enum is passed as the name of its member,
+    /// `"ieee"`, and an integer as itself. A generic type is not
+    /// passed: a Python function is not typed.
+    fn options(
+        &mut self,
+        signature: &Signature,
+        generics: &[GenericArgument],
+        at: Location,
+    ) -> Vec<String> {
+        let mut written = Vec::new();
+        for (parameter, argument) in signature.generics.iter().zip(generics) {
+            let GenericArgument::Constant(constant) = argument else {
+                continue;
+            };
+            // The analyser says what the constant comes to: a member
+            // of an enum is one however it was written (TYPE-7), and
+            // none of its spelling is read here.
+            let value = match &constant.value {
+                ConstantValue::Member(member) => Some(string(member)),
+                ConstantValue::Int(number) => Some(number.to_string()),
+                _ => None,
+            };
+            match value {
+                Some(value) => written.push(format!("{}={value}", name(&parameter.name))),
+                // A value that is not a constant here, such as a
+                // generic value of the function the call is in.
+                None => self.unsupported(at, &format!("the option `{}`", constant.text)),
+            }
+        }
+        written
+    }
+
     // ---- Lifting ----
 
     /// True when `value`, written in a graph, is a connection: a
@@ -1422,11 +1469,11 @@ impl Emitter<'_> {
     /// publishes its result, including an equal result. An outputless
     /// helper lifts to a sink."
     ///
-    /// Writes the node that calls the function `target`, or core's
-    /// native function `native` when it is a candidate of core, and
-    /// gives the node's name. `bound` says how each parameter of
-    /// `signature` is given, with `None` for one left out; `result` is
-    /// what the function gives.
+    /// Writes the node that calls the function `target`, or the
+    /// provider's function when `lifts` says it is a native candidate
+    /// of core, and gives the node's name. `bound` says how each
+    /// parameter of `signature` is given, with `None` for one left
+    /// out; `result` is what the function gives.
     ///
     /// FN-11: "A lifted argument with a declared default does not
     /// require a valid input: bind the default when that input is
@@ -1436,7 +1483,7 @@ impl Emitter<'_> {
     fn lifted(
         &mut self,
         target: (usize, usize),
-        native: Option<&str>,
+        lifts: Lifts,
         signature: &Signature,
         bound: &[Option<Bound>],
         result: Option<&Type>,
@@ -1482,12 +1529,13 @@ impl Emitter<'_> {
                 }
             }
         }
-        let (called, of) = match native {
-            Some(native) => {
+        let (called, of) = match lifts {
+            Lifts::Native(native, configured) => {
                 self.natives = true;
+                passed.extend(configured.iter().cloned());
                 (format!("_core.{native}"), native.to_string())
             }
-            None => {
+            Lifts::Function => {
                 let declared = &self.program.modules[target.0].declarations[target.1];
                 (self.function_name(target.0, target.1), name(&declared.name))
             }
@@ -1617,17 +1665,18 @@ impl Emitter<'_> {
     ) -> String {
         let at = whole.at;
         let program = self.program;
-        let (module, declaration, candidate) = match callee {
+        let (module, declaration, generics, candidate) = match callee {
             Callee::Function {
                 module,
                 declaration,
-                ..
-            } => (*module, *declaration, false),
+                generics,
+            } => (*module, *declaration, generics, false),
             Callee::Candidate {
                 module,
                 declaration,
+                generics,
                 ..
-            } => (*module, *declaration, true),
+            } => (*module, *declaration, generics, true),
             Callee::Required { .. } | Callee::Unread => {
                 self.unsupported(at, "this call");
                 return "None".to_string();
@@ -1671,9 +1720,22 @@ impl Emitter<'_> {
                 );
                 return "None".to_string();
             }
+            // NUM-9: a division under `zero: .error` gives a `result`,
+            // which is not written yet. It is a candidate of its own
+            // with the parameter types of the one that gives a number.
+            if matches!(signature.result, Some(Type::Result { .. })) {
+                self.unsupported(at, "a native candidate that gives a `result`");
+                return "None".to_string();
+            }
             Some(native)
         } else {
             None
+        };
+        // What a native candidate is configured with: its provider's
+        // function takes each generic value by its name.
+        let options = match native {
+            Some(_) => self.options(signature, generics, at),
+            None => Vec::new(),
         };
         // FN-6: in a graph a symbol or a value function given a
         // connection is lifted over it. "All-scalar calls execute
@@ -1689,14 +1751,11 @@ impl Emitter<'_> {
                 emitter.connects(function, value).then(|| value.ty.clone())
             });
             let result = signature.result.as_ref().map(|_| &whole.ty);
-            let node = self.lifted(
-                (module, declaration),
-                native.as_deref(),
-                signature,
-                &bound,
-                result,
-                at,
-            );
+            let lifts = match &native {
+                Some(native) => Lifts::Native(native, &options),
+                None => Lifts::Function,
+            };
+            let node = self.lifted((module, declaration), lifts, signature, &bound, result, at);
             return format!("{node}({})", written.join(", "));
         }
         if let Some(native) = native {
@@ -1705,7 +1764,12 @@ impl Emitter<'_> {
             // provider's function does.
             self.natives = true;
             let arguments = self.arguments(function, (module, declaration), signature, arguments);
-            return format!("_core.{native}({arguments})");
+            let arguments: Vec<String> = [arguments]
+                .into_iter()
+                .filter(|written| !written.is_empty())
+                .chain(options)
+                .collect();
+            return format!("_core.{native}({})", arguments.join(", "));
         }
         if !bodied && !matches!(declared.kind, DeclarationKind::Function(_)) {
             self.unsupported(at, &format!("a call of `{}`", declared.name));
@@ -1753,7 +1817,7 @@ impl Emitter<'_> {
                 });
             let node = self.lifted(
                 (*module, *declaration),
-                None,
+                Lifts::Function,
                 signature,
                 &bound,
                 signature.result.as_ref(),

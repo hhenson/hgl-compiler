@@ -390,6 +390,11 @@ pub enum ConstantValue {
     Duration(i64),
     /// `unbounded`, the size sentinel of a list (TYPE-10).
     Unbounded,
+    /// A member of an enum, by its name. The enum is the type of the
+    /// generic value parameter the constant is given to. An enum
+    /// member is one however it is written (TYPE-7): `.nan`,
+    /// `Zero.nan`, `(Zero.nan)` and `Zero("nan")` all come to `nan`.
+    Member(String),
     /// A generic value parameter of the declaration it is written in:
     /// the `N` of `list<f64, N>`.
     Parameter {

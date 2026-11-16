@@ -1192,6 +1192,120 @@ fn what_core_lacks_is_reported_where_a_program_reaches_it() {
     );
 }
 
+/// Divisions, each with the zero policy it is given or takes by
+/// default.
+const DIVISION: &str = concat!(
+    "module demo.div\n",
+    "\n",
+    "const fn ratio(a: f64, b: f64) -> f64 => a / b\n",
+    "const fn nans(a: f64, b: f64) -> f64 => a /{zero: .nan} b\n",
+    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
+    "const fn named(a: f64, b: f64) -> f64 => div_(a, b, zero: ZeroPolicy.nan)\n",
+    "const fn grouped(a: f64, b: f64) -> f64 => div_(a, b, zero: (ZeroPolicy.nan))\n",
+    "const fn built(a: f64, b: f64) -> f64 => div_(a, b, zero: ZeroPolicy(\"nan\"))\n",
+    "const fn floors(a: i64, b: i64) -> i64 => a // b\n",
+    "const fn rest(a: i64, b: i64) -> i64 => a % b\n",
+    "\n",
+    "fn ratios(a: f64, b: f64) -> f64 => a / b\n",
+    "fn halves(a: i64) -> f64 => a / 2\n",
+    "\n",
+    "test divides {\n",
+    "    assert ratio(6.0, 4.0) == 1.5\n",
+    "    assert 7 / 2 == 3.5\n",
+    "    assert 7.0 / 2 == 3.5\n",
+    "    assert 7 / 2.0 == 3.5\n",
+    // NUM-3: a signed infinity, whose sign combines both operands'.
+    "    assert ratio(1.0, 0.0) > 1.0e308\n",
+    "    assert ratio(-1.0, 0.0) < -1.0e308\n",
+    "    assert ratio(1.0, -0.0) < -1.0e308\n",
+    // NaN is equal to nothing, itself included (NUM-5).
+    "    assert ratio(0.0, 0.0) != ratio(0.0, 0.0)\n",
+    "    assert nans(1.0, 0.0) != nans(1.0, 0.0)\n",
+    "    assert nans(6.0, 4.0) == 1.5\n",
+    "    assert named(1.0, 0.0) != named(1.0, 0.0)\n",
+    "    assert grouped(1.0, 0.0) != grouped(1.0, 0.0)\n",
+    "    assert built(1.0, 0.0) != built(1.0, 0.0)\n",
+    "    assert strict(6.0, 4.0) == 1.5\n",
+    // NUM-1: floor division rounds toward negative infinity, and a
+    // modulo has the divisor's sign.
+    "    assert floors(7, 2) == 3\n",
+    "    assert floors(-7, 2) == -4\n",
+    "    assert rest(7, 2) == 1\n",
+    "    assert rest(-7, 2) == 1\n",
+    "    assert rest(7, -2) == -1\n",
+    "    assert 7.5 // 2 == 3.0\n",
+    "    assert 7.5 % 2 == 1.5\n",
+    "    assert -7.5 % 2 == 0.5\n",
+    // NUM-12: what IEEE arithmetic makes of the zero divisor.
+    "    assert 1.0 // 0.0 > 1.0e308\n",
+    "    assert 1.0 % 0.0 != 1.0 % 0.0\n",
+    // NUM-2: an infinite quotient stays one when it is floored, with
+    // the sign of both operands, and has no remainder.
+    "    assert (1.0 / 0.0) // 2.0 > 1.0e308\n",
+    "    assert (1.0 / 0.0) // -2.0 < -1.0e308\n",
+    "    assert (-1.0 / 0.0) // 2.0 < -1.0e308\n",
+    "    assert (1.0 / 0.0) // (1.0 / 0.0) != (1.0 / 0.0) // (1.0 / 0.0)\n",
+    "    assert (1.0 / 0.0) % 2.0 != (1.0 / 0.0) % 2.0\n",
+    "    assert eval(ratios, a: [6.0, 1.0], b: [4.0]) == [1.5, 0.25]\n",
+    "    assert eval(halves, a: [3]) == [1.5]\n",
+    "}\n",
+);
+
+/// Divisions by zero under `fail`, given or taken by default.
+const DIVISION_FAILS: &str = concat!(
+    "module demo.div.fails\n",
+    "const fn floors(a: i64, b: i64) -> i64 => a // b\n",
+    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
+    "test whole_by_zero { assert floors(1, 0) == 0 }\n",
+    "test strict_by_zero { assert strict(1.0, 0.0) == 0.0 }\n",
+);
+
+/// NUM-12: "Every division takes `zero`: `/`, `//`, and `%`". NUM-9:
+/// "`zero` is a generic value parameter of the candidates that declare
+/// it, and a call gives it a compile-time constant." The provider's
+/// function is given it by name, as the name of the policy: the one
+/// written, or the default the candidate declares (NUM-3: `/`
+/// "defaults to the `ieee` zero policy"; a division of two `i64`
+/// takes `.fail`).
+#[test]
+fn a_division_takes_its_zero_policy() {
+    let emitted = emit(&[("div.hgl", DIVISION)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_div/__init__.py");
+    for expected in [
+        "def ratio(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")\n",
+        "def nans(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
+        "def strict(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"fail\")\n",
+        // TYPE-7: a member is the same policy however it is written.
+        "def named(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
+        "def grouped(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
+        "def built(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
+        "def floors(a, b):\n    return _core.floordiv__i64_i64(lhs=a, rhs=b, zero=\"fail\")\n",
+        "def rest(a, b):\n    return _core.mod__i64_i64(lhs=a, rhs=b, zero=\"fail\")\n",
+        // A lifted division is configured as the call is.
+        concat!(
+            "def _lift_1_div__i64_i64(lhs: _hg.TS[_py.int], rhs: _py.int) -> _hg.TS[_py.float]:\n",
+            "    return _core.div__i64_i64(lhs=lhs.value, rhs=rhs, zero=\"ieee\")\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+
+    // NUM-9: "division with `zero: .error` returns `result<f64,
+    // error>`", which is not written yet.
+    let emitted = emit(&[(
+        "checked.hgl",
+        concat!(
+            "module demo.checked\n",
+            "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["checked.hgl:2:59 target.unsupported"]);
+}
+
 /// A program with forms that are not written: a loop in two of its
 /// functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -1377,6 +1491,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("defaults.hgl", DEFAULTS),
         ("lift.hgl", LIFTS),
         ("mixed.hgl", CANDIDATES),
+        ("div.hgl", DIVISION),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
@@ -1398,25 +1513,31 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        25,
+        26,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
 
 /// A test that fails on hgraph says which of its statements failed,
 /// and why: an assertion that does not hold, or an error that escaped
-/// (NUM-2: an `i64` result out of range). Needs hgraph, as above.
+/// (NUM-2: an `i64` result out of range; NUM-3: "The `fail` policy
+/// makes a zero divisor an HGL error with code
+/// `numeric.division_by_zero`"). Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
     let python = python_with_hgraph();
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_failures");
     fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&REACH);
+    let mut files = REACH.to_vec();
+    files.push(("fails.hgl", DIVISION_FAILS));
+    let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
         emitted.test("wrong").0,
         emitted.test("overflows").0,
+        emitted.test("whole_by_zero").0,
+        emitted.test("strict_by_zero").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -1436,6 +1557,8 @@ fn a_failure_names_the_statement_that_failed() {
             "passed",
             "failed reach.hgl:22:5 the assertion does not hold",
             "failed reach.hgl:26:5 HglError: an i64 result is outside the signed 64-bit range",
+            "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
+            "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
         ]
     );
 }

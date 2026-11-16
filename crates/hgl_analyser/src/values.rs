@@ -3825,7 +3825,7 @@ impl<'a> Typer<'a> {
             if !selecting.contains(name.as_str()) {
                 continue;
             }
-            given.constant = Some(self.constant_here(&given.node));
+            given.constant = Some(self.option_constant(&given.node));
             if !self.is_compile_time(&given.node) {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -5764,7 +5764,8 @@ impl<'a> Typer<'a> {
             defaults: generics
                 .iter()
                 .map(|generic| {
-                    generic_default(&callee.syntax, generic).map(|default| constant_at(&default))
+                    generic_default(&callee.syntax, generic)
+                        .map(|default| default_constant(&default, generic))
                 })
                 .collect(),
         };
@@ -5902,7 +5903,7 @@ impl<'a> Typer<'a> {
                     "GEN-8",
                 ));
             }
-            found[index] = Some(Argument::Constant(self.constant_here(&value)));
+            found[index] = Some(Argument::Constant(self.option_constant(&value)));
             named.push((index, value));
         }
         named
@@ -6402,7 +6403,7 @@ impl<'a> Typer<'a> {
             if found.is_none()
                 && let Some(default) = generic_default(operator_syntax, generic)
             {
-                *found = Some(Argument::Constant(constant_at(&default)));
+                *found = Some(Argument::Constant(default_constant(&default, generic)));
                 asked = true;
                 defaulted.push((index, default));
             }
@@ -7012,6 +7013,18 @@ impl<'a> Typer<'a> {
             node,
             constant: None,
         }
+    }
+
+    /// The constant a call gives a generic value parameter. A member
+    /// of an enum comes to that member however it is written (TYPE-7):
+    /// `.nan`, `Zero.nan`, `(Zero.nan)`, `Zero("nan")`. Anything else
+    /// is read as [`Self::constant_here`] reads it.
+    fn option_constant(&self, node: &SyntaxNode) -> Constant {
+        let mut constant = self.constant_here(node);
+        if let Some(OptionValue::Member(name)) = self.option_value(node) {
+            constant.value = ConstantValue::Member(name);
+        }
+        constant
     }
 
     /// The compile-time constant `node` is, read where it stands: a
@@ -8188,7 +8201,9 @@ impl<'a> Typer<'a> {
                     _ => return None,
                 };
                 match resolved {
-                    ConstantValue::Int(_) | ConstantValue::Duration(_) => {
+                    ConstantValue::Int(_)
+                    | ConstantValue::Duration(_)
+                    | ConstantValue::Member(_) => {
                         return constant_value(resolved);
                     }
                     // A generic value parameter of the enclosing
@@ -8530,7 +8545,7 @@ impl<'a> Typer<'a> {
                         .iter()
                         .map(|generic| {
                             generic_default(&declared.syntax, generic)
-                                .map(|default| constant_at(&default))
+                                .map(|default| default_constant(&default, generic))
                         })
                         .collect(),
                 };
@@ -10027,13 +10042,55 @@ fn folded(node: &SyntaxNode) -> Option<OptionValue> {
 }
 
 /// A constant held as a value, for a candidate's condition to compare:
-/// an integer or a duration. `None` for one whose value is not held.
+/// an integer, a duration or a member of an enum. `None` for one whose
+/// value is not held.
 fn constant_value(value: &ConstantValue) -> Option<OptionValue> {
     match value {
         ConstantValue::Int(value) => Some(OptionValue::Literal(Value::Int(*value))),
         ConstantValue::Duration(value) => Some(OptionValue::Literal(Value::Duration(*value))),
+        ConstantValue::Member(name) => Some(OptionValue::Member(name.clone())),
         _ => None,
     }
+}
+
+/// The constant a generic value parameter's default is. Where the
+/// parameter is of an enum, a member written as one, `.ieee` or
+/// `Zero.ieee`, in parentheses or not, comes to that member (TYPE-7).
+///
+/// A default is written in its declaration's file, which may not be
+/// the one being read, so no name in it is looked up: the parameter's
+/// type says the member is of its enum.
+fn default_constant(default: &SyntaxNode, generic: &GenericParameter) -> Constant {
+    let mut constant = constant_at(default);
+    // `.ieee`: a member, whatever is around it.
+    if let Some(OptionValue::Member(name)) = constant_of(default) {
+        constant.value = ConstantValue::Member(name);
+        return constant;
+    }
+    let of_enum = matches!(
+        &generic.kind,
+        GenericKind::Value(ty) if matches!(
+            not_null(Some(ty)),
+            Some(Type::Named { kind: NamedKind::Enum, .. })
+        )
+    );
+    // EXPR-1: "Parentheses select grouping".
+    let mut written = default.clone();
+    while written.kind() == SyntaxKind::ParenExpr {
+        match written.children().next() {
+            Some(inner) => written = inner,
+            None => return constant,
+        }
+    }
+    // `Zero.ieee`: the member's name is the last token, any word
+    // (LEX-9).
+    if of_enum
+        && written.kind() == SyntaxKind::MemberExpr
+        && let Some(name) = tokens(&written).last()
+    {
+        constant.value = ConstantValue::Member(name.text().to_string());
+    }
+    constant
 }
 
 /// The default a declaration writes for `parameter`, one of its own.
@@ -10179,7 +10236,7 @@ fn instance<'s>(
             continue;
         }
         if let Some(default) = generic_default(&candidate.syntax, generic) {
-            found[index] = Some(Argument::Constant(constant_at(&default)));
+            found[index] = Some(Argument::Constant(default_constant(&default, generic)));
             defaulted.push(index);
         }
     }

@@ -7,14 +7,31 @@ after the candidate and the types of its parameters: `add__i64_i64` is
 
 Core's numeric contract has `i64` arithmetic neither wrap nor promote: a
 result outside the signed 64-bit range is an error.
+
+A division takes `zero`, the name of a member of core's `ZeroPolicy`,
+which says what a zero divisor gives (NUM-3, NUM-12): `"ieee"` what IEEE
+arithmetic does, `"nan"` a NaN, and `"fail"` an error with the code
+`numeric.division_by_zero`. `"error"` gives a `result`, and is a
+candidate of its own that this file does not provide yet.
 """
+
+import math as _math
 
 _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
+_NAN = float("nan")
+_INFINITY = float("inf")
 
 
 class HglError(Exception):
-    """A failure of an HGL operation while a program runs."""
+    """A failure of an HGL operation while a program runs.
+
+    `code` is the catalogued code of the failure, where it has one.
+    """
+
+    def __init__(self, message, code=None):
+        super().__init__(message if code is None else f"{code}: {message}")
+        self.code = code
 
 
 def _i64(value):
@@ -65,6 +82,125 @@ def mul__f64_f64(lhs, rhs):
 
 def mul__i64_f64(lhs, rhs):
     return float(lhs) * rhs
+
+
+def _zero_divisor(lhs, rhs, zero):
+    """What a division by the zero `rhs` gives, when it gives a number.
+
+    NUM-3: under `ieee`, "a finite nonzero numerator divided by signed
+    zero produces signed infinity; zero divided by zero produces NaN.
+    The infinity sign combines both operand signs." Under `nan` every
+    zero divisor gives NaN, and under `fail` it is an error.
+    """
+    if zero == "fail":
+        raise HglError("a division by zero", code="numeric.division_by_zero")
+    if zero == "nan" or lhs == 0 or lhs != lhs:
+        return _NAN
+    if zero != "ieee":
+        raise HglError(f"the zero policy `{zero}` is not provided")
+    sign = _math.copysign(1.0, lhs) * _math.copysign(1.0, rhs)
+    return _math.copysign(_INFINITY, sign)
+
+
+def _div(lhs, rhs, zero):
+    """`/` of numbers, which gives an `f64` (NUM-1)."""
+    if rhs == 0:
+        return _zero_divisor(lhs, rhs, zero)
+    return lhs / rhs
+
+
+def _floordiv(lhs, rhs, zero):
+    """`//` with an `f64` operand.
+
+    NUM-12: "Under `.ieee` a floor division or a modulo with an `f64`
+    operand is what IEEE arithmetic makes of the zero divisor": the
+    quotient is an infinity or NaN, and so is its floor.
+    """
+    if rhs == 0:
+        return _zero_divisor(lhs, rhs, zero)
+    # NUM-2: floating arithmetic "preserves IEEE special values". An
+    # infinite numerator has an infinite quotient, or NaN over an
+    # infinity, and its floor is itself. Python's `//` would give NaN
+    # for every one. What a finite numerator over an infinity gives is
+    # not said by core yet (hhenson/hgl_core#35), and is Python's.
+    if _math.isinf(lhs):
+        return lhs / rhs
+    return float(lhs // rhs)
+
+
+def _mod(lhs, rhs, zero):
+    """`%` with an `f64` operand: NaN for a zero divisor under `ieee`."""
+    if rhs == 0:
+        if zero == "fail":
+            raise HglError("a division by zero", code="numeric.division_by_zero")
+        if zero not in ("ieee", "nan"):
+            raise HglError(f"the zero policy `{zero}` is not provided")
+        return _NAN
+    return float(lhs % rhs)
+
+
+def _whole(zero):
+    """A division of two `i64` gives an `i64`, which holds no NaN or
+    infinity: NUM-12 admits `fail` there, and `error`."""
+    if zero != "fail":
+        raise HglError(f"the zero policy `{zero}` is not provided")
+    raise HglError("a division by zero", code="numeric.division_by_zero")
+
+
+def div__i64_i64(lhs, rhs, zero):
+    return _div(lhs, rhs, zero)
+
+
+def div__f64_f64(lhs, rhs, zero):
+    return _div(lhs, rhs, zero)
+
+
+def div__i64_f64(lhs, rhs, zero):
+    return _div(lhs, rhs, zero)
+
+
+def div__f64_i64(lhs, rhs, zero):
+    return _div(lhs, rhs, zero)
+
+
+def floordiv__i64_i64(lhs, rhs, zero):
+    # NUM-1: "Integer floor division rounds toward negative infinity",
+    # as Python's does.
+    if rhs == 0:
+        _whole(zero)
+    return _i64(lhs // rhs)
+
+
+def floordiv__f64_f64(lhs, rhs, zero):
+    return _floordiv(lhs, rhs, zero)
+
+
+def floordiv__i64_f64(lhs, rhs, zero):
+    return _floordiv(lhs, rhs, zero)
+
+
+def floordiv__f64_i64(lhs, rhs, zero):
+    return _floordiv(lhs, rhs, zero)
+
+
+def mod__i64_i64(lhs, rhs, zero):
+    # NUM-1: "modulo has the divisor's sign when nonzero", as Python's
+    # does.
+    if rhs == 0:
+        _whole(zero)
+    return lhs % rhs
+
+
+def mod__f64_f64(lhs, rhs, zero):
+    return _mod(lhs, rhs, zero)
+
+
+def mod__i64_f64(lhs, rhs, zero):
+    return _mod(lhs, rhs, zero)
+
+
+def mod__f64_i64(lhs, rhs, zero):
+    return _mod(lhs, rhs, zero)
 
 
 def neg__i64(value):
