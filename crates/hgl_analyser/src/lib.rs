@@ -213,9 +213,10 @@ pub mod codes {
     /// A payload read under manual admission that no guard dominates
     /// (TIME-4).
     pub const PAYLOAD_UNGUARDED: &str = "payload.unguarded";
-    /// `modified([])` in a node that injects neither `scheduler` nor
-    /// `alarm`, or whose `start` schedules no wake on it (TIME-3).
-    pub const MODIFIED_NO_DRIVER: &str = "modified.no_driver";
+    /// The dormant-node warning: `modified([])` in a node that injects
+    /// neither `scheduler` nor `alarm`, or whose `start` does not use
+    /// the one it injects (TIME-3). It does not reject the source.
+    pub const NODE_NO_ACTIVATION: &str = "node.no_activation";
     /// A temporal connection where composition requires a constant
     /// (FN-3).
     pub const CONNECTION_AS_CONSTANT: &str = "connection.as_constant";
@@ -463,6 +464,18 @@ fn error(
     rule: &'static str,
 ) -> Diagnostic {
     Diagnostic::error(category, Code::Catalogued(code), at, message).with_rule(rule)
+}
+
+/// A warning of the specification's catalogue, which does not reject
+/// the source (ERR-1). It cites the rule that says what is warned of.
+fn warning(
+    category: Category,
+    code: &'static str,
+    at: Location,
+    message: String,
+    rule: &'static str,
+) -> Diagnostic {
+    Diagnostic::warning(category, Code::Catalogued(code), at, message).with_rule(rule)
 }
 
 /// Core's module as the pinned `hgl_core` declares it, built into the

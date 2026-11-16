@@ -338,11 +338,16 @@ fn a_selector_names_its_inputs_each_by_its_name() {
     );
 }
 
-/// TIME-3: "`modified([])` subscribes to no input: it stands only in a
-/// node that injects `scheduler` or `alarm` and schedules a wake on it
-/// in `start`, which is then what wakes the handler."
+/// TIME-3: "`modified([])` subscribes to no input: the node's scheduler
+/// or alarm is then what wakes the handler. Where the node injects
+/// neither, or its `start` does not use the one it injects, nothing
+/// wakes it: the node is dormant, and the selector is warned of
+/// (`node.no_activation`, ERR-10). Any use in `start` counts; what a
+/// function given the capability does with it is not followed. A node
+/// that is dormant by design acknowledges the warning." ERR-1: "A
+/// warning does not reject valid source."
 #[test]
-fn an_empty_subscription_needs_what_wakes_it() {
+fn a_dormant_node_is_warned_of() {
     let checked = module(concat!(
         // The chapter's `sampled`.
         "fn sampled(a: f64, const every: duration = 1s) -> f64 {\n",
@@ -353,8 +358,9 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "        if valid(a) { return a }\n",
         "    }\n",
         "}\n",
-        // In a branch of `start`, and in parentheses, which only group
-        // (EXPR-1).
+        // Any use in `start` counts: an alarm in a branch, a local the
+        // scheduler is bound to, a function it is given to, and with
+        // `start` written after the handler.
         "fn alarmed(a: f64) -> f64 {\n",
         "    inject alarm\n",
         "    start {\n",
@@ -362,48 +368,16 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    }\n",
         "    when modified([]) { return a }\n",
         "}\n",
-        // Through a local the scheduler is bound to (TIME-8).
         "fn renamed(a: f64) -> f64 {\n",
         "    inject scheduler\n",
-        "    start {\n",
-        "        let timer = (scheduler)\n",
-        "        let again = timer\n",
-        "        schedule(again, 1s)\n",
-        "    }\n",
+        "    start { let timer = scheduler }\n",
         "    when modified([]) { return a }\n",
         "}\n",
-        // As the value of a block (CTRL-10), with `start` written after
-        // the handler it wakes; and written with a generic argument.
         "const fn armed(scheduler: i64) -> i64 => scheduler\n",
-        "fn late(a: f64) -> f64 {\n",
-        "    inject scheduler\n",
-        "    when modified([]) { return a }\n",
-        "    start { schedule({ scheduler }, 1s) }\n",
-        "}\n",
-        "fn typed(a: f64) -> f64 {\n",
-        "    inject scheduler\n",
-        "    start { schedule<duration>(scheduler, 1s) }\n",
-        "    when modified([]) { return a }\n",
-        "}\n",
-        // What a function given the scheduler does is not followed: the
-        // wake is `schedule`, written in `start`.
         "fn helped(a: f64) -> f64 {\n",
         "    inject scheduler\n",
+        "    when modified([]) { return a }\n",
         "    start { armed(scheduler) }\n",
-        "    when modified([]) { return a }\n",
-        "}\n",
-        // A local of another block that has the alias's name is another
-        // binding, and no scheduler.
-        "fn reused(a: f64) -> f64 {\n",
-        "    inject scheduler\n",
-        "    start {\n",
-        "        if true { let timer = scheduler }\n",
-        "        if true {\n",
-        "            let timer = 1s\n",
-        "            schedule(timer, 1s)\n",
-        "        }\n",
-        "    }\n",
-        "    when modified([]) { return a }\n",
         "}\n",
         // Nothing injected that wakes it.
         "fn dormant(a: f64) -> f64 {\n",
@@ -414,8 +388,8 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    inject scheduler\n",
         "    when modified([]) { return a }\n",
         "}\n",
-        // A `start` that schedules nothing, and a wake asked for only
-        // in the handler it would wake.
+        // A `start` that does not use it: the scheduler is used only in
+        // the handler it would wake.
         "fn idle(a: f64) -> f64 {\n",
         "    inject scheduler, logger\n",
         "    start { log_info(logger, \"up\") }\n",
@@ -424,53 +398,28 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "        return a\n",
         "    }\n",
         "}\n",
-        // A wake on what is no capability of the node.
-        "fn misled(a: f64, const other: duration = 1s) -> f64 {\n",
-        "    inject alarm\n",
-        "    start { schedule(other, 1s) }\n",
-        "    when modified([]) { return a }\n",
+        // Dormant by design: the chapter's `null_sink`.
+        "@suppress_warning(\"node.no_activation\")\n",
+        "fn null_sink(a: f64) {\n",
+        "    when modified([]) { }\n",
+        "}\n",
+        // Another warning's name acknowledges nothing of this one.
+        "@suppress_warning(\"statement.no_effect\")\n",
+        "fn other(a: f64) {\n",
+        "    when modified([]) { }\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:40:10 phase/modified.no_driver TIME-3",
-            "m.hgl:51:10 phase/modified.no_driver TIME-3",
-            "m.hgl:54:10 phase/modified.no_driver TIME-3",
-            "m.hgl:58:10 phase/modified.no_driver TIME-3",
-            "m.hgl:63:10 phase/modified.no_driver TIME-3",
-            "m.hgl:71:10 phase/modified.no_driver TIME-3",
+            "m.hgl:29:10 warning/node.no_activation TIME-3",
+            "m.hgl:33:10 warning/node.no_activation TIME-3",
+            "m.hgl:38:10 warning/node.no_activation TIME-3",
+            "m.hgl:49:10 warning/node.no_activation TIME-3",
         ]
     );
-    // The operation is core's. A `schedule` a module declares for
-    // itself is that module's function, and no wake.
-    let own = module(concat!(
-        "const fn schedule(timer: i64, delay: duration) { }\n",
-        "fn fooled(a: f64) -> f64 {\n",
-        "    inject scheduler\n",
-        "    start { schedule(scheduler, 1s) }\n",
-        "    when modified([]) { return a }\n",
-        "}\n",
-    ));
-    assert_eq!(
-        own.summary(),
-        ["m.hgl:6:10 phase/modified.no_driver TIME-3"]
-    );
-    // Nor is a local that holds a function and has the name.
-    let local = module(concat!(
-        "fn fooled(a: f64) -> f64 {\n",
-        "    inject scheduler\n",
-        "    start {\n",
-        "        let schedule = fn(timer: i64, delay: duration) { }\n",
-        "        schedule(scheduler, 1s)\n",
-        "    }\n",
-        "    when modified([]) { return a }\n",
-        "}\n",
-    ));
-    assert_eq!(
-        local.summary(),
-        ["m.hgl:8:10 phase/modified.no_driver TIME-3"]
-    );
+    // Each is accepted: a warning rejects nothing.
+    assert!(!checked.rejected);
 }
 
 /// TIME-8: "A capability is used within the node that injects it and is

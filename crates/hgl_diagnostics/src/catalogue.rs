@@ -74,7 +74,6 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "state.input_read"),
     (Category::Phase, "out.lifecycle"),
     (Category::Phase, "payload.unguarded"),
-    (Category::Phase, "modified.no_driver"),
     (Category::Phase, "endpoint.argument"),
     (Category::Phase, "connection.as_constant"),
     (Category::Type, "generic.invalid_application"),
@@ -161,6 +160,16 @@ pub fn contains(category: Category, code: &str) -> bool {
     SOURCE_CODES
         .iter()
         .any(|&(listed_category, listed_code)| listed_category == category && listed_code == code)
+}
+
+/// Every warning of the catalogue, in the specification's order. A
+/// warning has a code and no category, and does not reject the source
+/// (ERR-1); no `expect-error` annotation names one (ERR-10).
+pub const WARNING_CODES: &[&str] = &["node.no_activation", "statement.no_effect"];
+
+/// True when the catalogue lists `code` as a warning.
+pub fn is_warning(code: &str) -> bool {
+    WARNING_CODES.contains(&code)
 }
 
 /// The category the catalogue lists `code` under, or `None` when it

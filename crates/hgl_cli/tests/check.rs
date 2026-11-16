@@ -173,6 +173,37 @@ fn a_rejected_program_reports_each_error_and_exits_one() {
     assert!(stderr.contains(&format!("{second}:3:16")), "{stderr}");
 }
 
+/// ERR-1: "A warning does not reject valid source." A program with a
+/// warning and no error exits with status 0; the warning is printed by
+/// its code, which has no category, and counted after the errors.
+#[test]
+fn a_warning_is_reported_and_does_not_reject() {
+    let root = scratch("warned");
+    let file = write(
+        &root,
+        "a.hgl",
+        "module m\nfn dormant(a: f64) -> f64 {\n    when modified([]) { return a }\n}\n",
+    );
+    let output = hgl(&["check", &argument(&root)]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "checked 1 file in 1 module: no errors, 1 warning\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; sources, tests and eval are not yet\n",
+        )
+    );
+    let stderr = text(&output.stderr);
+    // TIME-3, at the selector.
+    assert!(
+        stderr.contains("warning[node.no_activation]: `modified([])` subscribes to no input"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&format!("{file}:3:10")), "{stderr}");
+    assert!(stderr.contains("rule TIME-3"), "{stderr}");
+    assert!(!stderr.contains("error["), "{stderr}");
+}
+
 /// UNIT-11: a name nothing in the program binds is left for the prelude
 /// and listed, not reported.
 #[test]
