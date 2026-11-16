@@ -148,7 +148,12 @@ fn a_hook_rejects_what_its_phase_has_not() {
         "        let none = last_modified([])\n",
         "        return other\n",
         "    }\n",
-        "    when { return doubled(value) }\n",
+        // A `yield` in an anonymous function is that function's: the
+        // node around it is no source, and is read all the same.
+        "    when {\n",
+        "        let helper = fn() { yield 0s: 1 }\n",
+        "        return doubled(value)\n",
+        "    }\n",
         "    stop {\n",
         "        out = 2\n",
         "        invalidate(out)\n",
@@ -167,9 +172,9 @@ fn a_hook_rejects_what_its_phase_has_not() {
             "m.hgl:12:32 phase/endpoint.argument TIME-9",
             "m.hgl:13:34 phase/endpoint.argument TIME-9",
             "m.hgl:14:16 type/type.mismatch EXPR-5",
-            "m.hgl:16:19 function-kind/call.role FN-3",
-            "m.hgl:18:9 phase/out.lifecycle TIME-7",
-            "m.hgl:19:9 phase/out.lifecycle TIME-7",
+            "m.hgl:18:16 function-kind/call.role FN-3",
+            "m.hgl:21:9 phase/out.lifecycle TIME-7",
+            "m.hgl:22:9 phase/out.lifecycle TIME-7",
         ]
     );
 }

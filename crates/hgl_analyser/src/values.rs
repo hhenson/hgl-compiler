@@ -106,10 +106,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Node))
-                    && !declaration
-                        .syntax
-                        .descendants()
-                        .any(|node| node.kind() == SyntaxKind::YieldStmt) =>
+                    && !crate::phases::is_source(declaration) =>
                 {
                     Typer::new(
                         program,

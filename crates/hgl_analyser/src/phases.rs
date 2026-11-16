@@ -79,6 +79,15 @@ fn own_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
     found
 }
 
+/// True for a source: a temporal function whose own body has a `yield`
+/// (SOURCE-1). A `yield` in an anonymous function inside it is that
+/// function's.
+pub(crate) fn is_source(declaration: &Declaration) -> bool {
+    own_nodes(&declaration.syntax)
+        .iter()
+        .any(|node| node.kind() == SyntaxKind::YieldStmt)
+}
+
 /// True for a construct only a node's body holds, one of its
 /// declarations or one of its hooks. `yield` is a source's, whose
 /// contract is proposed and is not checked here.
@@ -167,11 +176,10 @@ fn node_body(
 ) {
     // A source is a node of another shape, with statements and `yield`
     // (SOURCE-1), whose contract is proposed: it is not checked here.
-    let own = own_nodes(&declaration.syntax);
-    let source = own.iter().any(|node| node.kind() == SyntaxKind::YieldStmt);
-    if source {
+    if is_source(declaration) {
         return;
     }
+    let own = own_nodes(&declaration.syntax);
     let body = child(&declaration.syntax, SyntaxKind::Block);
     // TIME-3: "A `when` nested in another block is rejected." TIME-5
     // has the declarations and the lifecycle hooks at the same level:
