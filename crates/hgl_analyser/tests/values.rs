@@ -2958,6 +2958,24 @@ fn a_nullable_is_no_payload_without_a_null_test() {
         "    if value == null { }\n",
         "    return value\n",
         "}\n",
+        // A loop's body may run no times, and one case of a `switch` is
+        // not the others: what is proved inside is proved of nothing
+        // after.
+        "const fn looped(xs: list<i64>, value: i64?) -> i64 {\n",
+        "    for x in xs {\n",
+        "        if value == null { return 0 }\n",
+        "    }\n",
+        "    return value\n",
+        "}\n",
+        "const fn switched(kind: i64, value: i64?) -> i64 {\n",
+        "    switch kind {\n",
+        "        case 1:\n",
+        "            if value == null { return 0 }\n",
+        "        case 2:\n",
+        "            return value\n",
+        "    }\n",
+        "    return value\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -2969,6 +2987,9 @@ fn a_nullable_is_no_payload_without_a_null_test() {
             "m.hgl:9:25 type/nullable.required_presence ERR-12",
             "m.hgl:10:48 type/nullable.required_presence ERR-12",
             "m.hgl:12:12 type/nullable.required_presence ERR-12",
+            "m.hgl:18:12 type/nullable.required_presence ERR-12",
+            "m.hgl:25:20 type/nullable.required_presence ERR-12",
+            "m.hgl:27:12 type/nullable.required_presence ERR-12",
         ]
     );
     assert_eq!(
@@ -3371,8 +3392,21 @@ fn a_symbol_is_its_call_in_its_place_and_in_its_operands() {
         "    var total = 1.5\n",
         "    total += 1\n",
         "}\n",
+        // An operand that leaves a generic parameter for its place to
+        // say has no place that says: it is reported, as it is where it
+        // is an argument (GEN-8).
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn unresolved() {\n",
+        "    let bad = repeat(1) == repeat(2)\n",
+        "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:15 type/generic.unresolved GEN-8",
+            "m.hgl:13:28 type/generic.unresolved GEN-8",
+        ]
+    );
     let statements = &body(&checked, "uses").statements;
     let value = |index: usize| match &statements[index] {
         Stmt::Declare {
