@@ -39,6 +39,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         natives: false,
         harness: false,
         imports: BTreeSet::new(),
+        expanding: Vec::new(),
         text: String::new(),
     };
     emitter.declarations();
@@ -269,6 +270,10 @@ struct Emitter<'a> {
     /// The other generated modules this one names a function of, by
     /// module path.
     imports: BTreeSet<String>,
+    /// The defaults being written in place of an argument left out,
+    /// each as its module, declaration and parameter: a default is not
+    /// written inside itself.
+    expanding: Vec<(usize, usize, usize)>,
     /// The Python written so far, less its header.
     text: String,
 }
@@ -374,19 +379,12 @@ impl Emitter<'_> {
             if parameter.pack.is_some() {
                 self.unsupported(parameter.at, "a pack parameter");
             }
-            if parameter.has_default {
-                // A call that leaves the argument out is written with
-                // the default in its place (see `arguments`), so the
-                // function is always given it.
-                parameters.push(python);
-            } else if matches!(parameter.ty, Type::Nullable(_)) {
-                // UNIT-8: "A parameter whose type is written `T?` needs
-                // no default to be omitted: it is taken to have a
-                // default of `null`".
-                parameters.push(format!("{python}=None"));
-            } else {
-                parameters.push(python);
-            }
+            // A parameter that may be left out, one with a default or
+            // one written `T?` (UNIT-8), is still always given: a call
+            // that leaves it out is written with the default, or
+            // `None`, in its place (see `arguments`). Python then has
+            // no default to order or to evaluate.
+            parameters.push(python);
         }
         self.line(0, "");
         self.line(0, "");
@@ -1089,12 +1087,28 @@ impl Emitter<'_> {
             let given = arguments
                 .iter()
                 .any(|argument| argument.parameter == Some(index));
-            if given {
+            if given || parameter.pack.is_some() {
                 continue;
             }
             if let Some(Some(default)) = defaults.get(index) {
+                // A default that calls its own function with that same
+                // argument left out would be written inside itself
+                // without end.
+                let key = (callee.0, callee.1, index);
+                if self.expanding.contains(&key) {
+                    self.unsupported(default.at, "a default that leaves itself out");
+                    written.push(format!("{}=None", name(&parameter.name)));
+                    continue;
+                }
+                self.expanding.push(key);
                 let value = self.expression(&cold, default);
+                self.expanding.pop();
                 written.push(format!("{}={value}", name(&parameter.name)));
+            } else if matches!(parameter.ty, Type::Nullable(_)) {
+                // UNIT-8: "A parameter whose type is written `T?` needs
+                // no default to be omitted: it is taken to have a
+                // default of `null`".
+                written.push(format!("{}=None", name(&parameter.name)));
             }
         }
         written.join(", ")

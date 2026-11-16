@@ -1261,8 +1261,8 @@ Python name does: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 | A graph | `@_hg.graph` |
 | A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
-| A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
-| A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`) |
+| A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
+| A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`). Python is given no default of its own, so it has none to put in order or to evaluate where the function is defined. A default that leaves itself out is reported |
 | A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl.demo.util as _hgl_demo_util`: two modules may each have a `pick` |
 | `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |

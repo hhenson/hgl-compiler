@@ -408,7 +408,7 @@ fn names_configuration_and_omitted_arguments_are_kept() {
     for expected in [
         "import _hgl.demo.left as _hgl_demo_left\nimport _hgl.demo.right as _hgl_demo_right\n",
         concat!(
-            "def chosen(fallback=None):\n",
+            "def chosen(fallback):\n",
             "    if (fallback is None):\n",
             "        return _hgl_demo_left.pick()\n",
             "    return _core.add__i64_i64(lhs=_hgl_demo_right.pick(), rhs=pick())\n",
@@ -418,7 +418,7 @@ fn names_configuration_and_omitted_arguments_are_kept() {
             "def _start_kept(first: int, _state: _hg.STATE = None):\n",
             "    _state.last = first\n",
         ),
-        "    return _core.add__i64_i64(lhs=before, rhs=chosen())\n",
+        "    return _core.add__i64_i64(lhs=before, rhs=chosen(fallback=None))\n",
     ] {
         assert!(
             python.contains(expected),
@@ -534,6 +534,75 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
+
+/// A default written in one module and left out by a call in another,
+/// whose caller has a parameter named as a function the default calls;
+/// and a parameter written `T?` before one with a default.
+const DEFAULT_MODULES: [(&str, &str); 2] = [
+    (
+        "lib.hgl",
+        concat!(
+            "module demo.lib\n",
+            "const fn base() -> i64 => 2\n",
+            "export const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
+            "export const fn pick(first: i64?, second: i64 = 1) -> i64 => second\n",
+        ),
+    ),
+    (
+        "caller.hgl",
+        concat!(
+            "module demo.caller\n",
+            "use demo.lib::{scale, pick}\n",
+            "const fn caller(base: i64) -> i64 => scale(3) + base\n",
+            "test callers {\n",
+            "    assert caller(10) == 16\n",
+            "    assert pick() == 1\n",
+            "    assert pick(7, 5) == 5\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// A default means what it means where it is declared (UNIT-7): written
+/// in a caller of another module, a function it calls is named through
+/// its own module, so a caller's `base` is not taken for it. Within one
+/// module no binding takes a name already in scope (UNIT-12). A
+/// parameter written `T?` that is left out is given `None` at the call,
+/// so Python has no default to put in order.
+#[test]
+fn a_default_keeps_its_meaning_in_another_module() {
+    let emitted = emit(&DEFAULT_MODULES);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/demo/caller/__init__.py");
+    for expected in [
+        "def caller(base):\n",
+        "_hgl_demo_lib.scale(value=3, factor=_hgl_demo_lib.base())",
+        "_hgl_demo_lib.pick(first=None, second=1)",
+        "_hgl_demo_lib.pick(first=7, second=5)",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    let library = emitted.text("_hgl/demo/lib/__init__.py");
+    assert!(library.contains("def pick(first, second):\n"));
+}
+
+/// A default that calls its own function with that argument left out
+/// would be written inside itself without end: it is reported.
+#[test]
+fn a_default_is_not_written_inside_itself() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn again(value: i64 = if true { 1 } else { again() }) -> i64 => value\n",
+            "const fn uses() -> i64 => again()\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:2:29 target.unsupported"]);
 }
 
 /// Names that Python, hgraph or the target would take: each is given a
@@ -763,6 +832,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
+    files.extend(DEFAULT_MODULES);
     let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
     for file in &emitted.files {
@@ -790,6 +860,7 @@ fn the_generated_tests_pass_on_hgraph() {
             "_hgl.demo.configured",
             "_hgl.demo.names",
             "_hgl.demo.defaults",
+            "_hgl.demo.caller",
         ])
         .output()
         .expect("the interpreter runs");
@@ -801,7 +872,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        21,
+        22,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
