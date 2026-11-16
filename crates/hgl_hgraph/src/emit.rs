@@ -19,8 +19,8 @@ use hgl_analyser::hir::{
     Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, GenericKind,
-    LocalKind, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature, Type,
+    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
+    Parameter, Phase, Program, Role, Scalar, Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -1380,38 +1380,17 @@ impl Emitter<'_> {
         generics: &[GenericArgument],
         at: Location,
     ) -> Vec<String> {
-        let program = self.program;
         let mut written = Vec::new();
         for (parameter, argument) in signature.generics.iter().zip(generics) {
             let GenericArgument::Constant(constant) = argument else {
                 continue;
             };
-            let value = match (&parameter.kind, &constant.value) {
-                // The parameter's type says the value is of an enum,
-                // and the constant names one of its members after its
-                // last `.`, however the enum itself is written there:
-                // `.fail`, `ZeroPolicy.fail`, `core::ZeroPolicy.fail`.
-                (
-                    GenericKind::Value(Type::Named {
-                        module,
-                        declaration,
-                        kind: NamedKind::Enum,
-                        ..
-                    }),
-                    _,
-                ) => {
-                    let members = match program.modules[*module].details.get(*declaration) {
-                        Some(Detail::Enum(of)) => of.members.as_slice(),
-                        _ => &[],
-                    };
-                    constant
-                        .text
-                        .rsplit_once('.')
-                        .map(|(_, member)| member.trim())
-                        .filter(|member| members.iter().any(|known| known.name == *member))
-                        .map(string)
-                }
-                (_, ConstantValue::Int(number)) => Some(number.to_string()),
+            // The analyser says what the constant comes to: a member
+            // of an enum is one however it was written (TYPE-7), and
+            // none of its spelling is read here.
+            let value = match &constant.value {
+                ConstantValue::Member(member) => Some(string(member)),
+                ConstantValue::Int(number) => Some(number.to_string()),
                 _ => None,
             };
             match value {
