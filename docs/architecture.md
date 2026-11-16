@@ -235,7 +235,7 @@ It is built in passes:
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
 | Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6 | in part: a default that names something is not checked |
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
-| Phases | Composition and runtime bodies, temporal shapes, lifting | | planned |
+| Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | in part: each temporal body is classified a graph or a node. What each admits is planned: see "Temporal bodies" below |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
 | Tests and eval | Test blocks, `assert`, eval targets and traces | | planned |
 
@@ -439,6 +439,27 @@ knows what the name is bound to, and confirms or corrects the guess:
 
 Nothing is selected by the option yet: comparing its value at a call is
 for the pass that selects candidates.
+
+### Temporal bodies
+
+The body of a temporal function describes one of two things (FN-2), and
+`Module::phases` records which for each `fn` and each `impl fn`:
+
+| The body holds | It describes | The function is |
+| --- | --- | --- |
+| `state`, `cache`, `inject`, `start`, `when`, `stop` or `yield`, anywhere in it | Runtime | A node |
+| None of those | Composition | A graph |
+
+"Classification precedes phase checking, even if the trigger occurs in
+an invalid nested position", so the pass looks only at which constructs
+a body holds, and reports nothing. A conditional or a loop does not
+make a body runtime (FN-3).
+
+Nothing more is read of a temporal body yet. The order planned, and
+what the chapters leave open for it, is in hhenson/hgl_spec#53: the
+structure of a node's body; hooks read as value code, with the
+operations on an endpoint; graphs, with connections, lifting and an
+operator's temporal candidates; conditionals and loops in composition.
 
 ### Value expressions
 
