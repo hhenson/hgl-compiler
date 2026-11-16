@@ -3823,34 +3823,7 @@ impl<'a> Typer<'a> {
             }
             return (ExprKind::Unread, ty);
         }
-        // A constant is checked here. A member whose number is not
-        // known says nothing sure of which numbers the enum has.
-        let members = match self.program.modules[module].details.get(declaration) {
-            Some(Detail::Enum(read)) => Some(&read.members),
-            _ => None,
-        };
-        // The member a constant names, `Ok`, or what the enum has none
-        // of, `Err`; `None` for a value of the run.
-        let named: Option<Result<usize, String>> = match (constant_of(&argument), members) {
-            (Some(OptionValue::Literal(Value::Int(given))), Some(members))
-                if members.iter().all(|member| member.value.is_some()) =>
-            {
-                Some(
-                    members
-                        .iter()
-                        .position(|member| member.value == Some(given))
-                        .ok_or_else(|| format!("no member numbered {given}")),
-                )
-            }
-            (Some(OptionValue::Literal(Value::Str(given))), Some(members)) => Some(
-                members
-                    .iter()
-                    .position(|member| member.name == given)
-                    .ok_or_else(|| format!("no member named `{given}`")),
-            ),
-            _ => None,
-        };
-        let kind = match named {
+        let kind = match self.member_constructed(module, declaration, &argument) {
             // A constant that names a member is that member: `Side(0)`
             // is `Side.buy`, wherever a member is looked for, a `switch`
             // label and a `const` argument among them.
@@ -5685,6 +5658,68 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// `Side(1)`, as it is written (TYPE-7: "A call of the enum's name
+    /// constructs a member. It takes one argument, by position"): the
+    /// enum constructed, its module and declaration, and the value it
+    /// is given.
+    fn constructs_enum(&self, node: &SyntaxNode) -> Option<(usize, usize, SyntaxNode)> {
+        if node.kind() != SyntaxKind::CallExpr {
+            return None;
+        }
+        let callee = node
+            .children()
+            .next()
+            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+        let list = child(node, SyntaxKind::ArgList)?;
+        let name = name_token(&callee)?;
+        let (module, declarations) = self.declarations(&name)?;
+        let declaration = declarations.iter().copied().find(|&declaration| {
+            self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
+        })?;
+        let mut arguments = arguments_of(&list).into_iter();
+        let (label, argument) = arguments.next()?;
+        (label.is_none() && arguments.next().is_none()).then_some((module, declaration, argument))
+    }
+
+    /// The member an enum's construction from `argument` names, where
+    /// that is a constant: its place among the members, `Ok`, or what
+    /// the enum has none of, `Err`. `None` for a value that is no
+    /// constant read here. TYPE-7: "`Side(1)` is the member whose
+    /// number is 1, and `Side("buy")` the member of that exact name."
+    ///
+    /// A member whose number is not known says nothing sure of which
+    /// numbers the enum has, and a number is then not looked for.
+    fn member_constructed(
+        &self,
+        module: usize,
+        declaration: usize,
+        argument: &SyntaxNode,
+    ) -> Option<Result<usize, String>> {
+        let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration) else {
+            return None;
+        };
+        let members = &read.members;
+        match constant_of(argument)? {
+            OptionValue::Literal(Value::Int(given))
+                if members.iter().all(|member| member.value.is_some()) =>
+            {
+                Some(
+                    members
+                        .iter()
+                        .position(|member| member.value == Some(given))
+                        .ok_or_else(|| format!("no member numbered {given}")),
+                )
+            }
+            OptionValue::Literal(Value::Str(given)) => Some(
+                members
+                    .iter()
+                    .position(|member| member.name == given)
+                    .ok_or_else(|| format!("no member named `{given}`")),
+            ),
+            _ => None,
+        }
+    }
+
     /// The constant an option is given, for a candidate's condition to
     /// compare (GEN-6). An enum member is one however it is written
     /// (TYPE-7): `.nan`, `Zero.nan`, `alias::Zero.nan`.
@@ -5704,6 +5739,20 @@ impl<'a> Typer<'a> {
             return tokens(node)
                 .last()
                 .map(|name| OptionValue::Member(name.text().to_string()));
+        }
+        // "an enum member however it is written (TYPE-7)": `Zero(1)`
+        // and `Zero("nan")` are the member they construct. One from a
+        // value that is no constant here, or that names no member, is
+        // not known.
+        if let Some((module, declaration, argument)) = self.constructs_enum(node) {
+            let member = self
+                .member_constructed(module, declaration, &argument)?
+                .ok()?;
+            let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration)
+            else {
+                return None;
+            };
+            return Some(OptionValue::Member(read.members[member].name.clone()));
         }
         constant_of(node)
     }
@@ -5758,6 +5807,11 @@ impl<'a> Typer<'a> {
                 .children()
                 .next()
                 .is_some_and(|base| self.names_enum(&base)),
+            // "an enum member however it is written (TYPE-7)": one
+            // constructed from a compile-time constant, `Side(1)`.
+            SyntaxKind::CallExpr => self
+                .constructs_enum(node)
+                .is_some_and(|(_, _, argument)| self.is_compile_time(&argument)),
             SyntaxKind::NameExpr => name_token(node).is_some_and(|name| {
                 matches!(
                     self.bindings.get(&(self.file, name.span().start)),
