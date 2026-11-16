@@ -64,8 +64,8 @@ fn an_accepted_program_is_written() {
     );
     let module = fs::read_to_string(
         out.join("_hgl")
-            .join("demo")
-            .join("pass_")
+            .join("_m_demo")
+            .join("_m_pass")
             .join("__init__.py"),
     )
     .unwrap();

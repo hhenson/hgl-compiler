@@ -64,19 +64,25 @@ const HARNESS: &str = include_str!("../support/harness.py");
 /// the place of nothing Python or hgraph imports.
 pub const ROOT: &str = "_hgl";
 
-/// The Python name of a module: its path under [`ROOT`], each part as
-/// a Python name (see the crate's naming). `examples.tests` is
-/// `_hgl.examples.tests`, and `demo.pass` is `_hgl.demo.pass_`.
+/// The Python name of a module: its path under [`ROOT`], each part
+/// with `_m_` before it. `examples.tests` is
+/// `_hgl._m_examples._m_tests`.
+///
+/// A module's package holds its declarations and the packages of the
+/// modules under it, side by side as attributes. The `_m_` keeps the
+/// two apart: no declaration's Python name starts with `_`, and no
+/// name the target makes up starts with `_m_`. So `module demo` may
+/// declare a `util` beside `module demo.util`.
 pub fn python_module(module: &str) -> String {
-    let parts: Vec<String> = module.split('.').map(emit::name).collect();
+    let parts: Vec<String> = module.split('.').map(|part| format!("_m_{part}")).collect();
     format!("{ROOT}.{}", parts.join("."))
 }
 
 /// The file a module is written to: `examples.tests` to
-/// `_hgl/examples/tests/__init__.py`. Each module is a Python package,
-/// so that one module's path may begin another's: `demo` and
-/// `demo.util` are `_hgl/demo/__init__.py` and
-/// `_hgl/demo/util/__init__.py`.
+/// `_hgl/_m_examples/_m_tests/__init__.py`. Each module is a Python
+/// package, so that one module's path may begin another's: `demo` and
+/// `demo.util` are `_hgl/_m_demo/__init__.py` and
+/// `_hgl/_m_demo/_m_util/__init__.py`.
 pub fn file_path(module: &str) -> String {
     format!("{}/__init__.py", python_module(module).replace('.', "/"))
 }
