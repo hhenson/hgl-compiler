@@ -382,6 +382,190 @@ fn propagation_needs_a_result_and_a_place_to_leave_by() {
     assert_eq!(locals(&checked, "doubled"), ["value: i64", "price: i64"]);
 }
 
+/// The chapter's `examples.capture`, less its module line.
+const CAPTURE: &str = concat!(
+    "const fn checked(value: i64) -> result<i64, error> {\n",
+    "    if value < 0 { return err(error(message: \"negative price\")) }\n",
+    "    return ok(value)\n",
+    "}\n",
+    "fn required(value: i64) -> i64 {\n",
+    "    when { return checked(value)? }\n",
+    "}\n",
+    "fn forward(value: i64) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn failed(failure: error, step: i64) -> bool {\n",
+    "    when modified(step) && valid(step) { return modified(failure) }\n",
+    "}\n",
+    "fn held(failure: error, step: i64) -> bool {\n",
+    "    when modified(step) && valid(step) { return valid(failure) }\n",
+    "}\n",
+    "fn captured_value(value: i64) -> i64 {\n",
+    "    let seen = capture(required, value)\n",
+    "    forward(seen.value)\n",
+    "}\n",
+    "fn captured_events(value: i64, step: i64) -> bool {\n",
+    "    let seen = capture(required, value)\n",
+    "    failed(seen.error, step)\n",
+    "}\n",
+    "fn captured_presence(value: i64, step: i64) -> bool {\n",
+    "    let seen = capture(required, value)\n",
+    "    held(seen.error, step)\n",
+    "}\n",
+);
+
+/// ERR-7: "In composition, `capture(callable, args...)` creates a
+/// temporal error boundary. It names a callable and gives it the
+/// arguments its own call takes, positional or named, read, checked,
+/// and selected as that call's are (EXPR-2, FN-4, GEN-5) ... What it
+/// gives is bound with `let` and read through two connections: `.value`
+/// retains the normal output type; outputless calls expose only
+/// `.error`, a connection of `error`".
+#[test]
+fn a_capture_is_read_through_two_connections() {
+    let checked = module(CAPTURE);
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(checked.prelude_names("m"), NONE);
+    // `let seen = capture(required, value)`: the call it covers is
+    // `required(value)`, the name left out of its arguments.
+    let captured = body(&checked, "captured_value");
+    let Some(Stmt::Declare {
+        value: Some(seen), ..
+    }) = captured.statements.first()
+    else {
+        panic!("`captured_value` begins with a `let`");
+    };
+    let ExprKind::Capture(call) = &seen.kind else {
+        panic!("the `let` holds a capture, and this is {:?}", seen.kind);
+    };
+    let ExprKind::Call { arguments, .. } = &call.kind else {
+        panic!("a capture covers a call");
+    };
+    assert_eq!(arguments.len(), 1, "`required` is given `value` alone");
+    assert_eq!(call.ty.to_string(), "i64");
+    // `forward(seen.value)`: the call's own output.
+    let Some(Stmt::Return {
+        value: Some(result),
+        ..
+    }) = captured.statements.last()
+    else {
+        panic!("`captured_value` ends in its result");
+    };
+    let ExprKind::Call { arguments, .. } = &result.kind else {
+        panic!("the result is a call of `forward`");
+    };
+    assert!(matches!(
+        arguments[0].value.kind,
+        ExprKind::Captured { error: false, .. }
+    ));
+    assert_eq!(arguments[0].value.ty.to_string(), "i64");
+}
+
+/// A capture noted while an argument is tried against a candidate goes
+/// when the trial is taken back: the local it was bound to is gone, and
+/// its number is the next local's. ERR-7: `.value` is the capture's;
+/// EXPR-7: `plain.count` is the struct's field.
+#[test]
+fn a_capture_in_a_trial_reading_marks_no_later_local() {
+    let checked = module(concat!(
+        "fn required(value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "struct Counted { count: i64 }\n",
+        "const fn choose<A, B>(a: A, b: B) -> A => a\n",
+        "fn composed(value: i64) -> i64 {\n",
+        "    choose(\n",
+        "        {\n",
+        "            let plain = Counted(count: 1)\n",
+        "            plain.count\n",
+        "        },\n",
+        "        {\n",
+        "            let seen = capture(required, value)\n",
+        "            seen.value\n",
+        "        },\n",
+        "    )\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}
+
+/// ERR-7: "In a value function or a hook it rejects (`capture.phase`)
+/// ... outputless calls expose only `.error`, a connection of `error`,
+/// and `.value` rejects there (`capture.output_field`). Capture of
+/// wiring-time scalar work rejects (`capture.phase`)."
+#[test]
+fn a_capture_covers_a_temporal_call_in_a_graph() {
+    let checked = module(concat!(
+        "const fn checked(value: i64) -> result<i64, error> => ok(value)\n",
+        "fn required(value: i64) -> i64 {\n",
+        "    when { return checked(value)? }\n",
+        "}\n",
+        "fn sink(value: i64) {\n",
+        "    when { }\n",
+        "}\n",
+        "fn failures(failure: error) -> bool {\n",
+        "    when { return true }\n",
+        "}\n",
+        // An outputless call has an `.error` and no `.value`.
+        "fn outputless(value: i64) -> bool {\n",
+        "    let seen = capture(sink, value)\n",
+        "    let wrong = seen.value\n",
+        "    let odd = seen.banana\n",
+        "    failures(seen.error)\n",
+        "}\n",
+        "fn composed(const fixed: i64, value: i64) -> bool {\n",
+        // A value function given ordinary values is wiring-time work;
+        // given a connection it is lifted, and may be captured.
+        "    let wired = capture(checked, fixed)\n",
+        "    let lifted = capture(checked, value)\n",
+        // The call's own arguments, by name, and checked as its are.
+        "    let named = capture(required, value: value)\n",
+        "    let typed = capture(required, \"text\")\n",
+        // No callable: nothing, an expression, a local, and a struct,
+        // whose name constructs a value.
+        "    let nothing = capture()\n",
+        "    let unnamed = capture(1 + 2, value)\n",
+        "    let local = capture(value, value)\n",
+        "    let built = capture(Kept, value: 1)\n",
+        // The call is held to what it is anywhere in a graph: a `const`
+        // parameter is given no connection (FN-3).
+        "    let limited = capture(bounded, value, value)\n",
+        "    failures(named.error)\n",
+        "}\n",
+        "struct Kept { value: i64 }\n",
+        "fn bounded(const limit: i64, value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        // A value function, and a hook.
+        "const fn valued(value: i64) -> i64 {\n",
+        "    let seen = capture(required, value)\n",
+        "    return 0\n",
+        "}\n",
+        "fn hooked(value: i64) -> i64 {\n",
+        "    when {\n",
+        "        let seen = capture(required, value)\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:22 type/capture.output_field ERR-7",
+            "m.hgl:15:20 name/member.unknown ERR-7",
+            "m.hgl:19:17 phase/capture.phase ERR-7",
+            "m.hgl:22:35 type/type.mismatch EXPR-5",
+            "m.hgl:23:19 type/argument.missing ERR-7",
+            "m.hgl:24:27 phase/capture.phase ERR-7",
+            "m.hgl:25:25 phase/capture.phase ERR-7",
+            "m.hgl:26:25 phase/capture.phase ERR-7",
+            "m.hgl:27:36 phase/connection.as_constant FN-3",
+            "m.hgl:35:16 phase/capture.phase ERR-7",
+            "m.hgl:40:20 phase/capture.phase ERR-7",
+        ]
+    );
+}
+
 /// ERR-13: "`ok`, `err`, `is_ok`, `is_err`, and `capture` are contextual
 /// names (LEX-10): as the callee of a call each is the form this
 /// chapter defines, whatever else is in scope. No declaration, import

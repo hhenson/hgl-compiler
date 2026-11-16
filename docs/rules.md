@@ -320,7 +320,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-5 | transpiler | planned | `?` evaluates once; failure returns or fails the node |
 | ERR-6 | analyser | partial | A list is indexed by an `i64` and a dictionary by its key, for the element or the value. Left: `at`, `get` and their fallbacks (`lookup.default_type`, `nullable.required_presence`) |
 | ERR-6 | transpiler | planned | A strict read fails on absence (`value.missing_key`); `get` fallback |
-| ERR-7 | analyser | planned | `capture` only in composition (`capture.phase`, `capture.output_field`) |
+| ERR-7 | analyser | partial | `capture(callable, args...)` in a graph reads the call it names, from the same arguments less the name, as that call is read; in a value function or a hook, of what names no callable, and of a call that composes nothing it is `capture.phase`. Bound with `let`, `.value` is the call's output and `.error` an `error`, both connections; `.value` of an outputless call is `capture.output_field`. Left: a capture used other than through a `let` and its two connections is not judged |
 | ERR-7 | transpiler | planned | Capture as a temporal error boundary |
 | ERR-8 | transpiler | planned | Capture ends the failed pass without rollback |
 | ERR-9 | analyser | partial | A type that is not known is reported once, and nothing is reported of its uses. Left: required constant failures |
@@ -330,7 +330,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
 | ERR-12 | analyser | partial | In a value function a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns. A nullable where its payload is required, or as an operand no candidate takes, is `nullable.required_presence`. Left: temporal bodies |
 | ERR-13 | parser | done | The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?` |
-| ERR-13 | analyser | partial | `ok`, `err`, `is_ok` and `is_err` as the callee of a call are the forms, looked up nowhere; no declaration, import alias, parameter or local takes one of the five names (`name.duplicate`). Left: `capture` as its form (ERR-7) |
+| ERR-13 | analyser | done | `ok`, `err`, `is_ok`, `is_err` and `capture` as the callee of a call are the forms, looked up nowhere; no declaration, import alias, parameter or local takes one of the five names (`name.duplicate`) |
 
 ## Tests and eval
 
