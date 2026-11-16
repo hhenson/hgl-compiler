@@ -385,6 +385,42 @@ fn a_requirement_is_tested_as_its_call_would_select() {
     );
 }
 
+/// GEN-8: an operator's generic value parameter takes "the default
+/// where none of them says", and so takes part in what a call requests.
+/// GEN-7: a requirement is the call it names as that call asks: one
+/// that gives another output than the call requests is not it.
+#[test]
+fn a_required_call_requests_what_its_defaults_say() {
+    let checked = module(concat!(
+        "operator window<T, const size: i64 = 3>(value: T) -> list<T, size>\n",
+        // The place says five, and so does the requirement.
+        "const fn five<T>(value: T) -> list<T, 5>\n",
+        "    requires window(T) -> list<T, 5> => window(value)\n",
+        // Nothing says the size: the default, three.
+        "const fn three<T>(value: T) requires window(T) -> list<T, 3> {\n",
+        "    let got = window(value)\n",
+        "    let written = window<T, 3>(value)\n",
+        "}\n",
+        // The requirement is of five, and the call asks for three.
+        "const fn other<T>(value: T) requires window(T) -> list<T, 5> {\n",
+        "    let got = window(value)\n",
+        "    let asked: list<T, 5> = window(value)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:10:15 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "three")[1..],
+        ["got: list<T, 3>", "written: list<T, 3>"]
+    );
+    assert_eq!(
+        locals(&checked, "other")[1..],
+        ["got: _", "asked: list<T, 5>"]
+    );
+}
+
 /// GEN-16: "a named operator requirement tests callability with the
 /// supplied types." Core's OPS-9 has its requirements name value
 /// operations, "Addition requires a value `add_(T, T) -> T`", which a
