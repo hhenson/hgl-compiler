@@ -306,6 +306,68 @@ fn a_candidates_requirement_is_tested_with_the_calls_types() {
     );
 }
 
+/// GEN-8: an operator's generic value parameter "takes part in the
+/// output requested ... and the default where none of them says." A
+/// requirement is tested as the call it names would select: with the
+/// operator's default in the output requested, and with what the
+/// operator requires of its result.
+#[test]
+fn a_requirement_is_tested_as_its_call_would_select() {
+    let checked = module(concat!(
+        "operator window<T, const size: i64 = 3>(value: T) -> list<T, size>\n",
+        "impl const fn window(value: f64) -> list<f64, 3> => [value, value, value]\n",
+        "impl const fn window(value: f64) -> list<f64, 5> =>\n",
+        "    [value, value, value, value, value]\n",
+        // With no arrow the default says which list: three.
+        "operator framed<T>(a: T) -> T\n",
+        "impl const fn framed<T>(a: T) -> T requires window(T) => a\n",
+        // The arrow says five.
+        "operator wide<T>(a: T) -> T\n",
+        "impl const fn wide<T>(a: T) -> T requires window(T) -> list<T, 5> => a\n",
+        // No candidate gives four.
+        "operator odd<T>(a: T) -> T\n",
+        "impl const fn odd<T>(a: T) -> T requires window(T) -> list<T, 4> => a\n",
+        "const fn uses(x: f64) {\n",
+        "    let three = framed(x)\n",
+        "    let five = wide(x)\n",
+        "    let four = odd(x)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:15:16 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[1..3], ["three: f64", "five: f64"]);
+}
+
+/// GEN-5: "A call in a value function or a runtime body selects among
+/// the value candidates. A call in composition selects among all of
+/// them". So what a graph requires may be met by a temporal candidate,
+/// and does not say that a value candidate, which a value candidate's
+/// own body would call (FN-3), exists.
+#[test]
+fn a_graphs_requirement_is_no_value_candidates() {
+    let checked = module(concat!(
+        "operator source<O>() -> O\n",
+        "operator relay<O>() -> O\n",
+        // A value candidate, which needs a value `source`, and a graph
+        // candidate, for which any will do.
+        "impl const fn relay<T>() -> T requires source() -> T => source()\n",
+        "operator wired<O>() -> O\n",
+        "impl fn wired<T>() -> T requires source() -> T => source()\n",
+        "fn graph<T>() -> T requires source() -> T {\n",
+        "    let direct = wired<T>()\n",
+        "    return relay<T>()\n",
+        "}\n",
+        // In a value function the same requirement is a value one.
+        "const fn value<T>() -> T requires source() -> T => relay<T>()\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:12 operator/operator.no_candidate GEN-5"]
+    );
+}
+
 /// GEN-7: a generic body's call of a candidate that requires an
 /// operation of its parameter is admitted where the body's own
 /// requirements state that operation, and rejected where they do not.
