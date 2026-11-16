@@ -1188,6 +1188,9 @@ impl<'a> Typer<'a> {
                     Some(&target),
                 );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
+                // `held += clock` calls the operator as `held + clock`
+                // does.
+                self.capabilities_given(&kind);
                 Expr {
                     kind,
                     ty: result,
@@ -1376,6 +1379,9 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
+        // Every call is read to here, whatever wrote it: a name, a name
+        // with generic arguments, or a symbol.
+        self.capabilities_given(&kind);
         Expr { kind, ty, at }
     }
 
@@ -2935,6 +2941,88 @@ impl<'a> Typer<'a> {
             self.note_wake(&callee, &read.0);
         }
         read
+    }
+
+    /// TIME-8: "giving one to a parameter of its type [is a use]". A
+    /// parameter written as a generic parameter or `any` is of no one
+    /// type: it takes any, and what the function does with its
+    /// argument, keep it in a list say, it would do with the
+    /// capability. Such a parameter takes none (owner's decision of
+    /// 2026-11-16 on hhenson/hgl_spec#73, question 5).
+    ///
+    /// The call is read, so each argument is known for the parameter it
+    /// is given to: of a function, or of the candidate an operator's
+    /// call or a symbol selected. A capability given to a parameter of
+    /// another type written out does not fit it, and is reported as any
+    /// value is (EXPR-5).
+    fn capabilities_given(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            // What a requirement's operator selects is not known here,
+            // and a call that is not read has no parameters to judge.
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        let mut given: Vec<(Location, String, String)> = Vec::new();
+        for argument in arguments {
+            let (Some(parameter), Some(capability)) = (
+                argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index)),
+                self.capability_of(&argument.value),
+            ) else {
+                continue;
+            };
+            // `T?` and `any?` take what `T` and `any` take, or null.
+            let mut written = &parameter.ty;
+            while let Type::Nullable(inner) = written {
+                written = inner;
+            }
+            let open = match written {
+                Type::Parameter { .. } => "a generic parameter",
+                Type::Scalar(Scalar::Any) => "`any`",
+                _ => continue,
+            };
+            given.push((
+                argument.value.at,
+                self.locals[capability].name.clone(),
+                format!("`{}` is written as {open}", parameter.name),
+            ));
+        }
+        for (at, capability, parameter) in given {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{capability}` is a capability, and is given only to a parameter of \
+                         its type: {parameter}"
+                    ),
+                    "TIME-8",
+                )
+                .with_note("a parameter that takes any type takes no capability"),
+            );
+        }
     }
 
     /// Notes a call in `start` that asks for a wake on the node's

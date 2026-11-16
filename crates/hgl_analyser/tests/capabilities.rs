@@ -16,7 +16,8 @@ use common::{Checked, check};
 /// No lines.
 const NONE: [&str; 0] = [];
 
-/// A core with the capability types and one operation on a logger.
+/// A core with the capability types, one operation on a logger, and
+/// the operator `+` stands for.
 /// `log` is native and so private to core (UNIT-3); `log_info` is the
 /// helper other modules call.
 const CORE: &str = concat!(
@@ -37,6 +38,8 @@ const CORE: &str = concat!(
     "export native type Alarm\n",
     "export native type GlobalState\n",
     "native const fn log(logger: Logger, level: LogLevel, message: str)\n",
+    // `+`, as core declares it.
+    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "export const fn log_info(logger: Logger, message: str) {\n",
     "    log(logger, .info, message)\n",
     "}\n",
@@ -281,6 +284,64 @@ fn endpoint_is_the_type_of_a_native_value_functions_parameter() {
             "m.hgl:9:23 type/endpoint.position TYPE-12",
             "m.hgl:10:17 type/endpoint.position TYPE-12",
             "m.hgl:11:24 type/endpoint.position TYPE-12",
+        ]
+    );
+}
+
+/// TIME-8: "Binding one to a `let` and giving one to a parameter of its
+/// type are uses." A parameter written as a generic parameter or `any`
+/// is of no one type, and takes no capability; nor is a generic
+/// argument a capability type (owner's decision of 2026-11-16 on
+/// hhenson/hgl_spec#73, question 5).
+#[test]
+fn a_capability_is_given_only_to_a_parameter_of_its_type() {
+    let checked = module(concat!(
+        "const fn stamped(clock: Clock, value: f64) -> f64 => value\n",
+        "const fn boxed<T>(value: T) -> list<T> => [value]\n",
+        "const fn shown(value: any) -> i64 => 0\n",
+        "operator kept<V>(value: V) -> i64\n",
+        "impl const fn kept<V>(value: V) -> i64 => 0\n",
+        "const fn maybe<T>(value: T?) -> i64 => 0\n",
+        "const fn perhaps(value: any?) -> i64 => 0\n",
+        "impl const fn add_<V>(lhs: V, rhs: V) -> i64 => 0\n",
+        "fn uses(value: f64) -> f64 {\n",
+        "    inject clock\n",
+        "    when {\n",
+        // A parameter of the capability's type.
+        "        let stamp = stamped(clock, value)\n",
+        // A generic parameter, with the argument inferred and written,
+        // through a local the capability is bound to, of an operator's
+        // candidate, and `any`.
+        "        let held = boxed(clock)\n",
+        "        let typed = boxed<Clock>(clock)\n",
+        "        let bound = clock\n",
+        "        let again = boxed(bound)\n",
+        "        let count = kept(clock)\n",
+        "        let text = shown(clock)\n",
+        // With `?`, which takes what the type under it takes.
+        "        let one = maybe(clock)\n",
+        "        let two = perhaps(clock)\n",
+        // A symbol calls the candidate it selects.
+        "        let sum = clock + clock\n",
+        // What is no capability is given to either.
+        "        let fine = boxed(value)\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:26 injectable/capability.as_value TIME-8",
+            "m.hgl:15:27 injectable/capability.as_value TIME-8",
+            "m.hgl:15:34 injectable/capability.as_value TIME-8",
+            "m.hgl:17:27 injectable/capability.as_value TIME-8",
+            "m.hgl:18:26 injectable/capability.as_value TIME-8",
+            "m.hgl:19:26 injectable/capability.as_value TIME-8",
+            "m.hgl:20:25 injectable/capability.as_value TIME-8",
+            "m.hgl:21:27 injectable/capability.as_value TIME-8",
+            "m.hgl:22:19 injectable/capability.as_value TIME-8",
+            "m.hgl:22:27 injectable/capability.as_value TIME-8",
         ]
     );
 }
