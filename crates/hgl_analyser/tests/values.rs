@@ -3224,7 +3224,14 @@ fn an_operators_default_is_part_of_the_output_requested() {
         "struct Round : Shape { radius: f64 }\n",
         "operator same<T, const mode: i64 = 0>(left: T, right: T) -> T\n",
         "impl const fn same(left: Shape, right: Shape) -> Shape => left\n",
+        // A value the call does not say leaves the rest of the output
+        // requested as it is: three rows, of any width.
+        "operator grid<const cols: i64, const rows: i64 = 3>() -> list<list<f64, cols>, rows>\n",
+        "impl const fn grid() -> list<list<f64, 2>, 3> => [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
+        "impl const fn grid() -> list<list<f64, 2>, 5> =>\n",
+        "    [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
         "const fn resolved(shape: Shape, round: Round) {\n",
+        "    let rows = grid()\n",
         "    let whole = choose(1)\n",
         "    let text = choose(\"x\")\n",
         "    let child_first = same(round, shape)\n",
@@ -3235,12 +3242,13 @@ fn an_operators_default_is_part_of_the_output_requested() {
         checked.summary(),
         [
             "m.hgl:14:31 type/type.mismatch EXPR-5",
-            "m.hgl:25:16 type/type.mismatch GEN-13",
+            "m.hgl:30:16 type/type.mismatch GEN-13",
         ]
     );
     assert_eq!(
         locals(&checked, "resolved")[2..],
         [
+            "rows: list<list<f64, 2>, 3>",
             "whole: i64",
             "text: _",
             "child_first: Shape",
