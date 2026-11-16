@@ -8,10 +8,12 @@
 //! hgl tree <file>       tokens --[parse]--> syntax tree, printed as an outline
 //! hgl check <roots>     syntax trees --[analyse]--> program; its errors reported
 //! hgl test <roots>      the program's cases, each checked; the outcome of each
+//! hgl emit <roots>      program --[transpile]--> files for a target, written
 //! ```
 //!
-//! `tokens` and `tree` read one file. `check` and `test` read a program:
-//! every `.hgl` file under the source roots they are given.
+//! `tokens` and `tree` read one file. `check`, `test` and `emit` read a
+//! program: every `.hgl` file under the source roots they are given.
+//! `test --target` also runs the program's tests on that target.
 //!
 //! This file contains no compiler logic. It reads arguments, finds and
 //! reads files, calls the stage crates, and prints. Argument parsing is delegated to the `clap`
@@ -25,7 +27,7 @@
 //! | ------ | ---------------------------------------------------------- |
 //! | 0      | The source was accepted; every selected case passed.       |
 //! | 1      | The source was rejected, or a case failed; the reasons are on standard error. |
-//! | 2      | The command could not run: bad arguments, unreadable file, a selected case that nothing can run yet. |
+//! | 2      | The command could not run: bad arguments, unreadable file, a selected test that was not run. |
 //!
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
@@ -38,10 +40,11 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
+use hgl_hgraph::Ran;
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
-use hgl_runner::{Case, CaseKind, Outcome, Report, Selection};
+use hgl_runner::{Case, CaseKind, Executor, Outcome, Report, Selection};
 use hgl_source::{FileId, SourceMap};
 use walkdir::WalkDir;
 
@@ -143,6 +146,23 @@ struct TestArgs {
     #[arg(long)]
     rejections_only: bool,
 
+    /// The target to run the tests on. With none, the tests are listed
+    /// and not run.
+    #[arg(long, value_enum)]
+    target: Option<Target>,
+
+    /// For `--target hgraph`: the Python interpreter to run the
+    /// program with, one that has hgraph installed. `python3` when not
+    /// given, or `python` on Windows.
+    #[arg(long, value_name = "PATH", requires = "target")]
+    python: Option<PathBuf>,
+
+    /// Keep what the target wrote for the run in this directory. With
+    /// none, it is written to a temporary directory and removed after
+    /// the run.
+    #[arg(long, value_name = "DIR", requires = "target")]
+    keep: Option<PathBuf>,
+
     #[command(flatten)]
     limits: LimitArgs,
 }
@@ -167,7 +187,8 @@ struct EmitArgs {
     limits: LimitArgs,
 }
 
-/// What `hgl emit` writes for. Each is a transpiler crate of its own.
+/// What `hgl emit` writes for and `hgl test` runs on. Each is a
+/// transpiler crate of its own.
 #[derive(Clone, Copy, ValueEnum)]
 enum Target {
     /// Python wiring for hgraph.
@@ -619,27 +640,16 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
     let (name, files) = match arguments.target {
         Target::Hgraph => (
             hgl_hgraph::TARGET,
-            hgl_hgraph::transpile(&program, &mut diagnostics),
+            hgl_hgraph::transpile(&program, &mut diagnostics).files,
         ),
     };
     if diagnostics.has_errors() {
         println!("nothing written: the {name} target does not write all of the program yet");
         return report(&sources, diagnostics);
     }
-    for file in &files {
-        // A written path has `/` between its parts on every system.
-        let path = file
-            .path
-            .split('/')
-            .fold(arguments.out.clone(), |path, part| path.join(part));
-        let written = path
-            .parent()
-            .map_or(Ok(()), fs::create_dir_all)
-            .and_then(|()| fs::write(&path, &file.text));
-        if let Err(error) = written {
-            eprintln!("hgl: cannot write {}: {error}", path.display());
-            return ExitCode::from(EXIT_FAILED);
-        }
+    if let Err(error) = hgl_hgraph::write(&files, &arguments.out) {
+        eprintln!("hgl: cannot write to {}: {error}", arguments.out.display());
+        return ExitCode::from(EXIT_FAILED);
     }
     println!(
         "wrote {} for {name} to {}",
@@ -656,14 +666,24 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// passed   rejection   cases/rolling.hgl:4 fn invalid
 /// FAILED   rejection   examples.rejection::bad_default
 ///     expected type/rolling.size_kind on line 9 of cases/rolling.hgl: not reported
-/// not run  executable  examples.rejection::survives
+/// passed   executable  examples.rejection::survives
+/// FAILED   executable  examples.rejection::wrong
+///     cases/rolling.hgl:31:5: the assertion does not hold
+/// not run  executable  examples.rejection::later
+///     cases/rolling.hgl:40:18: the hgraph target does not write the type `i64?` yet
 /// rejection cases: 1 passed, 1 failed
-/// executable cases: 1 not run: this compiler has no target to run a test on yet
+/// executable cases: 1 passed, 1 failed, 1 not run
 /// ```
 ///
 /// A rejection case is a declaration, import or test marked with
 /// `# expect-error` annotations (TST-12). An executable case is a named
-/// test; none can be run until the compiler has a target.
+/// test. It is run on the target `--target` names, and listed as not
+/// run when none is named:
+///
+/// ```text
+/// not run  executable  examples.rejection::survives
+/// executable cases: 1 not run: no target was given to run a test on
+/// ```
 fn test(arguments: &TestArgs) -> ExitCode {
     let Parsed {
         sources,
@@ -678,7 +698,19 @@ fn test(arguments: &TestArgs) -> ExitCode {
         tests: arguments.tests.clone(),
         rejections_only: arguments.rejections_only,
     };
-    let report = hgl_runner::run(&sources, &parsed, &front_end, &selection);
+    // The target the tests run on, and where it writes the program.
+    let mut on_hgraph = arguments.target.map(|Target::Hgraph| OnHgraph {
+        sources: &sources,
+        python: arguments
+            .python
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" })),
+        keep: arguments.keep.as_deref(),
+    });
+    let executor = on_hgraph
+        .as_mut()
+        .map(|executor| executor as &mut dyn Executor);
+    let report = hgl_runner::run(&sources, &parsed, &front_end, &selection, executor);
 
     // TST-14: invalid metadata and errors in the surviving source stop
     // the run before any case.
@@ -714,7 +746,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
     } else if report
         .cases
         .iter()
-        .any(|case| matches!(case.outcome, Outcome::Failed { .. }))
+        .any(|case| matches!(case.outcome, Outcome::Failed { .. } | Outcome::FailedRun(_)))
     {
         ExitCode::from(EXIT_REJECTED)
     } else {
@@ -723,13 +755,101 @@ fn test(arguments: &TestArgs) -> ExitCode {
     }
 }
 
-/// Prints one case: its outcome, kind and identity, and under a failed
-/// one each annotation no error met and each error no annotation
-/// expects (TST-13).
+/// `hgl test --target hgraph`: what runs the executable cases of a
+/// program on hgraph.
+struct OnHgraph<'a> {
+    /// The program's files, to say where a failure is.
+    sources: &'a SourceMap,
+    /// The Python interpreter to start.
+    python: PathBuf,
+    /// Where to keep what the target writes, when it is kept.
+    keep: Option<&'a Path>,
+}
+
+impl Executor for OnHgraph<'_> {
+    fn execute(&mut self, program: &Program, tests: &[String]) -> Vec<Outcome> {
+        // What the target does not write yet is no error of the
+        // program: it is why a test that needs it is not run.
+        let mut unwritten = Diagnostics::new();
+        let output = hgl_hgraph::transpile(program, &mut unwritten);
+        let place = |at: hgl_diagnostics::Location| {
+            let source = self.sources.file(at.file);
+            format!("{}:{}", source.name(), source.line_col(at.span.start))
+        };
+
+        // Each test asked for, as its position among the target's
+        // tests, and those of them that can be run.
+        let found: Vec<Option<usize>> = tests
+            .iter()
+            .map(|identity| {
+                output
+                    .tests
+                    .iter()
+                    .position(|test| test.identity() == *identity)
+            })
+            .collect();
+        let runnable: Vec<usize> = found
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&test| output.tests[test].blocked.is_none())
+            .collect();
+
+        // The directory the program is written to: the one to keep, or
+        // a temporary one that is removed when `temporary` is dropped
+        // at the end of this function.
+        let temporary;
+        let directory = match self.keep {
+            Some(directory) => Ok(directory),
+            None => match tempfile::Builder::new().prefix("hgl-test-").tempdir() {
+                Ok(made) => {
+                    temporary = made;
+                    Ok(temporary.path())
+                }
+                Err(error) => Err(format!("a temporary directory could not be made: {error}")),
+            },
+        };
+        let mut ran = match directory {
+            Ok(directory) => hgl_hgraph::run(&self.python, directory, &output, &runnable),
+            Err(reason) => vec![Ran::NotRun(reason); runnable.len()],
+        }
+        .into_iter();
+
+        found
+            .iter()
+            .map(|test| {
+                let Some(test) = test.map(|test| &output.tests[test]) else {
+                    return Outcome::NotRun("the target wrote no such test".to_string());
+                };
+                if let Some(diagnostic) = &test.blocked {
+                    return Outcome::NotRun(format!(
+                        "{}: {}",
+                        place(diagnostic.primary),
+                        diagnostic.message
+                    ));
+                }
+                match ran.next() {
+                    Some(Ran::Passed) => Outcome::Passed,
+                    Some(Ran::Failed { at, message }) => Outcome::FailedRun(match at {
+                        Some(at) => format!("{}: {message}", place(at)),
+                        None => message,
+                    }),
+                    Some(Ran::NotRun(reason)) => Outcome::NotRun(reason),
+                    None => Outcome::NotRun("the target gave it no outcome".to_string()),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Prints one case: its outcome, kind and identity. Under a failed
+/// rejection case is each annotation no error met and each error no
+/// annotation expects (TST-13); under an executable case that failed or
+/// was not run on a target is what the target said.
 fn print_case(sources: &SourceMap, case: &Case) {
     let outcome = match case.outcome {
         Outcome::Passed => "passed",
-        Outcome::Failed { .. } => "FAILED",
+        Outcome::Failed { .. } | Outcome::FailedRun(_) => "FAILED",
         Outcome::NotRun(_) => "not run",
     };
     let kind = match case.kind {
@@ -737,12 +857,22 @@ fn print_case(sources: &SourceMap, case: &Case) {
         CaseKind::Rejection => "rejection",
     };
     println!("{outcome:<8} {kind:<11} {}", case.identity);
-    let Outcome::Failed {
-        missing,
-        unexpected,
-    } = &case.outcome
-    else {
-        return;
+    let (missing, unexpected) = match &case.outcome {
+        Outcome::Failed {
+            missing,
+            unexpected,
+        } => (missing, unexpected),
+        // With no target every test has the one reason, which the
+        // counts give once.
+        Outcome::FailedRun(said) | Outcome::NotRun(said) => {
+            if said != hgl_runner::NO_TARGET {
+                for line in said.lines() {
+                    println!("    {line}");
+                }
+            }
+            return;
+        }
+        Outcome::Passed => return,
     };
     for expectation in missing {
         println!(
@@ -787,14 +917,25 @@ fn print_counts(report: &Report) {
         report.count(CaseKind::Rejection, passed),
         report.count(CaseKind::Rejection, failed)
     );
+    let ran = report.count(CaseKind::Executable, passed);
+    let broke = report.count(CaseKind::Executable, |outcome| {
+        matches!(outcome, Outcome::FailedRun(_))
+    });
     let waiting = report.count(CaseKind::Executable, not_run);
-    if waiting > 0 {
+    let untargeted = report.count(
+        CaseKind::Executable,
+        |outcome| matches!(outcome, Outcome::NotRun(reason) if reason == hgl_runner::NO_TARGET),
+    );
+    if ran + broke + waiting == 0 {
+        println!("executable cases: none selected");
+    } else if untargeted == waiting && ran + broke == 0 {
         println!(
             "executable cases: {waiting} not run: {}",
             hgl_runner::NO_TARGET
         );
     } else {
-        println!("executable cases: none selected");
+        // TST-14: "Report executed/rejected counts separately".
+        println!("executable cases: {ran} passed, {broke} failed, {waiting} not run");
     }
 }
 

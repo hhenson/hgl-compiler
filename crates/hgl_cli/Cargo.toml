@@ -22,6 +22,7 @@ hgl_runner.workspace = true
 hgl_hgraph.workspace = true
 clap.workspace = true
 walkdir.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

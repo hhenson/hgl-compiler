@@ -6,7 +6,9 @@
 //! and beside them the support files a generated module imports. Nothing
 //! here checks the language: what reaches this stage has been checked.
 //! What this target cannot yet write is reported as a `build`
-//! diagnostic, and no file is then to be used.
+//! diagnostic, and is left out of the files: they are then no whole
+//! program. A named test that reaches nothing left out can still be
+//! run ([`run`]), which is how `hgl test` runs a program on hgraph.
 //!
 //! How an HGL form is written for hgraph:
 //!
@@ -25,9 +27,14 @@
 //! `docs/architecture.md` says what is covered and what is not.
 
 mod emit;
+mod host;
+
+use std::collections::BTreeSet;
 
 use hgl_analyser::Program;
-use hgl_diagnostics::Diagnostics;
+use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
+
+pub use host::{Ran, run, write};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";
@@ -50,6 +57,57 @@ pub struct File {
     pub path: String,
     /// Its text.
     pub text: String,
+}
+
+/// What the target wrote for a program.
+#[derive(Debug, Clone)]
+pub struct Output {
+    /// The files: the root package's, one for each module but core,
+    /// and the support files those import.
+    pub files: Vec<File>,
+    /// The named tests of the program, in the order of its modules and
+    /// then as declared.
+    pub tests: Vec<Test>,
+}
+
+/// A named test as the target wrote it.
+#[derive(Debug, Clone)]
+pub struct Test {
+    /// The path of its module.
+    pub module: String,
+    /// Its name.
+    pub name: String,
+    /// The first form the test needs that the target does not write
+    /// yet, in the test or in a function it reaches. `None` for a test
+    /// that can be run.
+    pub blocked: Option<Diagnostic>,
+    /// Where each statement of the test starts in its module's file:
+    /// the line, counted from 1, and the place in the source.
+    statements: Vec<(usize, Location)>,
+}
+
+impl Test {
+    /// What names the test (TST-15): `module.path::name`.
+    pub fn identity(&self) -> String {
+        format!("{}::{}", self.module, self.name)
+    }
+
+    /// The statement of the test that line `line` of its module's file
+    /// is part of: the last one to start at or before it.
+    pub fn statement_at(&self, line: usize) -> Option<Location> {
+        self.statements
+            .iter()
+            .rev()
+            .find(|(start, _)| *start <= line)
+            .map(|(_, at)| *at)
+    }
+}
+
+/// The Python function a named test is written as. No function of a
+/// program is: a name that starts `test_` is written with `hgl_`
+/// before it.
+pub fn test_function(name: &str) -> String {
+    format!("test_{name}")
 }
 
 /// Core's native value functions for this target, as Python.
@@ -102,26 +160,46 @@ pub const HARNESS_FILE: &str = "_hgl/_harness.py";
 /// support files those modules import.
 ///
 /// `program` is one the analyser accepted. A form this target does not
-/// write yet is reported to `diagnostics`; the files are then
-/// incomplete and are not to be used.
-pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Vec<File> {
+/// write yet is reported to `diagnostics`, and the declaration or the
+/// test it is in is left out of its file. The files are then no whole
+/// program; each test says whether it can still be run.
+pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
     let mut files = vec![File {
         path: ROOT_FILE.to_string(),
         text: "\"\"\"A program written by the hgl compiler for hgraph.\"\"\"\n".to_string(),
     }];
     let mut natives = false;
     let mut harness = false;
+    // What was written for each module, at the module's position in
+    // the program: nothing for core.
+    let mut modules: Vec<Option<emit::Written>> = Vec::new();
     for (index, module) in program.modules.iter().enumerate() {
         if module.path == Program::CORE {
+            modules.push(None);
             continue;
         }
-        let written = emit::module(program, index, diagnostics);
+        let mut written = emit::module(program, index, diagnostics);
         natives |= written.natives;
         harness |= written.harness;
         files.push(File {
             path: file_path(&module.path),
-            text: written.text,
+            text: std::mem::take(&mut written.text),
         });
+        modules.push(Some(written));
+    }
+    let mut tests = Vec::new();
+    for (index, module) in program.modules.iter().enumerate() {
+        let Some(written) = &modules[index] else {
+            continue;
+        };
+        for (test, piece) in module.tests.iter().zip(&written.tests) {
+            tests.push(Test {
+                module: module.path.clone(),
+                name: test.name.clone(),
+                blocked: blocked(&modules, piece),
+                statements: piece.statements.clone(),
+            });
+        }
     }
     if natives {
         files.push(File {
@@ -135,7 +213,40 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Vec<File> 
             text: HARNESS.to_string(),
         });
     }
-    files
+    Output { files, tests }
+}
+
+/// The first form `test` needs that the target did not write: one of
+/// its own, or of a function it reaches through the functions it
+/// names. `modules` is what was written for each module of the
+/// program.
+fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diagnostic> {
+    if let Some(diagnostic) = &test.broken {
+        return Some(diagnostic.clone());
+    }
+    // The functions still to look at, the next one last, and those
+    // looked at: a function may be reached twice, or reach itself.
+    let mut waiting: Vec<(usize, usize)> = test.uses.iter().rev().copied().collect();
+    let mut seen = BTreeSet::new();
+    while let Some((module, declaration)) = waiting.pop() {
+        if !seen.insert((module, declaration)) {
+            continue;
+        }
+        let piece = modules
+            .get(module)
+            .and_then(Option::as_ref)
+            .and_then(|written| written.declarations.get(declaration));
+        // A function of core is named by no piece: a call of one that
+        // the provider has no function for is reported where it is.
+        let Some(piece) = piece else {
+            continue;
+        };
+        if let Some(diagnostic) = &piece.broken {
+            return Some(diagnostic.clone());
+        }
+        waiting.extend(piece.uses.iter().rev().copied());
+    }
+    None
 }
 
 /// The functions the provider of core's natives defines, read from its text: the

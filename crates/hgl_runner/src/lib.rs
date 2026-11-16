@@ -12,9 +12,10 @@
 //! The runner is not a stage of the pipeline: it drives the stages. A
 //! program holds two kinds of case (TST-15):
 //!
-//! * an **executable** case is a named test. Running one needs a target,
-//!   and this compiler has none yet, so the runner lists these and runs
-//!   none;
+//! * an **executable** case is a named test. Running one needs a target
+//!   and a host to run the written program on, which the runner knows
+//!   nothing of: it hands the tests to an [`Executor`], and lists them
+//!   as not run when it is given none;
 //! * a **rejection** case is a declaration, import or test that is
 //!   expected to be rejected, marked with `# expect-error` annotations
 //!   (TST-12). The runner checks these now.
@@ -38,15 +39,30 @@
 mod annotation;
 mod owner;
 
-use hgl_analyser::{ParsedFile, analyse};
+use hgl_analyser::{ParsedFile, Program, analyse};
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location, Severity};
 use hgl_source::{FileId, SourceMap, Span};
 
 pub use annotation::Expectation;
 use owner::{Owner, owner_of, owner_of_error, owners};
 
-/// Why no executable case is run.
-pub const NO_TARGET: &str = "this compiler has no target to run a test on yet";
+/// Why no executable case is run when the run is given no
+/// [`Executor`].
+pub const NO_TARGET: &str = "no target was given to run a test on";
+
+/// What runs executable cases: a target, and the host it runs a
+/// program on. The runner knows no target; whoever starts a run gives
+/// it one.
+pub trait Executor {
+    /// Runs the named tests `tests` of `program`, each given as
+    /// `module.path::name`, and gives the outcome of each in the order
+    /// asked. `program` is the surviving source, analysed and accepted.
+    ///
+    /// An outcome is [`Outcome::Passed`], [`Outcome::FailedRun`] or
+    /// [`Outcome::NotRun`]. A test given no outcome is counted as not
+    /// run.
+    fn execute(&mut self, program: &Program, tests: &[String]) -> Vec<Outcome>;
+}
 
 /// Which cases to run (TST-14).
 #[derive(Debug, Clone, Default)]
@@ -101,8 +117,11 @@ pub enum Outcome {
         /// Errors no annotation expects.
         unexpected: Vec<Diagnostic>,
     },
+    /// An executable case that ran and did not pass: an assertion did
+    /// not hold or an error escaped, with what the target said of it.
+    FailedRun(String),
     /// It was selected and could not be run, with the reason.
-    NotRun(&'static str),
+    NotRun(String),
 }
 
 /// One selected case.
@@ -161,11 +180,14 @@ impl Report {
 ///
 /// `files` are the program's parsed files, with nothing left out, and
 /// `front_end` holds what the lexer and parser reported for them.
+/// `executor` runs the executable cases; with none, they are listed
+/// and not run.
 pub fn run(
     sources: &SourceMap,
     files: &[ParsedFile],
     front_end: &Diagnostics,
     selection: &Selection,
+    executor: Option<&mut dyn Executor>,
 ) -> Report {
     let mut report = Report::default();
 
@@ -363,16 +385,29 @@ pub fn run(
         });
     }
 
-    // The executable cases: listed, and not run.
+    // The executable cases: run by the executor, or listed and not
+    // run. TST-14: "surviving-source errors prevent execution": a run
+    // that was stopped returned above, and reaches no executor.
     if !selection.rejections_only {
-        for test in executable {
-            if selected(&test) {
-                report.cases.push(Case {
-                    identity: test,
-                    kind: CaseKind::Executable,
-                    outcome: Outcome::NotRun(NO_TARGET),
-                });
-            }
+        let chosen: Vec<String> = executable
+            .into_iter()
+            .filter(|test| selected(test))
+            .collect();
+        let mut outcomes = match executor {
+            Some(executor) if !chosen.is_empty() => executor.execute(&program, &chosen),
+            Some(_) => Vec::new(),
+            None => vec![Outcome::NotRun(NO_TARGET.to_string()); chosen.len()],
+        }
+        .into_iter();
+        for test in chosen {
+            let outcome = outcomes
+                .next()
+                .unwrap_or_else(|| Outcome::NotRun("the target gave it no outcome".to_string()));
+            report.cases.push(Case {
+                identity: test,
+                kind: CaseKind::Executable,
+                outcome,
+            });
         }
     }
     report

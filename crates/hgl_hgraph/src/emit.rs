@@ -4,7 +4,13 @@
 //! each function does without its syntax. This walks them and writes
 //! the Python that does the same on hgraph. A form with no Python here
 //! yet is reported once, where it is written, and `None` stands in its
-//! place: the file is then incomplete, and the caller does not use it.
+//! place.
+//!
+//! A module is written a piece at a time: each declaration, then each
+//! named test. A piece with a form that is not written is left out of
+//! the file, and every piece records the functions it names. A test
+//! can then be run when neither it nor anything it reaches was left
+//! out, whatever else of the program was.
 
 use std::collections::BTreeSet;
 
@@ -17,16 +23,41 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
-use crate::{codes, provided, python_module};
+use crate::{codes, provided, python_module, test_function};
 
 /// What writing a module gave.
 pub(crate) struct Written {
-    /// The module's Python text.
+    /// The module's Python text: every piece but those with a form that
+    /// is not written yet.
     pub(crate) text: String,
     /// True when it calls a native function of core.
     pub(crate) natives: bool,
     /// True when it calls the eval harness.
     pub(crate) harness: bool,
+    /// A piece for each declaration of the module, in the order
+    /// declared.
+    pub(crate) declarations: Vec<Piece>,
+    /// A piece for each named test of the module, in the order
+    /// declared.
+    pub(crate) tests: Vec<Piece>,
+}
+
+/// One top-level part of a module as it is written: a declaration or a
+/// named test.
+#[derive(Default)]
+pub(crate) struct Piece {
+    /// Its Python text.
+    text: String,
+    /// The first form in it that the target does not write yet. A piece
+    /// with one is left out of the file.
+    pub(crate) broken: Option<Diagnostic>,
+    /// The functions it names, each as its module and its declaration.
+    pub(crate) uses: BTreeSet<(usize, usize)>,
+    /// For a test, where each of its statements starts: the line of
+    /// the module's file, counted from 1, and the place in the source.
+    /// A failure is reported by the line Python gives, and this says
+    /// which statement of the test that is.
+    pub(crate) statements: Vec<(usize, Location)>,
 }
 
 /// Writes module `index` of `program`.
@@ -41,6 +72,9 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         imports: BTreeSet::new(),
         expanding: Vec::new(),
         text: String::new(),
+        piece: Piece::default(),
+        declared: Vec::new(),
+        tested: Vec::new(),
     };
     emitter.declarations();
     emitter.tests();
@@ -49,6 +83,8 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         text,
         natives: emitter.natives,
         harness: emitter.harness,
+        declarations: emitter.declared,
+        tests: emitter.tested,
     }
 }
 
@@ -282,19 +318,37 @@ struct Emitter<'a> {
     /// each as its module, declaration and parameter: a default is not
     /// written inside itself.
     expanding: Vec<(usize, usize, usize)>,
-    /// The Python written so far, less its header.
+    /// The Python of the piece being written.
     text: String,
+    /// What is known of the piece being written, but for its text.
+    piece: Piece,
+    /// The pieces written for the module's declarations.
+    declared: Vec<Piece>,
+    /// The pieces written for the module's named tests.
+    tested: Vec<Piece>,
 }
 
 impl Emitter<'_> {
-    /// Reports a form this target does not write yet.
+    /// Reports a form this target does not write yet. The piece being
+    /// written is then left out of the file.
     fn unsupported(&mut self, at: Location, what: &str) {
-        self.diagnostics.emit(Diagnostic::error(
+        let diagnostic = Diagnostic::error(
             Category::Build,
             Code::Local(codes::UNSUPPORTED),
             at,
             format!("the hgraph target does not write {what} yet"),
-        ));
+        );
+        if self.piece.broken.is_none() {
+            self.piece.broken = Some(diagnostic.clone());
+        }
+        self.diagnostics.emit(diagnostic);
+    }
+
+    /// Ends the piece being written, and gives it.
+    fn close(&mut self) -> Piece {
+        let mut piece = std::mem::take(&mut self.piece);
+        piece.text = std::mem::take(&mut self.text);
+        piece
     }
 
     /// Adds one line at `depth` levels of indentation.
@@ -306,7 +360,8 @@ impl Emitter<'_> {
         self.text.push('\n');
     }
 
-    /// The header and the import lines, then the text.
+    /// The header and the import lines, then each piece that was
+    /// written whole.
     fn finish(&mut self) -> String {
         let path = &self.program.modules[self.module].path;
         let mut out = format!(
@@ -330,7 +385,22 @@ impl Emitter<'_> {
             let python = python_module(module);
             out.push_str(&format!("import {python} as {}\n", alias(module)));
         }
-        out.push_str(&self.text);
+        // The lines written so far. A piece's statements were marked
+        // by the line of the piece they start on, counted from 0, and
+        // are now given the line of the file, counted from 1.
+        let mut lines = out.matches('\n').count();
+        for piece in self.declared.iter_mut().chain(self.tested.iter_mut()) {
+            if piece.broken.is_some() {
+                // It is in no file, so its statements are on no line.
+                piece.statements.clear();
+                continue;
+            }
+            for (line, _) in &mut piece.statements {
+                *line += lines + 1;
+            }
+            lines += piece.text.matches('\n').count();
+            out.push_str(&piece.text);
+        }
         out
     }
 
@@ -340,40 +410,50 @@ impl Emitter<'_> {
     fn declarations(&mut self) {
         let program = self.program;
         let module = &program.modules[self.module];
-        for (index, declaration) in module.declarations.iter().enumerate() {
-            // A declaration of a test context is the tests' own, and is
-            // written with them once they are.
-            if declaration.test_only {
-                self.unsupported(declaration.at, "a declaration of a test context");
-                continue;
+        for index in 0..module.declarations.len() {
+            self.declaration(index);
+            let piece = self.close();
+            self.declared.push(piece);
+        }
+    }
+
+    /// The declaration `index` of the module.
+    fn declaration(&mut self, index: usize) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        let declaration = &module.declarations[index];
+        // A declaration of a test context is the tests' own, and is
+        // written with them once they are.
+        if declaration.test_only {
+            self.unsupported(declaration.at, "a declaration of a test context");
+            return;
+        }
+        let signature = match module.details.get(index) {
+            Some(Detail::Callable(signature)) => Some(signature),
+            _ => None,
+        };
+        let body = module.bodies.get(index).and_then(Option::as_ref);
+        match (declaration.kind, signature, body) {
+            (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
+                self.value_function(declaration, signature, body);
             }
-            let signature = match module.details.get(index) {
-                Some(Detail::Callable(signature)) => Some(signature),
-                _ => None,
-            };
-            let body = module.bodies.get(index).and_then(Option::as_ref);
-            match (declaration.kind, signature, body) {
-                (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
-                    self.value_function(declaration, signature, body);
+            (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
+                match module.phases.get(index).copied().flatten() {
+                    Some(Phase::Node) => self.node(declaration, signature, body),
+                    Some(Phase::Graph) => self.graph(declaration, signature, body),
+                    None => self.unsupported(declaration.at, "this function"),
                 }
-                (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
-                    match module.phases.get(index).copied().flatten() {
-                        Some(Phase::Node) => self.node(declaration, signature, body),
-                        Some(Phase::Graph) => self.graph(declaration, signature, body),
-                        None => self.unsupported(declaration.at, "this function"),
-                    }
-                }
-                _ => {
-                    let what = match declaration.kind {
-                        DeclarationKind::Struct => "a struct",
-                        DeclarationKind::Enum => "an enum",
-                        DeclarationKind::Operator => "an operator",
-                        DeclarationKind::NativeType => "a native type",
-                        kind if kind.candidate().is_some() => "an operator's candidate",
-                        _ => "a native function",
-                    };
-                    self.unsupported(declaration.at, what);
-                }
+            }
+            _ => {
+                let what = match declaration.kind {
+                    DeclarationKind::Struct => "a struct",
+                    DeclarationKind::Enum => "an enum",
+                    DeclarationKind::Operator => "an operator",
+                    DeclarationKind::NativeType => "a native type",
+                    kind if kind.candidate().is_some() => "an operator's candidate",
+                    _ => "a native function",
+                };
+                self.unsupported(declaration.at, what);
             }
         }
     }
@@ -744,18 +824,23 @@ impl Emitter<'_> {
         let program = self.program;
         let module = &program.modules[self.module];
         for (index, test) in module.tests.iter().enumerate() {
-            let Some(body) = module.test_bodies.get(index).and_then(Option::as_ref) else {
-                continue;
-            };
-            self.line(0, "");
-            self.line(0, "");
-            self.line(0, &format!("def test_{}():", test.name));
-            let function = Function {
-                locals: &body.locals,
-                signature: None,
-                mode: Mode::Test,
-            };
-            self.block(&function, &body.statements, 1);
+            match module.test_bodies.get(index).and_then(Option::as_ref) {
+                Some(body) => {
+                    self.line(0, "");
+                    self.line(0, "");
+                    self.line(0, &format!("def {}():", test_function(&test.name)));
+                    let function = Function {
+                        locals: &body.locals,
+                        signature: None,
+                        mode: Mode::Test,
+                    };
+                    self.block(&function, &body.statements, 1);
+                }
+                // The analyser gave the test no body to write.
+                None => self.unsupported(test.at, "this test"),
+            }
+            let piece = self.close();
+            self.tested.push(piece);
         }
     }
 
@@ -803,6 +888,14 @@ impl Emitter<'_> {
     }
 
     fn statement(&mut self, function: &Function, statement: &Stmt, depth: usize) {
+        // Where a statement of a test starts, by the line of its piece:
+        // a failure is traced back to the statement by it.
+        if function.mode == Mode::Test {
+            let line = self.text.matches('\n').count();
+            self.piece
+                .statements
+                .push((line, at_of(statement, function.locals)));
+        }
         // A graph describes connections: Python's own `if` would test
         // a port where the graph is built, and not what flows through
         // it (CTRL-14). Only what wires is written there.
@@ -1197,6 +1290,7 @@ impl Emitter<'_> {
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = self.definition_name(module, &declared.declarations[declaration]);
+        self.piece.uses.insert((module, declaration));
         if module == self.module {
             return python;
         }

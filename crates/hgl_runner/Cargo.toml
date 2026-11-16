@@ -1,6 +1,6 @@
 [package]
 name = "hgl_runner"
-description = "The test runner: reads `# expect-error` annotations and checks rejection cases."
+description = "The test runner: reads `# expect-error` annotations, checks rejection cases, and hands tests to a target to run."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

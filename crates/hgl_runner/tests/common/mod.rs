@@ -12,7 +12,7 @@ use hgl_analyser::ParsedFile;
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
-use hgl_runner::{CaseKind, Outcome, Report, Selection, run};
+use hgl_runner::{CaseKind, Executor, Outcome, Report, Selection, run};
 use hgl_source::SourceMap;
 
 /// A run, reduced to lines that tests compare.
@@ -36,7 +36,18 @@ pub fn run_all(files: &[(&str, &str)]) -> Ran {
 }
 
 /// Lexes and parses a program and runs the cases `selection` selects.
+/// No test is run: there is nothing to run one on.
 pub fn run_selected(files: &[(&str, &str)], selection: &Selection) -> Ran {
+    run_on(files, selection, None)
+}
+
+/// Lexes and parses a program and runs the cases `selection` selects,
+/// its tests on `executor` when there is one.
+pub fn run_on(
+    files: &[(&str, &str)],
+    selection: &Selection,
+    executor: Option<&mut dyn Executor>,
+) -> Ran {
     let mut sources = SourceMap::new();
     let mut front_end = Diagnostics::new();
     let mut parsed = Vec::new();
@@ -54,7 +65,7 @@ pub fn run_selected(files: &[(&str, &str)], selection: &Selection) -> Ran {
         );
         parsed.push(ParsedFile::new(file, tree.syntax()));
     }
-    let report = run(&sources, &parsed, &front_end, selection);
+    let report = run(&sources, &parsed, &front_end, selection, executor);
 
     // `file:line:column` of a byte of a file.
     let place = |file: hgl_source::FileId, offset: u32| {
@@ -69,10 +80,17 @@ pub fn run_selected(files: &[(&str, &str)], selection: &Selection) -> Ran {
         };
         let outcome = match &case.outcome {
             Outcome::Passed => "passed",
-            Outcome::Failed { .. } => "failed",
+            Outcome::Failed { .. } | Outcome::FailedRun(_) => "failed",
             Outcome::NotRun(_) => "not-run",
         };
         cases.push(format!("{outcome} {kind} {}", case.identity));
+        // What an executor said of a test. With none, every test has
+        // the one reason, and it is left out.
+        if let Outcome::FailedRun(said) | Outcome::NotRun(said) = &case.outcome
+            && said != hgl_runner::NO_TARGET
+        {
+            cases.push(format!("  said {said}"));
+        }
         if let Outcome::Failed {
             missing,
             unexpected,

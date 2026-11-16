@@ -368,8 +368,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-12 | diagnostics | done | The catalogue's source categories and codes, which an annotation may name |
 | TST-13 | parser | done | An error at the end of the file points at the end of the file |
 | TST-13 | runner | done | Rejection owners excluded; diagnostics and annotations matched one to one |
-| TST-14 | runner | partial | Invalid metadata and surviving-source errors stop the run; selectors; rejection counts. Left: counts of executed cases, with the first target |
-| TST-15 | runner | partial | When a run succeeds; identity, kind and outcome of each case. Left: executable cases, which are listed and not run |
+| TST-14 | runner | done | Invalid metadata and surviving-source errors stop the run, and nothing is then executed; selectors; counts of rejection cases and of tests passed, failed and not run |
+| TST-14 | transpiler | partial | hgraph: a test whose interpreter does not start or stops early, or whose module does not load, is not run and has not failed. Left: a limit on how long a test may run |
+| TST-15 | runner | done | When a run succeeds; identity, kind and outcome of each case. A test is run by the executor the run is given, and is not run with none |
+| TST-15 | transpiler | partial | hgraph: a test is named `module.path::name`, and one given to the host has an outcome: passed, failed with the statement that failed, or not run with the reason. Left: the tests that need a form the target does not write yet, which are not run |
 | TST-16 | analyser | planned | Proposed. Until it is agreed, a trace given to a `const fn` is not held to the parameter's type |
 | TST-16 | runner | planned | Proposed. The recorded trace as that value |
 
