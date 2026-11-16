@@ -19,8 +19,8 @@ use hgl_analyser::hir::{
     Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
-    Parameter, Phase, Program, Role, Scalar, Signature, Type,
+    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, GenericKind,
+    LocalKind, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -1371,35 +1371,55 @@ impl Emitter<'_> {
     ///
     /// NUM-9: "`zero` is a generic value parameter of the candidates
     /// that declare it, and a call gives it a compile-time constant."
-    /// A member of an enum, `.ieee`, is passed as its name, `"ieee"`,
-    /// and an integer as itself. A generic type is not passed: a
-    /// Python function is not typed.
+    /// A value of an enum is passed as the name of its member,
+    /// `"ieee"`, and an integer as itself. A generic type is not
+    /// passed: a Python function is not typed.
     fn options(
         &mut self,
         signature: &Signature,
         generics: &[GenericArgument],
         at: Location,
     ) -> Vec<String> {
+        let program = self.program;
         let mut written = Vec::new();
         for (parameter, argument) in signature.generics.iter().zip(generics) {
             let GenericArgument::Constant(constant) = argument else {
                 continue;
             };
-            let member = constant.text.strip_prefix('.').filter(|member| {
-                !member.is_empty()
-                    && member
-                        .chars()
-                        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-            });
-            let value = match (member, &constant.value) {
-                (Some(member), _) => string(member),
-                (None, ConstantValue::Int(number)) => number.to_string(),
-                _ => {
-                    self.unsupported(at, &format!("the option `{}`", constant.text));
-                    continue;
+            let value = match (&parameter.kind, &constant.value) {
+                // The parameter's type says the value is of an enum,
+                // and the constant names one of its members after its
+                // last `.`, however the enum itself is written there:
+                // `.fail`, `ZeroPolicy.fail`, `core::ZeroPolicy.fail`.
+                (
+                    GenericKind::Value(Type::Named {
+                        module,
+                        declaration,
+                        kind: NamedKind::Enum,
+                        ..
+                    }),
+                    _,
+                ) => {
+                    let members = match program.modules[*module].details.get(*declaration) {
+                        Some(Detail::Enum(of)) => of.members.as_slice(),
+                        _ => &[],
+                    };
+                    constant
+                        .text
+                        .rsplit_once('.')
+                        .map(|(_, member)| member.trim())
+                        .filter(|member| members.iter().any(|known| known.name == *member))
+                        .map(string)
                 }
+                (_, ConstantValue::Int(number)) => Some(number.to_string()),
+                _ => None,
             };
-            written.push(format!("{}={value}", name(&parameter.name)));
+            match value {
+                Some(value) => written.push(format!("{}={value}", name(&parameter.name))),
+                // A value that is not a constant here, such as a
+                // generic value of the function the call is in.
+                None => self.unsupported(at, &format!("the option `{}`", constant.text)),
+            }
         }
         written
     }

@@ -1200,6 +1200,7 @@ const DIVISION: &str = concat!(
     "const fn ratio(a: f64, b: f64) -> f64 => a / b\n",
     "const fn nans(a: f64, b: f64) -> f64 => a /{zero: .nan} b\n",
     "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
+    "const fn named(a: f64, b: f64) -> f64 => div_(a, b, zero: ZeroPolicy.nan)\n",
     "const fn floors(a: i64, b: i64) -> i64 => a // b\n",
     "const fn rest(a: i64, b: i64) -> i64 => a % b\n",
     "\n",
@@ -1219,6 +1220,7 @@ const DIVISION: &str = concat!(
     "    assert ratio(0.0, 0.0) != ratio(0.0, 0.0)\n",
     "    assert nans(1.0, 0.0) != nans(1.0, 0.0)\n",
     "    assert nans(6.0, 4.0) == 1.5\n",
+    "    assert named(1.0, 0.0) != named(1.0, 0.0)\n",
     "    assert strict(6.0, 4.0) == 1.5\n",
     // NUM-1: floor division rounds toward negative infinity, and a
     // modulo has the divisor's sign.
@@ -1270,6 +1272,8 @@ fn a_division_takes_its_zero_policy() {
         "def ratio(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")\n",
         "def nans(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
         "def strict(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"fail\")\n",
+        // A member is the same policy however its enum is written.
+        "def named(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
         "def floors(a, b):\n    return _core.floordiv__i64_i64(lhs=a, rhs=b, zero=\"fail\")\n",
         "def rest(a, b):\n    return _core.mod__i64_i64(lhs=a, rhs=b, zero=\"fail\")\n",
         // A lifted division is configured as the call is.
