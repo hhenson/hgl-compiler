@@ -20,7 +20,7 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
-    Parameter, Phase, Program, Role, Scalar, Signature, Type,
+    NamedKind, Parameter, Phase, Program, Role, Scalar, Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -54,8 +54,13 @@ pub(crate) struct Piece {
     /// The first form in it that the target does not write yet. A piece
     /// with one is left out of the file.
     pub(crate) broken: Option<Diagnostic>,
-    /// The functions it names, each as its module and its declaration.
+    /// The functions and the enums it names, each as its module and
+    /// its declaration.
     pub(crate) uses: BTreeSet<(usize, usize)>,
+    /// True for a type, which is written before the functions: a
+    /// function's annotations are read where it is defined, and may
+    /// name a type the source declares after it.
+    first: bool,
     /// For a test, where each of its statements starts: the line of
     /// the module's file, counted from 1, and the place in the source.
     /// A failure is reported by the line Python gives, and this says
@@ -72,6 +77,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         hgraph: false,
         natives: false,
         harness: false,
+        enums: false,
         imports: BTreeSet::new(),
         expanding: Vec::new(),
         text: String::new(),
@@ -187,6 +193,24 @@ pub(crate) fn name(written: &str) -> String {
         rest = inner;
     }
     if rest.starts_with('_') || rest.starts_with("test_") {
+        return format!("hgl_{written}");
+    }
+    written.to_string()
+}
+
+/// The name of an enum's member as Python's `Enum` has it. A member is
+/// read by name, `Side["buy"]`, so any word is one, a Python keyword
+/// among them. `Enum` keeps `mro` and the names that start and end with
+/// `_` for itself: a name that starts with `_` or is `mro`, under any
+/// number of `hgl_`, gets one more `hgl_`. No two names give one, as
+/// for [`name`]. The provider's `member` does the same for a member
+/// constructed from its name.
+fn member_name(written: &str) -> String {
+    let mut rest = written;
+    while let Some(inner) = rest.strip_prefix("hgl_") {
+        rest = inner;
+    }
+    if rest.starts_with('_') || rest == "mro" {
         return format!("hgl_{written}");
     }
     written.to_string()
@@ -352,6 +376,8 @@ struct Emitter<'a> {
     natives: bool,
     /// True once the eval harness is called.
     harness: bool,
+    /// True once the module declares an enum, which is a Python `Enum`.
+    enums: bool,
     /// The other generated modules this one names a function of, by
     /// module path.
     imports: BTreeSet<String>,
@@ -436,6 +462,9 @@ impl Emitter<'_> {
         // `evaluate` or `float` is then no clash with hgraph's, the
         // harness's or Python's own.
         out.push_str("import builtins as _py\n");
+        if self.enums {
+            out.push_str("import enum as _enum\n");
+        }
         if self.hgraph {
             out.push_str("import hgraph as _hg\n");
         }
@@ -453,7 +482,15 @@ impl Emitter<'_> {
         // by the line of the piece they start on, counted from 0, and
         // are now given the line of the file, counted from 1.
         let mut lines = out.matches('\n').count();
-        for piece in self.declared.iter_mut().chain(self.tested.iter_mut()) {
+        // The types first, then the functions, then the tests, each in
+        // the order declared.
+        let (types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
+            self.declared.iter_mut().partition(|piece| piece.first);
+        for piece in types
+            .into_iter()
+            .chain(functions)
+            .chain(self.tested.iter_mut())
+        {
             if piece.broken.is_some() {
                 // It is in no file, so its statements are on no line.
                 piece.statements.clear();
@@ -529,10 +566,10 @@ impl Emitter<'_> {
             // An operator is a name for its candidates, which are the
             // functions: it has nothing of its own to write.
             (DeclarationKind::Operator, _, _) => {}
+            (DeclarationKind::Enum, _, _) => self.enumeration(index),
             _ => {
                 let what = match declaration.kind {
                     DeclarationKind::Struct => "a struct",
-                    DeclarationKind::Enum => "an enum",
                     DeclarationKind::NativeType => "a native type",
                     kind if kind.candidate().is_some() => "an operator's candidate",
                     _ => "a native function",
@@ -540,6 +577,61 @@ impl Emitter<'_> {
                 self.unsupported(declaration.at, what);
             }
         }
+    }
+
+    /// `enum Side { buy, sell = 5 }`, the declaration `index` of the
+    /// module: a Python `Enum`, each member with its number (TYPE-7:
+    /// "Unnumbered numbering starts at zero and increments the previous
+    /// member; explicit numbers reset the next value").
+    ///
+    /// It is made by a call and not as a class, so that a member may
+    /// have any name: a class would take none that is a Python keyword.
+    fn enumeration(&mut self, index: usize) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        let declaration = &module.declarations[index];
+        let members = match module.details.get(index) {
+            Some(Detail::Enum(read)) => read.members.as_slice(),
+            _ => &[],
+        };
+        let mut written = Vec::new();
+        for member in members {
+            match member.value {
+                Some(number) => {
+                    written.push(format!(
+                        "({}, {number})",
+                        string(&member_name(&member.name))
+                    ));
+                }
+                None => self.unsupported(member.at, "a member whose number is not known"),
+            }
+        }
+        self.enums = true;
+        self.piece.first = true;
+        self.line(0, "");
+        self.line(0, "");
+        self.line(
+            0,
+            &format!(
+                "{} = _enum.Enum({}, [{}])",
+                name(&declaration.name),
+                string(&declaration.name),
+                written.join(", ")
+            ),
+        );
+    }
+
+    /// The Python name of the enum `declaration` of `module`. One of
+    /// another module is named through that module, as a function is.
+    fn type_name(&mut self, module: usize, declaration: usize) -> String {
+        let declared = &self.program.modules[module];
+        let python = name(&declared.declarations[declaration].name);
+        self.piece.uses.insert((module, declaration));
+        if module == self.module {
+            return python;
+        }
+        self.imports.insert(declared.path.clone());
+        format!("{}.{python}", alias(&declared.path))
     }
 
     /// `const fn name(a, b) -> T`, the declaration `index` of the
@@ -600,15 +692,28 @@ impl Emitter<'_> {
     /// function: `TS[int]` for a temporal `i64`, `int` for a `const`
     /// one. `None`, reported, for a type not written yet.
     fn annotation(&mut self, ty: &Type, temporal: bool, at: Location) -> Option<String> {
-        let Some(python) = scalar(ty) else {
-            self.unsupported(at, &format!("the type `{ty}`"));
-            return None;
+        let python = match (scalar(ty), ty) {
+            (Some(python), _) => python.to_string(),
+            // An enum is a scalar to hgraph, as its Python `Enum` is.
+            (
+                None,
+                Type::Named {
+                    module,
+                    declaration,
+                    kind: NamedKind::Enum,
+                    ..
+                },
+            ) => self.type_name(*module, *declaration),
+            _ => {
+                self.unsupported(at, &format!("the type `{ty}`"));
+                return None;
+            }
         };
         if temporal {
             self.hgraph = true;
             Some(format!("_hg.TS[{python}]"))
         } else {
-            Some(python.to_string())
+            Some(python)
         }
     }
 
@@ -1126,7 +1231,7 @@ impl Emitter<'_> {
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
         // In a graph a value may be a connection, and Python's `and`,
         // `not` and `if` would act on the port: only a name, a literal,
-        // a call and a widening are written there.
+        // a member of an enum, a call and a widening are written there.
         if function.mode == Mode::Graph
             && !matches!(
                 value.kind,
@@ -1134,6 +1239,7 @@ impl Emitter<'_> {
                     | ExprKind::Local(_)
                     | ExprKind::Call { .. }
                     | ExprKind::Widen(_)
+                    | ExprKind::EnumMember { .. }
             )
         {
             self.unsupported(value.at, "this expression in a graph");
@@ -1284,6 +1390,37 @@ impl Emitter<'_> {
                 let left = self.expression(function, left);
                 let right = self.expression(function, right);
                 format!("{left} {symbol} {right}")
+            }
+            // TYPE-7: a member of an enum, however it was written,
+            // read from its `Enum` by its name.
+            ExprKind::EnumMember {
+                module,
+                declaration,
+                member,
+            } => {
+                let written = match self.program.modules[*module].details.get(*declaration) {
+                    Some(Detail::Enum(read)) => read.members.get(*member),
+                    _ => None,
+                };
+                let Some(written) = written else {
+                    self.unsupported(value.at, "this member");
+                    return "None".to_string();
+                };
+                let member = string(&member_name(&written.name));
+                format!("{}[{member}]", self.type_name(*module, *declaration))
+            }
+            // TYPE-7: "`Side(1)` is the member whose number is 1, and
+            // `Side("buy")` the member of that exact name ... a value
+            // that is none fails where it is evaluated."
+            ExprKind::EnumFrom {
+                module,
+                declaration,
+                value,
+            } => {
+                self.natives = true;
+                let of = self.type_name(*module, *declaration);
+                let value = self.expression(function, value);
+                format!("_core.member({of}, {value})")
             }
             // ERR-2: "`ok(value)` constructs a success and
             // `err(value)` a failure."
