@@ -3124,9 +3124,159 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
     );
     assert_eq!(
         messages(&checked)[5],
-        "this call leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
+        "this leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
     );
     assert_eq!(locals(&checked, "uses")[7], "real: f64");
+}
+
+// ---- A default on any generic value parameter ----
+
+/// GEN-2: "A generic value parameter may have a default, a function's,
+/// a candidate's, a struct's, or an operator's, which it takes where a
+/// call or an application neither gives it nor resolves it (GEN-8). A
+/// type parameter and a pack have none." "Where an application supplies
+/// none, a generic value parameter that nothing says anything of takes
+/// its default: for `struct Window<const size: i64 = 3>`,
+/// `value: Window` is a `Window<3>`." GEN-13: a default is of its
+/// parameter's type.
+#[test]
+fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
+    let checked = module(concat!(
+        "struct Window<const size: i64 = 3> { values: list<f64, size> }\n",
+        "struct Grid<const rows: i64 = 2, const cols: i64 = 2> {\n",
+        "    cells: list<list<f64, cols>, rows>\n",
+        "}\n",
+        "struct Box<T> { value: T }\n",
+        // A type parameter has no default: the struct is not named bare.
+        "struct Run<T, const size: i64 = 3> { values: list<T, size> }\n",
+        "struct Bad<const size: i64 = \"three\"> { values: list<f64, size> }\n",
+        // A default whose type names a type parameter is of it for one
+        // construction and not another.
+        "struct Hold<T, const fallback: T = 2> { value: T }\n",
+        "const fn uses(w: Window, five: Window<5>, g: Grid, xs: list<f64, 3>) {\n",
+        "    let values = w.values\n",
+        "    let wide = five.values\n",
+        "    let cells = g.cells\n",
+        // A construction that nothing else says the size of.
+        "    let made = Window(values: xs)\n",
+        "    let held = Hold(value: 1.5)\n",
+        "    let text = Hold(value: \"x\")\n",
+        "}\n",
+        "const fn rejected(b: Box, r: Run) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:30 type/type.mismatch GEN-13",
+            "m.hgl:16:16 type/type.mismatch GEN-13",
+            "m.hgl:18:22 type/generic.argument_count GEN-2",
+            "m.hgl:18:30 type/generic.argument_count GEN-2",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "w: Window<3>",
+            "five: Window<5>",
+            "g: Grid<2, 2>",
+            "xs: list<f64, 3>",
+            "values: list<f64, 3>",
+            "wide: list<f64, 5>",
+            "cells: list<list<f64, 2>, 2>",
+            "made: Window<3>",
+            "held: Hold<f64, 2>",
+            "text: Hold<str, 2>",
+        ]
+    );
+}
+
+/// GEN-8: "An operator's takes part in the output requested, in GEN-2's
+/// order: what the call writes, then what its place expects, then its
+/// arguments, and the default where none of them says."
+#[test]
+fn an_operators_default_is_part_of_the_output_requested() {
+    let checked = module(concat!(
+        "operator window<T, const size: i64 = 3>(value: T) -> list<T, size>\n",
+        "impl const fn window(value: f64) -> list<f64, 3> => [value, value, value]\n",
+        "impl const fn window(value: f64) -> list<f64, 5> =>\n",
+        "    [value, value, value, value, value]\n",
+        "operator copy<const size: i64 = 3>(value: list<f64, size>) -> list<f64, size>\n",
+        "impl const fn copy<const N: i64>(value: list<f64, N>) -> list<f64, N> => value\n",
+        "const fn uses(x: f64, five: list<f64, 5>) {\n",
+        // The default: a list of three.
+        "    let three = window<f64>(x)\n",
+        "    let also = window(x)\n",
+        // What the call writes, and what its place expects, come first.
+        "    let written = window<f64, 5>(x)\n",
+        "    let placed: list<f64, 5> = window<f64>(x)\n",
+        // And so does an argument.
+        "    let copied = copy(five)\n",
+        // What the call writes decides, and the place expects another.
+        "    let wrong: list<f64, 5> = window<f64, 3>(x)\n",
+        "}\n",
+        // GEN-13: a default the call takes is of its parameter's type as
+        // the call resolves it. GEN-2: an abstract struct widens what an
+        // earlier argument decided, for an operator's generics too.
+        "operator choose<T, const fallback: T = 2>(value: T) -> T\n",
+        "impl const fn choose(value: i64) -> i64 => value\n",
+        "impl const fn choose(value: str) -> str => value\n",
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "operator same<T, const mode: i64 = 0>(left: T, right: T) -> T\n",
+        "impl const fn same(left: Shape, right: Shape) -> Shape => left\n",
+        // A value the call does not say leaves the rest of the output
+        // requested as it is: three rows, of any width.
+        "operator grid<const cols: i64, const rows: i64 = 3>() -> list<list<f64, cols>, rows>\n",
+        "impl const fn grid() -> list<list<f64, 2>, 3> => [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
+        "impl const fn grid() -> list<list<f64, 2>, 5> =>\n",
+        "    [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
+        // A value the output requested does not say is still the
+        // candidate's to find from its argument.
+        "operator wrap<V, const width: i64, const rows: i64 = 3>(value: V) -> list<list<f64, width>, rows>\n",
+        "impl const fn wrap<const N: i64>(value: list<f64, N>) -> list<list<f64, N>, 3>\n",
+        "    requires N == 2 => [value, value, value]\n",
+        // TYPE-14: a result is a value of the optional type requested.
+        "operator make<T, const n: i64 = 3>() -> list<T, n>?\n",
+        "impl const fn make() -> list<f64, 3> => [1.0, 2.0, 3.0]\n",
+        "const fn resolved(shape: Shape, round: Round, pair: list<f64, 2>) {\n",
+        "    let wrapped = wrap(pair)\n",
+        "    let made = make()\n",
+        "    let rows = grid()\n",
+        "    let whole = choose(1)\n",
+        "    let text = choose(\"x\")\n",
+        "    let child_first = same(round, shape)\n",
+        "    let parent_first = same(shape, round)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:31 type/type.mismatch EXPR-5",
+            "m.hgl:37:16 type/type.mismatch GEN-13",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "resolved")[3..],
+        [
+            "wrapped: list<list<f64, 2>, 3>",
+            "made: list<f64, 3>",
+            "rows: list<list<f64, 2>, 3>",
+            "whole: i64",
+            "text: _",
+            "child_first: Shape",
+            "parent_first: Shape",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[2..7],
+        [
+            "three: list<f64, 3>",
+            "also: list<f64, 3>",
+            "written: list<f64, 5>",
+            "placed: list<f64, 5>",
+            "copied: list<f64, 5>",
+        ]
+    );
 }
 
 // ---- Symbols ----

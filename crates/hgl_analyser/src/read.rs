@@ -582,6 +582,33 @@ fn cardinality(node: Option<SyntaxNode>) -> (u64, Option<u64>) {
     }
 }
 
+/// The default of every generic parameter of a declaration, as the
+/// arguments of an application that supplies none: `Some` only where it
+/// has generic parameters and each is a value with a default (GEN-2).
+///
+/// A default is written in its declaration's file, which may not be the
+/// one being read, so no name in it is looked up here: it is folded as
+/// far as it holds none.
+fn defaults_of(declaration: &Declaration) -> Option<Vec<Argument>> {
+    let forms = generic_forms(&declaration.syntax);
+    if forms.is_empty() {
+        return None;
+    }
+    forms
+        .iter()
+        .map(|(parameter, _, form)| {
+            let default = match form {
+                Form::Value => default_of(parameter)?,
+                Form::Plain | Form::Pack(..) => return None,
+            };
+            Some(Argument::Constant(Constant {
+                text: text_of(&default),
+                value: fold(&default, &|_| ConstantValue::Unevaluated),
+            }))
+        })
+        .collect()
+}
+
 /// The generic parameters of a declaration, as written.
 fn generic_forms(declaration: &SyntaxNode) -> Vec<(SyntaxNode, SyntaxToken, Form)> {
     child(declaration, SyntaxKind::GenericParams)
@@ -1527,7 +1554,18 @@ impl Reader<'_> {
                     return Type::Unknown;
                 };
                 let declaration = &declared[index];
-                self.argument_count(&name, declaration, list.as_ref(), position);
+                // GEN-2: "Where an application supplies none, a generic
+                // value parameter that nothing says anything of takes
+                // its default". A type position infers nothing, so a
+                // type named bare is the type with every default, where
+                // every parameter has one.
+                let arguments = match (&list, defaults_of(declaration)) {
+                    (None, Some(defaults)) if !position.bare => defaults,
+                    _ => {
+                        self.argument_count(&name, declaration, list.as_ref(), position);
+                        arguments
+                    }
+                };
                 Type::Named {
                     name: declaration.name.clone(),
                     module: *module,
@@ -1657,8 +1695,7 @@ impl Reader<'_> {
     }
 
     /// GEN-2: "A generic struct application supplies all arguments ...
-    /// Partial applications, generic defaults, and `_` struct arguments
-    /// are not admitted."
+    /// Partial applications and `_` struct arguments are not admitted."
     fn argument_count(
         &mut self,
         name: &SyntaxToken,
