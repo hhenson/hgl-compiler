@@ -2107,7 +2107,9 @@ impl<'a> Typer<'a> {
         if node.kind() == SyntaxKind::ParenExpr {
             return self.default_value(&node.children().next()?, ty);
         }
-        let of_enum = match ty {
+        // TYPE-14: a `Zero?` is "either a T or null", and a member of
+        // `Zero` is a value of it.
+        let of_enum = match not_null(ty) {
             Some(Type::Named {
                 module,
                 declaration,

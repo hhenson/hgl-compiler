@@ -2821,6 +2821,9 @@ fn a_default_is_read_where_its_candidate_is_declared() {
                 // own (GEN-6).
                 "impl const fn ratio(lhs: i64, rhs: i64, mode: Zero = Zero.nan) -> i64\n",
                 "    requires mode == .nan => lhs\n",
+                // TYPE-14: an optional enum's default may be a member.
+                "impl const fn ratio<const zero: Zero? = Zero.error>(lhs: str, rhs: str) -> str\n",
+                "    requires zero == .error => lhs\n",
             ),
         ),
         (
@@ -2829,13 +2832,17 @@ fn a_default_is_read_where_its_candidate_is_declared() {
                 "module m\n",
                 "use lib::{ratio}\n",
                 // Padding, so that the call is not at the default's offset.
-                "const fn uses(a: f64, n: i64) {\n",
+                "const fn uses(a: f64, n: i64, text: str) {\n",
                 "    let real = ratio(a, a)\n",
                 "    let whole = ratio(n, n)\n",
+                "    let words = ratio(text, text)\n",
                 "}\n",
             ),
         ),
     ]);
     assert_eq!(checked.summary(), NONE);
-    assert_eq!(locals(&checked, "uses")[2..], ["real: f64", "whole: i64"]);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        ["real: f64", "whole: i64", "words: str"]
+    );
 }
