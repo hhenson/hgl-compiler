@@ -599,10 +599,23 @@ yet resolve. Once the enclosing call is settled and the place stays
 unknown, the argument is read as one of which nothing is expected and
 the report is made: in `same(repeat(1), repeat(2))` with nothing
 expected, each `repeat`. It is not reported where something else was
-reported for the call. Not read yet: a function with a type pack or a
-pack parameter, whose generic types are then not known; whether a value
-argument is a constant; the type of a value argument against its
-parameter's.
+reported for the call.
+
+A named argument may give a generic value parameter of the function
+(GEN-8): the name is looked for among the function's generic value
+parameters and then among its parameters. What it gives is a
+compile-time constant, or `generic.argument_constant`; it is held to
+the parameter's type; it decides before anything is inferred; and it is
+kept among the call's generic arguments, not its arguments. One given
+among the generic arguments too, `scale<4>(n, factor: 5)`, is
+`argument.duplicate`. A generic value parameter the call does not give,
+and no argument's type says anything of, takes its default. So for
+`const fn scale<const factor: i64 = 3>(value: i64)`, `scale(n)` has
+`factor` 3 and `scale(n, factor: 5)` has it 5.
+
+Not read yet: a function with a type pack or a pack parameter, whose
+generic types are then not known; the type of a generic argument written
+after the callee's name, `scale<"wide">(n)`, against its parameter's.
 
 A call of an operator may write the operator's generic arguments
 (GEN-8). Where they settle the operator's result, that is the output

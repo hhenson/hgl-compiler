@@ -1758,6 +1758,17 @@ impl<'a> Typer<'a> {
             return (kind, ty);
         };
 
+        // GEN-8: "A call may give a generic value parameter of its
+        // callee by name, among its named arguments". What the call
+        // writes decides first (GEN-2).
+        let value_names: Vec<&str> = generics
+            .iter()
+            .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
+            .map(|generic| generic.name.as_str())
+            .collect();
+        let reported = self.diagnostics.len();
+        let named = self.named_generics(list, generics, &mut found);
+
         // The requested output: `let names: list<str> = repeat(3)` says
         // what the `T` of `repeat<T>(count: i64) -> list<T>` is. A `T`
         // result given to a `T?` place is the `T`.
@@ -1790,13 +1801,20 @@ impl<'a> Typer<'a> {
                 .collect(),
             generics,
             settled: !expected.is_some_and(open),
+            aside: &value_names,
         };
-        let reported = self.diagnostics.len();
         let Inferred {
             arguments,
-            found,
+            mut found,
             unknown,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
+        self.generic_values(
+            name,
+            &program.modules[module].declarations[declaration],
+            generics,
+            &named,
+            &mut found,
+        );
 
         // GEN-8: "A call rejects when it leaves a generic parameter
         // unresolved." Not where something else was reported, or an
@@ -1868,6 +1886,158 @@ impl<'a> Typer<'a> {
             form: Form::Named,
         };
         (kind, ty)
+    }
+
+    /// The named arguments of a call that give a generic value
+    /// parameter of the callee, each recorded in `found` as the
+    /// constant it is. Returns each with the position of its parameter
+    /// among `generics`, in the order written.
+    ///
+    /// GEN-8: "A call may give a generic value parameter of its callee
+    /// by name, among its named arguments ... The value a call gives a
+    /// generic value parameter is a compile-time constant ... Any other
+    /// rejects."
+    fn named_generics(
+        &mut self,
+        list: &SyntaxNode,
+        generics: &[GenericParameter],
+        found: &mut [Option<Argument>],
+    ) -> Vec<(usize, SyntaxNode)> {
+        let mut named = Vec::new();
+        for (name, value) in arguments_of(list) {
+            let Some(name) = name else {
+                continue;
+            };
+            let index = generics.iter().position(|generic| {
+                matches!(generic.kind, GenericKind::Value(_)) && generic.name == name.text()
+            });
+            let Some(index) = index else {
+                continue;
+            };
+            // Given among the call's generic arguments too, `f<2>(N:
+            // 3)`, or twice by name.
+            if found[index].is_some() {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    Location::new(self.file, name.span()),
+                    format!("`{}` is given twice", name.text()),
+                    "EXPR-2",
+                ));
+                // Read for what it reports itself.
+                self.expression(&value, Some(&Type::Unknown));
+                continue;
+            }
+            if !self.is_compile_time(&value) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    self.at(&value),
+                    format!(
+                        "`{}` is a generic value parameter, and this is no compile-time \
+                         constant: it is known only when the program runs",
+                        name.text()
+                    ),
+                    "GEN-8",
+                ));
+            }
+            found[index] = Some(Argument::Constant(self.constant_here(&value)));
+            named.push((index, value));
+        }
+        named
+    }
+
+    /// What the generic value parameters of a function are at a call,
+    /// once its arguments are read: each one the call gives by name,
+    /// `named`, is held to its parameter's type, and each one nothing
+    /// says anything of takes its default.
+    ///
+    /// GEN-13: a generic value parameter has an ordinary type, which
+    /// may name a type parameter, the `T` of `<T, const fallback: T>`:
+    /// what the call gives `fallback` says what `T` is where the
+    /// parameters have not. GEN-8: "A generic value parameter the call
+    /// does not give takes its default, when it has one."
+    fn generic_values(
+        &mut self,
+        callee: &SyntaxToken,
+        declaration: &Declaration,
+        generics: &[GenericParameter],
+        named: &[(usize, SyntaxNode)],
+        found: &mut [Option<Argument>],
+    ) {
+        let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
+        // The type of the generic value parameter at `index`, with what
+        // has been found in place; `Type::Unknown` where it still names
+        // a parameter nothing has resolved.
+        let type_of = |index: usize, found: &[Option<Argument>]| {
+            let GenericKind::Value(pattern) = &generics[index].kind else {
+                return Type::Unknown;
+            };
+            let resolved: Vec<Argument> = found
+                .iter()
+                .map(|found| found.clone().unwrap_or(Argument::Type(Type::Unknown)))
+                .collect();
+            let map: Vec<(Location, &Argument)> = own.iter().copied().zip(&resolved).collect();
+            placed(substitute_within(pattern, &map), &own)
+        };
+        // GEN-12: in the order they are declared, whatever order the
+        // call writes them in.
+        let mut ordered: Vec<&(usize, SyntaxNode)> = named.iter().collect();
+        ordered.sort_by_key(|(index, _)| *index);
+        for (index, node) in ordered {
+            let GenericKind::Value(pattern) = &generics[*index].kind else {
+                continue;
+            };
+            let place = format!("the generic value parameter `{}`", generics[*index].name);
+            let expected = type_of(*index, found);
+            if whole(&expected) {
+                let value = self.expression(node, Some(&expected));
+                self.fit(value, &expected, &place);
+                continue;
+            }
+            // Its type names a parameter nothing has said anything of:
+            // what it is given says.
+            let value = self.expression(node, Some(&Type::Unknown));
+            infer(pattern, &value.ty, generics, found);
+            let expected = type_of(*index, found);
+            self.fit(value, &expected, &place);
+        }
+        let program = self.program;
+        for (index, generic) in generics.iter().enumerate() {
+            let GenericKind::Value(declared) = &generic.kind else {
+                continue;
+            };
+            if found[index].is_some() {
+                continue;
+            }
+            let Some(default) = generic_default(&declaration.syntax, generic) else {
+                continue;
+            };
+            found[index] = Some(Argument::Constant(constant_at(&default)));
+            // A default that is not of the type as it is declared is
+            // reported there (`signatures`). One whose type names a
+            // type parameter is of it for one call and not another: the
+            // `2` of `<T, const fallback: T = 2>` is no `str`.
+            let expected = type_of(index, found);
+            if constant_fits(program, &default, &expected) == Some(false)
+                && constant_fits(program, &default, declared) != Some(false)
+                && let Some(kind) = written(&default)
+            {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    Location::new(self.file, callee.span()),
+                    format!(
+                        "this call leaves `{}` to its default, {}, and `{}` is `{expected}` \
+                         here",
+                        generic.name,
+                        kind.described(),
+                        generic.name
+                    ),
+                    "GEN-13",
+                ));
+            }
+        }
     }
 
     /// What the generic arguments a call writes say of the callee's
@@ -1973,11 +2143,12 @@ impl<'a> Typer<'a> {
             patterns,
             generics,
             settled,
+            aside,
         } = places;
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
-        let assigned = self.assign(name, list, slots, takes);
+        let assigned = self.assign(name, list, slots, takes, aside);
         let mut values: Vec<Option<Expr>> = vec![None; assigned.len()];
         // True for a value kept from its first reading that is not
         // then fitted to its place.
@@ -3234,6 +3405,7 @@ impl<'a> Typer<'a> {
                     patterns: read.members.iter().map(|member| &member.ty).collect(),
                     generics: &read.generics,
                     settled,
+                    aside: &[],
                 };
                 let found = vec![None; read.generics.len()];
                 let Inferred {
@@ -3283,6 +3455,7 @@ impl<'a> Typer<'a> {
         list: &SyntaxNode,
         slots: &[Slot],
         takes: Takes,
+        aside: &[&str],
     ) -> Vec<(Option<usize>, SyntaxNode)> {
         let what = takes.noun();
         let callee_at = Location::new(self.file, callee.span());
@@ -3348,6 +3521,12 @@ impl<'a> Typer<'a> {
                 }
                 Some(name) => {
                     named_seen = true;
+                    // GEN-8: "A name binds the callee's generic value
+                    // parameter of that name, or else its parameter of
+                    // that name." One that does is no place's.
+                    if aside.contains(&name.text()) {
+                        continue;
+                    }
                     let name_at = Location::new(self.file, name.span());
                     let found = slots
                         .iter()
@@ -3412,7 +3591,7 @@ impl<'a> Typer<'a> {
         slots: &[Slot],
         takes: Takes,
     ) -> Vec<hir::Argument> {
-        self.assign(callee, list, slots, takes)
+        self.assign(callee, list, slots, takes, &[])
             .into_iter()
             .map(|(slot, value)| {
                 let expected = slot.map(|index| &slots[index]);
@@ -5586,6 +5765,10 @@ struct Places<'s> {
     /// own place is known, or it has none. False while the call is read
     /// before its place is, which may yet say what a parameter is.
     settled: bool,
+    /// The names that are no place's: a named argument under one gives
+    /// a generic value parameter of the callee (GEN-8), and is read
+    /// with the call's generic arguments.
+    aside: &'s [&'s str],
 }
 
 /// What [`Typer::infer_arguments`] read.
