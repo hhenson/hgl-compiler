@@ -153,8 +153,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-1 | analyser | planned | A chained comparison is typed as written, not as a conjunction |
 | EXPR-2 | analyser | partial | In a value function, the arguments of a value function's call, positional before named, and of a struct's construction, all named; duplicate, unknown, missing, surplus and mistyped arguments rejected. A named operator call, and a symbol's configuration, may name an option its candidates declare. Left: what a pack holds; a generic function's parameter types; temporal bodies |
 | EXPR-2 | transpiler | planned | Arguments evaluated once in written order |
-| EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned, through `if`, `switch` and loops (CTRL-11). In a graph a local is a connection or an ordinary value by its first value. Left: a `var` reassigned across the two; conditionals and loops in composition |
-| EXPR-4 | analyser | partial | In a graph each value is a connection or an ordinary value: a temporal parameter and the result of a temporal or lifted call are connections. Left: reassigning a graph `var` rewires; a reassignment across the two rejected |
+| EXPR-3 | analyser | partial | A local has the type written or its first value's; only a `var` is assigned, with a value of its type; a `var` is read only once assigned, through `if`, `switch` and loops (CTRL-11). In a graph a local is a connection or an ordinary value by its first value. A `var` of a graph declared with no value takes the category of its first assignment. Left: loops in composition |
+| EXPR-4 | analyser | partial | In a graph each value is a connection or an ordinary value: a temporal parameter and the result of a temporal or lifted call are connections. A reassignment across the two is rejected (`binding.category`, with CTRL-14). Left: reassigning a graph `var` rewires |
 | EXPR-5 | analyser | partial | A value fits the type its place expects; an integer literal is an `f64` where one is expected, and a value that has a type is not converted; `null`, a tuple and a sequence take the expected type. Left: const expression restrictions; temporal bodies |
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
@@ -255,12 +255,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| CTRL-1 | analyser | planned | Wiring-time, temporal and value conditions told apart |
+| CTRL-1 | analyser | partial | In a graph an `if` is told apart by its condition: an ordinary `bool` composes one branch, a connection selects a child graph at runtime; in a value function and a hook it is ordinary control flow. Left: `switch` and loops in a graph |
 | CTRL-2 | transpiler | planned | Only the selected child runs; a changed selector restarts it |
-| CTRL-3 | analyser | planned | Type of a temporal `if` without `else` |
+| CTRL-3 | analyser | done | A temporal `if` with no `else` whose value is used is a connection of `T`, not a `T?` (with CTRL-13) |
 | CTRL-3 | transpiler | planned | The never-ticking branch |
-| CTRL-4 | analyser | planned | Escaping assignments need an enclosing declaration; branch locals stay local |
-| CTRL-5 | analyser | partial | In a value function, a path that has returned takes no part in what is assigned or in the type of an `if`. Left: composition and runtime bodies |
+| CTRL-4 | analyser | partial | A branch's locals do not escape. A `var` assigned under a temporal condition has a binding before the `if`, or every branch assigns it (with CTRL-14). Left: several results kept as separate connections |
+| CTRL-5 | analyser | partial | In a value function, a path that has returned takes no part in what is assigned or in the type of an `if`. In a graph a `return` with a value in a branch selected at runtime needs the continuation to return (CTRL-14). Left: runtime bodies |
 | CTRL-6 | analyser | partial | In a value function, a label is of the selector's type; a repeated literal or enum member is rejected (`switch.duplicate_label`); an enum's coverage stands for a `default`. Left: a label that is no constant; temporal bodies |
 | CTRL-6 | transpiler | planned | No fallthrough; an unmatched selector uses default or fails |
 | CTRL-7 | analyser | planned | What a composition loop receives |
@@ -273,6 +273,12 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-11 | analyser | partial | In a value function: what is assigned after an `if`, a `switch` and a loop; a `var` written `T?` is null from its declaration. Left: temporal bodies |
 | CTRL-12 | analyser | partial | In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector. Left: a label that is no constant |
 | CTRL-12 | transpiler | planned | The loops and the `switch` of a value function |
+| CTRL-13 | analyser | done | In a graph the condition of an `if` is a `bool`, a value or a connection; the `if` has its branches' one type, and is a connection when its condition or a branch is one; with no `else` it is a `T` connection under a temporal condition, and a `T?` or a `T` connection under a wiring-time one by what its branch is |
+| CTRL-13 | transpiler | planned | A child graph for each branch of a temporal `if`; an ordinary value in a branch wired as a constant |
+| CTRL-14 | analyser | partial | A `var` of a graph keeps the category of its first value, and one that holds an ordinary value is not assigned in a branch selected at runtime (`binding.category`); a `return` with a value in such a branch needs every path to return (`return.missing`). Left: the same in a `switch`'s cases |
+| CTRL-14 | transpiler | planned | A `var` after a temporal `if` as one connection; the result of a graph that returns in a branch |
+| CTRL-15 | analyser | planned | `switch` over a value and over a connection; what `for` binds over ordinary data, a fixed list, and a growing list, a set and a dictionary (`loop.carried`); `while` with an ordinary condition |
+| CTRL-15 | transpiler | planned | One case, or one child for each member; a wiring-time loop unrolled |
 | SOURCE-1 | analyser | planned | What a body containing `yield` may hold |
 | SOURCE-2 | transpiler | planned | Yield evaluates its time, then its payload; target validation |
 | SOURCE-3 | transpiler | planned | Targets strictly increase; skip, publish or suspend |

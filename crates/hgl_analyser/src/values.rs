@@ -193,6 +193,14 @@ struct Typer<'a> {
     /// temporal parameter is a connection and no payload is read
     /// (FN-3).
     graph: bool,
+    /// Inside a branch of an `if` whose condition is a connection, how
+    /// many locals there were where the outermost such branch began: a
+    /// `var` before that is declared outside it (CTRL-14).
+    temporal: Option<usize>,
+    /// True once a `return` with a value stands in a branch selected at
+    /// runtime: the graph's result is then the continuation's where the
+    /// branch is not selected, so every path returns (CTRL-14).
+    must_return: bool,
     /// The hook of a node being read; `None` in a value function, and
     /// between a node's hooks.
     hook: Option<Hook>,
@@ -261,6 +269,8 @@ impl<'a> Typer<'a> {
             returned: false,
             unsure: false,
             graph: false,
+            temporal: None,
+            must_return: false,
             hook: None,
             out: None,
             present: Vec::new(),
@@ -746,13 +756,15 @@ impl<'a> Typer<'a> {
             }
         };
         // FN-7: "A `const fn` that declares a result ends every path in
-        // `return value` or in its body's value". What a graph's body
-        // comes to is for the part that reads composition whole.
+        // `return value` or in its body's value". CTRL-14: a graph that
+        // returns a value in a branch selected at runtime does too:
+        // "the continuation returns a value too, and one that can reach
+        // its end with none rejects."
         if let Some(result) = &result
             && !open(result)
             && !self.returned
             && !self.unsure
-            && !self.graph
+            && (!self.graph || self.must_return)
         {
             self.diagnostics.emit(error(
                 Category::Type,
@@ -858,6 +870,12 @@ impl<'a> Typer<'a> {
                         ),
                     );
                 }
+                // CTRL-14: "A `return value` in a branch of a temporal
+                // `if` makes the graph's result that value while the
+                // branch is selected and the continuation's otherwise".
+                if value.is_some() && self.temporal.is_some() {
+                    self.must_return = true;
+                }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
                 Stmt::Return { value, at }
@@ -945,6 +963,9 @@ impl<'a> Typer<'a> {
         // category".
         self.locals[local].category = match &value {
             Some(value) if self.graph => self.category(value),
+            // A `var` of a graph declared with no value: its first
+            // assignment says what it is.
+            None if self.graph => ValueCategory::Unsettled,
             _ => ValueCategory::Value,
         };
         Stmt::Declare { local, value }
@@ -1047,12 +1068,64 @@ impl<'a> Typer<'a> {
             }
         };
         self.assigned[local] = true;
+        if self.graph {
+            self.assigned_category(local, &value);
+        }
         Stmt::Assign {
             local,
             operator,
             value,
             at,
         }
+    }
+
+    /// The category of a graph's `var` against that of a value assigned
+    /// to it.
+    ///
+    /// CTRL-14: "A `var` keeps the category of its first value
+    /// (EXPR-3): a connection assigned to one that holds an ordinary
+    /// value, or the reverse, rejects (EXPR-4). Under a temporal
+    /// condition a `var` declared before the `if` is assigned in a
+    /// branch only where it is a connection: one that holds an ordinary
+    /// value would have its value chosen at runtime, and the assignment
+    /// rejects." A `var` declared with no value takes the category of
+    /// the first value it is assigned, and what is not settled is not
+    /// judged.
+    fn assigned_category(&mut self, local: LocalId, value: &Expr) {
+        use ValueCategory::{Connection, Unsettled, Value};
+        let given = self.category(value);
+        if self.locals[local].category == Unsettled {
+            self.locals[local].category = given;
+        }
+        let held = self.locals[local].category;
+        // Declared before the outermost branch selected at runtime.
+        let chosen_at_runtime = self.temporal.is_some_and(|outside| local < outside);
+        let name = self.locals[local].name.clone();
+        let message = match (held, given) {
+            (Value, Connection) => format!(
+                "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
+                 the category of its first value"
+            ),
+            (Connection, Value) => format!(
+                "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
+                 category of its first value"
+            ),
+            (Value, Value) if chosen_at_runtime => format!(
+                "`{name}` holds an ordinary value, and this branch is selected at runtime: \
+                 its value would not be known while the graph is built"
+            ),
+            _ => return,
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::BINDING_CATEGORY,
+                value.at,
+                message,
+                "CTRL-14",
+            )
+            .with_related(self.locals[local].at, "declared here"),
+        );
     }
 
     // ---- Expressions ----
@@ -1215,6 +1288,19 @@ impl<'a> Typer<'a> {
             ExprKind::Block {
                 value: Some(value), ..
             } => self.category(value),
+            // CTRL-13: "It is a connection when its condition is one or
+            // either branch's value is".
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let branches = match otherwise {
+                    Some(otherwise) => join(self.category(then), self.category(otherwise)),
+                    None => self.category(then),
+                };
+                join(self.category(condition), branches)
+            }
             _ => Value,
         }
     }
@@ -7078,19 +7164,6 @@ impl<'a> Typer<'a> {
     fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
         match node.kind() {
             SyntaxKind::Block => self.block(node, expected, used),
-            // CTRL-1: in composition a condition chooses which branch
-            // to compose, or selects a child graph when it is temporal.
-            // That is for a later part, and is not read.
-            SyntaxKind::IfExpr if self.graph => {
-                self.forget();
-                self.unsure = true;
-                let unread = Expr {
-                    kind: ExprKind::Unread,
-                    ty: Type::Unknown,
-                    at: self.at(node),
-                };
-                (unread, Outcome::Value(Type::Unknown))
-            }
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
             SyntaxKind::ParenExpr if node.children().next().is_some() => {
                 // "Parentheses select grouping" (EXPR-1).
@@ -7181,10 +7254,16 @@ impl<'a> Typer<'a> {
                 codes::TYPE_MISMATCH,
                 value.at,
                 format!("this is `{}`, and a condition is a `bool`", value.ty),
-                "CTRL-10",
+                self.conditional_rule(),
             ));
         }
         value
+    }
+
+    /// The rule that says what an `if` is where this one stands:
+    /// CTRL-13 in a graph, CTRL-10 in a value function and a hook.
+    fn conditional_rule(&self) -> &'static str {
+        if self.graph { "CTRL-13" } else { "CTRL-10" }
     }
 
     /// One branch of an `if`, read from what is assigned before the
@@ -7245,6 +7324,20 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let condition = self.condition(&condition);
+        // CTRL-1: "A wiring-time condition chooses which branch to
+        // compose. A temporal condition in composition selects a child
+        // graph at runtime."
+        let selects = if self.graph {
+            self.category(&condition)
+        } else {
+            ValueCategory::Value
+        };
+        // The outermost branch selected at runtime: a `var` before it
+        // is declared outside (CTRL-14).
+        let outer = self.temporal;
+        if selects == ValueCategory::Connection && outer.is_none() {
+            self.temporal = Some(self.locals.len());
+        }
         // ERR-12: the bindings the condition proves are not null, where
         // it holds and where it does not.
         let (when_true, when_false) = self.null_tests(&condition);
@@ -7286,6 +7379,7 @@ impl<'a> Typer<'a> {
                 (then, Some(other))
             }
         };
+        self.temporal = outer;
         // ERR-12: "including after a terminating null branch". Where
         // one branch returns, what follows the `if` is reached only
         // through the other, and what that one's side of the condition
@@ -7337,6 +7431,22 @@ impl<'a> Typer<'a> {
                     (_, None) => then.value.ty.clone(),
                 };
                 Outcome::Value(ty)
+            }
+            // CTRL-13: with no `else`, "under a temporal condition it is
+            // a connection of `T` that never ticks while the condition
+            // is false (CTRL-3): `T`, not `T?`. Under a wiring-time
+            // condition a branch that is an ordinary value makes it a
+            // `T?`, as in a value function, and a branch that is a
+            // connection makes it a connection of `T` that never ticks
+            // where the branch is not composed." Where which it is is
+            // not settled, neither is the type.
+            (Outcome::Value(ty), None) if self.graph => {
+                use ValueCategory::{Connection, Unsettled, Value};
+                match (selects, self.category(&then.value)) {
+                    (Connection, _) | (Value, Connection) => Outcome::Value(ty),
+                    (Value, Value) => Outcome::Value(nullable(ty)),
+                    (Unsettled, _) | (_, Unsettled) => Outcome::Value(Type::Unknown),
+                }
             }
             // "With no `else` it is as if its `else` were null: its
             // value is a `T?`".
@@ -7396,7 +7506,7 @@ impl<'a> Typer<'a> {
             codes::TYPE_MISMATCH,
             other.at,
             format!("this branch is `{second}`, and the other is `{first}`"),
-            "CTRL-10",
+            self.conditional_rule(),
         ));
         first
     }

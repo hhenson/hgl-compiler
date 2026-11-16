@@ -195,3 +195,139 @@ fn a_connection_is_no_constant() {
         ]
     );
 }
+
+/// CTRL-1: "A wiring-time condition chooses which branch to compose. A
+/// temporal condition in composition selects a child graph at runtime."
+/// CTRL-13: "In composition the condition of an `if` is a `bool`, an
+/// ordinary value or a connection: a `bool?` or any other type rejects.
+/// An `if` whose value is used has the one type its branches' values
+/// have, and two types reject. It is a connection when its condition is
+/// one or either branch's value is ... With no `else`, under a temporal
+/// condition it is a connection of `T` that never ticks while the
+/// condition is false (CTRL-3): `T`, not `T?`. Under a wiring-time
+/// condition a branch that is an ordinary value makes it a `T?` ... and
+/// a branch that is a connection makes it a connection of `T`".
+#[test]
+fn an_if_in_a_graph_is_composed_or_selected() {
+    let checked = module(concat!(
+        "const fn scale(value: f64, factor: f64 = 2.0) -> f64 => value * factor\n",
+        "fn uses(price: f64, open: bool, const wide: bool, count: i64, maybe: bool?) -> f64 {\n",
+        // A wiring-time condition: one branch is composed.
+        "    let sized = if wide { scale(price) } else { price }\n",
+        "    let fixed = if wide { 1.0 } else { 2.0 }\n",
+        // A temporal condition selects at runtime; an ordinary value in
+        // a branch is wired as a constant.
+        "    let picked = if open { scale(price) } else { price }\n",
+        "    let wired = if open { 1.0 } else { 2.0 }\n",
+        // With no `else`.
+        "    let gated = if open { price }\n",
+        "    let some = if wide { 1.0 }\n",
+        "    let lone = if wide { price }\n",
+        // A condition that is no `bool`, and branches of two types.
+        "    let bad1 = if count { price } else { price }\n",
+        "    let bad2 = if maybe { price } else { price }\n",
+        "    let bad3 = if open { price } else { \"text\" }\n",
+        "    return picked\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:19 type/type.mismatch CTRL-13",
+            "m.hgl:12:19 type/type.mismatch CTRL-13",
+            "m.hgl:13:39 type/type.mismatch CTRL-13",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[5..12],
+        [
+            "sized: f64 (connection)",
+            "fixed: f64",
+            "picked: f64 (connection)",
+            "wired: f64 (connection)",
+            "gated: f64 (connection)",
+            "some: f64?",
+            "lone: f64 (connection)",
+        ]
+    );
+}
+
+/// CTRL-14: "A `var` keeps the category of its first value (EXPR-3): a
+/// connection assigned to one that holds an ordinary value, or the
+/// reverse, rejects (EXPR-4). Under a temporal condition a `var`
+/// declared before the `if` is assigned in a branch only where it is a
+/// connection ... After the `if` the `var` is one connection: the
+/// branch's binding while that branch is selected, and the binding it
+/// had before for a branch that does not assign it (CTRL-4). With none
+/// before, every branch that does not return assigns it."
+#[test]
+fn a_var_of_a_graph_keeps_its_category() {
+    let checked = module(concat!(
+        "const fn scale(value: f64, factor: f64 = 2.0) -> f64 => value * factor\n",
+        "fn adjusted(price: f64, rising: bool) -> f64 {\n",
+        "    var chosen = price\n",
+        "    if rising { chosen = scale(price) }\n",
+        "    return chosen\n",
+        "}\n",
+        // With no binding before, every branch assigns it.
+        "fn late(price: f64, rising: bool) -> f64 {\n",
+        "    var chosen: f64\n",
+        "    if rising { chosen = scale(price) } else { chosen = price }\n",
+        "    return chosen\n",
+        "}\n",
+        "fn clashes(price: f64, rising: bool, const wide: bool) -> f64 {\n",
+        "    var level = 1.0\n",
+        // An ordinary value to an ordinary value, and under a
+        // wiring-time condition.
+        "    level = 2.0\n",
+        "    if wide { level = 3.0 }\n",
+        // A connection to one that holds an ordinary value, and the
+        // reverse.
+        "    level = price\n",
+        "    var held = price\n",
+        "    held = 2.0\n",
+        // An ordinary value chosen at runtime.
+        "    if rising { level = 4.0 }\n",
+        // A `var` of the branch itself is the branch's.
+        "    if rising {\n",
+        "        var inner = 1.0\n",
+        "        inner = 2.0\n",
+        "    }\n",
+        // Assigned in one branch of two, and none before.
+        "    var unset: f64\n",
+        "    if rising { unset = price }\n",
+        "    return unset\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:13 type/binding.category CTRL-14",
+            "m.hgl:19:12 type/binding.category CTRL-14",
+            "m.hgl:20:25 type/binding.category CTRL-14",
+            "m.hgl:27:12 name/binding.unassigned EXPR-3",
+        ]
+    );
+    assert_eq!(locals(&checked, "late")[2..], ["chosen: f64 (connection)"]);
+}
+
+/// CTRL-14: "A `return value` in a branch of a temporal `if` makes the
+/// graph's result that value while the branch is selected and the
+/// continuation's otherwise (CTRL-5): the continuation returns a value
+/// too, and one that can reach its end with none rejects."
+#[test]
+fn a_return_selected_at_runtime_needs_its_continuation() {
+    let checked = module(concat!(
+        "fn early(price: f64, open: bool) -> f64 {\n",
+        "    if open { return price }\n",
+        "    return price * 2.0\n",
+        "}\n",
+        "fn both(price: f64, open: bool) -> f64 {\n",
+        "    if open { return price } else { return price * 2.0 }\n",
+        "}\n",
+        "fn falls(price: f64, open: bool) -> f64 {\n",
+        "    if open { return price }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:9:4 type/return.missing FN-7"]);
+}
