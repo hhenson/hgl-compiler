@@ -62,7 +62,7 @@ fn every_form_of_type_is_read() {
         "    n: zoned_time) {}\n",
         "fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
         "    e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>,\n",
-        "    i: result<f64, error>, j: error, k: delta<list<f64>>, l: T, m: f64?)\n",
+        "    i: result<f64, error>, j: error, k: delta<set<f64>>, l: T, m: f64?)\n",
         "    -> list<dict<str, Box<Quote>>> {}\n",
         "fn named(a: Quote, b: Box<i64>, c: Side, d: Handle) {}\n",
     ));
@@ -76,7 +76,7 @@ fn every_form_of_type_is_read() {
         signature(&checked, "shapes"),
         "<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>, \
          e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>, i: result<f64, error>, \
-         j: error, k: delta<list<f64>>, l: T, m: f64?) -> list<dict<str, Box<Quote>>>"
+         j: error, k: delta<set<f64>>, l: T, m: f64?) -> list<dict<str, Box<Quote>>>"
     );
     assert_eq!(
         signature(&checked, "named"),
@@ -173,7 +173,7 @@ fn types_are_read_wherever_they_are_written() {
         "    when {\n",
         "        let boxed: Box<i64> = Box<i64>(value: 1)\n",
         "        var total: i64\n",
-        "        let change = delta<list<f64>>(added: [])\n",
+        "        let change = delta<set<f64>>(added: [])\n",
         "        let adder = fn(x: i64) -> i64 => x + 1\n",
         "        return 0\n",
         "    }\n",
@@ -195,7 +195,7 @@ fn types_are_read_wherever_they_are_written() {
             "Box<i64>",
             "Box<i64>",
             "i64",
-            "delta<list<f64>>",
+            "delta<set<f64>>",
             "i64",
             "i64",
             "tuple<i64, str>",
@@ -581,7 +581,7 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
         "struct Quote { bid: f64 }\n",
         // What may hold an endpoint or a temporal shape.
         "fn good(a: list<ref<f64>>, b: dict<str, ref<f64>>, c: tuple<ref<f64>, atomic<Quote>>,\n",
-        "    d: dict<str, rolling<f64, 5>>, e: ref<list<f64>>, f: delta<ref<f64>>,\n",
+        "    d: dict<str, rolling<f64, 5>>, e: ref<list<f64>>, f: delta<rolling<f64, 5>>,\n",
         "    g: set<tuple<i64, list<str>>>, h: atomic<dict<str, list<Quote>>>) {}\n",
         "fn sets(a: set<ref<f64>>, b: set<rolling<f64, 5>>, c: set<atomic<Quote>>) {}\n",
         "fn keys(a: dict<ref<str>, f64>, b: dict<atomic<Quote>, f64>) {}\n",

@@ -90,8 +90,8 @@ pub use program::{
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
-    GenericKind, GenericParameter, Member, Pack, Parameter, Scalar, Signature, StructType, Type,
-    WrittenType,
+    GenericKind, GenericParameter, Member, NamedKind, Pack, Parameter, Scalar, Signature,
+    StructType, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -250,6 +250,8 @@ pub mod codes {
     /// ordinary value type may stand, under a `?` included (TYPE-12,
     /// TYPE-14 and the grammar's `value_type`).
     pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
+    /// `delta<T>` of a T that has no delta (TYPE-16).
+    pub const DELTA_UNSUPPORTED_SHAPE: &str = "delta.unsupported_shape";
     /// `signal` somewhere other than the whole type of an input
     /// (TYPE-12).
     pub const SIGNAL_POSITION: &str = "signal.position";

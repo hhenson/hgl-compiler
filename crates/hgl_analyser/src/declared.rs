@@ -396,10 +396,12 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             module,
             declaration,
             arguments,
+            kind,
         } => Type::Named {
             name: name.clone(),
             module: *module,
             declaration: *declaration,
+            kind: *kind,
             arguments: arguments
                 .iter()
                 .map(|argument| match argument {
@@ -449,8 +451,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             value: part(value),
             error: part(error),
         },
-        Type::Delta(inner) => Type::Delta(part(inner)),
-        Type::Nullable(inner) => Type::Nullable(part(inner)),
+        // TYPE-16: "In a generic declaration it stays as written until
+        // T is known", and is then what the table gives for that T.
+        Type::Delta(inner) => Type::delta(substitute(inner, map)),
+        // TYPE-14: "either a T or null". A `T?` whose T is given a
+        // nullable type is that type.
+        Type::Nullable(inner) => match substitute(inner, map) {
+            inner @ Type::Nullable(_) => inner,
+            inner => Type::Nullable(Box::new(inner)),
+        },
         Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => ty.clone(),
     }
 }
@@ -615,6 +624,7 @@ impl Structs<'_> {
                     module,
                     declaration,
                     arguments,
+                    ..
                 } => {
                     let parent = (*module, *declaration);
                     let declared = self.declaration(parent);
