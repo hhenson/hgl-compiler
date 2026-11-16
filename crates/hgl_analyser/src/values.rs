@@ -4269,10 +4269,12 @@ impl<'a> Typer<'a> {
     /// `None` when it cannot be told.
     ///
     /// Types that name a generic parameter of the declaration being
-    /// read are callable as its own requirements state (GEN-7). Any
-    /// other is callable when one most-specific candidate admits it
-    /// (GEN-5): a value candidate, or with `composes` any, as a call in
-    /// composition selects.
+    /// read are callable where its own requirements state it (GEN-7).
+    /// Otherwise, and for any other types, the operator is callable
+    /// when one most-specific candidate admits them (GEN-5): a value
+    /// candidate, or with `composes` any, as a call in composition
+    /// selects. So a candidate that takes any one type, core's
+    /// `eq_<T>`, answers for a generic parameter with nothing stated.
     fn callable(
         &mut self,
         operator: OperatorRef,
@@ -4299,7 +4301,9 @@ impl<'a> Typer<'a> {
                         .all(|(stated, (_, ty))| stated == ty)
                     && (result.is_none() || requirement.result.as_ref() == result)
             });
-            return Some(stated);
+            if stated {
+                return Some(true);
+            }
         }
         if self.requiring >= REQUIRING {
             return None;
@@ -4410,44 +4414,80 @@ impl<'a> Typer<'a> {
 
     /// What the enclosing declaration's requirements say of a call of
     /// `operator` with the arguments `given`: `Some` when one of them
-    /// is that call, with the result its arrow states.
+    /// is that call, with the result its arrow states and the
+    /// parameter of the operator each argument is given to.
     ///
     /// GEN-7: "A generic body is checked under its stated
     /// requirements". A requirement is the call when it names the
     /// operator and is supplied with the arguments' types, each in its
     /// place: under `requires add_(T, T) -> T`, `add_(lhs, rhs)` of two
-    /// `T` is a `T`. It speaks for arguments of which one is of a type
-    /// that names a generic parameter of the declaration: any other
-    /// call selects its candidate here, as it does in a body that has
-    /// no generic parameter.
-    fn required(&self, operator: OperatorRef, given: &[&Given]) -> Option<Option<Type>> {
+    /// `T` is a `T`, and so is `add_(rhs: b, lhs: a)`. It speaks for
+    /// arguments of which one is of a type that names a generic
+    /// parameter of the declaration: any other call selects its
+    /// candidate here, as it does in a body that has no generic
+    /// parameter.
+    fn required(
+        &self,
+        operator: OperatorRef,
+        given: &[&Given],
+    ) -> Option<(Option<Type>, Vec<usize>)> {
         let own: Vec<Location> = self
             .signature
             .generics
             .iter()
             .map(|generic| generic.at)
             .collect();
-        // Each argument in its position, with a type of its own.
-        let positional = given.iter().enumerate().all(|(position, given)| {
-            matches!(given.key, Key::Position(at) if at == position)
-                && !given.by_place
-                && !given.retried
-        });
-        if !positional || !given.iter().any(|given| mentions(&given.value.ty, &own)) {
+        let Some(Detail::Callable(public)) = self.program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
             return None;
+        };
+        // EXPR-2: "Named arguments use the selected public callable's
+        // parameter names". Each argument is given to one of the
+        // operator's own parameters, by its position or by that
+        // parameter's name (GEN-4), and has a type of its own. A name
+        // the operator does not declare is an option of a candidate,
+        // which no requirement speaks for.
+        let mut places = Vec::with_capacity(given.len());
+        for argument in given {
+            if argument.by_place || argument.retried {
+                return None;
+            }
+            let place = match &argument.key {
+                Key::Position(position) => *position,
+                Key::Name(name) => public
+                    .parameters
+                    .iter()
+                    .position(|parameter| parameter.name == *name)?,
+            };
+            // The operands a requirement is supplied with stand in the
+            // operator's first places, each given once.
+            if place >= given.len() || places.contains(&place) {
+                return None;
+            }
+            places.push(place);
+        }
+        if !given.iter().any(|given| mentions(&given.value.ty, &own)) {
+            return None;
+        }
+        // The type given to each place, in the operator's order.
+        let mut supplied: Vec<&Type> = vec![&Type::Unknown; given.len()];
+        for (given, &place) in given.iter().zip(&places) {
+            supplied[place] = &given.value.ty;
         }
         self.requirements()
             .into_iter()
             .find(|requirement| {
                 requirement.operator == operator
-                    && requirement.operands.len() == given.len()
+                    && requirement.operands.len() == supplied.len()
                     && requirement
                         .operands
                         .iter()
-                        .zip(given)
-                        .all(|(operand, given)| *operand == given.value.ty)
+                        .zip(&supplied)
+                        .all(|(operand, supplied)| operand == *supplied)
             })
-            .map(|requirement| requirement.result)
+            .map(|requirement| (requirement.result, places))
     }
 
     /// The call of an operation the enclosing declaration requires
@@ -4457,7 +4497,7 @@ impl<'a> Typer<'a> {
     fn call_required(
         &mut self,
         operator: OperatorRef,
-        result: Option<Type>,
+        (result, places): (Option<Type>, Vec<usize>),
         given: Vec<Given>,
         form: Form,
     ) -> (ExprKind, Type) {
@@ -4472,9 +4512,9 @@ impl<'a> Typer<'a> {
         };
         let arguments = given
             .into_iter()
-            .enumerate()
-            .map(|(position, given)| hir::Argument {
-                parameter: (position < parameters).then_some(position),
+            .zip(places)
+            .map(|(given, place)| hir::Argument {
+                parameter: (place < parameters).then_some(place),
                 value: given.value,
             })
             .collect();

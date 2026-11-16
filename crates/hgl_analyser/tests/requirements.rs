@@ -108,6 +108,13 @@ fn a_generic_body_calls_what_its_requirements_state() {
         "    let ones: list<T> = [one]\n",
         "    return ones + ones\n",
         "}\n",
+        // EXPR-2: "Named arguments use the selected public callable's
+        // parameter names": the operator's, `lhs` and `rhs`.
+        "const fn named<T>(a: T, b: T) -> T requires sub_(T, T) -> T {\n",
+        "    let both = sub_(lhs: a, rhs: b)\n",
+        "    let mixed = sub_(a, rhs: b)\n",
+        "    return sub_(rhs: b, lhs: a)\n",
+        "}\n",
         // With no arrow the requirement says only that the call is
         // admitted: what it gives is not known.
         "const fn loose<T>(a: T) requires add_(T, T) {\n",
@@ -119,6 +126,23 @@ fn a_generic_body_calls_what_its_requirements_state() {
     assert_eq!(callees(&checked, "sum"), ["add_"]);
     assert_eq!(callees(&checked, "difference"), ["neg_", "sub_", "sub_"]);
     assert_eq!(callees(&checked, "scaled"), ["mul_", "add_"]);
+    assert_eq!(callees(&checked, "named"), ["sub_", "sub_", "sub_"]);
+    // Each argument is recorded with the operator's parameter it is
+    // given to: `sub_(rhs: b, lhs: a)` gives `b` to the second.
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = body(&checked, "named").statements.last()
+    else {
+        panic!("a return with a value");
+    };
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("a call: {:?}", value.kind);
+    };
+    let given: Vec<Option<usize>> = arguments
+        .iter()
+        .map(|argument| argument.parameter)
+        .collect();
+    assert_eq!(given, [Some(1), Some(0)]);
     assert_eq!(
         locals(&checked, "difference")[2..],
         ["negated: T", "whole: T"]
@@ -147,6 +171,10 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
         "    requires add_(T, T) -> T || sub_(T, T) -> T => add_(a, a)\n",
         // The arrow's type is the call's.
         "const fn wrong<T>(a: T) -> i64 requires add_(T, T) -> T => add_(a, a)\n",
+        // A name the operator does not declare is a candidate's option,
+        // which no requirement speaks for.
+        "const fn option<T>(a: T) -> T\n",
+        "    requires div_(T, T) -> T => div_(a, a, zero: .fail)\n",
         // A symbol is its call: `+`, `<` and a minus need theirs stated.
         "const fn plus<T>(a: T, b: T) -> T => a + b\n",
         "const fn less<T>(a: T, b: T) -> bool => a < b\n",
@@ -163,9 +191,10 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
             "m.hgl:4:66 operator/operator.no_candidate GEN-5",
             "m.hgl:6:52 operator/operator.no_candidate GEN-5",
             "m.hgl:7:60 type/type.mismatch EXPR-5",
-            "m.hgl:8:40 operator/operator.no_candidate OPS-1",
-            "m.hgl:9:43 operator/operator.no_candidate OPS-2",
-            "m.hgl:10:33 operator/operator.no_candidate OPS-1",
+            "m.hgl:9:33 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:40 operator/operator.no_candidate OPS-1",
+            "m.hgl:11:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:12:33 operator/operator.no_candidate OPS-1",
         ]
     );
 }
@@ -232,6 +261,11 @@ fn a_requirement_is_met_by_the_callers_own() {
         "impl const fn total<T>(a: T, b: T) -> T requires add_(T, T) -> T => add_(a, b)\n",
         "const fn stated<T>(a: T) -> T requires add_(T, T) -> T => total(a, a)\n",
         "const fn unstated<T>(a: T) -> T => total(a, a)\n",
+        // A requirement nothing states is still met by a candidate that
+        // takes any one type: core's `eq_<T>`.
+        "operator alike<T>(a: T, b: T) -> bool\n",
+        "impl const fn alike<T>(a: T, b: T) -> bool requires eq_(T, T) -> bool => a == b\n",
+        "const fn compared<T>(a: T, b: T) -> bool => alike(a, b)\n",
         // Two candidates told apart by a requirement and its negation.
         "operator describe<T>(a: T) -> str\n",
         "impl const fn describe<T>(a: T) -> str requires add_(T, T) -> T => \"added\"\n",
@@ -246,6 +280,7 @@ fn a_requirement_is_met_by_the_callers_own() {
         ["m.hgl:5:36 operator/operator.no_candidate GEN-5"]
     );
     assert_eq!(callees(&checked, "stated"), ["candidate"]);
+    assert_eq!(callees(&checked, "compared"), ["candidate"]);
     assert_eq!(callees(&checked, "uses"), ["candidate", "candidate"]);
 }
 
