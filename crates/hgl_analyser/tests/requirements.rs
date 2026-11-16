@@ -122,6 +122,8 @@ fn a_generic_body_calls_what_its_requirements_state() {
         // The parameter may stand in the result alone.
         "operator make<O>() -> O\n",
         "const fn build<T>() -> T requires make() -> T => make()\n",
+        // GEN-8: the call may write the operator's generic arguments.
+        "const fn built<T>() -> T requires make() -> T => make<T>()\n",
         // With no arrow the requirement says only that the call is
         // admitted: what it gives is not known.
         "const fn loose<T>(a: T) requires add_(T, T) {\n",
@@ -138,6 +140,7 @@ fn a_generic_body_calls_what_its_requirements_state() {
     );
     assert_eq!(callees(&checked, "named"), ["sub_", "sub_", "sub_"]);
     assert_eq!(callees(&checked, "build"), ["make"]);
+    assert_eq!(callees(&checked, "built"), ["make"]);
     // Each argument is recorded with the operator's parameter it is
     // given to: `sub_(rhs: b, lhs: a)` gives `b` to the second.
     let Some(Stmt::Return {
@@ -190,6 +193,9 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
         "    requires add_(T, T) -> T || sub_(T, T) -> T => add_(a, a)\n",
         // The arrow's type is the call's.
         "const fn wrong<T>(a: T) -> i64 requires add_(T, T) -> T => add_(a, a)\n",
+        // Generic arguments the requirement does not agree with.
+        "operator make<O>() -> O\n",
+        "const fn unlike<T, U>() -> T requires make() -> T => make<U>()\n",
         // A sequence that is not of the type supplied.
         "const fn lists<T>(a: T) -> list<T>\n",
         "    requires add_(list<T>, list<T>) -> list<T> => [a] + [1]\n",
@@ -213,11 +219,12 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
             "m.hgl:4:66 operator/operator.no_candidate GEN-5",
             "m.hgl:6:52 operator/operator.no_candidate GEN-5",
             "m.hgl:7:60 type/type.mismatch EXPR-5",
-            "m.hgl:9:55 operator/operator.no_candidate OPS-1",
-            "m.hgl:11:33 operator/operator.no_candidate GEN-5",
-            "m.hgl:12:40 operator/operator.no_candidate OPS-1",
-            "m.hgl:13:43 operator/operator.no_candidate OPS-2",
-            "m.hgl:14:33 operator/operator.no_candidate OPS-1",
+            "m.hgl:9:54 operator/operator.no_candidate GEN-5",
+            "m.hgl:11:55 operator/operator.no_candidate OPS-1",
+            "m.hgl:13:33 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:40 operator/operator.no_candidate OPS-1",
+            "m.hgl:15:43 operator/operator.no_candidate OPS-2",
+            "m.hgl:16:33 operator/operator.no_candidate OPS-1",
         ]
     );
 }
