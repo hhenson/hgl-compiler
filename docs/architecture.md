@@ -471,9 +471,10 @@ else".
 | `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
 | `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
 
-A value function has no capability (owner's decision of 2026-11-16 on
-hhenson/hgl_spec#57): what it needs of one is its argument, which the
-node reads and passes. A source, a body with `yield`, is a node of
+A value function injects no capability (owner's decision of 2026-11-16
+on hhenson/hgl_spec#57): what it needs of one is its argument, a value
+the node reads or the capability itself, given to a parameter of the
+capability's type (TIME-8). A source, a body with `yield`, is a node of
 another form whose contract is proposed (SOURCE-1), and its body is not
 checked.
 
@@ -502,7 +503,8 @@ What is rejected there:
 | A second input given to any operation but the selectors `valid` and `modified` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
-| A capability kept, returned, held in a tuple or passed to a function the program declares: `let kept = clock`, `stamped(clock, value)` | `capability.as_value` | TIME-8 |
+| A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
+| `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
 
 A `when` reads an input's payload only where the input is valid
 (TIME-1). Its header says which are (TIME-3):
@@ -524,14 +526,32 @@ reads are not judged.
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
 
-A capability is no value (TIME-8). Before the `.` of a property,
-`clock.evaluation_time`, it is used as one; kept, returned, held in a
-tuple or passed to a function the program declares, it is rejected.
-Which calls are a capability's own operations, `schedule(scheduler, 0s)`,
-is core's to say, and core declares none yet (hhenson/hgl_core#30): a
-capability given to a call of a name nothing in the program declares is
-not judged, and what a property is is not known, so
-`clock.evaluation_time` has no type here.
+A capability is a value of a type core declares (TIME-8): `inject clock`
+binds a local of type `Clock`, which `Program::capability_type` finds in
+core by the capability's name with a capital. It is used and not
+retained:
+
+| Written | Read as |
+| --- | --- |
+| `clock.evaluation_time` | A property, of the type the native type declares for it (NATIVE-6) |
+| `let bound = clock`, `stamped(clock, value)` | Uses: a `let`, and an argument of a parameter of its type |
+| `(clock, value)`, `[clock]`, `Kept(value: clock)`, `held = clock` of a `state` or `cache`, `out = clock`, `return clock` | Retained: `capability.as_value` |
+| `Clock` written anywhere but as the whole type of a parameter of a `const fn` or a native value function | `capability.as_value` |
+
+A parameter of a capability's type in a value function is held to the
+same rule as the injected local it was given. The pinned core declares
+no capability type yet (hhenson/hgl_core#30): with it a capability has
+no type, its properties have none, and only what is retained is
+reported. A property assigned, a capability in a dictionary, whose
+literal is not read yet, and one given to a parameter written as a
+generic parameter or `any`, are not reported yet.
+
+A native type's properties are kept as `Detail::Native`, each a name
+and an ordinary value type, and a member access on a value of the type
+reads one. `endpoint<T>` is `Type::Endpoint`, admitted only as the whole
+type of a native value function's parameter (TYPE-12,
+`endpoint.position`); a call that gives such a parameter an input by its
+name is not read yet (TIME-9).
 
 Not read yet in a node: what `modified` subscribes to.
 

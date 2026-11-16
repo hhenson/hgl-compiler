@@ -175,8 +175,14 @@ pub mod codes {
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
     /// `inject out` in a function that declares no result (TIME-7).
     pub const INJECT_OUT_WITHOUT_RESULT: &str = "inject.out_without_result";
-    /// A capability passed or kept as ordinary data (TIME-8).
+    /// A capability retained, or a capability type written where one
+    /// would be (TIME-8).
     pub const CAPABILITY_AS_VALUE: &str = "capability.as_value";
+    /// `alarm` and `scheduler` injected in one node (TIME-8).
+    pub const INJECT_ALARM_AND_SCHEDULER: &str = "inject.alarm_and_scheduler";
+    /// `endpoint<T>` other than as the whole type of a native value
+    /// function's parameter (TYPE-12).
+    pub const ENDPOINT_POSITION: &str = "endpoint.position";
     /// A node's construct inside a block of a temporal function
     /// (TIME-3, TIME-5).
     pub const NODE_NESTED: &str = "node.nested";

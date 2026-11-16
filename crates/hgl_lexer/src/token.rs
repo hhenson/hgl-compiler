@@ -171,6 +171,7 @@ define_token_kinds! {
         KwResult => "result",
         KwRef => "ref",
         KwSignal => "signal",
+        KwEndpoint => "endpoint",
         KwDelta => "delta",
         KwError => "error",
     }

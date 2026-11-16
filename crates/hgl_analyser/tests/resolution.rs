@@ -704,15 +704,14 @@ fn every_binding_form_binds_in_its_scope() {
 
 // ---- TIME-8: capabilities ----
 
-/// TIME-8: "The injectables are `out`, `logger`, `clock`, and
-/// `scheduler`, and the proposed `alarm` and `global_state` below;
-/// `inject` names no other."
+/// TIME-8: "The injectables are `out`, `logger`, `clock`, `scheduler`,
+/// `alarm`, and `global_state`; `inject` names no other."
 #[test]
 fn inject_names_a_capability() {
     let checked = module(concat!(
         "fn node(value: i64) -> i64 {\n",
         "    inject out, logger, clock\n",
-        "    inject scheduler, alarm, global_state\n",
+        "    inject scheduler, global_state\n",
         "    inject banana, value_store\n",
         "    when { return value }\n",
         "}\n",

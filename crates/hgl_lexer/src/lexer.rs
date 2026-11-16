@@ -1119,10 +1119,10 @@ mod tests {
         // The hard reserved words: the names of the types the language
         // defines are reserved, as the scalar type names are.
         assert_eq!(
-            kinds_of("atomic tuple list set dict rolling result ref signal delta error"),
+            kinds_of("atomic tuple list set dict rolling result ref signal endpoint delta error"),
             [
                 KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef, KwSignal,
-                KwDelta, KwError
+                KwEndpoint, KwDelta, KwError
             ]
         );
         // A longer name that starts with one is a name (LEX-1).

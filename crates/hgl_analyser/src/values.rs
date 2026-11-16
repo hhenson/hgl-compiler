@@ -26,7 +26,7 @@
 //! known is reported once, where it was found, and never again where it
 //! is used (ERR-9).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_lexer::literal::{
@@ -218,6 +218,11 @@ struct Typer<'a> {
     /// are met, and is cut back to where it stood when a branch or a
     /// block ends.
     present: Vec<Fact>,
+    /// The locals a capability has been bound to: `let bound = clock`
+    /// (TIME-8: "Binding one to a `let` ... [is a use]"). The local is
+    /// then the capability under another name, and is held to the same
+    /// rule, whether or not core has given the capability a type.
+    aliases: HashSet<LocalId>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
     /// How many requirements deep a candidate's condition is being
@@ -279,6 +284,7 @@ impl<'a> Typer<'a> {
             hook: None,
             out: None,
             present: Vec::new(),
+            aliases: HashSet::new(),
             initializing: false,
             requiring: 0,
             identities: HashMap::new(),
@@ -401,10 +407,44 @@ impl<'a> Typer<'a> {
             .map(|name| {
                 let at = Location::new(self.file, name.span());
                 let is_out = name.text() == "out";
+                // TIME-8: "`inject` binds each of the others to a local
+                // of its capability's type, which core declares".
                 let ty = match (&self.signature.result, is_out) {
                     (Some(result), true) => result.clone(),
-                    _ => Type::Unknown,
+                    (_, true) => Type::Unknown,
+                    (_, false) => self
+                        .program
+                        .capability_type(name.text())
+                        .unwrap_or(Type::Unknown),
                 };
+                // TIME-8: "A node injects `alarm` or `scheduler`, not
+                // both."
+                let other = match name.text() {
+                    "alarm" => Some("scheduler"),
+                    "scheduler" => Some("alarm"),
+                    _ => None,
+                };
+                let earlier = other.and_then(|other| {
+                    self.locals
+                        .iter()
+                        .find(|local| local.kind == LocalKind::Inject && local.name == other)
+                        .map(|local| (other, local.at))
+                });
+                if let Some((other, first)) = earlier {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Injectable,
+                            codes::INJECT_ALARM_AND_SCHEDULER,
+                            at,
+                            format!(
+                                "a node injects `alarm` or `scheduler`, not both: `{other}` is \
+                                 injected already"
+                            ),
+                            "TIME-8",
+                        )
+                        .with_related(first, "injected here"),
+                    );
+                }
                 let local = self.declare(name.text(), at, LocalKind::Inject, ty, true);
                 if is_out {
                     self.out = Some(local);
@@ -976,6 +1016,13 @@ impl<'a> Typer<'a> {
         // is declared with no value ... it is assigned from there".
         let assigned = value.is_some() || matches!(ty, Type::Nullable(_));
         let local = self.declare(name.text(), at, kind, ty, assigned);
+        // TIME-8: a local a capability is bound to is that capability.
+        if value
+            .as_ref()
+            .is_some_and(|value| self.gives_capability(value))
+        {
+            self.aliases.insert(local);
+        }
         // EXPR-3: "Initialization fixes a binding's value/connection
         // category".
         self.locals[local].category = match &value {
@@ -1106,6 +1153,11 @@ impl<'a> Typer<'a> {
         } else if self.graph {
             self.assigned_category(local, &value);
         }
+        // TIME-8: a `var` a capability is assigned to is that
+        // capability from there.
+        if operator.is_none() && self.gives_capability(&value) {
+            self.aliases.insert(local);
+        }
         Stmt::Assign {
             local,
             operator,
@@ -1200,6 +1252,12 @@ impl<'a> Typer<'a> {
                 }
             }
             SyntaxKind::MemberExpr => self.member(node),
+            // An anonymous function's body is for a later part. What it
+            // captures of a capability is reported here.
+            SyntaxKind::FnExpr => {
+                self.captured_capabilities(node);
+                (ExprKind::Unread, Type::Unknown)
+            }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
             SyntaxKind::IndexExpr => self.index(node),
             // A block or an `if` whose value is used.
@@ -1537,51 +1595,176 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// True when the capability named at `node` is known to be used as
-    /// ordinary data.
-    ///
-    /// TIME-8: "Clock properties are read-only, including
-    /// `clock.evaluation_time`. Operations use direct receiver-first
-    /// forms such as `schedule(scheduler, delay)` and
-    /// `info(logger, value)` ... Arbitrary helpers cannot receive a
-    /// capability as ordinary data." Before the `.` of a property a
-    /// capability is used as one. Which calls are its operations is
-    /// core's to say, and core declares none yet (hhenson/hgl_core#30):
-    /// so one given to a call of a name nothing in the program declares
-    /// is not judged, whichever argument it is. Anywhere else it is
-    /// kept or passed on: a local's value, what is returned, an entry
-    /// of a tuple, an argument of a function the program declares.
-    fn used_as_data(&self, node: &SyntaxNode) -> bool {
-        // "Parentheses select grouping" (EXPR-1).
-        let mut used = node.clone();
-        while let Some(parent) = used.parent()
-            && parent.kind() == SyntaxKind::ParenExpr
-        {
-            used = parent;
-        }
-        let Some(parent) = used.parent() else {
-            return true;
-        };
-        match parent.kind() {
-            SyntaxKind::MemberExpr => parent.children().next().as_ref() != Some(&used),
-            SyntaxKind::Arg => {
-                let call = parent
-                    .parent()
-                    .and_then(|list| list.parent())
-                    .filter(|call| call.kind() == SyntaxKind::CallExpr);
-                // A name nothing binds, and no endpoint intrinsic
-                // (TIME-9): left for the prelude.
-                let undeclared = call
-                    .and_then(|call| call.children().next())
-                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-                    .and_then(|callee| name_token(&callee))
-                    .is_some_and(|name| {
-                        !self.bindings.contains_key(&(self.file, name.span().start))
-                            && EndpointOperation::named(name.text()).is_none()
-                    });
-                !undeclared
+    /// True when `local` is a capability (TIME-8): one the node
+    /// injects, other than `out`, which is its result; a parameter of a
+    /// capability's type; or a local one of those has been bound to.
+    fn is_capability(&self, local: LocalId) -> bool {
+        (self.locals[local].kind == LocalKind::Inject && Some(local) != self.out)
+            || self.program.is_capability_type(&self.locals[local].ty)
+            || self.aliases.contains(&local)
+    }
+
+    /// True when the value of `value` is a capability: a read of one,
+    /// or a block or an `if` whose value is one.
+    fn gives_capability(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Local(local) => self.is_capability(*local),
+            ExprKind::Block {
+                value: Some(value), ..
+            } => self.gives_capability(value),
+            ExprKind::If {
+                then, otherwise, ..
+            } => {
+                self.gives_capability(then)
+                    || otherwise
+                        .as_ref()
+                        .is_some_and(|otherwise| self.gives_capability(otherwise))
             }
-            _ => true,
+            _ => false,
+        }
+    }
+
+    /// TIME-8: a capability is not "a capture of an anonymous function
+    /// (FN-14)". FN-14 has the resolver reject the use of an injected
+    /// capability by its own name (`name.captured`); a `let` it is
+    /// bound to, and a parameter of a capability's type, may be used
+    /// there as any `let` or parameter is, and are reported here.
+    fn captured_capabilities(&mut self, function: &SyntaxNode) {
+        let captured: Vec<(LocalId, Location)> = function
+            .descendants()
+            .filter(|name| name.kind() == SyntaxKind::NameExpr)
+            .filter_map(|name| {
+                // A name of the function's own is no local of this
+                // body, and is found by none.
+                let local = self.local_of(&name)?;
+                (self.locals[local].kind != LocalKind::Inject && self.is_capability(local))
+                    .then(|| (local, self.at(&name)))
+            })
+            .collect();
+        for (local, at) in captured {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{}` is a capability, and is not retained: this is a capture of an \
+                         anonymous function",
+                        self.locals[local].name
+                    ),
+                    "TIME-8",
+                )
+                .with_note("give the function what it needs of the capability as an argument"),
+            );
+        }
+    }
+
+    /// How the capability named at `node` is retained where it stands,
+    /// in a few words for the message; `None` where it is used and not
+    /// retained.
+    ///
+    /// TIME-8: "it is not the value of a `state` or a `cache`, an entry
+    /// of a tuple, list, set, dictionary, or struct, what a function
+    /// returns, what a node publishes, or a capture of an anonymous
+    /// function (FN-14). Binding one to a `let` and giving one to a
+    /// parameter of its type are uses." A capture is the resolver's to
+    /// report (`name.captured`).
+    fn retained(&self, node: &SyntaxNode) -> Option<&'static str> {
+        // Where the capability goes: out through what only passes its
+        // value on, to the place that takes it.
+        let mut used = node.clone();
+        loop {
+            let parent = used.parent()?;
+            match parent.kind() {
+                // "Parentheses select grouping" (EXPR-1).
+                SyntaxKind::ParenExpr => used = parent,
+                // CTRL-10: "A block whose last statement is an
+                // expression has that expression's value". Any other
+                // statement's value is dropped, and is no use at all.
+                SyntaxKind::ExprStmt => {
+                    let block = parent
+                        .parent()
+                        .filter(|block| block.kind() == SyntaxKind::Block)?;
+                    if block.children().last().as_ref() != Some(&parent) {
+                        return None;
+                    }
+                    used = block;
+                }
+                // A branch of an `if` gives the `if` its value; its
+                // condition does not.
+                SyntaxKind::IfExpr
+                    if matches!(used.kind(), SyntaxKind::Block | SyntaxKind::IfExpr) =>
+                {
+                    used = parent;
+                }
+                _ => break,
+            }
+        }
+        let parent = used.parent()?;
+        match parent.kind() {
+            // FN-7: "A body that ends in an expression returns that
+            // expression, as an arrow body does ... In a function that
+            // declares no result the expression is a statement", whose
+            // value is dropped.
+            SyntaxKind::FnDecl if used.kind() == SyntaxKind::Block => {
+                self.signature.result.as_ref().map(|_| "what is returned")
+            }
+            SyntaxKind::ArrowBody => self.signature.result.as_ref().map(|_| "what is returned"),
+            SyntaxKind::StateDecl => Some("the value of a `state`"),
+            SyntaxKind::CacheDecl => Some("the value of a `cache`"),
+            SyntaxKind::TupleExpr => Some("an entry of a tuple"),
+            // A sequence with a pair, `[key: value]`, is not read yet,
+            // and so neither is what a dictionary holds.
+            SyntaxKind::SequenceExpr => Some("an entry of a list or a set"),
+            SyntaxKind::ReturnStmt => Some("what is returned"),
+            // `out = clock` publishes it; `kept = clock`, of a `state`
+            // or a `cache`, keeps it.
+            SyntaxKind::AssignStmt => {
+                let place = parent.children().next()?;
+                if place == used {
+                    return None;
+                }
+                let target = (place.kind() == SyntaxKind::NameExpr)
+                    .then(|| self.local_of(&place))
+                    .flatten()?;
+                if Some(target) == self.out {
+                    return Some("what the node publishes");
+                }
+                match self.locals[target].kind {
+                    LocalKind::State => Some("the value of a `state`"),
+                    LocalKind::Cache => Some("the value of a `cache`"),
+                    _ => None,
+                }
+            }
+            // An argument: of a struct's construction, an entry of the
+            // struct; of any other call, a use.
+            SyntaxKind::Arg => {
+                let call = parent.parent().and_then(|list| list.parent())?;
+                // What is called: `Name(...)`, or with generic
+                // arguments written `Name<T>(...)`, which is a struct's
+                // construction only where the name is a struct's.
+                let callee = match call.kind() {
+                    SyntaxKind::CallExpr => call
+                        .children()
+                        .next()
+                        .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                        .and_then(|callee| name_token(&callee)),
+                    SyntaxKind::TypedConstructor | SyntaxKind::UndecidedConstructor => {
+                        name_token(&call)
+                    }
+                    _ => None,
+                };
+                let constructs = callee
+                    .and_then(|name| self.declarations(&name))
+                    .is_some_and(|(module, declarations)| {
+                        declarations.iter().any(|&declaration| {
+                            self.program.modules[module].declarations[declaration].kind
+                                == DeclarationKind::Struct
+                        })
+                    });
+                constructs.then_some("an entry of a struct")
+            }
+            _ => None,
         }
     }
 
@@ -1616,12 +1799,12 @@ impl<'a> Typer<'a> {
                 "`out` is neither read nor written in `start`".to_string(),
             );
         }
-        // TIME-8: "They are capabilities, not first-class payloads ...
-        // Arbitrary helpers cannot receive a capability as ordinary
-        // data." `out` is the node's result, read as a value is.
-        if self.locals[local].kind == LocalKind::Inject
-            && Some(local) != self.out
-            && self.used_as_data(node)
+        // TIME-8: "A capability is used within the node that injects it
+        // and is not retained". An injected capability other than `out`,
+        // which is the node's result, and a parameter of a capability's
+        // type are both one.
+        if self.is_capability(local)
+            && let Some(how) = self.retained(node)
         {
             self.diagnostics.emit(
                 error(
@@ -1629,17 +1812,14 @@ impl<'a> Typer<'a> {
                     codes::CAPABILITY_AS_VALUE,
                     at,
                     format!(
-                        "`{}` is a capability, and is used here as a value: it is neither \
-                         kept nor passed on",
+                        "`{}` is a capability, and is not retained: this is {how}",
                         self.locals[local].name
                     ),
                     "TIME-8",
                 )
                 .with_note(
-                    "a capability is the receiver of its own operations, \
-                     `schedule(scheduler, delay)`, and the owner of its properties, \
-                     `clock.evaluation_time`: pass the value a function needs, not the \
-                     capability",
+                    "a capability is bound to a `let`, given to a parameter of its type, or \
+                     read through a property, `clock.evaluation_time`",
                 ),
             );
         }
@@ -5745,6 +5925,29 @@ impl<'a> Typer<'a> {
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        // NATIVE-6: "`value.property` reads one as an ordinary value."
+        if let Some(Detail::Native(native)) = program.modules[*module].details.get(*declaration) {
+            let Some(member) = native
+                .properties
+                .iter()
+                .position(|property| property.name == name.text())
+            else {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    Location::new(self.file, name.span()),
+                    format!("`{}` has no property `{}`", base.ty, name.text()),
+                    "NATIVE-6",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            };
+            let ty = native.properties[member].ty.clone();
+            let kind = ExprKind::Field {
+                base: Box::new(base),
+                member,
+            };
+            return (kind, ty);
+        }
         let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
             return (ExprKind::Unread, Type::Unknown);
         };
@@ -7063,6 +7266,7 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         (Type::Nullable(left), Type::Nullable(right))
         | (Type::Set(left), Type::Set(right))
         | (Type::Ref(left), Type::Ref(right))
+        | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))
         | (Type::List { element: left, .. }, Type::List { element: right, .. })
@@ -8234,6 +8438,7 @@ fn whole(ty: &Type) -> bool {
         Type::List { element, .. } => whole(element),
         Type::Set(inner)
         | Type::Ref(inner)
+        | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Nullable(inner) => whole(inner),
@@ -8513,6 +8718,7 @@ fn infer(
         }
         (Type::Set(pattern), Type::Set(actual))
         | (Type::Ref(pattern), Type::Ref(actual))
+        | (Type::Endpoint(pattern), Type::Endpoint(actual))
         | (Type::Atomic(pattern), Type::Atomic(actual))
         | (Type::Delta(pattern), Type::Delta(actual)) => infer(pattern, actual, generics, found),
         (
@@ -8674,9 +8880,12 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
         }),
         Type::Tuple(elements) => elements.iter().any(inner),
         Type::List { element, size } => size.as_ref().is_some_and(named) || inner(element),
-        Type::Set(ty) | Type::Ref(ty) | Type::Atomic(ty) | Type::Delta(ty) | Type::Nullable(ty) => {
-            inner(ty)
-        }
+        Type::Set(ty)
+        | Type::Ref(ty)
+        | Type::Endpoint(ty)
+        | Type::Atomic(ty)
+        | Type::Delta(ty)
+        | Type::Nullable(ty) => inner(ty),
         Type::Dict { key, value } => inner(key) || inner(value),
         Type::Rolling {
             value,

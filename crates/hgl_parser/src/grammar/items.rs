@@ -731,13 +731,55 @@ impl Parser<'_> {
 
     // ---- Native boundaries ----
 
-    /// `native_type_decl = [ "export" ], "native", "type", IDENTIFIER ;`
+    /// ```text
+    /// native_type_decl = [ "export" ], "native", "type", IDENTIFIER,
+    ///     [ native_type_body ] ;
+    /// native_type_body = "{", [ NL ],
+    ///     [ native_property, { NL, native_property }, [ NL ] ], "}" ;
+    /// native_property = member_name, ":", value_type ;
+    /// ```
+    ///
+    /// NATIVE-6: "A native type may declare read-only properties, each a
+    /// name and an ordinary value type, written as a struct's typed
+    /// fields are."
     fn native_type_decl(&mut self) {
         self.start(NativeTypeDecl);
         self.eat(KwExport);
         self.expect_word("native");
         self.expect_word("type");
         self.expect_name("a type name");
+        // The body is on the declaration's line, as a struct's is: a `{`
+        // on a later line begins another statement (LEX-5).
+        if self.at(LBrace) && !self.nl() {
+            self.bump();
+            self.nested(Context::BLOCK, |parser| {
+                // LEX-5: one property to a line.
+                parser.lines(
+                    "a property",
+                    "LEX-5",
+                    |_| false,
+                    |parser| parser.native_property(),
+                );
+                parser.close_brace();
+            });
+        }
+        self.finish();
+    }
+
+    /// `native_property = member_name, ":", value_type ;`
+    fn native_property(&mut self) {
+        // LEX-9: any word names a member. What is no name is left for
+        // the caller's line discipline, as a struct's member is.
+        if !self.at_member_name() {
+            return;
+        }
+        self.start(NativeProperty);
+        self.bump();
+        if self.eat(Colon) {
+            self.type_();
+        } else {
+            self.expected("`:`");
+        }
         self.finish();
     }
 

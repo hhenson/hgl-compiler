@@ -35,7 +35,7 @@ use crate::program::{
 };
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter,
-    Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    Member, NativeType, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
 };
 use crate::{codes, error};
 
@@ -392,6 +392,7 @@ pub(crate) fn is_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::DictType
             | SyntaxKind::RollingType
             | SyntaxKind::RefType
+            | SyntaxKind::EndpointType
             | SyntaxKind::SignalType
             | SyntaxKind::AtomicType
             | SyntaxKind::ResultType
@@ -670,6 +671,7 @@ impl Reader<'_> {
                 Detail::Callable(self.signature(node))
             }
             SyntaxKind::StructDecl => Detail::Struct(self.structure(node)),
+            SyntaxKind::NativeTypeDecl => Detail::Native(self.native_type(node, &declaration.name)),
             _ => Detail::Plain,
         };
         self.in_signature = false;
@@ -1048,6 +1050,11 @@ impl Reader<'_> {
                 }
             }
             SyntaxKind::StructMember => Position::FIELD,
+            // NATIVE-6: a property is "a name and an ordinary value
+            // type".
+            SyntaxKind::NativeProperty => {
+                Position::value("a property of a native type", "NATIVE-6")
+            }
             SyntaxKind::StructBases => Position::PLAIN,
             // GEN-13: "An explicit `const N: V` declares a value
             // parameter of ordinary type V."
@@ -1086,7 +1093,11 @@ impl Reader<'_> {
                 Type::Signal
             }
             SyntaxKind::NullableType => self.nullable(node, position),
-            SyntaxKind::NamedType => self.named(node, position),
+            SyntaxKind::NamedType => {
+                let ty = self.named(node, position);
+                self.capability_position(node, &ty);
+                ty
+            }
             SyntaxKind::TupleType => Type::Tuple(
                 node.children()
                     .filter(|element| is_type(element.kind()))
@@ -1108,6 +1119,10 @@ impl Reader<'_> {
             SyntaxKind::RefType => {
                 self.ordinary(node, position, true);
                 Type::Ref(Box::new(self.inner(node, Position::PLAIN)))
+            }
+            SyntaxKind::EndpointType => {
+                self.endpoint(node);
+                Type::Endpoint(Box::new(self.inner(node, Position::PLAIN)))
             }
             SyntaxKind::AtomicType => {
                 self.ordinary(node, position, false);
@@ -1175,6 +1190,111 @@ impl Reader<'_> {
                 .with_note("it is not a result, a field, or a part of another type"),
             );
         }
+    }
+
+    /// TIME-8: "A capability type is written only as the type of a
+    /// parameter of a `const fn` or of a native value function."
+    fn capability_position(&mut self, node: &SyntaxNode, ty: &Type) {
+        if !self.program.is_capability_type(ty) {
+            return;
+        }
+        let parameter = node
+            .parent()
+            .is_some_and(|parent| parent.kind() == SyntaxKind::Param);
+        if parameter && self.value_function {
+            return;
+        }
+        self.diagnostics.emit(
+            error(
+                Category::Injectable,
+                codes::CAPABILITY_AS_VALUE,
+                self.at(node.span()),
+                format!(
+                    "`{ty}` is a capability's type, and is written only as the type of a \
+                     parameter of a `const fn` or of a native value function"
+                ),
+                "TIME-8",
+            )
+            .with_note("a node has a capability by `inject`, and does not keep one"),
+        );
+    }
+
+    /// The read-only properties a native type declares (NATIVE-6): "each
+    /// a name and an ordinary value type, written as a struct's typed
+    /// fields are."
+    fn native_type(&mut self, node: &SyntaxNode, declared: &str) -> NativeType {
+        let mut properties: Vec<Member> = Vec::new();
+        for property in node
+            .children()
+            .filter(|property| property.kind() == SyntaxKind::NativeProperty)
+        {
+            // A property's name is its first token. It may be a reserved
+            // word (LEX-9).
+            let Some(name) = tokens(&property).next() else {
+                continue;
+            };
+            let ty =
+                type_child(&property).map_or(Type::Unknown, |written| self.outermost(&written));
+            // "Written as a struct's typed fields are": two of one name
+            // reject, as two fields do (TYPE-4), and the first stands.
+            if let Some(first) = properties
+                .iter()
+                .find(|earlier| earlier.name == name.text())
+            {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::FIELD_DUPLICATE,
+                        self.at(name.span()),
+                        format!("`{declared}` has two properties named `{}`", name.text()),
+                        "NATIVE-6",
+                    )
+                    .with_related(first.at, "first declared here"),
+                );
+                continue;
+            }
+            properties.push(Member {
+                name: name.text().to_string(),
+                at: self.at(name.span()),
+                ty,
+                has_default: false,
+            });
+        }
+        NativeType { properties }
+    }
+
+    /// TYPE-12: "`endpoint<T>` is the endpoint of a temporal value of T,
+    /// for a function that takes the endpoint and not its payload
+    /// (TIME-9). It is the whole type of a parameter of a native value
+    /// function, and of nothing else." FN-1 has that parameter the
+    /// exception to a value function's ordinary value types.
+    fn endpoint(&mut self, node: &SyntaxNode) {
+        let parameter = node
+            .parent()
+            .filter(|parent| parent.kind() == SyntaxKind::Param);
+        let native = parameter
+            .as_ref()
+            .and_then(|parameter| {
+                parameter
+                    .ancestors()
+                    .find(|ancestor| ancestor.kind() == SyntaxKind::NativeFnDecl)
+            })
+            .is_some();
+        if native && self.value_function {
+            return;
+        }
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::ENDPOINT_POSITION,
+                self.at(node.span()),
+                "`endpoint<T>` is the whole type of a parameter of a native value function, \
+                 and nothing else"
+                    .to_string(),
+                "TYPE-12",
+            )
+            .with_note("any other function takes the value: write the type `T`"),
+        );
     }
 
     /// TYPE-14: a set's element and a dictionary's key are never null

@@ -164,6 +164,10 @@ pub enum Type {
     Ref(Box<Type>),
     /// `signal`: an input with no payload (TYPE-12).
     Signal,
+    /// `endpoint<f64>`: the endpoint of a temporal value, where a native
+    /// value function takes the endpoint and not its payload (TYPE-12,
+    /// TIME-9).
+    Endpoint(Box<Type>),
     /// `atomic<Quote>`: whole snapshots of an ordinary value (TYPE-9).
     Atomic(Box<Type>),
     /// `result<f64, error>` (TYPE-13).
@@ -356,6 +360,7 @@ impl fmt::Display for Type {
                 None => write!(f, "rolling<{value}, {maximum}>"),
             },
             Type::Ref(target) => write!(f, "ref<{target}>"),
+            Type::Endpoint(target) => write!(f, "endpoint<{target}>"),
             Type::Signal => f.write_str("signal"),
             Type::Atomic(payload) => write!(f, "atomic<{payload}>"),
             Type::Result { value, error } => write!(f, "result<{value}, {error}>"),
@@ -401,8 +406,20 @@ pub enum Detail {
     Struct(StructType),
     /// An enum.
     Enum(EnumType),
-    /// A native type: nothing of it is a written type.
+    /// A native type: its read-only properties (NATIVE-6).
+    Native(NativeType),
+    /// An enum, before its members are read, and any other declaration
+    /// of which nothing is a written type.
     Plain,
+}
+
+/// A native type as it is declared: "A native type may declare read-only
+/// properties, each a name and an ordinary value type" (NATIVE-6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeType {
+    /// Its properties, in the order written. `has_default` is false for
+    /// each: a native type is not constructed in HGL.
+    pub properties: Vec<Member>,
 }
 
 /// The parameters and result of a callable.
