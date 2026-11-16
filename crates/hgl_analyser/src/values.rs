@@ -1924,10 +1924,18 @@ impl<'a> Typer<'a> {
         // ERR-3: "In composition a test of a connection is an ordinary
         // lifted call (FN-6): it gives a connection of `bool` and no
         // fact."
+        // A binding written `result<T, E>?` that a null test has proved
+        // present is read as its result (ERR-12), and is tested as one.
         let tagged = |local: LocalId| {
-            immutable(local)
-                && matches!(self.locals[local].ty, Type::Result { .. })
-                && self.locals[local].category == ValueCategory::Value
+            let result = match &self.locals[local].ty {
+                Type::Result { .. } => true,
+                Type::Nullable(inner) => {
+                    matches!(**inner, Type::Result { .. })
+                        && self.present.contains(&Fact::Present(local))
+                }
+                _ => false,
+            };
+            immutable(local) && result && self.locals[local].category == ValueCategory::Value
         };
         null_tests(condition, &refinable, &tagged, &|| self.temporal_inputs())
     }
