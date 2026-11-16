@@ -284,3 +284,49 @@ fn endpoint_is_the_type_of_a_native_value_functions_parameter() {
         ]
     );
 }
+
+/// TIME-8: "Binding one to a `let` and giving one to a parameter of its
+/// type are uses." A parameter written as a generic parameter or `any`
+/// is of no one type, and takes no capability; nor is a generic
+/// argument a capability type (owner's decision of 2026-11-16 on
+/// hhenson/hgl_spec#73, question 5).
+#[test]
+fn a_capability_is_given_only_to_a_parameter_of_its_type() {
+    let checked = module(concat!(
+        "const fn stamped(clock: Clock, value: f64) -> f64 => value\n",
+        "const fn boxed<T>(value: T) -> list<T> => [value]\n",
+        "const fn shown(value: any) -> i64 => 0\n",
+        "operator kept<V>(value: V) -> i64\n",
+        "impl const fn kept<V>(value: V) -> i64 => 0\n",
+        "fn uses(value: f64) -> f64 {\n",
+        "    inject clock\n",
+        "    when {\n",
+        // A parameter of the capability's type.
+        "        let stamp = stamped(clock, value)\n",
+        // A generic parameter, with the argument inferred and written,
+        // through a local the capability is bound to, of an operator's
+        // candidate, and `any`.
+        "        let held = boxed(clock)\n",
+        "        let typed = boxed<Clock>(clock)\n",
+        "        let bound = clock\n",
+        "        let again = boxed(bound)\n",
+        "        let count = kept(clock)\n",
+        "        let text = shown(clock)\n",
+        // What is no capability is given to either.
+        "        let fine = boxed(value)\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:26 injectable/capability.as_value TIME-8",
+            "m.hgl:12:27 injectable/capability.as_value TIME-8",
+            "m.hgl:12:34 injectable/capability.as_value TIME-8",
+            "m.hgl:14:27 injectable/capability.as_value TIME-8",
+            "m.hgl:15:26 injectable/capability.as_value TIME-8",
+            "m.hgl:16:26 injectable/capability.as_value TIME-8",
+        ]
+    );
+}

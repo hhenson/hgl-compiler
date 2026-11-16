@@ -2930,7 +2930,84 @@ impl<'a> Typer<'a> {
         if let Some(callee) = callee {
             self.note_wake(&callee, &read.0);
         }
+        self.capabilities_given(&read.0);
         read
+    }
+
+    /// TIME-8: "giving one to a parameter of its type [is a use]". A
+    /// parameter written as a generic parameter or `any` is of no one
+    /// type: it takes any, and what the function does with its
+    /// argument, keep it in a list say, it would do with the
+    /// capability. Such a parameter takes none (owner's decision of
+    /// 2026-11-16 on hhenson/hgl_spec#73, question 5).
+    ///
+    /// The call is read, so each argument is known for the parameter it
+    /// is given to. A capability given to a parameter of another type
+    /// written out does not fit it, and is reported as any value is
+    /// (EXPR-5).
+    fn capabilities_given(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            // What a requirement's operator selects is not known here,
+            // and a call that is not read has no parameters to judge.
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        let mut given: Vec<(Location, String, String)> = Vec::new();
+        for argument in arguments {
+            let (Some(parameter), Some(capability)) = (
+                argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index)),
+                self.capability_of(&argument.value),
+            ) else {
+                continue;
+            };
+            let open = match &parameter.ty {
+                Type::Parameter { .. } => "a generic parameter",
+                Type::Scalar(Scalar::Any) => "`any`",
+                _ => continue,
+            };
+            given.push((
+                argument.value.at,
+                self.locals[capability].name.clone(),
+                format!("`{}` is written as {open}", parameter.name),
+            ));
+        }
+        for (at, capability, parameter) in given {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{capability}` is a capability, and is given only to a parameter of \
+                         its type: {parameter}"
+                    ),
+                    "TIME-8",
+                )
+                .with_note("a parameter that takes any type takes no capability"),
+            );
+        }
     }
 
     /// Notes a call in `start` that asks for a wake on the node's
@@ -6449,8 +6526,10 @@ impl<'a> Typer<'a> {
                     _ => self.unread_call(&list),
                 };
                 // `schedule<duration>(scheduler, delay)` asks for a wake
-                // as the call without its generic arguments does.
+                // as the call without its generic arguments does, and
+                // gives its arguments as that call does.
                 self.note_wake(&name, &read.0);
+                self.capabilities_given(&read.0);
                 read
             }
         }

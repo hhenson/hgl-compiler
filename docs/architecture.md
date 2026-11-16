@@ -551,15 +551,15 @@ retained:
 | `clock.evaluation_time` | A property, of the type the native type declares for it (NATIVE-6) |
 | `let bound = clock`, `stamped(clock, value)` | Uses: a `let`, and an argument of a parameter of its type |
 | `(clock, value)`, `[clock]`, `Kept(value: clock)`, `held = clock` of a `state` or `cache`, `out = clock`, `return clock` | Retained: `capability.as_value` |
+| `boxed(clock)` where the parameter is written as a generic parameter or `any` | `capability.as_value`: such a parameter takes any type, and no capability |
 | `Clock` written anywhere but as the whole type of a parameter of a `const fn` or a native value function | `capability.as_value` |
 
 A parameter of a capability's type in a value function is held to the
 same rule as the injected local it was given. The pinned core declares
 no capability type yet (hhenson/hgl_core#30): with it a capability has
 no type, its properties have none, and only what is retained is
-reported. A property assigned, a capability in a dictionary, whose
-literal is not read yet, and one given to a parameter written as a
-generic parameter or `any`, are not reported yet.
+reported. A property assigned, and a capability in a dictionary, whose
+literal is not read yet, are not reported yet.
 
 A native type's properties are kept as `Detail::Native`, each a name
 and an ordinary value type, and a member access on a value of the type
