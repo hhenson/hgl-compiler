@@ -4099,3 +4099,112 @@ fn pairs_are_a_dictionary_where_one_is_expected() {
     assert_eq!(candidate("widened"), 2, "the `dict<str, f64>` candidate");
     assert_eq!(candidate("nested"), 3, "the only one that takes lists");
 }
+
+/// EXPR-3: "An assignment may name a place inside a value, at any
+/// depth: a field, `point.x = 1`, or an element, `row[0] = 1`,
+/// `book["a"] = 1`. The place's root is a `var` ... A `let`, a
+/// parameter, and an iteration binding are read-only all the way down.
+/// The value is of the field's type; of a list's element type, under an
+/// `i64` index; of a dictionary's value type, under a key of its key
+/// type; or of a tuple's position, under a constant index ... A set has
+/// no place to assign. A compound assignment reads the place first".
+#[test]
+fn a_place_inside_a_value_is_assigned() {
+    let checked = module(concat!(
+        "struct Point {\n",
+        "    x: f64\n",
+        "    y: f64\n",
+        "}\n",
+        "struct Line {\n",
+        "    first: Point\n",
+        "    last: Point\n",
+        "}\n",
+        "const fn moved(origin: Point, by: f64, rows: list<i64>) -> Point {\n",
+        // A field, with an integer literal an `f64` there; a field of
+        // a field; a dictionary's value, a list's element, a tuple's
+        // position.
+        "    var point = origin\n",
+        "    point.x += by\n",
+        "    point.y = 2\n",
+        "    var line = Line(first: origin, last: point)\n",
+        "    line.last.x = by\n",
+        "    var counts: dict<str, i64> = []\n",
+        "    counts[\"a\"] = 1\n",
+        "    counts[\"a\"] += 1\n",
+        "    var row = rows\n",
+        "    row[0] = 7\n",
+        "    var pair = (1, \"a\")\n",
+        "    pair[1] = \"b\"\n",
+        // A field of a parameter and of a `let`: read-only all the way
+        // down.
+        "    origin.x = by\n",
+        "    let fixed = line\n",
+        "    fixed.last.x = by\n",
+        // A value of another type than the place's; a key of another
+        // type than the dictionary's; a position the tuple has not.
+        "    point.x = \"a\"\n",
+        "    counts[1] = 1\n",
+        "    pair[2] = 1\n",
+        "    point.x += \"a\"\n",
+        // A set has no place.
+        "    var members: set<i64> = [1]\n",
+        "    members[0] = 2\n",
+        "    return point\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:23:5 name/binding.immutable EXPR-3",
+            "m.hgl:25:5 name/binding.immutable EXPR-3",
+            "m.hgl:26:15 type/type.mismatch EXPR-5",
+            "m.hgl:27:12 type/type.mismatch EXPR-5",
+            "m.hgl:28:10 type/tuple.index EXPR-7",
+            "m.hgl:29:13 operator/operator.no_candidate OPS-1",
+            "m.hgl:31:5 type/type.mismatch EXPR-7",
+        ]
+    );
+    // `point.x += by`: the place, an `f64`, and what it becomes, the
+    // sum of the place and `by`.
+    let Stmt::AssignPlace {
+        place,
+        operator,
+        value,
+        ..
+    } = &body(&checked, "moved").statements[1]
+    else {
+        panic!("the second statement assigns into a place");
+    };
+    assert_eq!(place.ty.to_string(), "f64");
+    assert!(matches!(place.kind, ExprKind::Field { .. }));
+    assert_eq!(*operator, Some(BinaryOperator::Add));
+    assert_eq!(value.ty.to_string(), "f64");
+
+    // NATIVE-6: "None is assigned." A property of a native type is
+    // read-only however the native value is reached: as an element of
+    // a `var`'s list, and under a field of it.
+    let native = module(concat!(
+        "native type Handle {\n",
+        "    size: i64\n",
+        "}\n",
+        "struct Held {\n",
+        "    handle: Handle\n",
+        "    count: i64\n",
+        "}\n",
+        "const fn resized(handles: list<Handle>, held: Held) -> i64 {\n",
+        "    var items = handles\n",
+        "    items[0].size = 2\n",
+        "    var keeper = held\n",
+        "    keeper.handle.size += 1\n",
+        "    keeper.count = 3\n",
+        "    return keeper.count\n",
+        "}\n",
+    ));
+    assert_eq!(
+        native.summary(),
+        [
+            "m.hgl:11:5 name/binding.immutable NATIVE-6",
+            "m.hgl:13:5 name/binding.immutable NATIVE-6",
+        ]
+    );
+}

@@ -168,6 +168,20 @@ pub enum Stmt {
         /// Where the statement is written.
         at: Location,
     },
+    /// `point.x = value`, `row[0] += value`: an assignment to a place
+    /// inside a value (EXPR-3).
+    AssignPlace {
+        /// The place: a chain of fields and elements from a local, read
+        /// as the expression it is. Its type is what the place takes.
+        place: Expr,
+        /// The operator of a compound assignment: `+` for `+=`.
+        operator: Option<BinaryOperator>,
+        /// What the place becomes. For a compound assignment, the
+        /// symbol with the place's value as its left operand.
+        value: Expr,
+        /// Where the statement is written.
+        at: Location,
+    },
     /// `inject name`: a capability of a node, one statement for each
     /// name (TIME-8). `out` is the node's result (TIME-7).
     Inject {
