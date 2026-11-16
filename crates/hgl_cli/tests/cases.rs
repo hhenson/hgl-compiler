@@ -397,7 +397,7 @@ const RUNNING: &str = concat!(
     "    assert doubled(2) == 4\n",
     "    assert doubled(2) == 5\n",
     "}\n",
-    "test later { assert eval(lone, value: [1]) == [1] }\n",
+    "test later { assert eval(lone, value: [0s: 1]) == [0s: 1] }\n",
 );
 
 /// TST-14: "crashes, and infrastructure failures cannot prove
@@ -431,10 +431,7 @@ fn a_host_that_does_not_start_runs_no_test() {
     assert_eq!(lines[4], "not run  executable  examples.running::later");
     assert_eq!(
         lines[5],
-        format!(
-            "    {file}:11:21: the hgraph target does not write an eval of a value function, \
-             which is lifted yet"
-        )
+        format!("    {file}:11:39: the hgraph target does not write a timed trace yet")
     );
     assert_eq!(lines[6], "rejection cases: 0 passed, 0 failed");
     assert_eq!(lines[7], "executable cases: 0 passed, 0 failed, 3 not run");
@@ -494,8 +491,7 @@ fn tests_run_on_hgraph() {
                 "FAILED   executable  examples.running::wrong\n",
                 "    {file}:9:5: the assertion does not hold\n",
                 "not run  executable  examples.running::later\n",
-                "    {file}:11:21: the hgraph target does not write an eval of a value function, ",
-                "which is lifted yet\n",
+                "    {file}:11:39: the hgraph target does not write a timed trace yet\n",
                 "rejection cases: 0 passed, 0 failed\n",
                 "executable cases: 1 passed, 1 failed, 1 not run\n",
             ),

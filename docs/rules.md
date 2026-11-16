@@ -190,7 +190,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
 | FN-5 | analyser | planned | `const(argument)` resolves as an ordinary call |
 | FN-6 | analyser | partial | In a graph a value function or a value candidate called with a connection among its arguments gives a connection, and one called with ordinary values alone an ordinary value. Left: which arguments are inputs and which configuration, recorded for the lifted node; an outputless helper as a sink |
-| FN-6 | transpiler | planned | Activation and publication of a lifted node |
+| FN-6 | transpiler | partial | hgraph: a value function or a candidate of core given a connection in a graph is a node of its own, an input for each connection and a scalar parameter for each ordinary argument; any input wakes it, and each evaluation publishes its result. A call given no connection is made where the graph is built. An outputless helper is a sink. A value function an eval names is lifted the same way. Left: a pack, and types beyond the four scalars |
 | FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type. Left: a composition return; an anonymous function's context |
 | FN-7 | transpiler | partial | hgraph: a `return` with a value publishes it and ends the evaluation, skipping later handlers; a body that ends with none publishes nothing. Left: a `return` after a write through `out` |
 | FN-8 | parser | done | Pack parameter forms |
@@ -198,7 +198,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8). Left: an anonymous function written in a graph; a capability used outside a hook or a source's body |
 | FN-10 | parser | done | Where an arrow body ends |
 | FN-11 | analyser | planned | Which lifted arguments need a valid input |
-| FN-11 | transpiler | planned | Default or null bound while the input is invalid |
+| FN-11 | transpiler | partial | hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid. Left: null bound for an input that admits null, which waits on nullable scalars |
 | FN-12 | transpiler | planned | Aggregate lifting: one invocation with the whole value |
 | FN-13 | transpiler | planned | Stable argument values; retained results independent of later changes |
 | FN-14 | analyser | done | What an anonymous function may use from around it |
