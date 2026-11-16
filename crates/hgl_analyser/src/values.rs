@@ -2906,17 +2906,36 @@ impl<'a> Typer<'a> {
     ///
     /// That is `schedule(scheduler, ...)`, written in `start` itself,
     /// the capability given first: by its name, by a local it is bound
-    /// to, or as the value of a block (TIME-8, CTRL-10). Core does not
-    /// declare `schedule` yet, so the call is known by its name. What a
-    /// function given the capability does with it is not followed: a
-    /// wake asked for only there is not one this finds.
+    /// to, or as the value of a block (TIME-8, CTRL-10). The operation
+    /// is core's. Core does not declare it yet, so a `schedule` that
+    /// nothing declares is taken for it; one a module declares for
+    /// itself is that module's function, and no wake. What a function
+    /// given the capability does with it is not followed: a wake asked
+    /// for only there is not one this finds.
     fn note_wake(&mut self, callee: &SyntaxToken, kind: &ExprKind) {
         if self.hook != Some(Hook::Start) || self.driven || callee.text() != "schedule" {
             return;
         }
-        let ExprKind::Call { arguments, .. } = kind else {
+        let ExprKind::Call {
+            callee: called,
+            arguments,
+            ..
+        } = kind
+        else {
             return;
         };
+        // Whose `schedule` it is: core's, or nobody's yet.
+        let core = self.program.core();
+        let cores = match called {
+            Callee::Unread => true,
+            Callee::Function { module, .. } => Some(*module) == core,
+            Callee::Candidate { operator, .. } | Callee::Required { operator } => {
+                Some(operator.0) == core
+            }
+        };
+        if !cores {
+            return;
+        }
         // The first argument: the one given to the first parameter, or
         // where the call is not read, the first written.
         let first = arguments
