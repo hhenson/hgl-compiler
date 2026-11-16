@@ -288,6 +288,11 @@ pub enum ExprKind {
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
     Local(LocalId),
+    /// The endpoint of a temporal input, or of `out`, where a native
+    /// value function takes the endpoint and not its payload: the
+    /// argument of an `endpoint<T>` parameter (TIME-9). The payload is
+    /// not read.
+    EndpointOf(LocalId),
     /// `{ statements }`: a block. Its value is that of its last
     /// statement, when that is an expression (CTRL-10).
     Block {

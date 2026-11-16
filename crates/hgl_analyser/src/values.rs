@@ -658,6 +658,19 @@ impl<'a> Typer<'a> {
     /// place." A selector is the language's `valid`: a name a
     /// declaration binds is a call of that declaration, and no selector
     /// (TIME-9).
+    /// True when the name at `name` may be one of the language's own
+    /// forms: nothing binds it, or core's module declares it. TIME-9
+    /// has core declare the endpoint operations, and in a `when` header
+    /// `modified` and `valid` "are forms of the language": a name a
+    /// module or a local binds is that module's or that local's.
+    fn is_the_languages(&self, name: &SyntaxToken) -> bool {
+        match self.bindings.get(&(self.file, name.span().start)) {
+            None => true,
+            Some(Binding::Declarations { module, .. }) => Some(*module) == self.program.core(),
+            Some(Binding::Local { .. }) => false,
+        }
+    }
+
     fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
         match header.kind() {
             SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
@@ -677,9 +690,7 @@ impl<'a> Typer<'a> {
                     SyntaxKind::NameExpr => name_token(&callee)?,
                     _ => return None,
                 };
-                if name.text() != "valid"
-                    || self.bindings.contains_key(&(self.file, name.span().start))
-                {
+                if name.text() != "valid" || !self.is_the_languages(&name) {
                     return None;
                 }
                 let list = child(header, SyntaxKind::ArgList)?;
@@ -882,6 +893,59 @@ impl<'a> Typer<'a> {
             | EndpointOperation::Passivate => Type::Unknown,
         };
         (ExprKind::Endpoint { operation, inputs }, ty)
+    }
+
+    /// The argument of an `endpoint<T>` parameter (TIME-9): "A call
+    /// gives an `endpoint<T>` parameter a temporal input of the
+    /// enclosing node by its name, or `out`, and nothing else".
+    ///
+    /// The input is named and not read: its payload may be invalid, and
+    /// the function is given the endpoint to ask. In a graph or a value
+    /// function there is no enclosing node, and nothing to give.
+    fn endpoint_given(&mut self, node: &SyntaxNode) -> Expr {
+        let at = self.at(node);
+        // "Parentheses select grouping" (EXPR-1).
+        let mut named = node.clone();
+        while named.kind() == SyntaxKind::ParenExpr
+            && let Some(inner) = named.children().next()
+        {
+            named = inner;
+        }
+        let local = (named.kind() == SyntaxKind::NameExpr)
+            .then(|| self.local_of(&named))
+            .flatten()
+            .filter(|&local| {
+                self.hook.is_some() && (self.is_temporal_input(local) || Some(local) == self.out)
+            });
+        let Some(local) = local else {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::ENDPOINT_ARGUMENT,
+                    at,
+                    "an `endpoint<T>` parameter takes a temporal input of the node by its \
+                     name, or `out`"
+                        .to_string(),
+                    "TIME-9",
+                )
+                .with_note(if self.hook.is_some() {
+                    "a state, a `const` parameter and an expression have no endpoint"
+                } else {
+                    "an endpoint is given in a node's hook: a graph and a value function have \
+                     no input of their own to give"
+                }),
+            );
+            return Expr {
+                kind: ExprKind::Unread,
+                ty: Type::Unknown,
+                at,
+            };
+        };
+        Expr {
+            kind: ExprKind::EndpointOf(local),
+            ty: Type::Endpoint(Box::new(self.locals[local].ty.clone())),
+            at,
+        }
     }
 
     /// The endpoint an argument of an endpoint operation names: a
@@ -1449,6 +1513,11 @@ impl<'a> Typer<'a> {
     /// expects, which gives a literal or a sequence its type (EXPR-5);
     /// whether the result fits is for [`Typer::fit`].
     fn expression(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> Expr {
+        // TIME-9: a place that expects an endpoint is given one, and no
+        // value: the argument of an `endpoint<T>` parameter.
+        if let Some(Type::Endpoint(_)) = expected {
+            return self.endpoint_given(node);
+        }
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
             SyntaxKind::Literal => self.literal(node, expected),
@@ -3242,6 +3311,20 @@ impl<'a> Typer<'a> {
             }
             return self.unread_call(&list);
         };
+        // TIME-9: "The operations on an endpoint are core's native value
+        // functions ... `modified` and `valid` are selectors in a `when`
+        // header (TIME-3): there they are forms of the language, which
+        // set subscription and admission." In a node's hooks each name
+        // is read as the form it is, a selector or a guard among them,
+        // whether core has declared the function or not: the call is of
+        // core's own, and what it gives is the same.
+        if self.hook.is_some()
+            && Some(module) == self.program.core()
+            && child(&callee, SyntaxKind::QualifiedName).is_none()
+            && let Some(operation) = EndpointOperation::named(name.text())
+        {
+            return self.endpoint(operation, &name, &list);
+        }
         self.call_named(&name, &list, (module, declarations), expected, None)
     }
 
@@ -4609,17 +4692,26 @@ impl<'a> Typer<'a> {
                     by_argument[generic] |= !was && found[generic].is_some();
                 }
             };
+            // Nothing is expected of the value while its place is not
+            // known, but that the place is an endpoint: the argument of
+            // `valid<T>(input: endpoint<T>)` is an endpoint of whatever
+            // the input holds, and says what `T` is (TIME-9).
+            let unknown = Type::Unknown;
+            let read_as = match pattern {
+                Type::Endpoint(_) => pattern,
+                _ => &unknown,
+            };
             if ordered {
                 if self.may_reread() {
                     let mark = self.mark();
-                    let value = self.expression(node, Some(&Type::Unknown));
+                    let value = self.expression(node, Some(read_as));
                     learn(self, &value.ty, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
-            let value = self.expression(node, Some(&Type::Unknown));
+            let value = self.expression(node, Some(read_as));
             learn(self, &value.ty, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
