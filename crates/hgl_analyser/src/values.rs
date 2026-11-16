@@ -1561,9 +1561,6 @@ impl<'a> Typer<'a> {
                     Some(&target),
                 );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
-                // `held += clock` calls the operator as `held + clock`
-                // does.
-                self.capabilities_given(&kind);
                 Expr {
                     kind,
                     ty: result,
@@ -1811,10 +1808,6 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
-        // Every call is read to here, whatever wrote it: a name, a name
-        // with generic arguments, or a symbol.
-        self.capabilities_given(&kind);
-        self.fixed_arguments(&kind);
         Expr { kind, ty, at }
     }
 
@@ -3409,6 +3402,16 @@ impl<'a> Typer<'a> {
         self.call_read(node, expected)
     }
 
+    /// What every call is held to once it is built, with each argument
+    /// given to its parameter. It is run where a call of a function and
+    /// a call of an operator's candidate are built, and so for a call
+    /// written by name, with generic arguments, by a symbol, as a link
+    /// of a chain `a + b + c`, or by a compound assignment.
+    fn finished_call(&mut self, kind: &ExprKind) {
+        self.capabilities_given(kind);
+        self.fixed_arguments(kind);
+    }
+
     /// FN-1: "a `const` parameter takes what is fixed when the graph is
     /// built. In composition that is any ordinary value. In a hook and
     /// in a value function it is a constant expression: of literals,
@@ -4547,6 +4550,7 @@ impl<'a> Typer<'a> {
                 arguments,
                 form: Form::Named,
             };
+            self.finished_call(&kind);
             return (kind, ty);
         };
 
@@ -4680,6 +4684,7 @@ impl<'a> Typer<'a> {
             arguments,
             form: Form::Named,
         };
+        self.finished_call(&kind);
         (kind, ty)
     }
 
@@ -6013,6 +6018,7 @@ impl<'a> Typer<'a> {
             arguments,
             form,
         };
+        self.finished_call(&kind);
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
