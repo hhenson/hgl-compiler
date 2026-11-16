@@ -837,10 +837,10 @@ read from both sides.
 
 | Where | Rule | What is done |
 | --- | --- | --- |
-| In the body of the declaration that states it | GEN-7 | A call of that operator, by name or by symbol, whose arguments are of the types supplied is admitted, and is of the arrow's type. The typed body records `Callee::Required` with the operator: which candidate it is is selected where `T` is known |
+| In the body of the declaration that states it | GEN-7, EXPR-2 | A call of that operator, by name or by symbol, whose arguments are of the types supplied is admitted, and is of the arrow's type. An argument is given to the operator's parameter by its position or by that parameter's name, `add_(rhs: b, lhs: a)`. The typed body records `Callee::Required` with the operator: which candidate it is is selected where `T` is known |
 | The same body, an operation nothing states | GEN-7 | Selected as any call is. `a + b` of two `T` finds no candidate and is `operator.no_candidate`; `a == b` is taken by core's `eq_<T>`, which is for any one type |
 | At a call that selects the candidate that states it | GEN-16, GEN-5 | Tested with the candidate's generic parameters in place: `add_(f64, f64) -> f64` holds when one most-specific value candidate of `add_` takes two `f64` and gives an `f64`. A requirement of a graph is tested against every candidate, as a call in composition selects |
-| At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement |
+| At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement, and otherwise when a candidate takes them as they are, as core's `eq_<T>` takes any one type |
 
 A requirement joined to others by `&&` holds wherever the condition
 does, and is one the body may use; one under `!` or `||` is tested at a
