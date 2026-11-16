@@ -320,7 +320,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-4 | transpiler | planned | Provenance attached on first graph failure and kept |
 | ERR-5 | analyser | partial | `value?` has the T of a `result<T, E>`. In a value function the enclosing result is a `result<U, E>` of the same E, and in a `when` the E is `error` (`result.propagation_type`, which what is no result, a nullable included, is too); in a graph, `start`, `stop`, a node's declarations and a source it is `result.propagation_phase`. Left: an anonymous function |
 | ERR-5 | transpiler | planned | `?` evaluates once; failure returns or fails the node |
-| ERR-6 | analyser | partial | A list is indexed by an `i64` and a dictionary by its key, for the element or the value. Left: `at`, `get` and their fallbacks (`lookup.default_type`, `nullable.required_presence`) |
+| ERR-6 | analyser | partial | A list is indexed by an `i64` and a dictionary by its key, for the element or the value. `get(book, key)` is core's candidate, a `V?`. Left: `at`, and `get` with a fallback (`lookup.default_type`, `nullable.required_presence`) |
 | ERR-6 | transpiler | planned | A strict read fails on absence (`value.missing_key`); `get` fallback |
 | ERR-7 | analyser | partial | `capture(callable, args...)` in a graph reads the call it names, from the same arguments less the name, as that call is read; in a value function or a hook, of what names no callable, and of a call that composes nothing it is `capture.phase`. Bound with `let`, `.value` is the call's output and `.error` an `error`, both connections; `.value` of an outputless call is `capture.output_field`. Left: a capture used other than through a `let` and its two connections is not judged |
 | ERR-7 | transpiler | planned | Capture as a temporal error boundary |
@@ -445,10 +445,11 @@ the same numeric rules the transpiler rows give.
 | CAP-2 | transpiler | planned | One record at its level |
 | CAP-3 | analyser | done | A clock's four properties, each with its type |
 | CAP-3 | transpiler | planned | What each clock property observes |
-| CAP-4 | analyser | done | A scheduler's two properties; `un_schedule`, with a tag or without, and `reset` |
-| CAP-4 | transpiler | planned | Cancelling a pending wake, and every one |
-| CAP-5 | analyser | partial | An alarm has no property, and a node injects it or `scheduler` (TIME-8). Left: asking for a wake on one, which core does not declare yet |
+| CAP-4 | analyser | done | A scheduler's two properties; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset` |
+| CAP-4 | transpiler | planned | Asking for a wake, cancelling a pending one, and every one |
+| CAP-5 | analyser | done | An alarm has no property, and a node injects it or `scheduler` (TIME-8). `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock |
 | CAP-5 | transpiler | planned | A best-effort wake |
+| CAP-6 | analyser | partial | `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes or its place expects. Left: one key's type across a program |
 | CAP-6 | transpiler | planned | Reading or writing the global store wakes no node |
 | CONF-1 | runner | planned | Runs core's cases as written and adds no expectation |
 | CONF-2 | runner | planned | Conformance runs with core and its native providers only |

@@ -511,3 +511,74 @@ fn the_supplied_core_declares_the_capabilities() {
         ]
     );
 }
+
+/// Core's scheduling and global store, with the core the compiler is
+/// built with. CAP-4: "`schedule(scheduler, at)` asks for a wake: `at`
+/// is a `duration` or a `datetime`. It takes a `tag` ... and
+/// `on_wall_clock`". CAP-5: "`schedule(alarm, at)` ... It has no
+/// property, no tag, no wall clock". CAP-6: "`get<V>(global_state, key)`
+/// is the value under `key`, of the type the call writes or its place
+/// expects ... `has(global_state, key)` ... `put(global_state, key,
+/// value)`", each key "fixed when the graph is built (the language's
+/// FN-1)". ERR-6: `get` on a dictionary "yields contextual absence".
+#[test]
+fn the_supplied_core_declares_scheduling_and_the_store() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn counted(const every: duration = 1s, const name: str = \"count\") -> i64 {\n",
+            "    inject scheduler, global_state\n",
+            "    start {\n",
+            "        if !has(global_state, \"count\") { put(global_state, \"count\", 0) }\n",
+            "        schedule(scheduler, every, tag: \"count\")\n",
+            "    }\n",
+            "    when scheduled() {\n",
+            "        schedule(scheduler, at: every, on_wall_clock: true)\n",
+            "        schedule(scheduler, @2026-11-16T09:00Z)\n",
+            "        put(global_state, name, get<i64>(global_state, name) + 1)\n",
+            "        let total: i64 = get(global_state, \"total\")\n",
+            "        return get<i64>(global_state, \"count\")\n",
+            "    }\n",
+            "}\n",
+            "fn woken(value: f64, const every: duration = 1s) -> f64 {\n",
+            "    inject alarm\n",
+            "    start { schedule(alarm, every) }\n",
+            "    when {\n",
+            "        schedule(alarm, @2026-11-16T09:00Z)\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+            "const fn lookup(book: dict<str, i64>, key: str) -> i64 {\n",
+            "    let price = get(book, key)\n",
+            "    if price == null { return 0 }\n",
+            "    return price\n",
+            "}\n",
+            // A tag on an alarm, a number for a time, a key that is no
+            // string, and a key that is a value of the evaluation.
+            "fn wrong(value: str) -> str {\n",
+            "    inject alarm, global_state\n",
+            "    start { schedule(alarm, 1s, tag: \"poll\") }\n",
+            "    when {\n",
+            "        schedule(alarm, 5)\n",
+            "        put(global_state, 7, 1)\n",
+            "        put(global_state, value, 1)\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert!(checked.core_supplied);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:31:13 operator/operator.no_candidate GEN-5",
+            "m.hgl:33:9 operator/operator.no_candidate GEN-5",
+            "m.hgl:34:9 operator/operator.no_candidate GEN-5",
+            "m.hgl:35:27 type/argument.constant FN-1",
+        ]
+    );
+    assert_eq!(checked.prelude_names("m"), [""; 0]);
+    assert!(locals(&checked, "counted").contains(&"total: i64".to_string()));
+    assert!(locals(&checked, "lookup").contains(&"price: i64?".to_string()));
+}
