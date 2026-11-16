@@ -1773,11 +1773,14 @@ impl<'a> Typer<'a> {
         }
         let parent = used.parent()?;
         match parent.kind() {
-            // FN-7: the last expression of a function's body is what it
-            // returns, as the expression of an arrow body is.
-            SyntaxKind::FnDecl | SyntaxKind::FnExpr if used.kind() == SyntaxKind::Block => {
-                Some("what is returned")
+            // FN-7: "A body that ends in an expression returns that
+            // expression, as an arrow body does ... In a function that
+            // declares no result the expression is a statement", whose
+            // value is dropped.
+            SyntaxKind::FnDecl if used.kind() == SyntaxKind::Block => {
+                self.signature.result.as_ref().map(|_| "what is returned")
             }
+            SyntaxKind::ArrowBody => self.signature.result.as_ref().map(|_| "what is returned"),
             SyntaxKind::StateDecl => Some("the value of a `state`"),
             SyntaxKind::CacheDecl => Some("the value of a `cache`"),
             SyntaxKind::TupleExpr => Some("an entry of a tuple"),
@@ -1785,7 +1788,6 @@ impl<'a> Typer<'a> {
             // and so neither is what a dictionary holds.
             SyntaxKind::SequenceExpr => Some("an entry of a list or a set"),
             SyntaxKind::ReturnStmt => Some("what is returned"),
-            SyntaxKind::ArrowBody => Some("what is returned"),
             // `out = clock` publishes it; `kept = clock`, of a `state`
             // or a `cache`, keeps it.
             SyntaxKind::AssignStmt => {
