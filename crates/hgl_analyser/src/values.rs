@@ -37,7 +37,8 @@ use hgl_source::FileId;
 
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
-    self, BinaryOperator, Body, Callee, Expr, ExprKind, Local, LocalId, Stmt, UnaryOperator, Value,
+    self, BinaryOperator, Body, Callee, Expr, ExprKind, Form, Local, LocalId, Stmt, UnaryOperator,
+    Value,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
@@ -1351,6 +1352,7 @@ impl<'a> Typer<'a> {
         let kind = ExprKind::Call {
             callee: Callee::Unread,
             arguments,
+            form: Form::Named,
         };
         (kind, Type::Unknown)
     }
@@ -1440,7 +1442,12 @@ impl<'a> Typer<'a> {
                 declaration,
                 generics: Vec::new(),
             };
-            return (ExprKind::Call { callee, arguments }, ty);
+            let kind = ExprKind::Call {
+                callee,
+                arguments,
+                form: Form::Named,
+            };
+            return (kind, ty);
         };
 
         // The requested output: `let names: list<str> = repeat(3)` says
@@ -1547,7 +1554,12 @@ impl<'a> Typer<'a> {
             declaration,
             generics: resolved,
         };
-        (ExprKind::Call { callee, arguments }, ty)
+        let kind = ExprKind::Call {
+            callee,
+            arguments,
+            form: Form::Named,
+        };
+        (kind, ty)
     }
 
     /// What the generic arguments a call writes say of the callee's
@@ -1859,40 +1871,8 @@ impl<'a> Typer<'a> {
         // requirements". Where its requirement says what its result may
         // be, a candidate's result is one of those.
         let among = self.result_among(operator, public, &map, &own_generics);
-        // The operator's value candidates, wherever they are declared.
-        // GEN-5: "Library membership and registration order grant no
-        // priority."
-        let mut candidates: Vec<(usize, usize, &Signature)> = Vec::new();
-        for (module, declared) in program.modules.iter().enumerate() {
-            for (declaration, candidate) in declared.declarations.iter().enumerate() {
-                if candidate.kind.candidate() != Some((Role::Value, Some(operator))) {
-                    continue;
-                }
-                if let Some(Detail::Callable(signature)) = declared.details.get(declaration) {
-                    candidates.push((module, declaration, signature));
-                }
-            }
-        }
-        // Not read: an operator or a candidate with a pack, and a
-        // candidate with a generic parameter that is a value or a type
-        // pack. Such a call has no type.
-        let packed = |signature: &Signature| {
-            signature
-                .parameters
-                .iter()
-                .any(|parameter| parameter.pack.is_some())
-        };
-        let unread = packed(public)
-            || candidates.iter().any(|(_, _, signature)| {
-                packed(signature)
-                    || signature.generics.iter().any(|generic| {
-                        matches!(
-                            generic.kind,
-                            GenericKind::Value(_) | GenericKind::Pack { .. }
-                        )
-                    })
-            });
-        if unread {
+        let candidates = self.value_candidates(operator);
+        if unreadable(public, &candidates) {
             return self.unread_call(list);
         }
 
@@ -1914,27 +1894,7 @@ impl<'a> Typer<'a> {
         // reports itself is reported here, once.
         let given: Vec<Given> = written
             .into_iter()
-            .map(|(key, node)| {
-                let by_place = typed_by_place(&node);
-                let mark = self.mark();
-                let value = self.expression(&node, Some(&Type::Unknown));
-                // An argument read as the type of its place is read
-                // again once the candidate is known. Its first reading,
-                // when it reports nothing, is taken back but for what
-                // it assigned, which a later argument may read.
-                let retried =
-                    by_place && self.diagnostics.len() == mark.diagnostics && self.may_reread();
-                if retried {
-                    self.take_back(mark, true);
-                }
-                Given {
-                    key,
-                    by_place,
-                    value,
-                    retried,
-                    node,
-                }
-            })
+            .map(|(key, node)| self.give(key, node))
             .collect();
         // An argument given to no parameter, or rejected itself, has
         // been reported, and one whose type is not known says nothing
@@ -1950,51 +1910,13 @@ impl<'a> Typer<'a> {
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
-        let operator_declaration =
-            &program.modules[operator.module].declarations[operator.declaration];
         let wanted = Wanted {
             place: requested
                 .as_ref()
                 .or(expected.filter(|expected| !open(expected))),
             among,
         };
-        let mut selected: Vec<Chosen> = Vec::new();
-        let mut untold = false;
-        for widening in [false, true] {
-            for &(module, declaration, signature) in &candidates {
-                let candidate = &program.modules[module].declarations[declaration];
-                // The candidate as this call takes it: its generic
-                // parameters resolved (GEN-2).
-                let Some((taken, generics)) = instance(signature, public, &given, &wanted) else {
-                    continue;
-                };
-                let admits = self.admits_call(
-                    (candidate, &taken),
-                    (operator_declaration, public),
-                    (module, &generics),
-                    (&given, &wanted),
-                    widening,
-                );
-                match admits {
-                    Admits::Yes => selected.push(Chosen {
-                        module,
-                        declaration,
-                        declared: signature,
-                        taken,
-                        generics,
-                    }),
-                    Admits::No => {}
-                    Admits::Unknown => untold = true,
-                }
-            }
-            if !selected.is_empty() {
-                break;
-            }
-        }
-        // GEN-5: "Select exactly one most-specific admitted candidate.
-        // Concrete types outrank variables; structurally constrained
-        // variables outrank unconstrained ones."
-        most_specific(&mut selected, public.parameters.len());
+        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         // EXPR-12: "Resolve configuration that selects an expression's
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
@@ -2092,22 +2014,144 @@ impl<'a> Typer<'a> {
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given), Type::Unknown);
         }
-        let Some(Chosen {
+        let Some(chosen) = selected.pop() else {
+            return (self.unselected(given), Type::Unknown);
+        };
+        self.called(operator, chosen, given, Form::Named)
+    }
+
+    /// The value candidates of `operator`, wherever they are declared.
+    /// GEN-5: "Library membership and registration order grant no
+    /// priority."
+    fn value_candidates(&self, operator: OperatorRef) -> Vec<(usize, usize, &'a Signature)> {
+        let program = self.program;
+        let mut candidates = Vec::new();
+        for (module, declared) in program.modules.iter().enumerate() {
+            for (declaration, candidate) in declared.declarations.iter().enumerate() {
+                if candidate.kind.candidate() != Some((Role::Value, Some(operator))) {
+                    continue;
+                }
+                if let Some(Detail::Callable(signature)) = declared.details.get(declaration) {
+                    candidates.push((module, declaration, signature));
+                }
+            }
+        }
+        candidates
+    }
+
+    /// One argument of an operator's call, read with nothing expected
+    /// of it: what it reports itself is reported here, once.
+    fn give(&mut self, key: Key, node: SyntaxNode) -> Given {
+        let by_place = typed_by_place(&node);
+        let mark = self.mark();
+        let value = self.expression(&node, Some(&Type::Unknown));
+        // An argument read as the type of its place is read again once
+        // the candidate is known. Its first reading, when it reports
+        // nothing, is taken back but for what it assigned, which a
+        // later argument may read.
+        let retried = by_place && self.diagnostics.len() == mark.diagnostics && self.may_reread();
+        if retried {
+            self.take_back(mark, true);
+        }
+        Given {
+            key,
+            by_place,
+            value,
+            retried,
+            node,
+        }
+    }
+
+    /// The candidates of `operator` that admit a call, the most
+    /// specific of them (GEN-5), and whether one could not be told to
+    /// admit it or not.
+    ///
+    /// EXPR-5: an integer literal is an `f64` where one is expected; it
+    /// selects as the `i64` it is where a candidate takes one. So the
+    /// candidates are tried first with no literal widened.
+    fn admitted(
+        &mut self,
+        operator: OperatorRef,
+        candidates: &[(usize, usize, &'a Signature)],
+        given: &[Given],
+        wanted: &Wanted,
+    ) -> (Vec<Chosen<'a>>, bool) {
+        let program = self.program;
+        let operator_declaration =
+            &program.modules[operator.module].declarations[operator.declaration];
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return (Vec::new(), false);
+        };
+        let mut selected: Vec<Chosen> = Vec::new();
+        let mut untold = false;
+        for widening in [false, true] {
+            for &(module, declaration, signature) in candidates {
+                let candidate = &program.modules[module].declarations[declaration];
+                // The candidate as this call takes it: its generic
+                // parameters resolved (GEN-2).
+                let Some((taken, generics)) = instance(signature, public, given, wanted) else {
+                    continue;
+                };
+                let admits = self.admits_call(
+                    (candidate, &taken),
+                    (operator_declaration, public),
+                    (module, &generics),
+                    (given, wanted),
+                    widening,
+                );
+                match admits {
+                    Admits::Yes => selected.push(Chosen {
+                        module,
+                        declaration,
+                        declared: signature,
+                        taken,
+                        generics,
+                    }),
+                    Admits::No => {}
+                    Admits::Unknown => untold = true,
+                }
+            }
+            if !selected.is_empty() {
+                break;
+            }
+        }
+        // GEN-5: "Select exactly one most-specific admitted candidate.
+        // Concrete types outrank variables; structurally constrained
+        // variables outrank unconstrained ones."
+        most_specific(&mut selected, public.parameters.len());
+        (selected, untold)
+    }
+
+    /// The call of the candidate `chosen` of `operator` with the
+    /// arguments `given`, written as `form` says. Each argument is of
+    /// the type the candidate's parameter has: the candidate was
+    /// admitted, so each is given to one of its parameters.
+    fn called(
+        &mut self,
+        operator: OperatorRef,
+        chosen: Chosen,
+        given: Vec<Given>,
+        form: Form,
+    ) -> (ExprKind, Type) {
+        let Chosen {
             module,
             declaration,
             taken,
             generics,
             ..
-        }) = selected.pop()
-        else {
-            return (self.unselected(given), Type::Unknown);
-        };
+        } = chosen;
         let signature: &Signature = &taken;
-
-        // Each argument is of the type the selected candidate's
-        // parameter has. The candidate was admitted, so each is given
-        // to one of its parameters.
-        let bound = bound(signature, public, &given).unwrap_or_default();
+        let program = self.program;
+        let bound = match program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        {
+            Some(Detail::Callable(public)) => bound(signature, public, &given).unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let arguments = given
             .into_iter()
             .enumerate()
@@ -2121,8 +2165,7 @@ impl<'a> Typer<'a> {
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
                 let value = if given.retried {
-                    // Read where it stands, as the parameter's type: the
-                    // candidate was admitted because it fits.
+                    // Read where it stands, as the parameter's type.
                     let value = self.expression(&given.node, Some(&parameter.ty));
                     self.fit(value, &parameter.ty, &place)
                 } else {
@@ -2142,6 +2185,7 @@ impl<'a> Typer<'a> {
                 generics,
             },
             arguments,
+            form,
         };
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
@@ -2307,6 +2351,7 @@ impl<'a> Typer<'a> {
         ExprKind::Call {
             callee: Callee::Unread,
             arguments,
+            form: Form::Named,
         }
     }
 
@@ -3375,6 +3420,28 @@ struct Wanted<'w> {
     /// called as `convert<f64>(count)`, an `f64` and a
     /// `result<f64, error>`.
     among: Option<Vec<Type>>,
+}
+
+/// True when a call of an operator is not read: the operator or a
+/// candidate has a pack, or a candidate has a generic parameter that is
+/// a value or a type pack. Such a call has no type.
+fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signature)]) -> bool {
+    let packed = |signature: &Signature| {
+        signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.pack.is_some())
+    };
+    packed(public)
+        || candidates.iter().any(|(_, _, signature)| {
+            packed(signature)
+                || signature.generics.iter().any(|generic| {
+                    matches!(
+                        generic.kind,
+                        GenericKind::Value(_) | GenericKind::Pack { .. }
+                    )
+                })
+        })
 }
 
 /// The parameter of a candidate each argument of a call is given to,
