@@ -164,8 +164,8 @@ fn a_yield_writes_a_value_of_the_sources_type() {
         // Not of the result's type.
         "        yield every: \"text\"\n",
         "        yield every: count\n",
-        // A capability published, a temporal function called, a
-        // failure propagated and a capture.
+        // A capability published, which is no `f64` either; a temporal
+        // function called, a failure propagated and a capture.
         "        yield every: clock\n",
         "        yield every: feeder(count)\n",
         "        let whole = checked(count)?\n",
@@ -179,6 +179,7 @@ fn a_yield_writes_a_value_of_the_sources_type() {
             "m.hgl:14:22 type/type.mismatch EXPR-5",
             "m.hgl:15:22 type/type.mismatch EXPR-5",
             "m.hgl:16:22 injectable/capability.as_value TIME-8",
+            "m.hgl:16:22 type/type.mismatch EXPR-5",
             "m.hgl:17:22 function-kind/call.role FN-3",
             "m.hgl:18:35 phase/result.propagation_phase ERR-5",
             "m.hgl:19:20 phase/capture.phase ERR-7",

@@ -438,3 +438,76 @@ fn an_exported_native_function_is_another_modules_to_call() {
         ]
     );
 }
+
+/// Core's capability contract, with the core the compiler is built
+/// with. CAP-1: "Each capability but `out` has a native type of core's
+/// module, named as the capability with a capital". CAP-2:
+/// "`log(logger, level, message)` writes one record ... `log_debug`,
+/// `log_info`, `log_warning`, and `log_error` each call `log` at their
+/// level. `logger.level` is the logger's current level." CAP-3: a
+/// clock's four properties. CAP-4: a scheduler's two properties,
+/// `un_schedule` and `reset`. CAP-5: an alarm "has no property".
+#[test]
+fn the_supplied_core_declares_the_capabilities() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn uses(value: f64) -> f64 {\n",
+            "    inject clock, logger, scheduler, global_state\n",
+            "    when {\n",
+            "        log(logger, .warning, \"direct\")\n",
+            "        log_debug(logger, \"debug\")\n",
+            "        log_info(logger, \"info\")\n",
+            "        log_warning(logger, \"warning\")\n",
+            "        log_error(logger, \"error\")\n",
+            "        let level = logger.level\n",
+            "        let at = clock.evaluation_time\n",
+            "        let now = clock.now\n",
+            "        let spent = clock.cycle_time\n",
+            "        let next = clock.next_cycle_evaluation_time\n",
+            "        let pending = scheduler.is_scheduled\n",
+            "        let due = scheduler.next_scheduled_time\n",
+            "        un_schedule(scheduler)\n",
+            "        un_schedule(scheduler, tag: \"poll\")\n",
+            "        reset(scheduler)\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+            "fn alarmed(value: f64) -> f64 {\n",
+            "    inject alarm\n",
+            "    when {\n",
+            "        let none = alarm.is_scheduled\n",
+            "        log(alarm, .info, \"text\")\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert!(checked.core_supplied);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:26:26 name/member.unknown NATIVE-6",
+            "m.hgl:27:13 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(checked.prelude_names("m"), [""; 0]);
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "value: f64",
+            "clock: Clock",
+            "logger: Logger",
+            "scheduler: Scheduler",
+            "global_state: GlobalState",
+            "level: LogLevel",
+            "at: datetime",
+            "now: datetime",
+            "spent: duration",
+            "next: datetime",
+            "pending: bool",
+            "due: datetime?",
+        ]
+    );
+}

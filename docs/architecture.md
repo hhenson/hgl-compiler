@@ -585,11 +585,11 @@ retained:
 | `Clock` written anywhere but as the whole type of a parameter of a `const fn` or a native value function | `capability.as_value` |
 
 A parameter of a capability's type in a value function is held to the
-same rule as the injected local it was given. The pinned core declares
-no capability type yet (hhenson/hgl_core#30): with it a capability has
-no type, its properties have none, and only what is retained is
-reported. A capability in a dictionary, whose literal is not read yet,
-is not reported yet.
+same rule as the injected local it was given. Where a program's own
+`module core` declares no capability type, a capability has no type and
+its properties none, and what is retained is still reported. A
+capability in a dictionary, whose literal is not read yet, is not
+reported yet.
 
 A native type's properties are kept as `Detail::Native`, each a name
 and an ordinary value type, and a member access on a value of the type
@@ -609,10 +609,11 @@ anything else is `endpoint.argument`, and so is any argument in a graph
 or a value function, which have no input of their own to give. A
 generic `T` under the endpoint is inferred from what the input holds.
 
-The endpoint operations are core's to declare as such functions. In a
-node's hooks their names are read as the forms they are, a selector or
-a guard among them, where nothing binds the name or core's module does:
-a node reads the same before core declares them and after.
+The endpoint operations are core's, declared as such functions: all but
+`delta_value`, whose result core has not settled. In a node's hooks
+their names are read as the forms they are, a selector or a guard among
+them, where core's module binds the name or nothing does: a node reads
+the same either way.
 
 Not read yet in a node: what `modified` subscribes to.
 

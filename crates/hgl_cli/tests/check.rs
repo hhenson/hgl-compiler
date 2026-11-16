@@ -374,7 +374,7 @@ fn core_is_supplied_when_the_roots_hold_none() {
     let stdout = text(&own.stdout);
     assert!(own.status.success(), "{}", text(&own.stderr));
     assert!(
-        stdout.contains("checked 3 files in 2 modules: no errors\n"),
+        stdout.contains("checked 5 files in 2 modules: no errors\n"),
         "{stdout}"
     );
     assert!(stdout.contains("module core\n"), "{stdout}");
