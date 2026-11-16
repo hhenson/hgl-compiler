@@ -1876,6 +1876,8 @@ impl<'a> Typer<'a> {
             ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
             ExprKind::Widen(inner) => self.category(inner),
             ExprKind::Field { base, .. } => self.category(base),
+            // An enum constructed from a connection is lifted (FN-6).
+            ExprKind::EnumFrom { value, .. } => self.category(value),
             // A result form over a connection is lifted, as a value
             // function's call is (FN-6, ERR-3): what it gives is what it
             // is given.
@@ -3379,6 +3381,22 @@ impl<'a> Typer<'a> {
 
     // ---- Calls and constructions ----
 
+    /// What the name that starts at `start` of `file` resolved to
+    /// (UNIT-10), in whichever module the file is of: a candidate's
+    /// default is written in its own module's file, which need not be
+    /// the one being read.
+    fn binding_at(&self, file: FileId, start: u32) -> Option<&'a Binding> {
+        if let Some(found) = self.bindings.get(&(file, start)) {
+            return Some(found);
+        }
+        self.program
+            .modules
+            .iter()
+            .flat_map(|module| module.uses.iter())
+            .find(|used| used.at.file == file && used.at.span.start == start)
+            .map(|used| &used.binding)
+    }
+
     /// The declarations a name is bound to, when it names declarations
     /// of a module and not a local.
     fn declarations(&self, name: &SyntaxToken) -> Option<(usize, &'a [usize])> {
@@ -3497,6 +3515,8 @@ impl<'a> Typer<'a> {
                 .get(*local)
                 .is_some_and(|parameter| parameter.constant),
             ExprKind::Widen(inner) => self.is_fixed(inner),
+            // `Side(N)`, of what is fixed: the member is fixed too.
+            ExprKind::EnumFrom { value, .. } => self.is_fixed(value),
             ExprKind::Unary { operand, .. } => self.is_fixed(operand),
             ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
             // A symbol over constants: `-1`, `1 + 2`.
@@ -3704,6 +3724,14 @@ impl<'a> Typer<'a> {
             let settled = !expected.is_some_and(open);
             return self.construct(name, list, module, declaration, given, settled);
         }
+        // TYPE-7: "A call of the enum's name constructs a member."
+        let enumeration = declarations
+            .iter()
+            .copied()
+            .find(|&declaration| kind_of(declaration) == DeclarationKind::Enum);
+        if let Some(declaration) = enumeration {
+            return self.enum_from(name, list, module, declaration);
+        }
         let operator = declarations
             .iter()
             .copied()
@@ -3765,6 +3793,81 @@ impl<'a> Typer<'a> {
             ));
         }
         self.unread_call(list)
+    }
+
+    /// `Side(1)` or `Side("buy")` (TYPE-7): "A call of the enum's name
+    /// constructs a member. It takes one argument, by position, that is
+    /// an `i64` or a `str`, and any other type rejects: `Side(1)` is the
+    /// member whose number is 1, and `Side("buy")` the member of that
+    /// exact name. Construction is checked: a constant that is no
+    /// member's number or name rejects, and a value that is none fails
+    /// where it is evaluated."
+    fn enum_from(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        module: usize,
+        declaration: usize,
+    ) -> (ExprKind, Type) {
+        let ty = Type::Named {
+            name: name.text().to_string(),
+            module,
+            declaration,
+            arguments: Vec::new(),
+        };
+        let Some(argument) = self.one_argument(name, list, "TYPE-7") else {
+            return (ExprKind::Unread, ty);
+        };
+        let value = self.expression(&argument, None);
+        let number = value.ty == Type::Scalar(Scalar::I64);
+        let text = value.ty == Type::Scalar(Scalar::Str);
+        if !number && !text {
+            // What is not known has been reported (ERR-9).
+            if !open(&value.ty) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    value.at,
+                    format!(
+                        "`{}` is constructed from a member's number, an `i64`, or its name, \
+                         a `str`, and this is `{}`",
+                        name.text(),
+                        value.ty
+                    ),
+                    "TYPE-7",
+                ));
+            }
+            return (ExprKind::Unread, ty);
+        }
+        let kind = match self.member_constructed(module, declaration, &argument) {
+            // A constant that names a member is that member: `Side(0)`
+            // is `Side.buy`, wherever a member is looked for, a `switch`
+            // label and a `const` argument among them.
+            Some(Ok(member)) => ExprKind::EnumMember {
+                module,
+                declaration,
+                member,
+            },
+            Some(Err(missing)) => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Name,
+                        codes::MEMBER_UNKNOWN,
+                        value.at,
+                        format!("`{}` has {missing}", name.text()),
+                        "TYPE-7",
+                    )
+                    .with_note("a member's name is matched exactly"),
+                );
+                ExprKind::Unread
+            }
+            None => ExprKind::EnumFrom {
+                module,
+                declaration,
+                value: Box::new(value),
+            },
+        };
+        (kind, ty)
     }
 
     // ---- Result forms (ERR-2 to ERR-5) ----
@@ -5571,6 +5674,82 @@ impl<'a> Typer<'a> {
         })
     }
 
+    /// `Side(1)`, as it is written (TYPE-7: "A call of the enum's name
+    /// constructs a member. It takes one argument, by position"): the
+    /// enum constructed, its module and declaration, and the value it
+    /// is given.
+    fn constructs_enum(&self, node: &SyntaxNode) -> Option<(usize, usize, SyntaxNode)> {
+        if node.kind() != SyntaxKind::CallExpr {
+            return None;
+        }
+        let callee = node
+            .children()
+            .next()
+            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+        let name = name_token(&callee)?;
+        let (module, declarations) = self.declarations(&name)?;
+        let declaration = declarations.iter().copied().find(|&declaration| {
+            self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
+        })?;
+        Some((module, declaration, one_by_position(node)?))
+    }
+
+    /// The name of the member an enum's construction from `argument`
+    /// names, where that is a constant that names one.
+    fn member_name(
+        &self,
+        module: usize,
+        declaration: usize,
+        argument: &SyntaxNode,
+    ) -> Option<String> {
+        let member = self
+            .member_constructed(module, declaration, argument)?
+            .ok()?;
+        match self.program.modules[module].details.get(declaration) {
+            Some(Detail::Enum(read)) => Some(read.members[member].name.clone()),
+            _ => None,
+        }
+    }
+
+    /// The member an enum's construction from `argument` names, where
+    /// that is a constant: its place among the members, `Ok`, or what
+    /// the enum has none of, `Err`. `None` for a value that is no
+    /// constant read here. TYPE-7: "`Side(1)` is the member whose
+    /// number is 1, and `Side("buy")` the member of that exact name."
+    ///
+    /// A member whose number is not known says nothing sure of which
+    /// numbers the enum has, and a number is then not looked for.
+    fn member_constructed(
+        &self,
+        module: usize,
+        declaration: usize,
+        argument: &SyntaxNode,
+    ) -> Option<Result<usize, String>> {
+        let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration) else {
+            return None;
+        };
+        let members = &read.members;
+        match constant_of(argument)? {
+            OptionValue::Literal(Value::Int(given))
+                if members.iter().all(|member| member.value.is_some()) =>
+            {
+                Some(
+                    members
+                        .iter()
+                        .position(|member| member.value == Some(given))
+                        .ok_or_else(|| format!("no member numbered {given}")),
+                )
+            }
+            OptionValue::Literal(Value::Str(given)) => Some(
+                members
+                    .iter()
+                    .position(|member| member.name == given)
+                    .ok_or_else(|| format!("no member named `{given}`")),
+            ),
+            _ => None,
+        }
+    }
+
     /// The constant an option is given, for a candidate's condition to
     /// compare (GEN-6). An enum member is one however it is written
     /// (TYPE-7): `.nan`, `Zero.nan`, `alias::Zero.nan`.
@@ -5591,6 +5770,15 @@ impl<'a> Typer<'a> {
                 .last()
                 .map(|name| OptionValue::Member(name.text().to_string()));
         }
+        // "an enum member however it is written (TYPE-7)": `Zero(1)`
+        // and `Zero("nan")` are the member they construct. One from a
+        // value that is no constant here, or that names no member, is
+        // not known.
+        if let Some((module, declaration, argument)) = self.constructs_enum(node) {
+            return self
+                .member_name(module, declaration, &argument)
+                .map(OptionValue::Member);
+        }
         constant_of(node)
     }
 
@@ -5603,9 +5791,14 @@ impl<'a> Typer<'a> {
     /// member written in full, `Zero.ieee`, is known for one by the
     /// option's type being an enum: a member of any other would not be
     /// a value of it.
-    fn default_value(&self, node: &SyntaxNode, ty: Option<&Type>) -> Option<OptionValue> {
+    fn default_value(
+        &self,
+        file: FileId,
+        node: &SyntaxNode,
+        ty: Option<&Type>,
+    ) -> Option<OptionValue> {
         if node.kind() == SyntaxKind::ParenExpr {
-            return self.default_value(&node.children().next()?, ty);
+            return self.default_value(file, &node.children().next()?, ty);
         }
         // TYPE-14: a `Zero?` is "either a T or null", and a member of
         // `Zero` is a value of it.
@@ -5614,17 +5807,44 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 ..
-            }) => {
-                self.program.modules[*module].declarations[*declaration].kind
-                    == DeclarationKind::Enum
+            }) if self.program.modules[*module].declarations[*declaration].kind
+                == DeclarationKind::Enum =>
+            {
+                Some((*module, *declaration))
             }
-            _ => false,
+            _ => None,
         };
-        if of_enum && node.kind() == SyntaxKind::MemberExpr {
+        if of_enum.is_some() && node.kind() == SyntaxKind::MemberExpr {
             // The member's name is the last token: any word (LEX-9).
             return tokens(node)
                 .last()
                 .map(|name| OptionValue::Member(name.text().to_string()));
+        }
+        // `Zero(0)`, `Zero("nan")` (TYPE-7): a construction of the
+        // option's enum is the member it names. The callee is looked
+        // up in `file`, where the default is written: a call of
+        // anything else, `choose(0)`, is no constant read here.
+        if let Some((module, declaration)) = of_enum
+            && node.kind() == SyntaxKind::CallExpr
+        {
+            let callee = node
+                .children()
+                .next()
+                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+            let name = name_token(&callee)?;
+            let constructs = matches!(
+                self.binding_at(file, name.span().start),
+                Some(Binding::Declarations {
+                    module: found,
+                    declarations,
+                }) if *found == module && declarations.contains(&declaration)
+            );
+            if !constructs {
+                return None;
+            }
+            return self
+                .member_name(module, declaration, &one_by_position(node)?)
+                .map(OptionValue::Member);
         }
         constant_of(node)
     }
@@ -5644,6 +5864,11 @@ impl<'a> Typer<'a> {
                 .children()
                 .next()
                 .is_some_and(|base| self.names_enum(&base)),
+            // "an enum member however it is written (TYPE-7)": one
+            // constructed from a compile-time constant, `Side(1)`.
+            SyntaxKind::CallExpr => self
+                .constructs_enum(node)
+                .is_some_and(|(_, _, argument)| self.is_compile_time(&argument)),
             SyntaxKind::NameExpr => name_token(node).is_some_and(|name| {
                 matches!(
                     self.bindings.get(&(self.file, name.span().start)),
@@ -6904,7 +7129,7 @@ impl<'a> Typer<'a> {
                     GenericKind::Value(ty) => Some(ty),
                     _ => None,
                 };
-                return this.default_value(&default, ty);
+                return this.default_value(candidate.at.file, &default, ty);
             }
             let index = signature
                 .parameters
@@ -6916,16 +7141,20 @@ impl<'a> Typer<'a> {
             if let Some(position) = argument {
                 return this.option_value(&given[position].node);
             }
-            let default =
-                default_at(&candidate.syntax, &signature.parameters[index]).or_else(|| {
+            // A default and the file it is written in: the candidate's,
+            // or else the operator's.
+            let default = default_at(&candidate.syntax, &signature.parameters[index])
+                .map(|default| (candidate.at.file, default))
+                .or_else(|| {
                     public
                         .parameters
                         .get(index)
                         .and_then(|parameter| default_at(&operator.syntax, parameter))
+                        .map(|default| (operator.at.file, default))
                 });
             match default {
-                Some(default) => {
-                    this.default_value(&default, Some(&signature.parameters[index].ty))
+                Some((file, default)) => {
+                    this.default_value(file, &default, Some(&signature.parameters[index].ty))
                 }
                 // Written `T?` and left out: it is null.
                 None => Some(OptionValue::Literal(Value::Null)),
@@ -10218,6 +10447,15 @@ fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
     // order.
     order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
     order
+}
+
+/// The one argument of a call that gives one value, by position:
+/// the `1` of `Side(1)`. `None` for any other call.
+fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
+    let list = child(call, SyntaxKind::ArgList)?;
+    let mut arguments = arguments_of(&list).into_iter();
+    let (label, argument) = arguments.next()?;
+    (label.is_none() && arguments.next().is_none()).then_some(argument)
 }
 
 /// The arguments of an argument list, in order: each with its name,

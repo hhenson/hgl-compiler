@@ -3852,3 +3852,161 @@ fn a_const_parameter_takes_what_is_fixed() {
         ]
     );
 }
+
+/// TYPE-7: "A call of the enum's name constructs a member. It takes one
+/// argument, by position, that is an `i64` or a `str`, and any other
+/// type rejects: `Side(1)` is the member whose number is 1, and
+/// `Side(\"buy\")` the member of that exact name. Construction is
+/// checked: a constant that is no member's number or name rejects, and
+/// a value that is none fails where it is evaluated."
+#[test]
+fn an_enum_is_constructed_from_a_number_or_a_name() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "enum Level { low = 10, high = 20 }\n",
+        "const fn made(code: i64, name: str) -> Side {\n",
+        "    let one = Side(1)\n",
+        "    let named = Side(\"buy\")\n",
+        "    let level = Level(20)\n",
+        // A value of the run is checked where it is evaluated.
+        "    let late = Side(code)\n",
+        "    let spoken = Side(name)\n",
+        // A constant that is no member's: the number, and the name,
+        // which is matched exactly.
+        "    let two = Side(2)\n",
+        "    let upper = Side(\"BUY\")\n",
+        "    let between = Level(15)\n",
+        // Neither an `i64` nor a `str`; no value; two.
+        "    let real = Side(1.5)\n",
+        "    let none = Side()\n",
+        "    let pair = Side(1, 2)\n",
+        "    return one\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:20 name/member.unknown TYPE-7",
+            "m.hgl:11:22 name/member.unknown TYPE-7",
+            "m.hgl:12:25 name/member.unknown TYPE-7",
+            "m.hgl:13:21 type/type.mismatch TYPE-7",
+            "m.hgl:14:16 type/argument.missing TYPE-7",
+            "m.hgl:15:24 type/argument.unexpected TYPE-7",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "made")[2..7],
+        [
+            "one: Side",
+            "named: Side",
+            "level: Level",
+            "late: Side",
+            "spoken: Side",
+        ]
+    );
+
+    // A constant that names a member is that member, wherever one is
+    // looked for: a `switch` label (CTRL-6), a `switch` that covers the
+    // enum (CTRL-5), and a `const` argument (FN-1).
+    let members = module(concat!(
+        "enum Side { buy, sell }\n",
+        "native const fn priced(const side: Side) -> i64\n",
+        "const fn covered(side: Side) -> i64 {\n",
+        "    switch side {\n",
+        "        case Side(0): return 1\n",
+        "        case Side(\"sell\"): return 2\n",
+        "    }\n",
+        "}\n",
+        "const fn doubled(side: Side) -> i64 {\n",
+        "    switch side {\n",
+        "        case Side(0): return 1\n",
+        "        case .buy: return 2\n",
+        "        default: return 3\n",
+        "    }\n",
+        "}\n",
+        "const fn fixed<const N: i64>(code: i64) -> i64 {\n",
+        "    let one = priced(Side(1))\n",
+        "    let two = priced(Side(N))\n",
+        "    return priced(Side(code))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        members.summary(),
+        [
+            "m.hgl:13:14 type/switch.duplicate_label CTRL-6",
+            "m.hgl:20:19 type/argument.constant FN-1",
+        ]
+    );
+
+    // GEN-8: "The value a call gives a generic value parameter is a
+    // compile-time constant: a literal, an enum member however it is
+    // written (TYPE-7)". A member constructed from a constant is one,
+    // and selects the candidate its member does; one constructed from
+    // a value of the run is none.
+    let generic = module(concat!(
+        "enum Side { buy, sell }\n",
+        "const fn priced<const side: Side>() -> i64 => 1\n",
+        "operator quoted<L, O>(lhs: L) -> O\n",
+        "impl const fn quoted(lhs: f64, side: Side = Side(0)) -> str\n",
+        "    requires side == .buy => \"bid\"\n",
+        "impl const fn quoted(lhs: f64, side: Side) -> f64\n",
+        "    requires side == .sell => lhs\n",
+        "const fn given<const N: i64>(code: i64, price: f64) -> i64 {\n",
+        "    let member = priced(side: Side.sell)\n",
+        "    let numbered = priced(side: Side(1))\n",
+        "    let named = priced(side: Side(\"buy\"))\n",
+        "    let fixed = priced(side: Side(N))\n",
+        "    let bid = quoted(price, side: Side(0))\n",
+        "    let offer = quoted(price, side: Side(\"sell\"))\n",
+        // A default that is a construction: the member it names.
+        "    let plain = quoted(price)\n",
+        "    return priced(side: Side(code))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        generic.summary(),
+        ["m.hgl:17:25 type/generic.argument_constant GEN-8"]
+    );
+    assert_eq!(
+        locals(&generic, "given")[6..],
+        ["bid: str", "offer: f64", "plain: str"],
+        "a constructed member selects the candidate its member does"
+    );
+
+    // A default is read in the file it is written in, which may be of
+    // another module. Only a call of the option's own enum constructs
+    // a member: `choose(0)` is a call of a function, and says nothing
+    // of which member it gives.
+    let elsewhere = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export enum Side { buy, sell }\n",
+                "const fn choose(code: i64) -> Side => Side.sell\n",
+                "operator quoted<L, O>(lhs: L) -> O\n",
+                "impl const fn quoted(lhs: f64, side: Side = Side(0)) -> str\n",
+                "    requires side == .buy => \"bid\"\n",
+                "impl const fn quoted(lhs: i64, side: Side = choose(0)) -> str\n",
+                "    requires side == .buy => \"bid\"\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib::{quoted}\n",
+                "const fn uses(price: f64, count: i64) {\n",
+                "    let constructed = quoted(price)\n",
+                "    let called = quoted(count)\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(elsewhere.summary(), NONE);
+    assert_eq!(
+        locals(&elsewhere, "uses")[2..],
+        ["constructed: str", "called: _"],
+        "`choose(0)` is not read as the member numbered 0"
+    );
+}

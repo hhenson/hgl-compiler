@@ -386,6 +386,16 @@ pub enum ExprKind {
         /// The member's position among the enum's members.
         member: usize,
     },
+    /// `Side(1)` or `Side("buy")`: the member of an enum that has the
+    /// number, or the name, given (TYPE-7).
+    EnumFrom {
+        /// The position of the enum's module in `Program::modules`.
+        module: usize,
+        /// The position of the enum in that module's `declarations`.
+        declaration: usize,
+        /// The number, an `i64`, or the name, a `str`.
+        value: Box<Expr>,
+    },
     /// A field of a struct value: `quote.bid`.
     Field {
         /// The struct value.
