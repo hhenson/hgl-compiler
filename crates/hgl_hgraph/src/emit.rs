@@ -791,6 +791,21 @@ impl Emitter<'_> {
     }
 
     fn statement(&mut self, function: &Function, statement: &Stmt, depth: usize) {
+        // A graph describes connections: Python's own `if` would test
+        // a port where the graph is built, and not what flows through
+        // it (CTRL-14). Only what wires is written there.
+        if function.mode == Mode::Graph
+            && matches!(
+                statement,
+                Stmt::Expr(Expr {
+                    kind: ExprKind::If { .. },
+                    ..
+                })
+            )
+        {
+            self.unsupported(at_of(statement, function.locals), "an `if` in a graph");
+            return;
+        }
         match statement {
             Stmt::Declare { local, value } => {
                 if let Some(value) = value {
@@ -902,6 +917,18 @@ impl Emitter<'_> {
     /// An expression as Python. One with no Python here yet is reported
     /// and written `None`.
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
+        // In a graph a value may be a connection, and Python's `and`,
+        // `not`, `if` and `float` would act on the port: only a name, a
+        // literal and a call are written there.
+        if function.mode == Mode::Graph
+            && !matches!(
+                value.kind,
+                ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::Call { .. }
+            )
+        {
+            self.unsupported(value.at, "this expression in a graph");
+            return "None".to_string();
+        }
         match &value.kind {
             ExprKind::Literal(literal) => self.literal(literal, value.at),
             ExprKind::Local(local) => {
@@ -1141,6 +1168,16 @@ impl Emitter<'_> {
             && (candidate || declared.kind.role() == Some(Role::Value));
         if lifted {
             self.unsupported(at, "a call that is lifted over connections");
+            return "None".to_string();
+        }
+        // A test is a composition block (TST-3), and a temporal function
+        // called in one makes a connection, which Python has no graph
+        // to make in: a target is run through `eval`.
+        if function.mode == Mode::Test && declared.kind.role() == Some(Role::Temporal) {
+            self.unsupported(
+                at,
+                "a call of a temporal function in a test, outside an eval",
+            );
             return "None".to_string();
         }
         if candidate {
