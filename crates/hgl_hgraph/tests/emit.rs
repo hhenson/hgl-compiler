@@ -1359,6 +1359,8 @@ const RESULT_FAILS: &str = concat!(
 /// Err. In when, only `result<T,error>` may propagate to node failure."
 ///
 /// NUM-9: "division with `zero: .error` returns `result<f64, error>`".
+/// NUM-10: "A checked-division Err is ordinary result data. It neither
+/// implicitly fails a node nor requires an exception."
 #[test]
 fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
     let emitted = emit(&[("results.hgl", RESULTS)]);
