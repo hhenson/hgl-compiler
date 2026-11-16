@@ -6372,6 +6372,7 @@ impl<'a> Typer<'a> {
         // What was noted of a local that is taken back goes with it:
         // its number is given to the next local declared.
         self.aliases.retain(|local, _| *local < mark.locals);
+        self.captures.retain(|local, _| *local < mark.locals);
         self.present.truncate(mark.present);
         if keep_flow {
             self.assigned.truncate(mark.locals);
