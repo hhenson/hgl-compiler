@@ -846,7 +846,16 @@ read from both sides.
 A call that writes the operator's generic arguments, `make<T>()`, is
 the requirement those agree with (GEN-8): what the operator's signature
 says of a parameter or of its result with them in place is what the
-requirement says.
+requirement says, part for part, and what the call does not write
+agrees with any.
+
+A requirement and a call ask the candidates through one function,
+`Typer::output_requested`: what the place expects, the types supplied
+in the operator's parameter order with an abstract struct widening what
+an earlier one decided (GEN-2), the operator's defaults, each of its
+parameter's type as resolved (GEN-13), and the operator's own
+requirement of its result. So a requirement holds exactly where the
+call it names would select one candidate.
 
 Where two requirements name one operator with the same types and
 different results, the call is the one that gives what its place
