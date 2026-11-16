@@ -641,9 +641,23 @@ and no argument's type says anything of, takes its default. So for
 `const fn scale<const factor: i64 = 3>(value: i64)`, `scale(n)` has
 `factor` 3 and `scale(n, factor: 5)` has it 5.
 
+Any generic value parameter may have a default (GEN-2, owner's decision
+of 2026-11-16 on hhenson/hgl_spec#52):
+
+| Declared | Written | Read as |
+| --- | --- | --- |
+| `struct Window<const size: i64 = 3>` | `value: Window`, `Window(values: xs)` where nothing says the size | `Window<3>`. A struct with a parameter that has no default is still not named bare |
+| `operator window<T, const size: i64 = 3>(value: T) -> list<T, size>` | `window<f64>(x)` | The output requested is a `list<f64, 3>` |
+
+An operator's generics are resolved in GEN-2's order: what the call
+writes, then what its place expects, then its arguments, and a default
+where none of them says (GEN-8). The output requested is matched as far
+as it is known, so `window(x)` asks for a list of three of any type.
+
 Not read yet: a function with a type pack or a pack parameter, whose
 generic types are then not known; the type of a generic argument written
-after the callee's name, `scale<"wide">(n)`, against its parameter's.
+after the callee's name, `scale<"wide">(n)`, against its parameter's; an
+operator's own generic value parameter given by name.
 
 A call of an operator may write the operator's generic arguments
 (GEN-8). Where they settle the operator's result, that is the output

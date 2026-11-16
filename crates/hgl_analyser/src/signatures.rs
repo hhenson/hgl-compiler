@@ -31,11 +31,15 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
-            let Some(Detail::Callable(signature)) = module.details.get(index) else {
-                continue;
+            // A function's, a candidate's and an operator's, and a
+            // struct's (GEN-2).
+            let generics = match module.details.get(index) {
+                Some(Detail::Callable(signature)) => &signature.generics,
+                Some(Detail::Struct(read)) => &read.generics,
+                _ => continue,
             };
             let file = module.files[declaration.file].file;
-            for generic in &signature.generics {
+            for generic in generics {
                 let GenericKind::Value(ty) = &generic.kind else {
                     continue;
                 };

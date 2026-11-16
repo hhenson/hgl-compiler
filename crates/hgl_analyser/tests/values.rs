@@ -3103,6 +3103,97 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
     assert_eq!(locals(&checked, "uses")[7], "real: f64");
 }
 
+// ---- A default on any generic value parameter ----
+
+/// GEN-2: "A generic value parameter may have a default, a function's,
+/// a candidate's, a struct's, or an operator's, which it takes where a
+/// call or an application neither gives it nor resolves it (GEN-8). A
+/// type parameter and a pack have none." "Where an application supplies
+/// none, a generic value parameter that nothing says anything of takes
+/// its default: for `struct Window<const size: i64 = 3>`,
+/// `value: Window` is a `Window<3>`." GEN-13: a default is of its
+/// parameter's type.
+#[test]
+fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
+    let checked = module(concat!(
+        "struct Window<const size: i64 = 3> { values: list<f64, size> }\n",
+        "struct Grid<const rows: i64 = 2, const cols: i64 = 2> {\n",
+        "    cells: list<list<f64, cols>, rows>\n",
+        "}\n",
+        "struct Box<T> { value: T }\n",
+        // A type parameter has no default: the struct is not named bare.
+        "struct Run<T, const size: i64 = 3> { values: list<T, size> }\n",
+        "struct Bad<const size: i64 = \"three\"> { values: list<f64, size> }\n",
+        "const fn uses(w: Window, five: Window<5>, g: Grid, xs: list<f64, 3>) {\n",
+        "    let values = w.values\n",
+        "    let wide = five.values\n",
+        "    let cells = g.cells\n",
+        // A construction that nothing else says the size of.
+        "    let made = Window(values: xs)\n",
+        "}\n",
+        "const fn rejected(b: Box, r: Run) {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:30 type/type.mismatch GEN-13",
+            "m.hgl:15:22 type/generic.argument_count GEN-2",
+            "m.hgl:15:30 type/generic.argument_count GEN-2",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "w: Window<3>",
+            "five: Window<5>",
+            "g: Grid<2, 2>",
+            "xs: list<f64, 3>",
+            "values: list<f64, 3>",
+            "wide: list<f64, 5>",
+            "cells: list<list<f64, 2>, 2>",
+            "made: Window<3>",
+        ]
+    );
+}
+
+/// GEN-8: "An operator's takes part in the output requested, in GEN-2's
+/// order: what the call writes, then what its place expects, then its
+/// arguments, and the default where none of them says."
+#[test]
+fn an_operators_default_is_part_of_the_output_requested() {
+    let checked = module(concat!(
+        "operator window<T, const size: i64 = 3>(value: T) -> list<T, size>\n",
+        "impl const fn window(value: f64) -> list<f64, 3> => [value, value, value]\n",
+        "impl const fn window(value: f64) -> list<f64, 5> =>\n",
+        "    [value, value, value, value, value]\n",
+        "operator copy<const size: i64 = 3>(value: list<f64, size>) -> list<f64, size>\n",
+        "impl const fn copy<const N: i64>(value: list<f64, N>) -> list<f64, N> => value\n",
+        "const fn uses(x: f64, five: list<f64, 5>) {\n",
+        // The default: a list of three.
+        "    let three = window<f64>(x)\n",
+        "    let also = window(x)\n",
+        // What the call writes, and what its place expects, come first.
+        "    let written = window<f64, 5>(x)\n",
+        "    let placed: list<f64, 5> = window<f64>(x)\n",
+        // And so does an argument.
+        "    let copied = copy(five)\n",
+        // What the call writes decides, and the place expects another.
+        "    let wrong: list<f64, 5> = window<f64, 3>(x)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:14:31 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        locals(&checked, "uses")[2..7],
+        [
+            "three: list<f64, 3>",
+            "also: list<f64, 3>",
+            "written: list<f64, 5>",
+            "placed: list<f64, 5>",
+            "copied: list<f64, 5>",
+        ]
+    );
+}
+
 // ---- Symbols ----
 
 /// The generics chapter: "Syntax binds these core identities

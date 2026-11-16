@@ -2509,33 +2509,31 @@ impl<'a> Typer<'a> {
         // is left to resolve: `convert<f64>(count)` asks for an `f64`.
         // What they say of the operands is for the pass that resolves
         // generic candidates.
-        let explicit: Vec<Argument> = match generics {
-            None => Vec::new(),
+        let written: Vec<Option<Argument>> = match generics {
+            None => vec![None; public.generics.len()],
             Some(_) => {
                 let Some((explicit, _)) = self.generic_arguments(name, &public.generics, generics)
                 else {
                     return self.unread_call(list);
                 };
                 explicit
-                    .into_iter()
-                    .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
-                    .collect()
             }
         };
-        let own_generics: Vec<Location> =
-            public.generics.iter().map(|generic| generic.at).collect();
-        let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
-        let requested: Option<Type> = generics.and_then(|_| {
-            public
-                .result
-                .as_ref()
-                .map(|result| placed(substitute_within(result, &map), &own_generics))
-                .filter(whole)
-        });
-        // GEN-4: an operator "owns ... generic relationships, and
-        // requirements". Where its requirement says what its result may
-        // be, a candidate's result is one of those.
-        let among = self.result_among(operator, public, &map, &own_generics);
+        // GEN-8: "A generic value parameter the call does not give takes
+        // its default, when it has one. An operator's takes part in the
+        // output requested, in GEN-2's order: what the call writes, then
+        // what its place expects, then its arguments, and the default
+        // where none of them says."
+        let mut found = written;
+        if let (Some(result), Some(expected)) = (&public.result, expected)
+            && !open(expected)
+        {
+            let place = match result {
+                Type::Nullable(_) => expected,
+                _ => not_null(Some(expected)).unwrap_or(expected),
+            };
+            infer(result, place, &public.generics, &mut found);
+        }
         let candidates = self.value_candidates(operator);
         if unreadable(public, &candidates) {
             return self.unread_call(list);
@@ -2568,6 +2566,59 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
 
+        // Then its arguments, in the order the operator declares its
+        // parameters (GEN-12): each given to one of them says what a
+        // generic in that parameter's type is.
+        for (index, parameter) in public.parameters.iter().enumerate() {
+            let argument = given.iter().find(|given| match &given.key {
+                Key::Position(position) => *position == index,
+                Key::Name(name) => *name == parameter.name,
+            });
+            if let Some(argument) = argument {
+                infer(
+                    &parameter.ty,
+                    &argument.value.ty,
+                    &public.generics,
+                    &mut found,
+                );
+            }
+        }
+        let operator_syntax =
+            &program.modules[operator.module].declarations[operator.declaration].syntax;
+        // True when the call says something of the output itself: it
+        // writes generic arguments, or one of the operator's takes its
+        // default.
+        let mut asked = generics.is_some();
+        for (generic, found) in public.generics.iter().zip(found.iter_mut()) {
+            if found.is_none()
+                && let Some(default) = generic_default(operator_syntax, generic)
+            {
+                *found = Some(Argument::Constant(constant_at(&default)));
+                asked = true;
+            }
+        }
+        let explicit: Vec<Argument> = found
+            .into_iter()
+            .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
+            .collect();
+        let own_generics: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
+        // The output requested, as far as it is known: a `list<T, 3>`
+        // with `T` not yet said is a list of three of anything.
+        let requested: Option<Type> = asked
+            .then(|| {
+                public
+                    .result
+                    .as_ref()
+                    .map(|result| placed(substitute_within(result, &map), &own_generics))
+                    .filter(|requested| !matches!(requested, Type::Unknown))
+            })
+            .flatten();
+        // GEN-4: an operator "owns ... generic relationships, and
+        // requirements". Where its requirement says what its result may
+        // be, a candidate's result is one of those.
+        let among = self.result_among(operator, public, &map, &own_generics);
         // GEN-5: "the requested output before inputs". EXPR-5: an
         // integer literal is an `f64` where one is expected; it selects
         // as the `i64` it is where a candidate takes one.
@@ -3280,6 +3331,9 @@ impl<'a> Typer<'a> {
         widening: bool,
     ) -> Admits {
         let result_fits = match (wanted.place, &signature.result) {
+            // An output requested in part, a `list<T, 3>` with `T` not
+            // said, is matched as far as it is known.
+            (Some(wanted), Some(result)) if !whole(wanted) => agree(wanted, result),
             (Some(wanted), Some(result)) => self.admits(wanted, result),
             (Some(_), None) => false,
             (None, _) => true,
@@ -3682,7 +3736,16 @@ impl<'a> Typer<'a> {
                     settled,
                     aside: &[],
                     values: &[],
-                    defaults: Vec::new(),
+                    // GEN-2: "a generic value parameter that nothing
+                    // says anything of takes its default".
+                    defaults: read
+                        .generics
+                        .iter()
+                        .map(|generic| {
+                            generic_default(&declared.syntax, generic)
+                                .map(|default| constant_at(&default))
+                        })
+                        .collect(),
                 };
                 let found = vec![None; read.generics.len()];
                 let Inferred {
