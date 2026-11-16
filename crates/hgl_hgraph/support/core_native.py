@@ -118,6 +118,13 @@ def _floordiv(lhs, rhs, zero):
     """
     if rhs == 0:
         return _zero_divisor(lhs, rhs, zero)
+    # NUM-2: floating arithmetic "preserves IEEE special values". An
+    # infinite numerator has an infinite quotient, or NaN over an
+    # infinity, and its floor is itself. Python's `//` would give NaN
+    # for every one. What a finite numerator over an infinity gives is
+    # not said by core yet (hhenson/hgl_core#35), and is Python's.
+    if _math.isinf(lhs):
+        return lhs / rhs
     return float(lhs // rhs)
 
 

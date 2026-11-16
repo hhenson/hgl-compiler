@@ -1233,6 +1233,13 @@ const DIVISION: &str = concat!(
     // NUM-12: what IEEE arithmetic makes of the zero divisor.
     "    assert 1.0 // 0.0 > 1.0e308\n",
     "    assert 1.0 % 0.0 != 1.0 % 0.0\n",
+    // NUM-2: an infinite quotient stays one when it is floored, with
+    // the sign of both operands, and has no remainder.
+    "    assert (1.0 / 0.0) // 2.0 > 1.0e308\n",
+    "    assert (1.0 / 0.0) // -2.0 < -1.0e308\n",
+    "    assert (-1.0 / 0.0) // 2.0 < -1.0e308\n",
+    "    assert (1.0 / 0.0) // (1.0 / 0.0) != (1.0 / 0.0) // (1.0 / 0.0)\n",
+    "    assert (1.0 / 0.0) % 2.0 != (1.0 / 0.0) % 2.0\n",
     "    assert eval(ratios, a: [6.0, 1.0], b: [4.0]) == [1.5, 0.25]\n",
     "    assert eval(halves, a: [3]) == [1.5]\n",
     "}\n",
