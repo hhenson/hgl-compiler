@@ -3993,4 +3993,37 @@ fn pairs_are_a_dictionary_where_one_is_expected() {
         panic!("the result is a sequence of pairs");
     };
     assert_eq!(entries.len(), 1);
+
+    // GEN-5: a candidate that fits with no integer literal widened is
+    // taken before one that needs it, a literal in a pair among them.
+    let selected = module(concat!(
+        "operator each<D>(book: D) -> str\n",
+        "impl const fn each(book: dict<str, i64>) -> str => \"whole\"\n",
+        "impl const fn each(book: dict<str, f64>) -> str => \"real\"\n",
+        "impl const fn each(book: dict<str, list<f64>>) -> str => \"lists\"\n",
+        "const fn chosen() -> str => each([\"a\": 1])\n",
+        "const fn widened() -> str => each([\"a\": 1.5])\n",
+        "const fn nested() -> str => each([\"a\": [1, 2]])\n",
+    ));
+    assert_eq!(selected.summary(), NONE);
+    let candidate = |name: &str| {
+        let Some(Stmt::Return {
+            value: Some(call), ..
+        }) = body(&selected, name).statements.last()
+        else {
+            panic!("`{name}` returns a call");
+        };
+        let ExprKind::Call {
+            callee: Callee::Candidate { declaration, .. },
+            ..
+        } = &call.kind
+        else {
+            panic!("`{name}` calls a candidate of `each`");
+        };
+        *declaration
+    };
+    // The candidates are declared in order: 1, 2, 3 after the operator.
+    assert_eq!(candidate("chosen"), 1, "the `dict<str, i64>` candidate");
+    assert_eq!(candidate("widened"), 2, "the `dict<str, f64>` candidate");
+    assert_eq!(candidate("nested"), 3, "the only one that takes lists");
 }

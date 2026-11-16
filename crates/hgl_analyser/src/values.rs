@@ -9282,6 +9282,10 @@ fn widens_an_entry(value: &Expr) -> bool {
         ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => {
             entries.iter().any(widens_an_entry)
         }
+        // Either side of a pair: `["a": 1]` where an `f64` is asked for.
+        ExprKind::Pairs(entries) => entries
+            .iter()
+            .any(|(key, value)| widens_an_entry(key) || widens_an_entry(value)),
         // The value of a block, and of each branch of an `if`.
         ExprKind::Block {
             value: Some(value), ..
