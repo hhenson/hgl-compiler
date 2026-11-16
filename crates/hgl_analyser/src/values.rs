@@ -37,11 +37,11 @@ use hgl_source::FileId;
 
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
-    self, BinaryOperator, Body, Callee, Expr, ExprKind, Form, Local, LocalId, Stmt, UnaryOperator,
-    Value,
+    self, BinaryOperator, Body, Callee, EndpointOperation, Expr, ExprKind, Form, Hook, Local,
+    LocalId, Stmt, UnaryOperator, Value,
 };
 use crate::program::{
-    Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
+    Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
 };
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
@@ -96,6 +96,32 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     diagnostics,
                 )
                 .body(),
+                // FN-2: a node, whose hooks are read as value code
+                // (FN-3: "In a hook a temporal parameter is a value of
+                // its declared type, read as in a value function"). A
+                // source's contract is proposed, and its body is not
+                // read.
+                (
+                    DeclarationKind::Function(Role::Temporal)
+                    | DeclarationKind::Implementation(Role::Temporal, _),
+                    Some(Detail::Callable(signature)),
+                ) if module.phases.get(position) == Some(&Some(Phase::Node))
+                    && !crate::phases::is_source(declaration) =>
+                {
+                    Typer::new(
+                        program,
+                        module,
+                        declaration,
+                        signature,
+                        Tables {
+                            bindings: &bindings,
+                            written: &written,
+                            calls: &calls,
+                        },
+                        diagnostics,
+                    )
+                    .node()
+                }
                 _ => None,
             };
             bodies.push(body);
@@ -145,6 +171,11 @@ struct Typer<'a> {
     /// True once a statement this pass does not read has been met: it
     /// may return, so the function is not said to end with no value.
     unsure: bool,
+    /// The hook of a node being read; `None` in a value function, and
+    /// between a node's hooks.
+    hook: Option<Hook>,
+    /// The local that is a node's injected `out`, its result (TIME-7).
+    out: Option<LocalId>,
     /// The bindings a null test has proved are not null where the pass
     /// is reading (ERR-12). A binding that is refined is immutable, so
     /// what is proved holds to the end of the block it is proved in:
@@ -193,6 +224,8 @@ impl<'a> Typer<'a> {
             rereads: REREADS,
             returned: false,
             unsure: false,
+            hook: None,
+            out: None,
             present: Vec::new(),
             identities: HashMap::new(),
             candidates: HashMap::new(),
@@ -249,6 +282,251 @@ impl<'a> Typer<'a> {
     /// statement and its value is dropped ... A `const fn` that declares
     /// a result ends every path in `return value` or in its body's
     /// value: one that can reach its end with no value rejects."
+    /// The body of a node: its declarations and then its hooks (FN-2).
+    /// A statement that is neither has been reported by `phases`, and
+    /// is not read.
+    fn node(mut self) -> Option<Body> {
+        let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
+        let mut statements = Vec::new();
+        for statement in block.children() {
+            match statement.kind() {
+                SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
+                    statements.push(self.local(&statement));
+                }
+                SyntaxKind::InjectDecl => statements.extend(self.inject(&statement)),
+                SyntaxKind::LifecycleBlock | SyntaxKind::WhenStmt => {
+                    statements.push(self.hook(&statement));
+                }
+                _ => statements.push(self.unread(&statement)),
+            }
+        }
+        Some(Body {
+            locals: self.locals,
+            statements,
+        })
+    }
+
+    /// `inject name, ...`: each name is a capability of the node
+    /// (TIME-8). `out` is its result (TIME-7): "`inject out` exposes
+    /// that same result for reads, assignment, and admitted piecewise
+    /// mutation." What the others are used for is for a later part.
+    fn inject(&mut self, node: &SyntaxNode) -> Vec<Stmt> {
+        let names: Vec<SyntaxToken> = tokens(node)
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .collect();
+        names
+            .into_iter()
+            .map(|name| {
+                let at = Location::new(self.file, name.span());
+                let is_out = name.text() == "out";
+                let ty = match (&self.signature.result, is_out) {
+                    (Some(result), true) => result.clone(),
+                    _ => Type::Unknown,
+                };
+                let local = self.declare(name.text(), at, LocalKind::Inject, ty, true);
+                if is_out {
+                    self.out = Some(local);
+                }
+                Stmt::Inject { local, at }
+            })
+            .collect()
+    }
+
+    /// `start { ... }`, `when condition { ... }`, `stop { ... }`: a hook
+    /// of a node, read as value code (FN-3).
+    fn hook(&mut self, node: &SyntaxNode) -> Stmt {
+        let at = self.at(node);
+        let hook = match tokens(node).next().map(|token| token.kind()) {
+            Some(SyntaxKind::KwStart) => Hook::Start,
+            Some(SyntaxKind::KwStop) => Hook::Stop,
+            _ => Hook::When,
+        };
+        // Each hook is run from its beginning: nothing has returned.
+        self.returned = false;
+        let before = self.hook.replace(hook);
+        let block = child(node, SyntaxKind::Block);
+        // CTRL-9: what stands before the body's `{` is the condition of
+        // a `when`, which may have none.
+        let condition = node
+            .children()
+            .find(|part| part.kind() != SyntaxKind::Block)
+            .filter(|_| hook == Hook::When)
+            .map(|condition| self.condition(&condition));
+        // ERR-12: the body is reached only where the condition holds.
+        let frame = self.present.len();
+        if let Some(condition) = &condition {
+            let (when_true, _) = self.null_tests(condition);
+            self.present.extend(when_true);
+        }
+        let body = match block {
+            Some(block) => {
+                let (mut statements, last) = self.block_head(&block);
+                if let Some(last) = last {
+                    statements.push(Stmt::Expr(self.flow(&last, None, false).0));
+                }
+                statements
+            }
+            None => Vec::new(),
+        };
+        self.present.truncate(frame);
+        self.hook = before;
+        Stmt::Hook {
+            hook,
+            condition,
+            body,
+            at,
+        }
+    }
+
+    /// Reports a use of the node's output where TIME-7 has none: "`out`
+    /// is read in a `when` and in `stop`, and written only in a `when`:
+    /// `start` neither reads nor writes it".
+    fn out_lifecycle(&mut self, at: Location, message: String) {
+        self.diagnostics.emit(
+            error(Category::Phase, codes::OUT_LIFECYCLE, at, message, "TIME-7").with_note(
+                "a node that publishes when the graph starts schedules itself in `start` and \
+                 writes in its first scheduled evaluation",
+            ),
+        );
+    }
+
+    /// An operation on an endpoint (TIME-9): "Elsewhere each takes a
+    /// temporal input of the enclosing function by its name, or `out`".
+    /// With no argument, or a sequence of them, it is a selector of a
+    /// `when` header (TIME-3).
+    fn endpoint(
+        &mut self,
+        operation: EndpointOperation,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+    ) -> (ExprKind, Type) {
+        let at = Location::new(self.file, name.span());
+        let arguments: Vec<SyntaxNode> = arguments_of(list)
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+        // How many it takes: a selector may stand with none.
+        let (fewest, most) = match operation {
+            EndpointOperation::Scheduled => (0, 0),
+            EndpointOperation::Valid | EndpointOperation::Modified => (0, 1),
+            _ => (1, 1),
+        };
+        if arguments.len() < fewest {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                at,
+                format!("`{}` is given no endpoint: it takes one", operation.name()),
+                "TIME-9",
+            ));
+        }
+        for surplus in arguments.iter().skip(most) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(surplus),
+                format!(
+                    "`{}` takes {}, and this is one more",
+                    operation.name(),
+                    if most == 0 {
+                        "no argument"
+                    } else {
+                        "one endpoint"
+                    }
+                ),
+                "TIME-9",
+            ));
+        }
+        // The endpoints named: one, or for a selector the entries of a
+        // sequence (TIME-3: `valid([])`). Any other operation takes one
+        // endpoint by its name, and a sequence is none.
+        let selector = matches!(
+            operation,
+            EndpointOperation::Valid | EndpointOperation::Modified
+        );
+        let inputs: Option<Vec<LocalId>> = arguments.first().filter(|_| most == 1).map(|first| {
+            let entries: Vec<SyntaxNode> = match first.kind() {
+                SyntaxKind::SequenceExpr if selector => first.children().collect(),
+                _ => vec![first.clone()],
+            };
+            entries
+                .iter()
+                .filter_map(|entry| self.endpoint_named(operation, entry))
+                .collect()
+        });
+        let writes = operation == EndpointOperation::Invalidate;
+        if let (Some(inputs), Some(out)) = (&inputs, self.out)
+            && inputs.contains(&out)
+        {
+            match self.hook {
+                Some(Hook::Start) => self.out_lifecycle(
+                    at,
+                    "`out` is neither read nor written in `start`".to_string(),
+                ),
+                Some(Hook::Stop) if writes => {
+                    self.out_lifecycle(at, "`out` is read in `stop`, and not written".to_string());
+                }
+                _ => {}
+            }
+        }
+        let ty = match operation {
+            EndpointOperation::Valid
+            | EndpointOperation::Modified
+            | EndpointOperation::Scheduled => BOOL,
+            // END-3: "`delta_value(x)` returns the scalar value `x`
+            // published this cycle".
+            EndpointOperation::DeltaValue => inputs
+                .as_ref()
+                .and_then(|inputs| inputs.first())
+                .map_or(Type::Unknown, |input| self.locals[*input].ty.clone()),
+            // END-6: a `datetime?`.
+            EndpointOperation::LastModified => nullable(Type::Scalar(Scalar::Datetime)),
+            EndpointOperation::Invalidate
+            | EndpointOperation::Activate
+            | EndpointOperation::Passivate => Type::Unknown,
+        };
+        (ExprKind::Endpoint { operation, inputs }, ty)
+    }
+
+    /// The endpoint an argument of an endpoint operation names: a
+    /// temporal parameter of the node, or its injected `out`. Any other
+    /// is reported (`endpoint.argument`).
+    fn endpoint_named(
+        &mut self,
+        operation: EndpointOperation,
+        node: &SyntaxNode,
+    ) -> Option<LocalId> {
+        let local = match node.kind() {
+            SyntaxKind::NameExpr => self.local_of(node),
+            _ => None,
+        };
+        let temporal = |local: LocalId| {
+            self.signature
+                .parameters
+                .get(local)
+                .is_some_and(|parameter| !parameter.constant)
+        };
+        match local {
+            Some(local) if temporal(local) || Some(local) == self.out => Some(local),
+            _ => {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::ENDPOINT_ARGUMENT,
+                    self.at(node),
+                    format!(
+                        "`{}` takes a temporal input of `{}` by its name, or `out`",
+                        operation.name(),
+                        self.declaration.name
+                    ),
+                    "TIME-9",
+                ));
+                // Read for what it reports itself.
+                self.expression(node, Some(&Type::Unknown));
+                None
+            }
+        }
+    }
+
     fn body(mut self) -> Option<Body> {
         let syntax = &self.declaration.syntax;
         let result = self.signature.result.clone();
@@ -337,8 +615,11 @@ impl<'a> Typer<'a> {
                 let at = self.at(node);
                 // FN-7: "A value return yields an ordinary value." One
                 // with nothing written yields none.
+                // In a temporal function a `return` with no value "ends
+                // the evaluation and publishes nothing itself".
                 if let (None, Some(result)) = (&value, &self.signature.result)
                     && !open(result)
+                    && self.hook.is_none()
                 {
                     self.diagnostics.emit(error(
                         Category::Type,
@@ -358,6 +639,18 @@ impl<'a> Typer<'a> {
                         "this returns a value, and the function declares no result".to_string(),
                         "FN-7",
                     ));
+                }
+                // TIME-7: "a `return` with a value stands in neither
+                // `start` nor `stop`."
+                if let (Some(value), Some(hook @ (Hook::Start | Hook::Stop))) = (&value, self.hook)
+                {
+                    self.out_lifecycle(
+                        value.at,
+                        format!(
+                            "a `return` with a value publishes, and `{}` publishes nothing",
+                            hook.as_str()
+                        ),
+                    );
                 }
                 // CTRL-5: "Return targets the enclosing HGL function."
                 self.returned = true;
@@ -402,10 +695,13 @@ impl<'a> Typer<'a> {
         let Some(name) = tokens(node).find(|token| token.kind() == SyntaxKind::Ident) else {
             return self.unread(node);
         };
-        let kind = if tokens(node).any(|token| token.kind() == SyntaxKind::KwVar) {
-            LocalKind::Var
-        } else {
-            LocalKind::Let
+        // `state` and `cache` are a node's (TIME-5, TIME-6): each is
+        // assigned as a `var` is.
+        let kind = match tokens(node).next().map(|token| token.kind()) {
+            Some(SyntaxKind::KwVar) => LocalKind::Var,
+            Some(SyntaxKind::KwState) => LocalKind::State,
+            Some(SyntaxKind::KwCache) => LocalKind::Cache,
+            _ => LocalKind::Let,
         };
         // The annotation, read by the pass before this one.
         let annotation = node
@@ -463,10 +759,25 @@ impl<'a> Typer<'a> {
             });
         let at = self.at(node);
         let target = self.locals[local].ty.clone();
-        if !matches!(
-            self.locals[local].kind,
-            LocalKind::Var | LocalKind::State | LocalKind::Cache
-        ) {
+        // TIME-7: "`inject out` exposes that same result for reads,
+        // assignment, and admitted piecewise mutation ... `out` is read
+        // in a `when` and in `stop`, and written only in a `when`".
+        let is_out = Some(local) == self.out;
+        if is_out && let Some(hook @ (Hook::Start | Hook::Stop)) = self.hook {
+            self.out_lifecycle(
+                self.at(&place),
+                format!(
+                    "`out` is written only in a `when`, and this is `{}`",
+                    hook.as_str()
+                ),
+            );
+        }
+        if !is_out
+            && !matches!(
+                self.locals[local].kind,
+                LocalKind::Var | LocalKind::State | LocalKind::Cache
+            )
+        {
             self.diagnostics.emit(
                 error(
                     Category::Name,
@@ -766,6 +1077,13 @@ impl<'a> Typer<'a> {
             );
             // One report for one `var`.
             self.assigned[local] = true;
+        }
+        // TIME-7: "`start` neither reads nor writes it".
+        if Some(local) == self.out && self.hook == Some(Hook::Start) {
+            self.out_lifecycle(
+                at,
+                "`out` is neither read nor written in `start`".to_string(),
+            );
         }
         // ERR-12: "Refine that same binding to T on paths proving a
         // non-null T? value".
@@ -1718,6 +2036,17 @@ impl<'a> Typer<'a> {
             _ => None,
         };
         let Some((name, (module, declarations))) = found else {
+            // TIME-9: "The operations on an endpoint are intrinsics of
+            // the language". Nothing declares one, so its name is bound
+            // to nothing; it is read in a node's hooks.
+            if self.hook.is_some()
+                && callee.kind() == SyntaxKind::NameExpr
+                && let Some(name) = name_token(&callee)
+                && !self.bindings.contains_key(&(self.file, name.span().start))
+                && let Some(operation) = EndpointOperation::named(name.text())
+            {
+                return self.endpoint(operation, &name, &list);
+            }
             return self.unread_call(&list);
         };
         self.call_named(&name, &list, (module, declarations), expected, None)
@@ -1794,8 +2123,13 @@ impl<'a> Typer<'a> {
                 codes::CALL_ROLE,
                 Location::new(self.file, name.span()),
                 format!(
-                    "`{}` is a temporal function, and a value function calls value functions",
-                    name.text()
+                    "`{}` is a temporal function, and a {} calls value functions",
+                    name.text(),
+                    if self.hook.is_some() {
+                        "hook"
+                    } else {
+                        "value function"
+                    }
                 ),
                 "FN-3",
             ));

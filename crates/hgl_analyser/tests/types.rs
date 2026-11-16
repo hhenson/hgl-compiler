@@ -168,7 +168,7 @@ fn types_are_read_wherever_they_are_written() {
     let checked = module(concat!(
         "struct Box<T> { value: T }\n",
         "fn node<T>(value: T) -> i64 requires T in {i64, f64} {\n",
-        "    state held: list<i64, 4> = []\n",
+        "    state held: list<i64, 4> = [0, 0, 0, 0]\n",
         "    cache seen: set<str> = []\n",
         "    when {\n",
         "        let boxed: Box<i64> = Box<i64>(value: 1)\n",

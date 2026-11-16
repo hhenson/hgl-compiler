@@ -187,6 +187,12 @@ pub mod codes {
     /// A statement of a node's body that is no declaration and no hook
     /// (FN-2).
     pub const NODE_STATEMENT: &str = "node.statement";
+    /// `out` used in `start` or written in `stop`, or a `return` with a
+    /// value in either (TIME-7).
+    pub const OUT_LIFECYCLE: &str = "out.lifecycle";
+    /// An endpoint operation given what is no temporal input of its
+    /// function and not `out` (TIME-9).
+    pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";
     /// A window's size is neither a tick count nor a duration, or its
     /// two sizes are of different kinds (TYPE-11).
     pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";
