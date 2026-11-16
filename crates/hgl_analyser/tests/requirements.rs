@@ -406,10 +406,27 @@ fn a_required_call_requests_what_its_defaults_say() {
         "    let got = window(value)\n",
         "    let asked: list<T, 5> = window(value)\n",
         "}\n",
+        // With no arrow the requirement is of the bare call, which asks
+        // for the default: three, and not five.
+        "const fn bare<T>(value: T) requires window(T) {\n",
+        "    let got = window(value)\n",
+        "    let wide = window<T, 5>(value)\n",
+        "}\n",
+        // The same holds where a requirement is evidence for a
+        // candidate's: `framed` asks for the bare call.
+        "operator framed<T>(a: T) -> T\n",
+        "impl const fn framed<T>(a: T) -> T requires window(T) => a\n",
+        "const fn by_three<T>(value: T) -> T requires window(T) -> list<T, 3> => framed(value)\n",
+        "const fn by_bare<T>(value: T) -> T requires window(T) => framed(value)\n",
+        "const fn by_five<T>(value: T) -> T requires window(T) -> list<T, 5> => framed(value)\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:10:15 operator/operator.no_candidate GEN-5"]
+        [
+            "m.hgl:10:15 operator/operator.no_candidate GEN-5",
+            "m.hgl:15:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:21:72 operator/operator.no_candidate GEN-5",
+        ]
     );
     assert_eq!(
         locals(&checked, "three")[1..],
@@ -418,6 +435,10 @@ fn a_required_call_requests_what_its_defaults_say() {
     assert_eq!(
         locals(&checked, "other")[1..],
         ["got: _", "asked: list<T, 5>"]
+    );
+    assert_eq!(
+        locals(&checked, "bare")[1..],
+        ["got: list<T, 3>", "wide: _"]
     );
 }
 
