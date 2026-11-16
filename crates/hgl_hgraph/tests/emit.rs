@@ -918,7 +918,6 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:2:8 target.unsupported",
             "m.hgl:6:12 target.unsupported",
             "m.hgl:9:10 target.unsupported",
-            "m.hgl:15:44 target.unsupported",
             "m.hgl:17:12 target.unsupported",
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
@@ -927,14 +926,145 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:27:30 target.unsupported",
             "m.hgl:27:42 target.unsupported",
             "m.hgl:28:17 target.unsupported",
-            // An eval of a value function, which is lifted.
-            "m.hgl:29:12 target.unsupported",
         ]
     );
 }
 
+/// Value functions and symbols given connections in graphs, and a
+/// value function an eval names.
+const LIFTS: &str = concat!(
+    "module demo.lift\n",
+    "\n",
+    "const fn scale(value: f64, factor: f64 = 2.0) -> f64 => value * factor\n",
+    "const fn doubled(value: i64) -> i64 => value * 2\n",
+    "\n",
+    "fn relay(value: i64) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "\n",
+    "fn summed(left: i64, right: i64) -> i64 => left + right\n",
+    "fn scaled(price: f64, factor: f64) -> f64 => scale(price, factor)\n",
+    "fn half_configured(price: f64) -> f64 => scale(price, 3.0)\n",
+    "fn defaulted(price: f64) -> f64 => scale(price)\n",
+    "fn nested(left: i64, right: i64) -> i64 => doubled(relay(left) + right) + 1\n",
+    "fn twice(left: i64, right: i64) -> i64 => (left + right) + (left + right)\n",
+    "fn positive(price: f64) -> bool => price > 0.0\n",
+    "fn fixed(value: i64, const factor: i64) -> i64 => relay(value) + doubled(factor)\n",
+    "const fn label(value: i64, text: str = \"{NAME}\") -> str => text\n",
+    "fn labelled(value: i64) -> str => label(value)\n",
+    "const fn note(value: i64) {}\n",
+    "fn watched(value: i64) -> i64 {\n",
+    "    note(value)\n",
+    "    return value\n",
+    "}\n",
+    "\n",
+    "test lifts {\n",
+    "    assert eval(doubled, value: [1, _, 3]) == [2, _, 6]\n",
+    "    assert eval(summed, left: [1, _, 3], right: [_, 10]) == [_, 11, 13]\n",
+    "    assert eval(scaled, price: [1.0, _, 3.0, 3.0], factor: [_, 4.0]) ==\n",
+    "        [2.0, 4.0, 12.0, 12.0]\n",
+    "    assert eval(half_configured, price: [1.0, 2.0]) == [3.0, 6.0]\n",
+    "    assert eval(defaulted, price: [1.5]) == [3.0]\n",
+    "    assert eval(nested, left: [1, 2], right: [10]) == [23, 25]\n",
+    "    assert eval(twice, left: [1, 2], right: [10]) == [22, 24]\n",
+    "    assert eval(positive, price: [1.0, -1.0]) == [true, false]\n",
+    "    assert eval(fixed, value: [1, 2], factor: 5) == [11, 12]\n",
+    "    assert eval(scale, value: [1.0, _, 3.0], factor: [_, 4.0]) == [2.0, 4.0, 12.0]\n",
+    "    assert eval(watched, value: [1, 2]) == [1, 2]\n",
+    "    assert eval(labelled, value: [1]) == [\"{NAME}\"]\n",
+    "}\n",
+);
+
+/// FN-6: "A selected value helper, a `const fn` or a value candidate of
+/// an operator, with temporal arguments in composition is lifted:
+/// temporal arguments become inputs; scalar arguments and omitted
+/// defaults bind as configuration." The lifted call is a node of its
+/// own, written before the graph that uses it.
+///
+/// FN-11: "A lifted argument with a declared default does not require a
+/// valid input: bind the default when that input is invalid."
+///
+/// TST-8: "A selected value helper uses ordinary lifting."
+#[test]
+fn a_value_function_given_a_connection_is_lifted() {
+    let emitted = emit(&[("lift.hgl", LIFTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_lift/__init__.py");
+    for expected in [
+        // A symbol: the candidate selected for it, lifted.
+        concat!(
+            "@_hg.compute_node\n",
+            "def _lift_0_add__i64_i64(lhs: _hg.TS[_py.int], rhs: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "    return _core.add__i64_i64(lhs=lhs.value, rhs=rhs.value)\n",
+            "\n",
+            "\n",
+            "@_hg.graph\n",
+            "def summed(left: _hg.TS[_py.int], right: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "    return _lift_0_add__i64_i64(lhs=left, rhs=right)\n",
+        ),
+        // An input whose parameter has a default need not be valid.
+        concat!(
+            "@_hg.compute_node(valid=(\"value\",))\n",
+            "def _lift_1_scale(value: _hg.TS[_py.float], factor: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+            "    return scale(value=value.value, factor=(factor.value if factor.valid else 2.0))\n",
+        ),
+        // A scalar argument is configuration.
+        concat!(
+            "@_hg.compute_node\n",
+            "def _lift_2_scale(value: _hg.TS[_py.float], factor: _py.float) -> _hg.TS[_py.float]:\n",
+            "    return scale(value=value.value, factor=factor)\n",
+            "\n",
+            "\n",
+            "@_hg.graph\n",
+            "def half_configured(price: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+            "    return _lift_2_scale(value=price, factor=3.0)\n",
+        ),
+        // A default left out is bound where the node calls.
+        concat!(
+            "def _lift_3_scale(value: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+            "    return scale(value=value.value, factor=2.0)\n",
+        ),
+        // What a temporal or a lifted call gives is a connection.
+        concat!(
+            "    return _lift_6_add__i64_i64(lhs=_lift_5_doubled(value=",
+            "_lift_4_add__i64_i64(lhs=relay(value=left), rhs=right)), rhs=1)\n",
+        ),
+        // The same lifting twice in a graph is one node.
+        concat!(
+            "def twice(left: _hg.TS[_py.int], right: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "    return _lift_7_add__i64_i64(lhs=_lift_7_add__i64_i64(lhs=left, rhs=right), ",
+            "rhs=_lift_7_add__i64_i64(lhs=left, rhs=right))\n",
+        ),
+        // "All-scalar calls execute directly and invent no source
+        // timing."
+        "rhs=doubled(value=factor))\n",
+        // A string a program wrote is its own, whatever is in it.
+        concat!(
+            "def _lift_10_label(value: _hg.TS[_py.int]) -> _hg.TS[_py.str]:\n",
+            "    return label(value=value.value, text=\"{NAME}\")\n",
+        ),
+        // "An outputless helper lifts to a sink."
+        concat!(
+            "@_hg.sink_node\n",
+            "def _lift_11_note(value: _hg.TS[_py.int]):\n",
+            "    note(value=value.value)\n",
+        ),
+        // An eval of a value function runs it lifted.
+        concat!(
+            "    if not (_harness.evaluate(_lift_12_doubled, value=[1, None, 3]) == [2, None, 6]):\n",
+            "        raise _py.AssertionError()\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    assert_eq!(python.matches("def _lift_7_add__i64_i64(").count(), 1);
+}
+
 /// A program with forms that are not written: a loop in two of its
-/// functions, and an eval of a value function in one of its tests.
+/// functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
     (
         "reach.hgl",
@@ -956,7 +1086,7 @@ const REACH: [(&str, &str); 3] = [
             "    assert fine(2) == 3\n",
             "}\n",
             "test reaches { assert outer(1) == 2 }\n",
-            "test own { assert eval(lone, value: [1]) == [1] }\n",
+            "test own { assert eval(lone, value: [0s: 1]) == [0s: 1] }\n",
             "test across { assert far::relay(1) == 2 }\n",
             "test wrong {\n",
             "    assert fine(1) == 2\n",
@@ -1000,7 +1130,8 @@ fn a_test_runs_when_all_it_reaches_is_written() {
         emitted.reported,
         [
             "reach.hgl:7:5 target.unsupported",
-            "reach.hgl:18:19 target.unsupported",
+            "reach.hgl:18:37 target.unsupported",
+            "reach.hgl:18:49 target.unsupported",
             "deep.hgl:4:5 target.unsupported",
         ]
     );
@@ -1018,11 +1149,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     );
     assert_eq!(
         emitted.blocked("own"),
-        Some(
-            "reach.hgl:18:19 the hgraph target does not write an eval of a value function, \
-             which is lifted yet"
-                .to_string()
-        )
+        Some("reach.hgl:18:37 the hgraph target does not write a timed trace yet".to_string())
     );
     let (_, direct) = emitted.test("direct");
     assert_eq!(direct.identity(), "reach::direct");
@@ -1119,6 +1246,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("selectors.hgl", SELECTORS),
         ("names.hgl", NAMES),
         ("defaults.hgl", DEFAULTS),
+        ("lift.hgl", LIFTS),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
@@ -1140,7 +1268,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        23,
+        24,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }

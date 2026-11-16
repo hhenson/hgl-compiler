@@ -16,10 +16,11 @@ use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, Expr, ExprKind, Hook, Local,
-    Stmt, UnaryOperator, Value,
+    Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Declaration, DeclarationKind, Detail, LocalKind, Phase, Program, Role, Scalar, Signature, Type,
+    Declaration, DeclarationKind, Detail, LocalKind, Parameter, Phase, Program, Role, Scalar,
+    Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -72,6 +73,9 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         imports: BTreeSet::new(),
         expanding: Vec::new(),
         text: String::new(),
+        prelude: String::new(),
+        lifts: Vec::new(),
+        lifted: 0,
         piece: Piece::default(),
         declared: Vec::new(),
         tested: Vec::new(),
@@ -86,6 +90,28 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         declarations: emitter.declared,
         tests: emitter.tested,
     }
+}
+
+/// How a parameter of a lifted function is given (FN-6: "temporal
+/// arguments become inputs; scalar arguments and omitted defaults bind
+/// as configuration").
+#[derive(Clone)]
+enum Bound {
+    /// By a connection: an input of the lifted node, of this type.
+    Input(Type),
+    /// By a value known where the graph is built, of this type.
+    Configuration(Type),
+}
+
+/// Names as a Python tuple of strings: `("a", "b")`.
+fn tuple(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+    // A tuple of one needs its comma.
+    format!(
+        "({}{})",
+        quoted.join(", "),
+        if quoted.len() == 1 { "," } else { "" }
+    )
 }
 
 /// What kind of body is being written, which says how a name is read.
@@ -320,6 +346,15 @@ struct Emitter<'a> {
     expanding: Vec<(usize, usize, usize)>,
     /// The Python of the piece being written.
     text: String,
+    /// The lifted nodes the piece being written uses, which are
+    /// written before it.
+    prelude: String,
+    /// Those lifted nodes: the text of each before its name and after
+    /// it, and its name. One lifted the same way twice in a piece is
+    /// written once.
+    lifts: Vec<((String, String), String)>,
+    /// How many lifted nodes the module has been given names for.
+    lifted: usize,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -347,7 +382,15 @@ impl Emitter<'_> {
     /// Ends the piece being written, and gives it.
     fn close(&mut self) -> Piece {
         let mut piece = std::mem::take(&mut self.piece);
-        piece.text = std::mem::take(&mut self.text);
+        // The lifted nodes it uses come first, and its statements are
+        // then that many lines further down.
+        let prelude = std::mem::take(&mut self.prelude);
+        let lines = prelude.matches('\n').count();
+        for (line, _) in &mut piece.statements {
+            *line += lines;
+        }
+        piece.text = prelude + &std::mem::take(&mut self.text);
+        self.lifts.clear();
         piece
     }
 
@@ -666,16 +709,11 @@ impl Emitter<'_> {
             self.unsupported(declaration.at, "a node that no input wakes");
         }
         let names = |locals: &[usize]| -> String {
-            let quoted: Vec<String> = locals
+            let named: Vec<String> = locals
                 .iter()
-                .map(|&local| format!("\"{}\"", name(&body.locals[local].name)))
+                .map(|&local| name(&body.locals[local].name))
                 .collect();
-            // A tuple of one needs its comma.
-            format!(
-                "({}{})",
-                quoted.join(", "),
-                if quoted.len() == 1 { "," } else { "" }
-            )
+            tuple(&named)
         };
         let mut options = Vec::new();
         if active.len() != inputs.len() && !handlers.is_empty() {
@@ -1028,12 +1066,15 @@ impl Emitter<'_> {
     /// and written `None`.
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
         // In a graph a value may be a connection, and Python's `and`,
-        // `not`, `if` and `float` would act on the port: only a name, a
-        // literal and a call are written there.
+        // `not` and `if` would act on the port: only a name, a literal,
+        // a call and a widening are written there.
         if function.mode == Mode::Graph
             && !matches!(
                 value.kind,
-                ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::Call { .. }
+                ExprKind::Literal(_)
+                    | ExprKind::Local(_)
+                    | ExprKind::Call { .. }
+                    | ExprKind::Widen(_)
             )
         {
             self.unsupported(value.at, "this expression in a graph");
@@ -1082,6 +1123,15 @@ impl Emitter<'_> {
                     }
                 }
             }
+            // The language widens a literal and no connection (EXPR-5),
+            // so what is widened here is known where the graph is
+            // built. Python's `float` would act on a port.
+            ExprKind::Widen(inner)
+                if function.mode == Mode::Graph && self.connects(function, inner) =>
+            {
+                self.unsupported(value.at, "a widening of a connection");
+                "None".to_string()
+            }
             ExprKind::Widen(inner) => {
                 format!("_py.float({})", self.expression(function, inner))
             }
@@ -1120,7 +1170,7 @@ impl Emitter<'_> {
             }
             ExprKind::Call {
                 callee, arguments, ..
-            } => self.call(function, callee, arguments, value.at),
+            } => self.call(function, callee, arguments, value),
             // A block that is only its value, and an `if` between two
             // such.
             ExprKind::Block { statements, value } if statements.is_empty() => match value {
@@ -1222,17 +1272,6 @@ impl Emitter<'_> {
                 Some(format!("{}={value}", name(&parameter.name)))
             })
             .collect();
-        let program = self.program;
-        let defaults = program.modules[callee.0]
-            .defaults
-            .get(callee.1)
-            .map_or(&[][..], Vec::as_slice);
-        // A default is read with no local in scope.
-        let cold = Function {
-            locals: &[],
-            signature: None,
-            mode: Mode::Value,
-        };
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let given = arguments
                 .iter()
@@ -1240,28 +1279,249 @@ impl Emitter<'_> {
             if given || parameter.pack.is_some() {
                 continue;
             }
-            if let Some(Some(default)) = defaults.get(index) {
-                // A default that calls its own function with that same
-                // argument left out would be written inside itself
-                // without end.
-                let key = (callee.0, callee.1, index);
-                if self.expanding.contains(&key) {
-                    self.unsupported(default.at, "a default that leaves itself out");
-                    written.push(format!("{}=None", name(&parameter.name)));
-                    continue;
-                }
-                self.expanding.push(key);
-                let value = self.expression(&cold, default);
-                self.expanding.pop();
+            if let Some(value) = self.left_out(callee, index, parameter) {
                 written.push(format!("{}={value}", name(&parameter.name)));
-            } else if matches!(parameter.ty, Type::Nullable(_)) {
-                // UNIT-8: "A parameter whose type is written `T?` needs
-                // no default to be omitted: it is taken to have a
-                // default of `null`".
-                written.push(format!("{}=None", name(&parameter.name)));
             }
         }
         written.join(", ")
+    }
+
+    /// What parameter `index` of the function `callee` is given when a
+    /// call leaves it out: its default, or `None` for one written `T?`
+    /// with none. Nothing for a parameter that cannot be left out.
+    fn left_out(
+        &mut self,
+        callee: (usize, usize),
+        index: usize,
+        parameter: &Parameter,
+    ) -> Option<String> {
+        let program = self.program;
+        let defaults = program.modules[callee.0]
+            .defaults
+            .get(callee.1)
+            .map_or(&[][..], Vec::as_slice);
+        if let Some(Some(default)) = defaults.get(index) {
+            // A default that calls its own function with that same
+            // argument left out would be written inside itself
+            // without end.
+            let key = (callee.0, callee.1, index);
+            if self.expanding.contains(&key) {
+                self.unsupported(default.at, "a default that leaves itself out");
+                return Some("None".to_string());
+            }
+            // A default is read with no local in scope.
+            let cold = Function {
+                locals: &[],
+                signature: None,
+                mode: Mode::Value,
+            };
+            self.expanding.push(key);
+            let value = self.expression(&cold, default);
+            self.expanding.pop();
+            Some(value)
+        } else if matches!(parameter.ty, Type::Nullable(_)) {
+            // UNIT-8: "A parameter whose type is written `T?` needs
+            // no default to be omitted: it is taken to have a
+            // default of `null`".
+            Some("None".to_string())
+        } else {
+            None
+        }
+    }
+
+    // ---- Lifting ----
+
+    /// True when `value`, written in a graph, is a connection: a
+    /// temporal parameter or a local given one, what a temporal
+    /// function gives, or what a lifted call gives (FN-6).
+    fn connects(&self, function: &Function, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Local(local) => function.locals[*local].category == ValueCategory::Connection,
+            ExprKind::Call {
+                callee:
+                    Callee::Function {
+                        module,
+                        declaration,
+                        ..
+                    }
+                    | Callee::Candidate {
+                        module,
+                        declaration,
+                        ..
+                    },
+                arguments,
+                ..
+            } => {
+                let declared = &self.program.modules[*module].declarations[*declaration];
+                declared.kind.role() == Some(Role::Temporal)
+                    || arguments
+                        .iter()
+                        .any(|argument| self.connects(function, &argument.value))
+            }
+            ExprKind::Widen(inner) => self.connects(function, inner),
+            _ => false,
+        }
+    }
+
+    /// Gives a lifted node a name and writes it before the piece being
+    /// written. `before` is the node's text up to its name and `after`
+    /// the text from there on; `of` is what it lifts, for the name. A
+    /// node lifted the same way twice in a piece is written once.
+    ///
+    /// The text is in two parts, and the name is not put in for a mark
+    /// in it: a mark could as well be in a string a program wrote.
+    fn lifted_node(&mut self, of: &str, before: String, after: String) -> String {
+        let text = (before, after);
+        if let Some((_, known)) = self.lifts.iter().find(|(written, _)| *written == text) {
+            return known.clone();
+        }
+        // The name starts with `_`, as no name of a program's does.
+        let python = format!("_lift_{}_{of}", self.lifted);
+        self.lifted += 1;
+        self.hgraph = true;
+        self.prelude.push_str("\n\n");
+        self.prelude.push_str(&text.0);
+        self.prelude.push_str(&python);
+        self.prelude.push_str(&text.1);
+        self.lifts.push((text, python.clone()));
+        python
+    }
+
+    /// FN-6: "A selected value helper, a `const fn` or a value candidate
+    /// of an operator, with temporal arguments in composition is
+    /// lifted: temporal arguments become inputs; scalar arguments and
+    /// omitted defaults bind as configuration. ... Any input
+    /// notification activates the node ... Each admitted evaluation
+    /// publishes its result, including an equal result. An outputless
+    /// helper lifts to a sink."
+    ///
+    /// Writes the node that calls the function `target`, or core's
+    /// native function `native` when it is a candidate of core, and
+    /// gives the node's name. `bound` says how each parameter of
+    /// `signature` is given, with `None` for one left out; `result` is
+    /// what the function gives.
+    ///
+    /// FN-11: "A lifted argument with a declared default does not
+    /// require a valid input: bind the default when that input is
+    /// invalid. Otherwise, an argument whose value contract admits null
+    /// does not require a valid input: bind null when it is invalid.
+    /// Every other input must satisfy ordinary `valid(input)`."
+    fn lifted(
+        &mut self,
+        target: (usize, usize),
+        native: Option<&str>,
+        signature: &Signature,
+        bound: &[Option<Bound>],
+        result: Option<&Type>,
+        at: Location,
+    ) -> String {
+        // The node's parameters, the inputs that must be valid, how
+        // many inputs there are, and the arguments of the call it
+        // makes.
+        let mut parameters = Vec::new();
+        let mut required = Vec::new();
+        let mut inputs = 0;
+        let mut passed = Vec::new();
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            let python = name(&parameter.name);
+            match bound.get(index).and_then(Option::as_ref) {
+                Some(Bound::Input(ty)) => {
+                    inputs += 1;
+                    let annotation = self
+                        .annotation(ty, true, at)
+                        .unwrap_or_else(|| "_py.object".to_string());
+                    parameters.push(format!("{python}: {annotation}"));
+                    match self.left_out(target, index, parameter) {
+                        Some(fallback) => passed.push(format!(
+                            "{python}=({python}.value if {python}.valid else {fallback})"
+                        )),
+                        None => {
+                            passed.push(format!("{python}={python}.value"));
+                            required.push(python);
+                        }
+                    }
+                }
+                Some(Bound::Configuration(ty)) => {
+                    let annotation = self
+                        .annotation(ty, false, at)
+                        .unwrap_or_else(|| "_py.object".to_string());
+                    parameters.push(format!("{python}: {annotation}"));
+                    passed.push(format!("{python}={python}"));
+                }
+                None => {
+                    if let Some(value) = self.left_out(target, index, parameter) {
+                        passed.push(format!("{python}={value}"));
+                    }
+                }
+            }
+        }
+        let (called, of) = match native {
+            Some(native) => {
+                self.natives = true;
+                (format!("_core.{native}"), native.to_string())
+            }
+            None => {
+                let declared = &self.program.modules[target.0].declarations[target.1];
+                (self.function_name(target.0, target.1), name(&declared.name))
+            }
+        };
+        let returns = result.and_then(|result| self.annotation(result, true, at));
+        // hgraph requires every input to be valid unless it is told
+        // which ones.
+        let options = if required.len() == inputs {
+            String::new()
+        } else {
+            format!("(valid={})", tuple(&required))
+        };
+        let call = format!("{called}({})", passed.join(", "));
+        let (decorator, after) = match (result, returns) {
+            (Some(_), returns) => (
+                "compute_node",
+                format!(
+                    "({}) -> {}:\n    return {call}\n",
+                    parameters.join(", "),
+                    returns.unwrap_or_else(|| "_py.object".to_string()),
+                ),
+            ),
+            (None, _) => (
+                "sink_node",
+                format!("({}):\n    {call}\n", parameters.join(", ")),
+            ),
+        };
+        self.lifted_node(&of, format!("@_hg.{decorator}{options}\ndef "), after)
+    }
+
+    /// The arguments a call gives, each by its parameter's name, and
+    /// how each parameter of `signature` is then bound in a lifted
+    /// node: as an input where `input` gives the argument a type, as
+    /// configuration otherwise.
+    fn bound(
+        &mut self,
+        function: &Function,
+        signature: &Signature,
+        arguments: &[Argument],
+        input: impl Fn(&Self, &Expr) -> Option<Type>,
+    ) -> (Vec<String>, Vec<Option<Bound>>) {
+        let mut written = Vec::new();
+        let mut bound: Vec<Option<Bound>> = vec![None; signature.parameters.len()];
+        for argument in arguments {
+            let parameter = argument
+                .parameter
+                .and_then(|index| Some((index, signature.parameters.get(index)?)));
+            let Some((index, parameter)) = parameter.filter(|(_, p)| p.pack.is_none()) else {
+                // FN-8: a pack takes the arguments the fixed parameters
+                // leave, which are not written yet.
+                self.unsupported(argument.value.at, "an argument of a pack in a lifted call");
+                continue;
+            };
+            bound[index] = Some(match input(self, &argument.value) {
+                Some(ty) => Bound::Input(ty),
+                None => Bound::Configuration(argument.value.ty.clone()),
+            });
+            let value = self.expression(function, &argument.value);
+            written.push(format!("{}={value}", name(&parameter.name)));
+        }
+        (written, bound)
     }
 
     /// The Python name `declaration` of `module` is defined under.
@@ -1310,8 +1570,9 @@ impl Emitter<'_> {
         function: &Function,
         callee: &Callee,
         arguments: &[Argument],
-        at: Location,
+        whole: &Expr,
     ) -> String {
+        let at = whole.at;
         let program = self.program;
         let (module, declaration, candidate) = match callee {
             Callee::Function {
@@ -1335,14 +1596,6 @@ impl Emitter<'_> {
             return "None".to_string();
         };
         let declared = &program.modules[module].declarations[declaration];
-        // In a graph a symbol or a value function is lifted over the
-        // connections it is given, which is not written yet.
-        let lifted = function.mode == Mode::Graph
-            && (candidate || declared.kind.role() == Some(Role::Value));
-        if lifted {
-            self.unsupported(at, "a call that is lifted over connections");
-            return "None".to_string();
-        }
         // A test is a composition block (TST-3), and a temporal function
         // called in one makes a connection, which Python has no graph
         // to make in: a target is run through `eval`.
@@ -1353,7 +1606,8 @@ impl Emitter<'_> {
             );
             return "None".to_string();
         }
-        if candidate {
+        // A candidate of core is a function of the target's provider.
+        let native = if candidate {
             let types: Vec<String> = signature
                 .parameters
                 .iter()
@@ -1368,6 +1622,35 @@ impl Emitter<'_> {
                 );
                 return "None".to_string();
             }
+            Some(native)
+        } else {
+            None
+        };
+        // FN-6: in a graph a symbol or a value function given a
+        // connection is lifted over it. "All-scalar calls execute
+        // directly and invent no source timing": one given none is
+        // called as it is, where the graph is built.
+        let lifted = function.mode == Mode::Graph
+            && (candidate || declared.kind.role() == Some(Role::Value))
+            && arguments
+                .iter()
+                .any(|argument| self.connects(function, &argument.value));
+        if lifted {
+            let (written, bound) = self.bound(function, signature, arguments, |emitter, value| {
+                emitter.connects(function, value).then(|| value.ty.clone())
+            });
+            let result = signature.result.as_ref().map(|_| &whole.ty);
+            let node = self.lifted(
+                (module, declaration),
+                native.as_deref(),
+                signature,
+                &bound,
+                result,
+                at,
+            );
+            return format!("{node}({})", written.join(", "));
+        }
+        if let Some(native) = native {
             // NUM-2: an `i64` result outside the signed 64-bit range is
             // an error, which Python's own `+` would not make it: the
             // provider's function does.
@@ -1408,15 +1691,32 @@ impl Emitter<'_> {
             self.unsupported(call.at, "this eval");
             return "None".to_string();
         };
+        self.harness = true;
         // FN-4: where a name has no temporal definition, eval takes the
-        // value one and lifts it. A plain Python function is no node
-        // for hgraph to run.
+        // value one, and TST-8: "A selected value helper uses ordinary
+        // lifting". A trace is an input of the lifted node, and any
+        // other argument its configuration.
         let declared = &self.program.modules[*module].declarations[*declaration];
         if declared.kind.role() == Some(Role::Value) {
-            self.unsupported(call.at, "an eval of a value function, which is lifted");
-            return "None".to_string();
+            let (written, bound) =
+                self.bound(function, signature, arguments, |_, value| match &value.ty {
+                    Type::Trace { cell, .. } => Some((**cell).clone()),
+                    _ => None,
+                });
+            let node = self.lifted(
+                (*module, *declaration),
+                None,
+                signature,
+                &bound,
+                signature.result.as_ref(),
+                call.at,
+            );
+            return if written.is_empty() {
+                format!("_harness.evaluate({node})")
+            } else {
+                format!("_harness.evaluate({node}, {})", written.join(", "))
+            };
         }
-        self.harness = true;
         let target = self.function_name(*module, *declaration);
         let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
         if arguments.is_empty() {

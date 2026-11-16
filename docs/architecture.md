@@ -1277,6 +1277,9 @@ declaration's Python name does.
 | A `when` header's selectors | The node's `active=` is every input a handler subscribes to and its `valid=` the inputs every handler requires (TIME-3, TIME-4). A handler is guarded by what it asks beyond those: that one of its own inputs ticked, that the inputs only it requires are valid, and the rest of its condition. Handlers are tried in the order written |
 | `inject out` | `_output: _hg.TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
 | A graph | `@_hg.graph` |
+| In a graph, a value function or a candidate of core given a connection (FN-6) | A node of its own, `_lift_N_name`, written before the graph: an input `name: _hg.TS[type]` for each connection, a scalar parameter for each ordinary argument, and a default left out written where the node calls. An input whose parameter has a default is not required valid, `valid=(...)`, and is read as `(name.value if name.valid else default)` (FN-11). The same lifting twice in one graph is one node |
+| In a graph, such a call given no connection | The call itself, made where the graph is built |
+| `eval` of a value function | The function lifted the same way, each trace an input |
 | A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
@@ -1309,11 +1312,11 @@ and their candidates declared in a program; generic temporal functions;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` or an input read in `start` or `stop`, which hgraph gives neither;
-`cache`, the `inject` of a capability, and sources; in a graph, a call
-lifted over connections, an `if`, and any expression but a name, a
-literal and a call; a temporal function called in a test outside an
-`eval`, and an `eval` of a value function, which is lifted; loops and
-`switch`;
+`cache`, the `inject` of a capability, and sources; in a graph, an `if`
+and any expression but a name, a literal and a call; a pack in a lifted
+call; a function or a candidate of core that has an HGL body and no
+native one; a temporal function called in a test outside an `eval`;
+loops and `switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 
