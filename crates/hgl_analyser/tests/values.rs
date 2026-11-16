@@ -3214,8 +3214,39 @@ fn an_operators_default_is_part_of_the_output_requested() {
         // What the call writes decides, and the place expects another.
         "    let wrong: list<f64, 5> = window<f64, 3>(x)\n",
         "}\n",
+        // GEN-13: a default the call takes is of its parameter's type as
+        // the call resolves it. GEN-2: an abstract struct widens what an
+        // earlier argument decided, for an operator's generics too.
+        "operator choose<T, const fallback: T = 2>(value: T) -> T\n",
+        "impl const fn choose(value: i64) -> i64 => value\n",
+        "impl const fn choose(value: str) -> str => value\n",
+        "abstract struct Shape { id: i64 }\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "operator same<T, const mode: i64 = 0>(left: T, right: T) -> T\n",
+        "impl const fn same(left: Shape, right: Shape) -> Shape => left\n",
+        "const fn resolved(shape: Shape, round: Round) {\n",
+        "    let whole = choose(1)\n",
+        "    let text = choose(\"x\")\n",
+        "    let child_first = same(round, shape)\n",
+        "    let parent_first = same(shape, round)\n",
+        "}\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:14:31 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:31 type/type.mismatch EXPR-5",
+            "m.hgl:25:16 type/type.mismatch GEN-13",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "resolved")[2..],
+        [
+            "whole: i64",
+            "text: _",
+            "child_first: Shape",
+            "parent_first: Shape",
+        ]
+    );
     assert_eq!(
         locals(&checked, "uses")[2..7],
         [

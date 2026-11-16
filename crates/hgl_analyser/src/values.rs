@@ -2613,18 +2613,32 @@ impl<'a> Typer<'a> {
         // Then its arguments, in the order the operator declares its
         // parameters (GEN-12): each given to one of them says what a
         // generic in that parameter's type is.
+        // The generic parameters an argument decided: what the call
+        // writes, or its place expects, is not widened (GEN-2).
+        let mut by_argument = vec![false; public.generics.len()];
         for (index, parameter) in public.parameters.iter().enumerate() {
             let argument = given.iter().find(|given| match &given.key {
                 Key::Position(position) => *position == index,
                 Key::Name(name) => *name == parameter.name,
             });
-            if let Some(argument) = argument {
-                infer(
-                    &parameter.ty,
-                    &argument.value.ty,
-                    &public.generics,
-                    &mut found,
-                );
+            let Some(argument) = argument else {
+                continue;
+            };
+            let actual = &argument.value.ty;
+            // GEN-2: "an abstract struct that the type decided inherits
+            // from widens the parameter to that struct".
+            if let Some(generic) = bare_parameter(&parameter.ty, &public.generics)
+                && by_argument[generic]
+                && let Some(Argument::Type(decided)) = &found[generic]
+                && self.widens(decided, actual)
+            {
+                found[generic] = Some(Argument::Type(actual.clone()));
+                continue;
+            }
+            let before: Vec<bool> = found.iter().map(Option::is_some).collect();
+            infer(&parameter.ty, actual, &public.generics, &mut found);
+            for (generic, was) in before.into_iter().enumerate() {
+                by_argument[generic] |= !was && found[generic].is_some();
             }
         }
         let operator_syntax =
@@ -2633,12 +2647,16 @@ impl<'a> Typer<'a> {
         // writes generic arguments, or one of the operator's takes its
         // default.
         let mut asked = generics.is_some();
-        for (generic, found) in public.generics.iter().zip(found.iter_mut()) {
+        // The operator's generic value parameters that take their
+        // defaults, each with the default.
+        let mut defaulted: Vec<(usize, SyntaxNode)> = Vec::new();
+        for (index, (generic, found)) in public.generics.iter().zip(found.iter_mut()).enumerate() {
             if found.is_none()
                 && let Some(default) = generic_default(operator_syntax, generic)
             {
                 *found = Some(Argument::Constant(constant_at(&default)));
                 asked = true;
+                defaulted.push((index, default));
             }
         }
         let explicit: Vec<Argument> = found
@@ -2648,6 +2666,35 @@ impl<'a> Typer<'a> {
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
         let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
+        // GEN-13: a default the call takes is of its parameter's type
+        // as the call resolves it: the `2` of
+        // `operator choose<T, const fallback: T = 2>` is no `str`. One
+        // that is not of the type as it is declared is reported there.
+        for (index, default) in &defaulted {
+            let generic = &public.generics[*index];
+            let GenericKind::Value(declared) = &generic.kind else {
+                continue;
+            };
+            let resolved = placed(substitute_within(declared, &map), &own_generics);
+            if constant_fits(program, default, &resolved) == Some(false)
+                && constant_fits(program, default, declared) != Some(false)
+                && let Some(kind) = self::written(default)
+            {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "this leaves `{}` to its default, {}, and `{}` is `{resolved}` here",
+                        generic.name,
+                        kind.described(),
+                        generic.name
+                    ),
+                    "GEN-13",
+                ));
+                return (self.unselected(given, Form::Named), Type::Unknown);
+            }
+        }
         // The output requested, as far as it is known: a `list<T, 3>`
         // with `T` not yet said is a list of three of anything.
         let requested: Option<Type> = asked
