@@ -135,6 +135,9 @@ pub struct Module {
     /// `declarations`, in the same order, `None` for a declaration that
     /// is no value function or has no body.
     pub bodies: Vec<Option<Body>>,
+    /// The typed block of each named test: one entry for each of
+    /// `tests`, in the same order, `None` for a test with no block.
+    pub test_bodies: Vec<Option<Body>>,
     /// What the body of each temporal function describes (FN-2): one
     /// entry for each of `declarations`, in the same order, `None` for
     /// a declaration that is no temporal function or has no body

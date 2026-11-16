@@ -482,7 +482,16 @@ same pass holds it to that: a `state`, a `cache`, an `inject`, a hook, a
 function, is `test.statement_phase`. `assert raises("code")` names one
 execution code of the catalogue, as a string literal written out
 (TST-10, `catalogue::EXECUTION_CODES`); anything else is
-`test.raises_code`. A test's block is not read further yet.
+`test.raises_code`.
+
+A test's block is then read as a graph's body is (`Typer::test`, into
+`Module::test_bodies`): a test has a name and neither a parameter nor a
+result. `assert` is a statement there (TST-4): its condition is a `bool`
+(`type.mismatch`) known when the test is built, and no connection
+(`connection.as_constant`). The block of an `assert raises` is read with
+the test's scope. An `eval` is not read yet, and nothing is said of a
+comparison with one: a sequence written out beside an operand whose type
+is not known has nothing to be read as (ERR-9).
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:

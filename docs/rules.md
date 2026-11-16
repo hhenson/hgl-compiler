@@ -344,8 +344,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
 | TST-2 | analyser | done | Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
-| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Left: its block read as composition; eval traces stay test-local |
-| TST-4 | analyser | planned | `assert` needs a wiring-time bool |
+| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. Left: eval traces stay test-local |
+| TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). Left: a comparison with an `eval`, which is the harness's and is not read |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | planned | Eval target selection and argument binding |
 | TST-6 | runner | planned | Dense traces: positions, `_` placeholders, a result ending at its last publication |
