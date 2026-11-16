@@ -362,6 +362,16 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    }\n",
         "    when modified([]) { return a }\n",
         "}\n",
+        // Through a local the scheduler is bound to (TIME-8).
+        "fn renamed(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start {\n",
+        "        let timer = (scheduler)\n",
+        "        let again = timer\n",
+        "        schedule(again, 1s)\n",
+        "    }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
         // Nothing injected that wakes it.
         "fn dormant(a: f64) -> f64 {\n",
         "    when modified([]) && valid([]) { return 0.0 }\n",
@@ -391,10 +401,10 @@ fn an_empty_subscription_needs_what_wakes_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:18:10 phase/modified.no_driver TIME-3",
-            "m.hgl:22:10 phase/modified.no_driver TIME-3",
             "m.hgl:27:10 phase/modified.no_driver TIME-3",
-            "m.hgl:35:10 phase/modified.no_driver TIME-3",
+            "m.hgl:31:10 phase/modified.no_driver TIME-3",
+            "m.hgl:36:10 phase/modified.no_driver TIME-3",
+            "m.hgl:44:10 phase/modified.no_driver TIME-3",
         ]
     );
 }

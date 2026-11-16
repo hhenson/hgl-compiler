@@ -774,12 +774,15 @@ impl<'a> Typer<'a> {
     /// anywhere in `start`: the call that asks for one, given the
     /// injected capability first (TIME-8).
     fn has_driver(&self) -> bool {
-        let drivers: Vec<&str> = self
+        // The names the node's scheduler or alarm goes by: the injected
+        // name, and in `start` each local it is bound to (TIME-8:
+        // "Binding one to a `let` ... [is a use]").
+        let mut drivers: Vec<String> = self
             .locals
             .iter()
             .filter(|local| local.kind == LocalKind::Inject)
-            .map(|local| local.name.as_str())
-            .filter(|name| matches!(*name, "scheduler" | "alarm"))
+            .map(|local| local.name.clone())
+            .filter(|name| matches!(name.as_str(), "scheduler" | "alarm"))
             .collect();
         if drivers.is_empty() {
             return false;
@@ -795,34 +798,60 @@ impl<'a> Typer<'a> {
                     .next()
                     .is_some_and(|word| word.kind() == SyntaxKind::KwStart)
         });
-        starts
-            .flat_map(|start| start.descendants())
-            .filter(|call| call.kind() == SyntaxKind::CallExpr)
-            .any(|call| {
-                let mut parts = call.children();
-                let called = parts
-                    .next()
-                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-                    .and_then(|callee| name_token(&callee))
-                    .is_some_and(|name| name.text() == "schedule");
-                // The capability is the first argument, by its name.
-                // "Parentheses select grouping" (EXPR-1): `(scheduler)`
-                // is the same argument.
-                let first = parts
-                    .next()
-                    .and_then(|list| arguments_of(&list).into_iter().next())
-                    .map(|(_, mut value)| {
-                        while value.kind() == SyntaxKind::ParenExpr
-                            && let Some(inner) = value.children().next()
-                        {
-                            value = inner;
-                        }
-                        value
-                    })
-                    .filter(|value| value.kind() == SyntaxKind::NameExpr)
-                    .and_then(|value| name_token(&value));
-                called && first.is_some_and(|name| drivers.contains(&name.text()))
-            })
+        // The name an expression is, through any parentheses, which
+        // only group (EXPR-1).
+        let named = |mut value: SyntaxNode| {
+            while value.kind() == SyntaxKind::ParenExpr
+                && let Some(inner) = value.children().next()
+            {
+                value = inner;
+            }
+            (value.kind() == SyntaxKind::NameExpr)
+                .then(|| name_token(&value))
+                .flatten()
+        };
+        // In source order, so a local is known before the call that
+        // names it. No local takes a name already in scope (UNIT-12),
+        // so a name is one binding throughout.
+        for part in starts.flat_map(|start| start.descendants()) {
+            match part.kind() {
+                // `let timer = scheduler`.
+                SyntaxKind::LocalDecl => {
+                    let bound = tokens(&part).find(|token| token.kind() == SyntaxKind::Ident);
+                    let value = part
+                        .children()
+                        .find(|value| !is_type(value.kind()))
+                        .and_then(named);
+                    if let (Some(bound), Some(value)) = (bound, value)
+                        && drivers.iter().any(|driver| driver == value.text())
+                    {
+                        drivers.push(bound.text().to_string());
+                    }
+                }
+                // `schedule(scheduler, delay)`: the capability is the
+                // first argument.
+                SyntaxKind::CallExpr => {
+                    let mut parts = part.children();
+                    let called = parts
+                        .next()
+                        .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                        .and_then(|callee| name_token(&callee))
+                        .is_some_and(|name| name.text() == "schedule");
+                    let first = parts
+                        .next()
+                        .and_then(|list| arguments_of(&list).into_iter().next())
+                        .and_then(|(_, value)| named(value));
+                    if called
+                        && first
+                            .is_some_and(|name| drivers.iter().any(|driver| driver == name.text()))
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// The endpoint an argument of an endpoint operation names: a
