@@ -196,6 +196,22 @@ pub enum Stmt {
         /// Where the statement is written.
         at: Location,
     },
+    /// `assert condition`, in a test: the condition is a `bool` known
+    /// when the test's graph is built (TST-4).
+    Assert {
+        /// What is asserted.
+        condition: Expr,
+        /// Where the statement is written.
+        at: Location,
+    },
+    /// `assert raises("code") { ... }`, in a test: the block is expected
+    /// to fail with that execution code (TST-10).
+    AssertRaises {
+        /// The block that is run.
+        body: Vec<Stmt>,
+        /// Where the statement is written.
+        at: Location,
+    },
     /// `yield time: value`, in a source: it "writes its output and sets
     /// its next evaluation" (SOURCE-1).
     Yield {

@@ -146,7 +146,43 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             };
             bodies.push(body);
         }
+        // TST-3: "A test is a composition-phase block with assertions."
+        // It is no declaration: it has a name, and neither a parameter
+        // nor a result, so it is read as a graph of that name with an
+        // empty signature.
+        let empty = Signature {
+            generics: Vec::new(),
+            parameters: Vec::new(),
+            result: None,
+        };
+        let mut test_bodies = Vec::with_capacity(module.tests.len());
+        for test in &module.tests {
+            let stand_in = Declaration {
+                name: test.name.clone(),
+                at: test.at,
+                kind: DeclarationKind::Function(Role::Temporal),
+                exported: false,
+                test_only: true,
+                file: test.file,
+                syntax: test.syntax.clone(),
+            };
+            let body = Typer::new(
+                program,
+                module,
+                &stand_in,
+                &empty,
+                Tables {
+                    bindings: &bindings,
+                    written: &written,
+                    calls: &calls,
+                },
+                diagnostics,
+            )
+            .test();
+            test_bodies.push(body);
+        }
         program.modules[index].bodies = bodies;
+        program.modules[index].test_bodies = test_bodies;
     }
 }
 
@@ -226,6 +262,10 @@ struct Typer<'a> {
     /// another name, and is held to the same rule, whether or not core
     /// has given the capability a type.
     aliases: HashMap<LocalId, LocalId>,
+    /// True while a named test's block is read (TST-3): there `assert`
+    /// is a statement, and what the test may not hold is reported by the
+    /// phase pass and not read.
+    testing: bool,
     /// True while the statements of a source that yield are read
     /// (SOURCE-1): there a `yield` is a statement, a `return` with no
     /// value ends the source, and a `while` may have no condition.
@@ -308,6 +348,7 @@ impl<'a> Typer<'a> {
             out: None,
             present: Vec::new(),
             aliases: HashMap::new(),
+            testing: false,
             generating: false,
             captures: HashMap::new(),
             callable: None,
@@ -451,6 +492,68 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The block of a named test (TST-3): "A test is a
+    /// composition-phase block with assertions." It is read as a
+    /// graph's body is, with `assert` among its statements.
+    fn test(mut self) -> Option<Body> {
+        let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
+        self.graph = true;
+        self.testing = true;
+        let statements = block
+            .children()
+            .map(|statement| self.statement(&statement))
+            .collect();
+        Some(Body {
+            locals: self.locals,
+            statements,
+        })
+    }
+
+    /// `assert condition`, or `assert raises("code") { ... }` (TST-4,
+    /// TST-10). TST-4: "Assert requires a wiring-time bool."
+    fn assertion(&mut self, node: &SyntaxNode) -> Stmt {
+        let at = self.at(node);
+        let Some(asserted) = node.children().next() else {
+            return self.unread(node);
+        };
+        if asserted.kind() == SyntaxKind::RaisesAssertion {
+            // TST-11: "The block has ordinary lexical test scope". Its
+            // code is the phase pass's to check.
+            let body = self.loop_body(child(&asserted, SyntaxKind::Block).as_ref());
+            return Stmt::AssertRaises { body, at };
+        }
+        let condition = self.expression(&asserted, Some(&BOOL));
+        // What is not known at all has been reported, or is for a later
+        // part: an `eval`, and so a comparison with one (ERR-9). A type
+        // known in part is known to be no `bool`: the list of `[]`.
+        if !open(&condition.ty) && condition.ty != BOOL {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                condition.at,
+                format!("an `assert` takes a `bool`, and this is `{}`", condition.ty),
+                "TST-4",
+            ));
+        } else if self.category(&condition) == ValueCategory::Connection {
+            // "Wiring-time": known when the test's graph is built, and
+            // no connection, whose value is known only as the graph
+            // runs.
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::CONNECTION_AS_CONSTANT,
+                    condition.at,
+                    "an `assert` takes a `bool` known when the test is built, and this is a \
+                     connection"
+                        .to_string(),
+                    "TST-4",
+                )
+                .with_note("what a function publishes is observed with `eval`"),
+            );
+        }
+        Stmt::Assert { condition, at }
     }
 
     /// The body of a source (SOURCE-1): "a node that produces its
@@ -1177,6 +1280,12 @@ impl<'a> Typer<'a> {
         match node.kind() {
             SyntaxKind::LocalDecl => self.local(node),
             SyntaxKind::AssignStmt => self.assignment(node),
+            // An `assert` is a statement of a test's own (TST-3).
+            SyntaxKind::AssertStmt if self.testing => self.assertion(node),
+            // TST-3: a test "cannot itself declare state/cache, inject,
+            // lifecycle hooks, when, yield, or return". The phase pass
+            // reports a `return` there, and it is not read.
+            SyntaxKind::ReturnStmt if self.testing => self.unread(node),
             // A `yield` is a statement of a source's own (SOURCE-1). In
             // a hook it is reported by the phase pass, and not read.
             SyntaxKind::YieldStmt if self.generating => self.yield_statement(node),
@@ -2934,10 +3043,19 @@ impl<'a> Typer<'a> {
         // not, so that what it leaves unresolved is reported
         // (`generic.unresolved` for the `repeat(1)` of
         // `repeat(1) == repeat(2)`).
-        let reread = |this: &mut Self, operand: &Given, other: &Type| {
+        //
+        // `other` is the other operand's type where it has been read,
+        // and `None` where it has not yet. A sequence or a tuple
+        // written out beside an operand whose type is not known has
+        // nothing to be read as, and that is the other operand's doing:
+        // nothing is reported of it (ERR-9). So `eval(...) == []` says
+        // nothing of its `[]` while `eval` is not read.
+        let reread = |this: &mut Self, operand: &Given, other: Option<&Type>| {
             if takes_its_type(&operand.node) {
-                let expected = beside(&operand.node, other);
+                let expected = beside(&operand.node, other.unwrap_or(&Type::Unknown));
                 this.expression(&operand.node, Some(&expected))
+            } else if operand.by_place && other.is_some_and(open) {
+                this.expression(&operand.node, Some(&Type::Unknown))
             } else {
                 this.expression(&operand.node, None)
             }
@@ -2945,22 +3063,22 @@ impl<'a> Typer<'a> {
         match (left.retried, right.retried) {
             (false, false) => (left.value, right.value),
             (false, true) => {
-                let right = reread(self, &right, &left.value.ty);
+                let right = reread(self, &right, Some(&left.value.ty));
                 (left.value, right)
             }
             (true, false) => {
-                let left = reread(self, &left, &right.value.ty);
+                let left = reread(self, &left, Some(&right.value.ty));
                 (left, right.value)
             }
             // One that takes its type from the other is read after it.
             (true, true) if takes_its_type(&left.node) && !takes_its_type(&right.node) => {
-                let right = reread(self, &right, &Type::Unknown);
-                let left = reread(self, &left, &right.ty);
+                let right = reread(self, &right, None);
+                let left = reread(self, &left, Some(&right.ty));
                 (left, right)
             }
             (true, true) => {
-                let left = reread(self, &left, &Type::Unknown);
-                let right = reread(self, &right, &left.ty);
+                let left = reread(self, &left, None);
+                let right = reread(self, &right, Some(&left.ty));
                 (left, right)
             }
         }

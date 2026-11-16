@@ -417,7 +417,7 @@ fn production_names_no_test_only_declaration() {
                 "module m\n",
                 "const fn private() -> i64 => 1\n",
                 "const fn production() -> Fixture => helper()\n",
-                "test uses_both { assert helper() == private() }\n",
+                "test uses_both { assert helper().x == private() }\n",
             ),
         ),
         (
