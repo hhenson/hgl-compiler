@@ -153,12 +153,14 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
             "    inject out, logger\n",
             "    when { }\n",
             "}\n",
-            // An anonymous function is a function of its own (FN-14): a
-            // value helper may inject a capability (FN-9), and that is
-            // no declaration of the node's inside a block.
+            // An anonymous function is a function of its own (FN-14):
+            // what it holds is no declaration of the node's inside a
+            // block. In a node it is value code (FN-3), which has no
+            // capability (FN-9), no state and no hooks.
             "fn helped(value: i64) -> i64 {\n",
             "    start {\n",
             "        let helper = fn() { inject logger }\n",
+            "        let keeper = fn() { state seen: i64 = 0 }\n",
             "    }\n",
             "    when { return value }\n",
             "}\n",
@@ -175,6 +177,8 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
             "m.hgl:29:9 phase/node.nested TIME-5",
             "m.hgl:33:9 phase/node.nested TIME-3",
             "m.hgl:37:12 injectable/inject.out_without_result TIME-7",
+            "m.hgl:42:29 phase/node.in_value_function FN-9",
+            "m.hgl:43:29 phase/node.in_value_function FN-3",
         ]
     );
 }
