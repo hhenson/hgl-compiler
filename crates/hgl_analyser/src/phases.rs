@@ -88,8 +88,8 @@ pub(crate) fn is_source(declaration: &Declaration) -> bool {
 }
 
 /// True for a construct only a node's body holds, one of its
-/// declarations or one of its hooks. `yield` is a source's, whose
-/// contract is proposed and is not checked here.
+/// declarations or one of its hooks. `yield` is a source's, which has
+/// a shape of its own (SOURCE-1).
 fn is_node_construct(kind: SyntaxKind) -> bool {
     is_declaration(kind) || is_hook(kind)
 }
@@ -232,6 +232,262 @@ fn in_anonymous_function(declaration: &Declaration, file: FileId, diagnostics: &
     }
 }
 
+/// The body of a source (SOURCE-1): "A temporal `fn` whose body has a
+/// `yield` is a source: a node that produces its output and has no
+/// temporal parameters. It injects `clock`, `logger`, and
+/// `global_state`, and not `out`, `scheduler`, or `alarm` ... A source
+/// with no declaration and no hook has a body of statements, `yield`
+/// among them. One with an `inject`, a `cache`, a `state`, a `start`,
+/// or a `stop` has its declarations, then `start`, then one block that
+/// holds every `yield`, then `stop`, and nothing else; the block is
+/// `{ ... }`, a `while`, or a `for` ... a source declares no `var`. A
+/// source has no `when`."
+fn source_body(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
+    let rejected = |diagnostics: &mut Diagnostics, at: Location, message: String| {
+        diagnostics.emit(error(
+            Category::Phase,
+            codes::SOURCE_STATEMENT,
+            at,
+            message,
+            "SOURCE-1",
+        ));
+    };
+    let name = &declaration.name;
+    // "No temporal parameters": each parameter is `const`.
+    for parameter in crate::read::parameters(&declaration.syntax) {
+        if !crate::read::is_const(&parameter) {
+            diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::SOURCE_INPUT,
+                    Location::new(file, parameter.span()),
+                    format!("`{name}` is a source, and has no temporal parameter"),
+                    "SOURCE-1",
+                )
+                .with_note("a source takes its configuration as `const` parameters"),
+            );
+        }
+    }
+    let own = own_nodes(&declaration.syntax);
+    let body = child(&declaration.syntax, SyntaxKind::Block);
+    for node in &own {
+        match node.kind() {
+            // "A source has no `when`", wherever it is written.
+            SyntaxKind::WhenStmt => {
+                if let Some((_, at)) = keyword(node, file) {
+                    diagnostics.emit(error(
+                        Category::Phase,
+                        codes::SOURCE_WHEN,
+                        at,
+                        format!("`{name}` is a source, and a source has no `when`"),
+                        "SOURCE-1",
+                    ));
+                }
+            }
+            // "A source declares no `var`."
+            SyntaxKind::LocalDecl
+                if tokens(node)
+                    .next()
+                    .is_some_and(|word| word.kind() == SyntaxKind::KwVar) =>
+            {
+                rejected(
+                    diagnostics,
+                    Location::new(file, node.span()),
+                    format!(
+                        "`{name}` is a source, and a source declares no `var`: what it keeps \
+                         from one `yield` to the next is a `cache` or a `state`"
+                    ),
+                );
+            }
+            // It injects `clock`, `logger` and `global_state`, "and not
+            // `out`, `scheduler`, or `alarm`".
+            SyntaxKind::InjectDecl => {
+                let taken: Vec<String> = tokens(node)
+                    .filter(|token| {
+                        token.kind() == SyntaxKind::Ident
+                            && matches!(token.text(), "out" | "scheduler" | "alarm")
+                    })
+                    .map(|token| format!("`{}`", token.text()))
+                    .collect();
+                if !taken.is_empty() {
+                    rejected(
+                        diagnostics,
+                        Location::new(file, node.span()),
+                        format!(
+                            "`{name}` is a source, and does not inject {}: `yield` writes its \
+                             output and sets its next evaluation",
+                            taken.join(" or ")
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+        // TIME-5 has the declarations and the lifecycle hooks at the
+        // level of the body, in a source as in any node.
+        if (is_declaration(node.kind()) || node.kind() == SyntaxKind::LifecycleBlock)
+            && node.parent() != body
+            && let Some((word, at)) = keyword(node, file)
+        {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::NODE_NESTED,
+                at,
+                format!(
+                    "`{}` stands in a node's body itself, and not inside another block",
+                    word.text()
+                ),
+                "TIME-5",
+            ));
+        }
+    }
+    let Some(body) = body else {
+        return;
+    };
+    let statements: Vec<SyntaxNode> = body.children().collect();
+    // "A source with no declaration and no hook has a body of
+    // statements, `yield` among them."
+    let structured = statements.iter().any(|statement| {
+        is_declaration(statement.kind()) || statement.kind() == SyntaxKind::LifecycleBlock
+    });
+    if !structured {
+        return;
+    }
+    // "Its declarations, then `start`, then one block that holds every
+    // `yield`, then `stop`, and nothing else". Each statement has a
+    // place in that order, and none comes before one it follows.
+    #[derive(Clone, Copy, PartialEq, PartialOrd)]
+    enum Place {
+        Declarations,
+        Start,
+        Block,
+        Stop,
+    }
+    let mut reached = Place::Declarations;
+    // Where the block, `start` and `stop` were first written.
+    let mut block: Option<Location> = None;
+    let mut lifecycle: Vec<(String, Location)> = Vec::new();
+    for statement in &statements {
+        let at = Location::new(file, statement.span());
+        let kind = statement.kind();
+        // `{ ... }` as a statement is a block in an expression
+        // statement.
+        let is_block = match kind {
+            SyntaxKind::WhileStmt | SyntaxKind::ForStmt => true,
+            SyntaxKind::ExprStmt => statement
+                .children()
+                .next()
+                .is_some_and(|inner| inner.kind() == SyntaxKind::Block),
+            _ => false,
+        };
+        let place = if is_declaration(kind) {
+            Place::Declarations
+        } else if kind == SyntaxKind::LifecycleBlock {
+            let word = keyword(statement, file);
+            let Some((word, word_at)) = word else {
+                continue;
+            };
+            // TIME-5: "At most one start and one stop are admitted."
+            match lifecycle.iter().find(|(earlier, _)| earlier == word.text()) {
+                Some((_, first)) => {
+                    diagnostics.emit(
+                        error(
+                            Category::Phase,
+                            codes::NODE_DUPLICATE_HOOK,
+                            word_at,
+                            format!("a node has one `{}`, and this is a second", word.text()),
+                            "TIME-5",
+                        )
+                        .with_related(*first, "the first"),
+                    );
+                    continue;
+                }
+                None => lifecycle.push((word.text().to_string(), word_at)),
+            }
+            // "A `yield` in a hook" is no part of the one block.
+            for inner in own_nodes(statement)
+                .iter()
+                .filter(|inner| inner.kind() == SyntaxKind::YieldStmt)
+            {
+                rejected(
+                    diagnostics,
+                    Location::new(file, inner.span()),
+                    format!(
+                        "a source yields in its one block, and this `yield` is in `{}`",
+                        word.text()
+                    ),
+                );
+            }
+            if word.kind() == SyntaxKind::KwStart {
+                Place::Start
+            } else {
+                Place::Stop
+            }
+        } else if is_block {
+            if let Some(first) = block {
+                diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::SOURCE_STATEMENT,
+                        at,
+                        format!(
+                            "`{name}` has one block that holds every `yield`, and this is a second"
+                        ),
+                        "SOURCE-1",
+                    )
+                    .with_related(first, "the first"),
+                );
+                continue;
+            }
+            block = Some(at);
+            Place::Block
+        } else if kind == SyntaxKind::WhenStmt {
+            // Reported above, as `source.when`.
+            continue;
+        } else {
+            rejected(
+                diagnostics,
+                at,
+                format!(
+                    "`{name}` is a source with a declaration or a hook: its body is its \
+                     declarations, `start`, one block that holds every `yield`, and `stop`"
+                ),
+            );
+            continue;
+        };
+        if place < reached {
+            if place == Place::Declarations {
+                // TIME-5: "State/cache/inject declarations precede
+                // executable hooks", and so the block they run around.
+                if let Some((word, word_at)) = keyword(statement, file) {
+                    diagnostics.emit(error(
+                        Category::Phase,
+                        codes::NODE_DECLARATION_ORDER,
+                        word_at,
+                        format!(
+                            "`{}` follows a hook or the block: a source's declarations come \
+                             first",
+                            word.text()
+                        ),
+                        "TIME-5",
+                    ));
+                }
+            } else {
+                rejected(
+                    diagnostics,
+                    at,
+                    format!(
+                        "`{name}` is out of order here: a source has its declarations, then \
+                         `start`, then its one block, then `stop`"
+                    ),
+                );
+            }
+        } else {
+            reached = place;
+        }
+    }
+}
+
 /// The body of a node: its declarations and then its hooks, and nothing
 /// else (FN-2).
 fn node_body(
@@ -241,8 +497,9 @@ fn node_body(
     diagnostics: &mut Diagnostics,
 ) {
     // A source is a node of another shape, with statements and `yield`
-    // (SOURCE-1), whose contract is proposed: it is not checked here.
+    // (SOURCE-1).
     if is_source(declaration) {
+        source_body(declaration, file, diagnostics);
         return;
     }
     let own = own_nodes(&declaration.syntax);

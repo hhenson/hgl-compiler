@@ -229,3 +229,128 @@ fn a_value_function_has_no_state_no_capability_and_no_hooks() {
         ]
     );
 }
+
+/// SOURCE-1: "A temporal `fn` whose body has a `yield` is a source: a
+/// node that produces its output and has no temporal parameters. It
+/// injects `clock`, `logger`, and `global_state`, and not `out`,
+/// `scheduler`, or `alarm` ... A source with no declaration and no hook
+/// has a body of statements, `yield` among them. One with an `inject`,
+/// a `cache`, a `state`, a `start`, or a `stop` has its declarations,
+/// then `start`, then one block that holds every `yield`, then `stop`,
+/// and nothing else; the block is `{ ... }`, a `while`, or a `for` ...
+/// a source declares no `var`. A source has no `when`."
+#[test]
+fn a_source_has_its_own_shape() {
+    // The chapter's `examples.source`, each of its four forms.
+    let accepted = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn two_values() -> i64 {\n",
+            "    yield 1s: 7\n",
+            "    yield 1s: 9\n",
+            "}\n",
+            "fn greeting(const every: duration = 1s) -> str {\n",
+            "    inject logger\n",
+            "    start { log_info(logger, \"greeting starts\") }\n",
+            "    {\n",
+            "        yield every: \"hello\"\n",
+            "        yield every: \"world\"\n",
+            "    }\n",
+            "    stop { log_info(logger, \"greeting ends\") }\n",
+            "}\n",
+            "fn counter(const every: duration = 1s, const limit: i64 = 3) -> i64 {\n",
+            "    inject logger\n",
+            "    cache count: i64 = 0\n",
+            "    while count < limit {\n",
+            "        count += 1\n",
+            "        yield every: count\n",
+            "    }\n",
+            "    stop { log_info(logger, str(count)) }\n",
+            "}\n",
+            "fn replay(const values: list<f64>, const every: duration = 1s) -> f64 {\n",
+            "    inject logger\n",
+            "    start { log_info(logger, \"replay starts\") }\n",
+            "    for value in values {\n",
+            "        let doubled = value * 2.0\n",
+            "        yield every: doubled\n",
+            "    }\n",
+            "    stop { log_info(logger, \"replay ends\") }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(accepted.summary(), [""; 0]);
+
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            // With no declaration and no hook: a temporal parameter, a
+            // `var` and a `when`.
+            "fn plain(value: i64, const every: duration = 1s) -> i64 {\n",
+            "    var seen = 0\n",
+            "    yield every: 1\n",
+            "    when { }\n",
+            "}\n",
+            "fn shaped(const every: duration = 1s) -> i64 {\n",
+            "    inject logger, out, scheduler\n",
+            // Outside the block, in a hook, and a statement of no
+            // place.
+            "    yield every: 0\n",
+            "    start { yield every: 1 }\n",
+            "    let loose = 1\n",
+            "    {\n",
+            "        var inner = 1\n",
+            "        yield every: 2\n",
+            "    }\n",
+            // A second block, a late declaration, a second `start` and
+            // a second `stop`.
+            "    while true {\n",
+            "        yield every: 3\n",
+            "    }\n",
+            "    cache late: i64 = 0\n",
+            "    stop { }\n",
+            "    start { }\n",
+            "    stop { }\n",
+            "}\n",
+            // `stop` before the block and `start` after it; a
+            // declaration inside the block.
+            "fn disordered(const every: duration = 1s) -> i64 {\n",
+            "    stop { }\n",
+            "    for value in [1, 2] {\n",
+            "        cache nested: i64 = 0\n",
+            "        yield every: value\n",
+            "    }\n",
+            "    start { }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:10 phase/source.input SOURCE-1",
+            "m.hgl:3:5 phase/source.statement SOURCE-1",
+            "m.hgl:5:5 phase/source.when SOURCE-1",
+            "m.hgl:8:5 phase/source.statement SOURCE-1",
+            "m.hgl:9:5 phase/source.statement SOURCE-1",
+            "m.hgl:10:13 phase/source.statement SOURCE-1",
+            "m.hgl:11:5 phase/source.statement SOURCE-1",
+            "m.hgl:13:9 phase/source.statement SOURCE-1",
+            "m.hgl:16:5 phase/source.statement SOURCE-1",
+            "m.hgl:19:5 phase/node.declaration_order TIME-5",
+            "m.hgl:21:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:22:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:26:5 phase/source.statement SOURCE-1",
+            "m.hgl:27:9 phase/node.nested TIME-5",
+            "m.hgl:30:5 phase/source.statement SOURCE-1",
+        ]
+    );
+    // Each is a node all the same (FN-2).
+    let module = checked.program.module("m").expect("module m exists");
+    assert!(
+        module
+            .phases
+            .iter()
+            .all(|phase| phase.map(|phase| phase.as_str()) == Some("node"))
+    );
+}
