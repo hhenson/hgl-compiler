@@ -2854,53 +2854,47 @@ impl<'a> Typer<'a> {
     /// read, and the call has no type.
     fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         let read = self.call_read(node, expected);
-        if self.hook == Some(Hook::Start) && !self.driven {
-            self.driven = self.wakes(node, &read.0);
+        let callee = node
+            .children()
+            .next()
+            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+            .and_then(|callee| name_token(&callee));
+        if let Some(callee) = callee {
+            self.note_wake(&callee, &read.0);
         }
         read
     }
 
-    /// True when the call at `node`, read as `kind`, asks for a wake on
-    /// the node's scheduler or alarm (TIME-3: the node "schedules a wake
-    /// on it in `start`").
+    /// Notes a call in `start` that asks for a wake on the node's
+    /// scheduler or alarm (TIME-3: the node "schedules a wake on it in
+    /// `start`").
     ///
-    /// That is `schedule(scheduler, ...)`, the capability given first:
-    /// as it is written, by a local it is bound to, or as the value of
-    /// a block (TIME-8, CTRL-10). Core does not declare `schedule` yet,
-    /// so the call is known by its name. A function the program
-    /// declares that is given the capability may ask for the wake
-    /// itself: what it does is not followed, and it is taken to.
-    fn wakes(&self, node: &SyntaxNode, kind: &ExprKind) -> bool {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return false;
+    /// That is `schedule(scheduler, ...)`, written in `start` itself,
+    /// the capability given first: by its name, by a local it is bound
+    /// to, or as the value of a block (TIME-8, CTRL-10). Core does not
+    /// declare `schedule` yet, so the call is known by its name. What a
+    /// function given the capability does with it is not followed: a
+    /// wake asked for only there is not one this finds.
+    fn note_wake(&mut self, callee: &SyntaxToken, kind: &ExprKind) {
+        if self.hook != Some(Hook::Start) || self.driven || callee.text() != "schedule" {
+            return;
+        }
+        let ExprKind::Call { arguments, .. } = kind else {
+            return;
         };
-        let wakes_node = |value: &Expr| {
-            self.capability_of(value).is_some_and(|capability| {
+        // The first argument: the one given to the first parameter, or
+        // where the call is not read, the first written.
+        let first = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0))
+            .or_else(|| arguments.first());
+        self.driven = first
+            .and_then(|argument| self.capability_of(&argument.value))
+            .is_some_and(|capability| {
                 let local = &self.locals[capability];
                 local.kind == LocalKind::Inject
                     && matches!(local.name.as_str(), "scheduler" | "alarm")
-            })
-        };
-        let schedule = node
-            .children()
-            .next()
-            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| name.text() == "schedule");
-        if schedule {
-            // The first argument: the one given to the first parameter,
-            // or where the call is not read, the first written.
-            let first = arguments
-                .iter()
-                .find(|argument| argument.parameter == Some(0))
-                .or_else(|| arguments.first());
-            return first.is_some_and(|argument| wakes_node(&argument.value));
-        }
-        !matches!(callee, Callee::Unread)
-            && arguments.iter().any(|argument| wakes_node(&argument.value))
+            });
     }
 
     /// A call, as the form or the function its callee names.
@@ -5662,12 +5656,16 @@ impl<'a> Typer<'a> {
             // pass kept them, the name being a function or an operator.
             _ => {
                 let generics = self.calls.get(&(self.file, start)).copied();
-                match (generics, self.declarations(&name)) {
+                let read = match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {
                         self.call_named(&name, &list, found, expected, Some(generics))
                     }
                     _ => self.unread_call(&list),
-                }
+                };
+                // `schedule<duration>(scheduler, delay)` asks for a wake
+                // as the call without its generic arguments does.
+                self.note_wake(&name, &read.0);
+                read
             }
         }
     }

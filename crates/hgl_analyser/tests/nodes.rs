@@ -373,14 +373,20 @@ fn an_empty_subscription_needs_what_wakes_it() {
         "    when modified([]) { return a }\n",
         "}\n",
         // As the value of a block (CTRL-10), with `start` written after
-        // the handler it wakes, and through a helper the scheduler is
-        // given to.
+        // the handler it wakes; and written with a generic argument.
         "const fn armed(scheduler: i64) -> i64 => scheduler\n",
         "fn late(a: f64) -> f64 {\n",
         "    inject scheduler\n",
         "    when modified([]) { return a }\n",
         "    start { schedule({ scheduler }, 1s) }\n",
         "}\n",
+        "fn typed(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start { schedule<duration>(scheduler, 1s) }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+        // What a function given the scheduler does is not followed: the
+        // wake is `schedule`, written in `start`.
         "fn helped(a: f64) -> f64 {\n",
         "    inject scheduler\n",
         "    start { armed(scheduler) }\n",
@@ -428,11 +434,12 @@ fn an_empty_subscription_needs_what_wakes_it() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:46:10 phase/modified.no_driver TIME-3",
-            "m.hgl:49:10 phase/modified.no_driver TIME-3",
-            "m.hgl:53:10 phase/modified.no_driver TIME-3",
+            "m.hgl:40:10 phase/modified.no_driver TIME-3",
+            "m.hgl:51:10 phase/modified.no_driver TIME-3",
+            "m.hgl:54:10 phase/modified.no_driver TIME-3",
             "m.hgl:58:10 phase/modified.no_driver TIME-3",
-            "m.hgl:66:10 phase/modified.no_driver TIME-3",
+            "m.hgl:63:10 phase/modified.no_driver TIME-3",
+            "m.hgl:71:10 phase/modified.no_driver TIME-3",
         ]
     );
 }
