@@ -147,6 +147,18 @@ fn an_endpoint_operation_with_a_generic_argument_is_the_same_form() {
     );
     // The guard written with its argument proves its input as the one
     // without does: `return a` under manual admission is not reported.
+
+    // A header's selector written so sets admission as the one without
+    // does (TIME-3): `b` is not among those it names.
+    let header = module(concat!(
+        "fn selected(a: i64, b: i64) -> i64 {\n",
+        "    when valid<i64>(a) { return b }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        header.summary(),
+        ["m.hgl:3:33 phase/payload.unguarded TIME-4"]
+    );
 }
 
 /// TIME-9: "A call gives an `endpoint<T>` parameter a temporal input of
