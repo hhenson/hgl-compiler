@@ -1288,6 +1288,7 @@ declaration's Python name does.
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | A named test | A function `test_name` |
+| `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |

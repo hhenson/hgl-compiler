@@ -946,8 +946,13 @@ impl Emitter<'_> {
                 self.line(depth, &format!("return {value}"));
             }
             Stmt::Assert { condition, .. } => {
+                // Python's own `assert` is removed when the interpreter
+                // is run with `-O` or `PYTHONOPTIMIZE`, and a test
+                // would then pass whatever it asserts. An `if` is
+                // always run.
                 let condition = self.expression(function, condition);
-                self.line(depth, &format!("assert {condition}"));
+                self.line(depth, &format!("if not ({condition}):"));
+                self.line(depth + 1, "raise _py.AssertionError()");
             }
             Stmt::Expr(Expr {
                 kind:

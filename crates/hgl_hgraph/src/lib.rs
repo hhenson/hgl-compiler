@@ -22,6 +22,7 @@
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | A named test | A function `test_name` |
+//! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
 //! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.

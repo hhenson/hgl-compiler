@@ -197,8 +197,10 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "def test_scales():\n",
     "    seen = _harness.evaluate(wired, value=[1, None, 2])\n",
-    "    assert seen == [1, None, 12]\n",
-    "    assert _harness.evaluate(scaled, value=[5], factor=2) != []\n",
+    "    if not (seen == [1, None, 12]):\n",
+    "        raise _py.AssertionError()\n",
+    "    if not (_harness.evaluate(scaled, value=[5], factor=2) != []):\n",
+    "        raise _py.AssertionError()\n",
     "    _harness.evaluate(sink, value=[True])\n",
 );
 
@@ -242,8 +244,10 @@ fn cores_scalar_eval_cases_are_written_whole() {
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
-        "    assert _harness.evaluate(pass_i64, value=[None, 7, None, None]) == [None, 7]\n",
-        "    assert _harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]) == [\"\", None, \"\", \"a\"]\n",
+        "    if not (_harness.evaluate(pass_i64, value=[None, 7, None, None]) == [None, 7]):\n",
+        "        raise _py.AssertionError()\n",
+        "    if not (_harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]) == [\"\", None, \"\", \"a\"]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(python.contains(expected), "the module has:\n{expected}");
     }
@@ -564,8 +568,10 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         // A node's configuration, in a graph and in an eval.
         "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
         "    return offset(value=value, by=10)\n",
-        "    assert _harness.evaluate(offset, value=[1], by=10) == [11]\n",
-        "    assert _harness.evaluate(offset, value=[1], by=1) == [2]\n",
+        "    if not (_harness.evaluate(offset, value=[1], by=10) == [11]):\n",
+        "        raise _py.AssertionError()\n",
+        "    if not (_harness.evaluate(offset, value=[1], by=1) == [2]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -705,9 +711,11 @@ fn no_two_names_are_one_python_name() {
             "    return _core.add__i64_i64(lhs=_value_doubled(value=value.value), rhs=1)\n",
         ),
         "def eight():\n    return _value_doubled(value=4)\n",
-        "    assert _harness.evaluate(doubled, value=[4]) == [9]\n",
+        "    if not (_harness.evaluate(doubled, value=[4]) == [9]):\n",
+        "        raise _py.AssertionError()\n",
         // An input named as the harness's own parameter is.
-        "    assert _harness.evaluate(pass_, target=[1]) == [1]\n",
+        "    if not (_harness.evaluate(pass_, target=[1]) == [1]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -850,7 +858,8 @@ fn modules_nest_and_empty_forms_have_a_body() {
         "import _hgl._m_demo._m_util as _hgl_4demo_4util\n",
         "def kept():\n    held = None\n    return held\n",
         "@idle.start\ndef _start_idle():\n    pass\n",
-        "    assert (kept() is None)\n",
+        "    if not ((kept() is None)):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -1048,8 +1057,12 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     let defined = line("def test_wrong():");
     assert_eq!(wrong.statement_at(defined), None);
     let place = |line| wrong.statement_at(line).map(|at| emitted.place(at));
+    // An `assert` is two lines of Python: the `if`, and the `raise`
+    // a failure is reported on.
     assert_eq!(place(defined + 1), Some("reach.hgl:21:5".to_string()));
-    assert_eq!(place(defined + 2), Some("reach.hgl:22:5".to_string()));
+    assert_eq!(place(defined + 2), Some("reach.hgl:21:5".to_string()));
+    assert_eq!(place(defined + 3), Some("reach.hgl:22:5".to_string()));
+    assert_eq!(place(defined + 4), Some("reach.hgl:22:5".to_string()));
 }
 
 /// An interpreter that cannot be started runs no test: each is not

@@ -9,10 +9,17 @@ use std::process::{Command, Output};
 
 /// Runs `hgl` with `arguments` and waits for it to finish.
 fn hgl(arguments: &[&str]) -> Output {
+    hgl_with(arguments, &[])
+}
+
+/// Runs `hgl` with `arguments` and with each of `environment`, a name
+/// and a value, set in its environment.
+fn hgl_with(arguments: &[&str], environment: &[(&str, &str)]) -> Output {
     // Cargo builds the binary before the test and puts its path in this
     // environment variable at compile time.
     Command::new(env!("CARGO_BIN_EXE_hgl"))
         .args(arguments)
+        .envs(environment.iter().copied())
         .output()
         .expect("the hgl binary runs")
 }
@@ -463,16 +470,22 @@ fn tests_run_on_hgraph() {
     let root = scratch("on_hgraph");
     let file = write(&root, "cases.hgl", RUNNING);
     let kept = scratch("on_hgraph_kept");
-    let output = hgl(&[
-        "test",
-        &argument(&root),
-        "--target",
-        "hgraph",
-        "--python",
-        &python,
-        "--keep",
-        &argument(&kept),
-    ]);
+    // `PYTHONOPTIMIZE` has Python remove its own `assert` statements.
+    // An HGL assertion is checked all the same: the test that fails
+    // still fails.
+    let output = hgl_with(
+        &[
+            "test",
+            &argument(&root),
+            "--target",
+            "hgraph",
+            "--python",
+            &python,
+            "--keep",
+            &argument(&kept),
+        ],
+        &[("PYTHONOPTIMIZE", "2")],
+    );
     assert_eq!(
         text(&output.stdout),
         format!(
