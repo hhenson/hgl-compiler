@@ -14,7 +14,7 @@ use std::fs;
 use std::path::Path;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Callee, ExprKind, Stmt};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Role};
 
 /// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
@@ -396,10 +396,9 @@ fn identity_arithmetic_is_selected_by_its_option() {
     let locals: Vec<String> = body.locals[5..11]
         .iter()
         .map(|local| {
-            let connection = if local.connection {
-                " (connection)"
-            } else {
-                ""
+            let connection = match local.category {
+                ValueCategory::Connection => " (connection)",
+                _ => "",
             };
             format!("{}: {}{connection}", local.name, local.ty)
         })

@@ -6,7 +6,7 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt};
+use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Role};
 
 /// No lines.
@@ -30,16 +30,16 @@ fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
 }
 
 /// The locals of `name` as `local: type`, with ` (connection)` after one
-/// that is a connection.
+/// that is a connection and ` (unsettled)` after one that may be.
 fn locals(checked: &Checked, name: &str) -> Vec<String> {
     body(checked, name)
         .locals
         .iter()
         .map(|local| {
-            let connection = if local.connection {
-                " (connection)"
-            } else {
-                ""
+            let connection = match local.category {
+                ValueCategory::Connection => " (connection)",
+                ValueCategory::Unsettled => " (unsettled)",
+                ValueCategory::Value => "",
             };
             format!("{}: {}{connection}", local.name, local.ty)
         })

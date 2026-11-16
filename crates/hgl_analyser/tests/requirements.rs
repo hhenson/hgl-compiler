@@ -8,7 +8,7 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt};
+use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -356,13 +356,47 @@ fn a_node_and_a_graph_are_checked_under_their_requirements() {
         "    return sum\n",
         "}\n",
         "fn graph_bare<T>(lhs: T, rhs: T) -> T => add_(lhs, rhs)\n",
+        // FN-3: a connection given to a `const` parameter of the
+        // operation required is rejected, as at any call.
+        "operator freeze<T>(const value: T) -> T\n",
+        "fn frozen<T>(x: T) -> T requires freeze(T) -> T => freeze(x)\n",
+        // Given no connection, what a required operation gives may be
+        // a connection or a value: a temporal candidate or a value one
+        // (GEN-5). It is not settled here, and is not judged where a
+        // constant is required.
+        "operator source<O>() -> O\n",
+        "operator width<V>(of: V) -> i64\n",
+        "fn sized(value: f64, const size: i64) -> f64 => value\n",
+        "fn sourced<T>(price: f64, const sample: T) -> f64\n",
+        "    requires source() -> T && width(T) -> i64 {\n",
+        "    let made = source()\n",
+        "    let wide = width(sample)\n",
+        "    return sized(price, wide)\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:9:42 operator/operator.no_candidate GEN-5"]
+        [
+            "m.hgl:9:42 operator/operator.no_candidate GEN-5",
+            "m.hgl:11:59 phase/connection.as_constant FN-3",
+        ]
+    );
+    let unsettled: Vec<(&str, ValueCategory)> = body(&checked, "sourced").locals[2..]
+        .iter()
+        .map(|local| (local.name.as_str(), local.category))
+        .collect();
+    assert_eq!(
+        unsettled,
+        [
+            ("made", ValueCategory::Unsettled),
+            ("wide", ValueCategory::Unsettled),
+        ]
     );
     assert_eq!(callees(&checked, "node_sum"), ["add_"]);
     assert_eq!(callees(&checked, "graph_sum"), ["add_"]);
     let sum = &body(&checked, "graph_sum").locals[2];
-    assert_eq!((sum.name.as_str(), sum.connection), ("sum", true));
+    assert_eq!(
+        (sum.name.as_str(), sum.category),
+        ("sum", ValueCategory::Connection)
+    );
 }
