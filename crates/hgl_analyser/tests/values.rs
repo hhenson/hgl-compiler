@@ -3276,8 +3276,21 @@ fn a_symbol_is_its_call_in_its_place_and_in_its_operands() {
         "    var total = 1.5\n",
         "    total += 1\n",
         "}\n",
+        // An operand that leaves a generic parameter for its place to
+        // say has no place that says: it is reported, as it is where it
+        // is an argument (GEN-8).
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn unresolved() {\n",
+        "    let bad = repeat(1) == repeat(2)\n",
+        "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:15 type/generic.unresolved GEN-8",
+            "m.hgl:13:28 type/generic.unresolved GEN-8",
+        ]
+    );
     let statements = &body(&checked, "uses").statements;
     let value = |index: usize| match &statements[index] {
         Stmt::Declare {

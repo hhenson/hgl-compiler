@@ -493,7 +493,7 @@ impl<'a> Typer<'a> {
                 // target is the left operand, and is read.
                 let left = self.read_local(local, &place);
                 let left = Given::read(0, place.clone(), left);
-                let right = self.give(Key::Position(1), value.clone());
+                let right = self.operand(1, value.clone());
                 let identity = self.symbol_operator(operator.identity());
                 // What the sum is given to says what it is to be.
                 let (kind, result) = self.symbol(
@@ -1184,7 +1184,7 @@ impl<'a> Typer<'a> {
         // their written order, then right operand".
         let left = match read.take() {
             Some(value) => Given::read(0, left, value),
-            None => self.give(Key::Position(0), left),
+            None => self.operand(0, left),
         };
         let (entries, faulty) = match (&config, identity) {
             (Some(config), Some(identity)) => {
@@ -1194,7 +1194,7 @@ impl<'a> Typer<'a> {
             (Some(_), None) => return (ExprKind::Unread, Type::Unknown),
             (None, _) => (Vec::new(), false),
         };
-        let right = self.give(Key::Position(1), right);
+        let right = self.operand(1, right);
         self.symbol(
             (operator, operator_at),
             identity,
@@ -1252,8 +1252,13 @@ impl<'a> Typer<'a> {
             unjudged: if comparison { BOOL } else { Type::Unknown },
             place: place.filter(|place| !open(place)).cloned(),
         };
+        // An operand whose type is known only in part says nothing of
+        // the candidates either: a call that leaves a generic parameter
+        // for its place to say, `repeat(1)`.
         let as_written = |operand: &Given| {
-            is_null(&operand.node) || !operand.by_place && unjudged_operand(&operand.value.ty)
+            is_null(&operand.node)
+                || !operand.by_place
+                    && (unjudged_operand(&operand.value.ty) || !whole(&operand.value.ty))
         };
         let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
         let Some(identity) = identity else {
@@ -1292,24 +1297,66 @@ impl<'a> Typer<'a> {
     /// first reading was taken back is read again with the other's
     /// type before it.
     fn operands_as_written(&mut self, left: Given, right: Given) -> (Expr, Expr) {
+        // An operand read again: as the other's type where it takes its
+        // type from it, and with nothing expected of it where it does
+        // not, so that what it leaves unresolved is reported
+        // (`generic.unresolved` for the `repeat(1)` of
+        // `repeat(1) == repeat(2)`).
+        let reread = |this: &mut Self, operand: &Given, other: &Type| {
+            if takes_its_type(&operand.node) {
+                let expected = beside(&operand.node, other);
+                this.expression(&operand.node, Some(&expected))
+            } else {
+                this.expression(&operand.node, None)
+            }
+        };
         match (left.retried, right.retried) {
             (false, false) => (left.value, right.value),
             (false, true) => {
-                let expected = beside(&right.node, &left.value.ty);
-                let right = self.expression(&right.node, Some(&expected));
+                let right = reread(self, &right, &left.value.ty);
                 (left.value, right)
             }
             (true, false) => {
-                let expected = beside(&left.node, &right.value.ty);
-                let left = self.expression(&left.node, Some(&expected));
+                let left = reread(self, &left, &right.value.ty);
                 (left, right.value)
             }
-            (true, true) => {
-                let left = self.expression(&left.node, None);
-                let expected = beside(&right.node, &left.ty);
-                let right = self.expression(&right.node, Some(&expected));
+            // One that takes its type from the other is read after it.
+            (true, true) if takes_its_type(&left.node) && !takes_its_type(&right.node) => {
+                let right = reread(self, &right, &Type::Unknown);
+                let left = reread(self, &left, &right.ty);
                 (left, right)
             }
+            (true, true) => {
+                let left = reread(self, &left, &Type::Unknown);
+                let right = reread(self, &right, &left.ty);
+                (left, right)
+            }
+        }
+    }
+
+    /// An operand of a symbol, read as an argument is: with nothing
+    /// expected of it. A reading that reports nothing and settles no
+    /// whole type is taken back, as one of an operand with no type of
+    /// its own is, and the operand is read again: as the selected
+    /// candidate's parameter, or where the symbol is recorded as it is
+    /// written, by [`Typer::operands_as_written`].
+    fn operand(&mut self, position: usize, node: SyntaxNode) -> Given {
+        let by_place = typed_by_place(&node);
+        let mark = self.mark();
+        let value = self.expression(&node, Some(&Type::Unknown));
+        let retried = (by_place || !whole(&value.ty))
+            && self.diagnostics.len() == mark.diagnostics
+            && self.may_reread();
+        if retried {
+            self.take_back(mark, true);
+        }
+        Given {
+            key: Key::Position(position),
+            by_place,
+            value,
+            retried,
+            node,
+            constant: None,
         }
     }
 
