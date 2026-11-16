@@ -13,7 +13,7 @@ impl Parser<'_> {
     /// ```text
     /// generic_parameters = "<", generic_parameter, { ",", generic_parameter }, [ "," ], ">" ;
     /// generic_parameter = IDENTIFIER | "...", IDENTIFIER, [ cardinality ]
-    ///                   | "const", IDENTIFIER, ":", value_type ;
+    ///                   | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] ;
     /// ```
     ///
     /// The cursor is on the `<`.
@@ -40,6 +40,13 @@ impl Parser<'_> {
                     parser.type_();
                 } else {
                     parser.expected("`:`");
+                }
+                // GEN-2: "A generic value parameter of a function or a
+                // candidate may have a default". Which declarations may
+                // give one is the analyser's to say.
+                if parser.at_assign() {
+                    parser.eat_assign();
+                    parser.expression();
                 }
                 parser.finish();
             } else if parser.at(Ident) {
