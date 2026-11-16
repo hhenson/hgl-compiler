@@ -4370,16 +4370,47 @@ impl<'a> Typer<'a> {
             .collect();
         let generic = operands.iter().any(|(_, ty)| mentions(ty, &own))
             || result.is_some_and(|result| mentions(result, &own));
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return None;
+        };
+        // A requirement is tested as the call it names would select
+        // (GEN-8). It writes no generic argument: its arrow is what its
+        // place expects, and the types it is supplied with are its
+        // arguments.
+        let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
+        from_place(public, result, &mut found);
+        let supplied: Vec<Option<&Type>> = (0..public.parameters.len())
+            .map(|index| operands.get(index).map(|(_, ty)| ty))
+            .collect();
+        let Requested {
+            place: requested,
+            among,
+            unfit,
+        } = self.output_requested(operator, public, found, &supplied, false);
+        // GEN-13: a default the call would take is not of its
+        // parameter's type as these types resolve it. The call would be
+        // rejected, and so the operator is not callable with them.
+        if unfit.is_some() {
+            return Some(false);
+        }
+        // What the call asks of the result: with the operator's
+        // defaults, or as its arrow says.
+        let asked: Option<Type> = requested.or_else(|| result.cloned());
         if generic {
+            // GEN-7: what the declaration being read states is evidence
+            // for the same call: this operator, these types, and the
+            // same output asked. `requires window(T) -> list<T, 5>` does
+            // not say the bare `window(T)`, which asks for the
+            // operator's default, is callable.
+            let types: Vec<&Type> = operands.iter().map(|(_, ty)| ty).collect();
             let stated = self.requirements().into_iter().any(|requirement| {
                 requirement.operator == operator
-                    && requirement.operands.len() == operands.len()
-                    && requirement
-                        .operands
-                        .iter()
-                        .zip(&operands)
-                        .all(|(stated, (_, ty))| stated == ty)
-                    && (result.is_none() || requirement.result.as_ref() == result)
+                    && requirement.operands.iter().eq(types.iter().copied())
+                    && self.asked_by(&requirement) == Some(asked.clone())
             });
             if stated {
                 return Some(true);
@@ -4388,13 +4419,6 @@ impl<'a> Typer<'a> {
         if self.requiring >= REQUIRING {
             return None;
         }
-        let program = self.program;
-        let Some(Detail::Callable(public)) = program.modules[operator.module]
-            .details
-            .get(operator.declaration)
-        else {
-            return None;
-        };
         // In a graph the candidates of a call are the temporal ones
         // too (GEN-5): a requirement is for the value ones.
         let mut candidates = self.value_candidates(operator);
@@ -4424,34 +4448,41 @@ impl<'a> Typer<'a> {
                 Given::read(position, node, value)
             })
             .collect();
-        // A requirement is tested as the call it names would select
-        // (GEN-8). It writes no generic argument: its arrow is what its
-        // place expects, and the types it is supplied with are its
-        // arguments.
-        let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
-        from_place(public, result, &mut found);
-        let supplied: Vec<Option<&Type>> = (0..public.parameters.len())
-            .map(|index| given.get(index).map(|given| &given.value.ty))
-            .collect();
-        let Requested {
-            place: requested,
-            among,
-            unfit,
-        } = self.output_requested(operator, public, found, &supplied, false);
-        // GEN-13: a default the call would take is not of its
-        // parameter's type as these types resolve it. The call would be
-        // rejected, and so the operator is not callable with them.
-        if unfit.is_some() {
-            return Some(false);
-        }
         let wanted = Wanted {
-            place: requested.as_ref().or(result),
+            place: asked.as_ref(),
             among,
         };
         self.requiring += 1;
         let (selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         self.requiring -= 1;
         (!untold).then_some(selected.len() == 1)
+    }
+
+    /// What a requirement asks of its operator's result, as the call it
+    /// names would (GEN-8): the operator's result with its arrow, the
+    /// types it is supplied with and the operator's defaults in place,
+    /// or its arrow where those say nothing. The outer `None` is for a
+    /// default that call would take and that does not fit (GEN-13).
+    fn asked_by(&self, requirement: &Requirement) -> Option<Option<Type>> {
+        let operator = requirement.operator;
+        let arrow = requirement.result.as_ref();
+        let Some(Detail::Callable(public)) = self.program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return Some(arrow.cloned());
+        };
+        let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
+        from_place(public, arrow, &mut found);
+        let supplied: Vec<Option<&Type>> = (0..public.parameters.len())
+            .map(|index| requirement.operands.get(index))
+            .collect();
+        let Requested { place, unfit, .. } =
+            self.output_requested(operator, public, found, &supplied, false);
+        if unfit.is_some() {
+            return None;
+        }
+        Some(place.or_else(|| arrow.cloned()))
     }
 
     /// The named operator requirements the enclosing declaration
@@ -4615,9 +4646,16 @@ impl<'a> Typer<'a> {
             }
             // GEN-8: what the call requests is what it gets. Under
             // `requires window(T) -> list<T, 5>`, a `window(value)` that
-            // takes the operator's default of three is another call.
-            if let (Some(requested), Some(result)) = (requested, &requirement.result)
-                && !self.admits(requested, result)
+            // takes the operator's default of three is another call, and
+            // so is a `window<T, 5>(value)` under `requires window(T)`,
+            // which asks for that default.
+            let Some(asks) = self.asked_by(&requirement) else {
+                continue;
+            };
+            if let Some(requested) = requested
+                && !asks
+                    .as_ref()
+                    .is_some_and(|asks| self.admits(requested, asks))
             {
                 continue;
             }
@@ -4677,12 +4715,14 @@ impl<'a> Typer<'a> {
             // one whose arrow gives what the call's place expects is
             // the call: under `convert(T) -> i64 && convert(T) -> f64`
             // a place that expects an `f64` takes the second.
-            let gives = match (wanted, &requirement.result) {
+            let gives = match (wanted, requirement.result.as_ref().or(asks.as_ref())) {
                 (Some(wanted), Some(result)) => self.admits(wanted, result),
                 _ => true,
             };
+            // What the call gives: what its arrow states, or where it
+            // states none what the operator's defaults make its result.
             let required = Required {
-                result: requirement.result,
+                result: requirement.result.or(asks),
                 operands: requirement.operands,
                 places: places.clone(),
             };
