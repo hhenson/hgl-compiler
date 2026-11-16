@@ -212,45 +212,45 @@ fn an_eval_written_wrong_is_reported() {
 }
 
 /// TST-3: a trace is "given to a `const fn` as an argument. It is not a
-/// temporal argument outside an eval, is stored in no field". TST-16,
-/// proposed: "A dense trace is a `list<delta<T>?>`, with null where it
-/// has `_` ... Where `delta<T>` is itself nullable ... the dense trace
-/// is not given, and rejects there. A timed trace is a
-/// `dict<duration, delta<T>>` or a `dict<datetime, delta<T>>`".
+/// temporal argument outside an eval, is stored in no field". What a
+/// `const fn` is given for one is proposed (TST-16), so the argument is
+/// not held to the parameter's type. A value that holds a trace is held
+/// to the same as the trace is.
 #[test]
 fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
     let checked = module(concat!(
         "test given {\n",
         "    let seen = eval(pass, value: [7, _, 9])\n",
         "    let spaced = eval(pass, value: [0s: 7, 2s: 9])\n",
-        // To a `const fn`: a list, or a dictionary by time.
+        // To a `const fn`, of either style and inside a sequence:
+        // accepted, and not judged against the parameter.
         "    assert close(seen, [7, null, 9])\n",
         "    assert close(eval(pass, value: [1]), [1])\n",
         "    assert timed(spaced)\n",
-        // Of the other style than the parameter takes.
         "    assert timed(seen)\n",
-        "    assert close(spaced, [7])\n",
-        // A dense trace whose cells may be null.
-        "    let nulls = eval(maybe, value: [1, null])\n",
-        "    assert close(nulls, [1])\n",
+        "    let listed = [seen]\n",
         // A field; a temporal function; and each where the place is
         // generic, and so of whatever it is given.
         "    let kept = Kept(values: seen)\n",
         "    let again = pass(seen)\n",
         "    let boxed = Boxed(value: seen)\n",
         "    let passed = through(seen)\n",
+        // Wrapped in a sequence, it goes no further.
+        "    let boxes = Boxed(value: [seen])\n",
+        "    let wrapped = through([seen])\n",
+        "    let pair = Boxed(value: (seen, 1))\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:37:18 type/type.mismatch EXPR-5",
-            "m.hgl:38:18 type/type.mismatch EXPR-5",
-            "m.hgl:40:18 type/trace.escape TST-16",
-            "m.hgl:41:29 type/trace.escape TST-3",
-            "m.hgl:42:22 type/trace.escape TST-3",
+            "m.hgl:39:29 type/trace.escape TST-3",
+            "m.hgl:40:22 type/trace.escape TST-3",
+            "m.hgl:41:30 type/trace.escape TST-3",
+            "m.hgl:42:26 type/trace.escape TST-3",
             "m.hgl:43:30 type/trace.escape TST-3",
-            "m.hgl:44:26 type/trace.escape TST-3",
+            "m.hgl:44:27 type/trace.escape TST-3",
+            "m.hgl:45:29 type/trace.escape TST-3",
         ]
     );
     assert_eq!(
@@ -258,7 +258,7 @@ fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
         [
             "seen: trace of i64",
             "spaced: trace of i64",
-            "nulls: trace of i64?",
+            "listed: list<trace of i64>",
         ]
     );
 }

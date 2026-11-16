@@ -348,7 +348,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
 | TST-2 | analyser | done | Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
-| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace stored in a field or given to a temporal function is `trace.escape`, and one given to a `const fn` is the value TST-16 has it be. Left: an `eval` outside a named test, which is not read; a trace returned |
+| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace, or a value that holds one, stored in a field or given to a temporal function is `trace.escape`; one given to a `const fn` is accepted. Left: an `eval` outside a named test, which is not read; a trace returned |
 | TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | partial | An eval's first argument names a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). Its other arguments are bound as a call's are: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. Left: a generic target given structural cells |
@@ -367,7 +367,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-13 | runner | done | Rejection owners excluded; diagnostics and annotations matched one to one |
 | TST-14 | runner | partial | Invalid metadata and surviving-source errors stop the run; selectors; rejection counts. Left: counts of executed cases, with the first target |
 | TST-15 | runner | partial | When a run succeeds; identity, kind and outcome of each case. Left: executable cases, which are listed and not run |
-| TST-16 | analyser | partial | Proposed. A trace given to a `const fn` is a `list<delta<T>?>` when dense and a `dict<duration, delta<T>>` or `dict<datetime, delta<T>>` when timed; a dense trace whose cells may be null is `trace.escape`. Left: a generic `const fn` |
+| TST-16 | analyser | planned | Proposed. Until it is agreed, a trace given to a `const fn` is not held to the parameter's type |
 | TST-16 | runner | planned | Proposed. The recorded trace as that value |
 
 ## Program execution

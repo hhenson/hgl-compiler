@@ -510,10 +510,6 @@ pub enum ExprKind {
         /// True for `!=`.
         negated: bool,
     },
-    /// A trace given to a `const fn`, as the ordinary value it is there
-    /// (TST-16, proposed): a list of each cell or null, or a dictionary
-    /// of each cell by its time.
-    TraceValue(Box<Expr>),
     /// An expression no pass reads yet, or one that has been reported.
     Unread,
 }

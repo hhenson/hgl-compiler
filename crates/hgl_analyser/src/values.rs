@@ -283,10 +283,6 @@ struct Typer<'a> {
     /// takes a trace. The call takes it when it starts, so that what
     /// its arguments call is read as any call.
     evaluating: bool,
-    /// True while the arguments of a call of a value function are
-    /// given to its parameters: a trace given there is the ordinary
-    /// value TST-16 has it be.
-    takes_traces: bool,
     /// True once `start` has used the node's scheduler or alarm, which
     /// may then wake it (TIME-3).
     driven: bool,
@@ -362,7 +358,6 @@ impl<'a> Typer<'a> {
             captures: HashMap::new(),
             callable: None,
             evaluating: false,
-            takes_traces: false,
             driven: false,
             undriven: Vec::new(),
             initializing: false,
@@ -3937,9 +3932,75 @@ impl<'a> Typer<'a> {
     /// a call of an operator's candidate are built, and so for a call
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
-    fn finished_call(&mut self, kind: &ExprKind) {
+    fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
         self.capabilities_given(kind);
         self.fixed_arguments(kind);
+        self.traces_given(kind, evaluating);
+    }
+
+    /// TST-3: a trace "is bound with `let`, compared ..., and given to
+    /// a `const fn` as an argument. It is not a temporal argument
+    /// outside an eval". `evaluating` is true for the call an `eval`
+    /// stands for, whose temporal parameters take traces (TST-5).
+    ///
+    /// A value that holds a trace at any depth, `[seen]`, is held to
+    /// the same: wrapping a trace does not take it where it may not go.
+    /// What a `const fn` is given for a trace is proposed (TST-16), so
+    /// there the argument is neither converted nor held to the
+    /// parameter's type.
+    fn traces_given(&mut self, kind: &ExprKind, evaluating: bool) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        // FN-1: a value function, or a value candidate.
+        let value = matches!(
+            self.program.modules[module].declarations[declaration]
+                .kind
+                .role(),
+            Some(Role::Value)
+        );
+        if value {
+            return;
+        }
+        let constant = |index: usize| match self.program.modules[module].details.get(declaration) {
+            Some(Detail::Callable(signature)) => signature
+                .parameters
+                .get(index)
+                .is_some_and(|parameter| parameter.constant),
+            _ => false,
+        };
+        let escaped: Vec<Location> = arguments
+            .iter()
+            .filter(|argument| holds_trace(&argument.value.ty))
+            .filter(|argument| {
+                // An eval's own trace, given to a parameter that takes
+                // one.
+                let taken = evaluating
+                    && matches!(argument.value.ty, Type::Trace { .. })
+                    && argument.parameter.is_some_and(|index| !constant(index));
+                !taken
+            })
+            .map(|argument| argument.value.at)
+            .collect();
+        for at in escaped {
+            self.trace_escape(at, Takes::Parameters);
+        }
     }
 
     /// FN-1: "a `const` parameter takes what is fixed when the graph is
@@ -5451,22 +5512,14 @@ impl<'a> Typer<'a> {
         // The call an `eval` stands for is this one, and not one among
         // its arguments.
         let evaluating = std::mem::take(&mut self.evaluating);
-        // TST-3: a trace is "given to a `const fn` as an argument".
-        let value = matches!(
-            self.program.modules[module].declarations[declaration].kind,
-            DeclarationKind::Function(Role::Value) | DeclarationKind::NativeFunction(Role::Value)
-        );
-        let outer = std::mem::replace(&mut self.takes_traces, value && !evaluating);
-        let read = self.call_function_with(
+        self.call_function_with(
             name,
             list,
             (module, declaration),
             expected,
             given,
             evaluating,
-        );
-        self.takes_traces = outer;
-        read
+        )
     }
 
     /// [`Typer::call_function`], with `evaluating` true where the call
@@ -5559,7 +5612,7 @@ impl<'a> Typer<'a> {
                 arguments,
                 form: Form::Named,
             };
-            self.finished_call(&kind);
+            self.finished_call(&kind, evaluating);
             return (kind, ty);
         };
 
@@ -5694,7 +5747,7 @@ impl<'a> Typer<'a> {
             arguments,
             form: Form::Named,
         };
-        self.finished_call(&kind);
+        self.finished_call(&kind, evaluating);
         (kind, ty)
     }
 
@@ -6148,7 +6201,11 @@ impl<'a> Typer<'a> {
                 // have no reading of their own.
                 let placeless =
                     *settled && !takes_its_type(node) && mentions(patterns[index], &unfound);
-                let argument = match values[position].take() {
+                // True for a place that is a trace an eval gives
+                // (TST-5), and not one a generic parameter was made by
+                // what it was given.
+                let traced = matches!(patterns[index], Type::Trace { .. });
+                match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
                         value: self.expression(node, None),
@@ -6157,30 +6214,22 @@ impl<'a> Typer<'a> {
                         parameter: Some(index),
                         value,
                     },
+                    // A value that holds a trace is the place's to
+                    // report where the call is finished (TST-3), and is
+                    // not held to its type.
+                    Some(value) if !traced && holds_trace(&value.ty) => hir::Argument {
+                        parameter: Some(index),
+                        value,
+                    },
                     Some(value) => {
                         let place = format!("the {} `{}`", takes.noun(), slot.name);
-                        let value = match self.trace_given(value, &slot.ty, takes) {
-                            (value, true) => self.fit(value, &slot.ty, &place),
-                            (value, false) => value,
-                        };
                         hir::Argument {
                             parameter: Some(index),
-                            value,
+                            value: self.fit(value, &slot.ty, &place),
                         }
                     }
-                    None => self.argument(Some(index), node, Some(&slot), takes),
-                };
-                // TST-3: a trace "is not a temporal argument outside an
-                // eval, is stored in no field". A generic place is of
-                // whatever it is given, so a trace given to one has made
-                // the place a trace, and is reported here.
-                let made_it_one = !matches!(patterns[index], Type::Trace { .. })
-                    && matches!(argument.value.ty, Type::Trace { .. })
-                    && (matches!(slot.ty, Type::Trace { .. }) || open(&slot.ty));
-                if made_it_one && (takes == Takes::Fields || !self.takes_traces) {
-                    self.trace_escape(argument.value.at, takes);
+                    None => self.argument(Some(index), node, Some((&slot, traced)), takes),
                 }
-                argument
             })
             .collect();
         let unknown = assigned
@@ -7172,7 +7221,7 @@ impl<'a> Typer<'a> {
             arguments,
             form,
         };
-        self.finished_call(&kind);
+        self.finished_call(&kind, false);
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
@@ -8423,6 +8472,16 @@ impl<'a> Typer<'a> {
                 kind: NamedKind::Struct,
             }
         };
+        // TST-3: a trace "is stored in no field", bare or inside a
+        // value given to one.
+        let stored: Vec<Location> = arguments
+            .iter()
+            .filter(|argument| holds_trace(&argument.value.ty))
+            .map(|argument| argument.value.at)
+            .collect();
+        for at in stored {
+            self.trace_escape(at, Takes::Fields);
+        }
         let kind = ExprKind::Construct {
             module,
             declaration,
@@ -8589,29 +8648,39 @@ impl<'a> Typer<'a> {
         self.assign(callee, list, slots, takes, &[])
             .into_iter()
             .map(|(slot, value)| {
-                let expected = slot.map(|index| &slots[index]);
+                // No generic parameter here: a slot that is a trace is
+                // one an eval gives (TST-5).
+                let expected = slot.map(|index| {
+                    let slot = &slots[index];
+                    (slot, matches!(slot.ty, Type::Trace { .. }))
+                });
                 self.argument(slot, &value, expected, takes)
             })
             .collect()
     }
 
     /// The argument written at `node`, given to `slot`. One given to a
-    /// pack, or to nothing, is read for what it reports itself.
+    /// pack, or to nothing, is read for what it reports itself. With
+    /// the slot is whether it is a trace an eval gives (TST-5).
+    ///
+    /// A value that holds a trace, given to a place that takes none,
+    /// is not held to the place's type: where it may go is for the
+    /// call or the construction to report once it is built (TST-3).
     fn argument(
         &mut self,
         parameter: Option<usize>,
         node: &SyntaxNode,
-        slot: Option<&Slot>,
+        slot: Option<(&Slot, bool)>,
         takes: Takes,
     ) -> hir::Argument {
         let value = match slot {
-            Some(slot) => {
+            Some((slot, traced)) => {
                 let value = self.expression(node, Some(&slot.ty));
-                let place = format!("the {} `{}`", takes.noun(), slot.name);
-                match self.trace_given(value, &slot.ty, takes) {
-                    (value, true) => self.fit(value, &slot.ty, &place),
-                    // Reported: the trace goes where none does.
-                    (value, false) => value,
+                if !traced && holds_trace(&value.ty) {
+                    value
+                } else {
+                    let place = format!("the {} `{}`", takes.noun(), slot.name);
+                    self.fit(value, &slot.ty, &place)
                 }
             }
             None => self.expression(node, Some(&Type::Unknown)),
@@ -8619,16 +8688,6 @@ impl<'a> Typer<'a> {
         hir::Argument { parameter, value }
     }
 
-    /// A trace given to a parameter or a field that takes none.
-    ///
-    /// TST-3: a trace is "given to a `const fn` as an argument. It is
-    /// not a temporal argument outside an eval, is stored in no field".
-    /// TST-16, proposed: "A trace given to a `const fn` is an ordinary
-    /// value there ... A dense trace is a `list<delta<T>?>`, with null
-    /// where it has `_` ... Where `delta<T>` is itself nullable ... the
-    /// dense trace is not given, and rejects there. A timed trace is a
-    /// `dict<duration, delta<T>>` or a `dict<datetime, delta<T>>`".
-    ///
     /// Reports a trace given to a field, or to a parameter of a
     /// function that is no `const fn` (TST-3).
     fn trace_escape(&mut self, at: Location, takes: Takes) {
@@ -8646,55 +8705,6 @@ impl<'a> Typer<'a> {
             )
             .with_note("a trace is bound with `let`, compared, and given to a `const fn`"),
         );
-    }
-
-    /// Gives the value with true where it is to be held to the slot's
-    /// type: `value` itself where it is no trace or the slot takes one,
-    /// or the ordinary value a `const fn` is given. With false it is a
-    /// trace that has been reported.
-    fn trace_given(&mut self, value: Expr, slot: &Type, takes: Takes) -> (Expr, bool) {
-        let Type::Trace { cell, style } = &value.ty else {
-            return (value, true);
-        };
-        if matches!(slot, Type::Trace { .. }) || open(slot) {
-            return (value, true);
-        }
-        if takes == Takes::Fields || !self.takes_traces {
-            self.trace_escape(value.at, takes);
-            return (value, false);
-        }
-        let ty = match style {
-            Some(TraceStyle::Timed(key)) => Type::Dict {
-                key: Box::new(Type::Scalar(*key)),
-                value: cell.clone(),
-            },
-            _ if matches!(**cell, Type::Nullable(_)) => {
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::TRACE_ESCAPE,
-                        value.at,
-                        "this dense trace has cells that may be null, so as a list it could \
-                         not tell a published null from no publication"
-                            .to_string(),
-                        "TST-16",
-                    )
-                    .with_note("a timed trace has an entry for each publication, and is given"),
-                );
-                return (value, false);
-            }
-            _ => Type::List {
-                element: Box::new(Type::Nullable(cell.clone())),
-                size: None,
-            },
-        };
-        let at = value.at;
-        let given = Expr {
-            kind: ExprKind::TraceValue(Box::new(value)),
-            ty,
-            at,
-        };
-        (given, true)
     }
 
     // ---- Members and elements ----
@@ -11485,6 +11495,31 @@ fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
     // order.
     order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
     order
+}
+
+/// True when `ty` is a trace or holds one at any depth: the
+/// `list<trace of i64>` of `[seen]`.
+fn holds_trace(ty: &Type) -> bool {
+    match ty {
+        Type::Trace { .. } => true,
+        Type::Named { arguments, .. } => arguments
+            .iter()
+            .any(|argument| matches!(argument, Argument::Type(ty) if holds_trace(ty))),
+        Type::Tuple(elements) => elements.iter().any(holds_trace),
+        Type::List { element: inner, .. }
+        | Type::Rolling { value: inner, .. }
+        | Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Endpoint(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Nullable(inner) => holds_trace(inner),
+        Type::Dict { key, value } => holds_trace(key) || holds_trace(value),
+        Type::Result { value, error } => holds_trace(value) || holds_trace(error),
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
+            false
+        }
+    }
 }
 
 /// The one argument of a call that gives one value, by position:
