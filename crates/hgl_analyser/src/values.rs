@@ -1388,17 +1388,20 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// True when the capability named at `node` is used as ordinary
-    /// data, and not as a capability is.
+    /// True when the capability named at `node` is known to be used as
+    /// ordinary data.
     ///
     /// TIME-8: "Clock properties are read-only, including
     /// `clock.evaluation_time`. Operations use direct receiver-first
     /// forms such as `schedule(scheduler, delay)` and
-    /// `info(logger, value)`". So a capability stands before the `.` of
-    /// one of its properties, or first among the arguments of one of
-    /// its operations. Those are core's, which does not declare them
-    /// yet: an operation is a call of a name nothing binds. Anywhere
-    /// else it is kept or passed on.
+    /// `info(logger, value)` ... Arbitrary helpers cannot receive a
+    /// capability as ordinary data." Before the `.` of a property a
+    /// capability is used as one. Which calls are its operations is
+    /// core's to say, and core declares none yet (hhenson/hgl_core#30):
+    /// so one given to a call of a name nothing in the program declares
+    /// is not judged, whichever argument it is. Anywhere else it is
+    /// kept or passed on: a local's value, what is returned, an entry
+    /// of a tuple, an argument of a function the program declares.
     fn used_as_data(&self, node: &SyntaxNode) -> bool {
         // "Parentheses select grouping" (EXPR-1).
         let mut used = node.clone();
@@ -1413,32 +1416,21 @@ impl<'a> Typer<'a> {
         match parent.kind() {
             SyntaxKind::MemberExpr => parent.children().next().as_ref() != Some(&used),
             SyntaxKind::Arg => {
-                let list = parent.parent();
-                let call = list
-                    .as_ref()
+                let call = parent
+                    .parent()
                     .and_then(|list| list.parent())
                     .filter(|call| call.kind() == SyntaxKind::CallExpr);
-                let (Some(list), Some(call)) = (list, call) else {
-                    return true;
-                };
-                // The receiver: the first argument, given by position.
-                let receiver = list
-                    .children()
-                    .find(|argument| argument.kind() == SyntaxKind::Arg)
-                    .is_some_and(|first| first == parent)
-                    && !has_token(&parent, SyntaxKind::Colon);
-                // An operation of core's: a name nothing binds, and no
-                // endpoint intrinsic (TIME-9).
-                let operation = call
-                    .children()
-                    .next()
+                // A name nothing binds, and no endpoint intrinsic
+                // (TIME-9): left for the prelude.
+                let undeclared = call
+                    .and_then(|call| call.children().next())
                     .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
                     .and_then(|callee| name_token(&callee))
                     .is_some_and(|name| {
                         !self.bindings.contains_key(&(self.file, name.span().start))
                             && EndpointOperation::named(name.text()).is_none()
                     });
-                !(receiver && operation)
+                !undeclared
             }
             _ => true,
         }
@@ -1497,7 +1489,8 @@ impl<'a> Typer<'a> {
                 .with_note(
                     "a capability is the receiver of its own operations, \
                      `schedule(scheduler, delay)`, and the owner of its properties, \
-                     `clock.evaluation_time`",
+                     `clock.evaluation_time`: pass the value a function needs, not the \
+                     capability",
                 ),
             );
         }

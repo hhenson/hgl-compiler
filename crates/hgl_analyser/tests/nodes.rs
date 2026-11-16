@@ -341,6 +341,10 @@ fn a_selector_names_its_inputs_each_by_its_name() {
 /// `schedule(scheduler, delay)` and `info(logger, value)`, with no
 /// method-call aliases. Arbitrary helpers cannot receive a capability as
 /// ordinary data." TIME-7: `out` is the node's result, read as a value.
+///
+/// Which calls are a capability's operations is core's to say, and it
+/// declares none yet: a capability given to a call of a name nothing in
+/// the program declares is not judged.
 #[test]
 fn a_capability_is_not_kept_or_passed_as_data() {
     let checked = module(concat!(
@@ -353,11 +357,13 @@ fn a_capability_is_not_kept_or_passed_as_data() {
         "        info(logger, value)\n",
         "        let now = (clock).evaluation_time\n",
         "        let last = stamped(clock.evaluation_time, out)\n",
-        // Kept, passed to a helper, given where no receiver stands, and
-        // held in a tuple.
+        // Not judged: nothing declares `info` or `unrelated`.
+        "        info(value, logger)\n",
+        "        unrelated(logger, value)\n",
+        // Kept, passed to a function the program declares, and held in
+        // a tuple.
         "        let kept = clock\n",
         "        let passed = stamped(clock, value)\n",
-        "        info(value, logger)\n",
         "        let pair = (scheduler, value)\n",
         "        return value\n",
         "    }\n",
@@ -366,10 +372,9 @@ fn a_capability_is_not_kept_or_passed_as_data() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:10:20 injectable/capability.as_value TIME-8",
-            "m.hgl:11:30 injectable/capability.as_value TIME-8",
-            "m.hgl:12:21 injectable/capability.as_value TIME-8",
-            "m.hgl:13:21 injectable/capability.as_value TIME-8",
+            "m.hgl:12:20 injectable/capability.as_value TIME-8",
+            "m.hgl:13:30 injectable/capability.as_value TIME-8",
+            "m.hgl:14:21 injectable/capability.as_value TIME-8",
         ]
     );
 }
