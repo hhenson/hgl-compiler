@@ -306,10 +306,10 @@ impl Emitter<'_> {
             out.push_str("import hgraph as _hg\n");
         }
         if self.natives {
-            out.push_str("import _hgl_core_native as _core\n");
+            out.push_str("import _hgl._core_native as _core\n");
         }
         if self.harness {
-            out.push_str("import _hgl_harness as _harness\n");
+            out.push_str("import _hgl._harness as _harness\n");
         }
         for module in &self.imports {
             let python = python_module(module);
@@ -368,6 +368,12 @@ impl Emitter<'_> {
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
             let python = name(&parameter.name);
+            // FN-8: a pack captures the arguments the fixed parameters
+            // leave, which a call records with no parameter of their
+            // own: they are not written yet.
+            if parameter.pack.is_some() {
+                self.unsupported(parameter.at, "a pack parameter");
+            }
             if parameter.has_default {
                 // A call that leaves the argument out is written with
                 // none, so the function must have the default, whose
@@ -1098,7 +1104,7 @@ impl Emitter<'_> {
     }
 
     /// A call: of a function of the program, or of a native candidate
-    /// of core, which the target's own `_hgl_core_native` provides.
+    /// of core, which the target's own provider has a function for.
     fn call(
         &mut self,
         function: &Function,

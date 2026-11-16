@@ -60,9 +60,15 @@ fn an_accepted_program_is_written() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        format!("wrote 2 files for hgraph to {}\n", out.display())
+        format!("wrote 3 files for hgraph to {}\n", out.display())
     );
-    let module = fs::read_to_string(out.join("demo").join("pass_").join("__init__.py")).unwrap();
+    let module = fs::read_to_string(
+        out.join("_hgl")
+            .join("demo")
+            .join("pass_")
+            .join("__init__.py"),
+    )
+    .unwrap();
     assert!(
         module.contains(
             "def pass_(value: _hg.TS[int]) -> _hg.TS[int]:\n    return value.delta_value\n"
@@ -72,7 +78,8 @@ fn an_accepted_program_is_written() {
         module
             .contains("    assert _harness.evaluate(pass_, value=[7, None, 9]) == [7, None, 9]\n")
     );
-    assert!(out.join("_hgl_harness.py").is_file());
+    assert!(out.join("_hgl").join("_harness.py").is_file());
+    assert!(out.join("_hgl").join("__init__.py").is_file());
 }
 
 /// A rejected program, and one the target does not write all of, write
