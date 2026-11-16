@@ -74,6 +74,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "state.input_read"),
     (Category::Phase, "out.lifecycle"),
     (Category::Phase, "payload.unguarded"),
+    (Category::Phase, "modified.no_driver"),
     (Category::Phase, "endpoint.argument"),
     (Category::Phase, "connection.as_constant"),
     (Category::Type, "generic.invalid_application"),

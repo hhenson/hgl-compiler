@@ -683,12 +683,36 @@ impl<'a> Typer<'a> {
                 "TIME-9",
             ));
         }
-        // The endpoints named, each by its name. `valid([])` names
-        // none (TIME-3); any other sequence is no endpoint, and is
-        // reported as one.
-        let none = operation == EndpointOperation::Valid
-            && matches!(arguments.as_slice(), [only]
+        // The endpoints named, each by its name. `valid([])` and
+        // `modified([])` name none (TIME-3); any other sequence is no
+        // endpoint, and is reported as one.
+        let none = matches!(
+            operation,
+            EndpointOperation::Valid | EndpointOperation::Modified
+        ) && matches!(arguments.as_slice(), [only]
                 if only.kind() == SyntaxKind::SequenceExpr && only.children().next().is_none());
+        // TIME-3: "`modified([])` subscribes to no input: it stands
+        // only in a node that injects `scheduler` or `alarm` and
+        // schedules a wake on it in `start`, which is then what wakes
+        // the handler."
+        if none && operation == EndpointOperation::Modified && !self.has_driver() {
+            // The selector: `modified([])`, its name to its `)`.
+            let selector = list.parent().map_or(at, |call| self.at(&call));
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::MODIFIED_NO_DRIVER,
+                    selector,
+                    "`modified([])` subscribes to no input, and nothing else wakes this node"
+                        .to_string(),
+                    "TIME-3",
+                )
+                .with_note(
+                    "inject `scheduler` or `alarm` and schedule a wake on it in `start`: \
+                     `start { schedule(scheduler, delay) }`",
+                ),
+            );
+        }
         let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
             None
         } else if none {
@@ -734,6 +758,56 @@ impl<'a> Typer<'a> {
             | EndpointOperation::Passivate => Type::Unknown,
         };
         (ExprKind::Endpoint { operation, inputs }, ty)
+    }
+
+    /// True when the node has what wakes a handler that subscribes to
+    /// no input (TIME-3): it "injects `scheduler` or `alarm` and
+    /// schedules a wake on it in `start`".
+    ///
+    /// The wake is found as it is written, `schedule(scheduler, ...)`
+    /// anywhere in `start`: the call that asks for one, given the
+    /// injected capability first (TIME-8).
+    fn has_driver(&self) -> bool {
+        let drivers: Vec<&str> = self
+            .locals
+            .iter()
+            .filter(|local| local.kind == LocalKind::Inject)
+            .map(|local| local.name.as_str())
+            .filter(|name| matches!(*name, "scheduler" | "alarm"))
+            .collect();
+        if drivers.is_empty() {
+            return false;
+        }
+        let Some(block) = child(&self.declaration.syntax, SyntaxKind::Block) else {
+            return false;
+        };
+        // `start { ... }`: a lifecycle block whose first word is
+        // `start`.
+        let starts = block.children().filter(|hook| {
+            hook.kind() == SyntaxKind::LifecycleBlock
+                && tokens(hook)
+                    .next()
+                    .is_some_and(|word| word.kind() == SyntaxKind::KwStart)
+        });
+        starts
+            .flat_map(|start| start.descendants())
+            .filter(|call| call.kind() == SyntaxKind::CallExpr)
+            .any(|call| {
+                let mut parts = call.children();
+                let called = parts
+                    .next()
+                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                    .and_then(|callee| name_token(&callee))
+                    .is_some_and(|name| name.text() == "schedule");
+                // The capability is the first argument, by its name.
+                let first = parts
+                    .next()
+                    .and_then(|list| arguments_of(&list).into_iter().next())
+                    .map(|(_, value)| value)
+                    .filter(|value| value.kind() == SyntaxKind::NameExpr)
+                    .and_then(|value| name_token(&value));
+                called && first.is_some_and(|name| drivers.contains(&name.text()))
+            })
     }
 
     /// The endpoint an argument of an endpoint operation names: a

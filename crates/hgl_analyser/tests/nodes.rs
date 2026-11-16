@@ -319,10 +319,10 @@ fn a_selector_names_its_inputs_each_by_its_name() {
         // A subscription to the inputs named: validity is the default,
         // every input.
         "    when modified(a, b) { return a + c }\n",
-        // Forms the chapter does not have: an empty subscription is
-        // proposed, and not agreed.
+        // Forms the chapter does not have: a sequence that names
+        // inputs.
         "    when valid([a, b]) { return a }\n",
-        "    when modified([]) { return a }\n",
+        "    when modified([a]) { return a }\n",
         // A constant, and a name given twice, among those named.
         "    when valid(a, 1) { return a }\n",
         "}\n",
@@ -334,6 +334,65 @@ fn a_selector_names_its_inputs_each_by_its_name() {
             "m.hgl:11:16 phase/endpoint.argument TIME-9",
             "m.hgl:12:19 phase/endpoint.argument TIME-9",
             "m.hgl:13:19 phase/endpoint.argument TIME-9",
+        ]
+    );
+}
+
+/// TIME-3: "`modified([])` subscribes to no input: it stands only in a
+/// node that injects `scheduler` or `alarm` and schedules a wake on it
+/// in `start`, which is then what wakes the handler."
+#[test]
+fn an_empty_subscription_needs_what_wakes_it() {
+    let checked = module(concat!(
+        // The chapter's `sampled`.
+        "fn sampled(a: f64, const every: duration = 1s) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start { schedule(scheduler, every) }\n",
+        "    when modified([]) && valid([]) {\n",
+        "        schedule(scheduler, every)\n",
+        "        if valid(a) { return a }\n",
+        "    }\n",
+        "}\n",
+        "fn alarmed(a: f64) -> f64 {\n",
+        "    inject alarm\n",
+        "    start {\n",
+        "        if true { schedule(alarm, 1s) }\n",
+        "    }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+        // Nothing injected that wakes it.
+        "fn dormant(a: f64) -> f64 {\n",
+        "    when modified([]) && valid([]) { return 0.0 }\n",
+        "}\n",
+        // Injected, and no `start`.
+        "fn unstarted(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+        // A `start` that schedules nothing, and a wake asked for only
+        // in the handler it would wake.
+        "fn idle(a: f64) -> f64 {\n",
+        "    inject scheduler, logger\n",
+        "    start { log_info(logger, \"up\") }\n",
+        "    when modified([]) {\n",
+        "        schedule(scheduler, 1s)\n",
+        "        return a\n",
+        "    }\n",
+        "}\n",
+        // A wake on what is no capability of the node.
+        "fn misled(a: f64, const other: duration = 1s) -> f64 {\n",
+        "    inject alarm\n",
+        "    start { schedule(other, 1s) }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:10 phase/modified.no_driver TIME-3",
+            "m.hgl:22:10 phase/modified.no_driver TIME-3",
+            "m.hgl:27:10 phase/modified.no_driver TIME-3",
+            "m.hgl:35:10 phase/modified.no_driver TIME-3",
         ]
     );
 }
