@@ -2677,6 +2677,46 @@ fn a_generic_value_given_by_name_is_not_overridden_by_an_argument() {
     );
 }
 
+/// GEN-6: "A call admits the candidate only where that holds for the
+/// parameter's value at the call, a default included." The value is the
+/// one resolved: from an argument's type where that says it, and the
+/// default only where nothing else does. GEN-8: a constant expression is
+/// a compile-time constant, and is compared as what it comes to.
+#[test]
+fn a_candidates_condition_is_checked_against_the_value_resolved() {
+    let checked = module(concat!(
+        "operator count<V>(value: V) -> i64\n",
+        "impl const fn count<const N: i64 = 3>(value: list<i64, N>) -> i64\n",
+        "    requires N == 3 => N\n",
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick<const N: i64>(value: i64) -> i64 requires N == 2 => value\n",
+        "operator twice<V>(value: V) -> i64\n",
+        "impl const fn twice<const N: i64 = 1 + 1>(value: i64) -> i64\n",
+        "    requires N in {2, 4} => value\n",
+        "const fn uses(pair: list<i64, 2>, triple: list<i64, 3>) {\n",
+        "    let three = count(triple)\n",
+        // `N` is 2 here, from the list, and not its default 3.
+        "    let two = count(pair)\n",
+        // `1 + 1` is 2.
+        "    let sum = pick(1, N: 1 + 1)\n",
+        "    let other = pick(1, N: 1 + 2)\n",
+        "    let default = twice(1)\n",
+        "    let given = twice(1, N: 2 * 2)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:15 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:17 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    let locals = locals(&checked, "uses");
+    assert_eq!(locals[2], "three: i64");
+    assert_eq!(locals[4], "sum: i64");
+    assert_eq!(locals[6..], ["default: i64", "given: i64"]);
+}
+
 /// GEN-2: a generic value parameter's default is written in its
 /// candidate's declaration, which may be in another file than the call.
 /// TYPE-7: an enum member written in full there, `Zero.ieee`, is the

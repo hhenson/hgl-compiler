@@ -2600,6 +2600,26 @@ impl<'a> Typer<'a> {
                 if let Some(position) = argument {
                     return this.option_value(&given[position].node);
                 }
+                // What was resolved for it: from an argument's type or
+                // the result asked for, an integer or a duration, or
+                // else its default. The `N` of `value: list<i64, N>`
+                // given a list of two is 2 whatever its default says.
+                let resolved = match generics.get(generic) {
+                    Some(Argument::Constant(constant)) => &constant.value,
+                    _ => return None,
+                };
+                match resolved {
+                    ConstantValue::Int(_) | ConstantValue::Duration(_) => {
+                        return constant_value(resolved);
+                    }
+                    // A generic value parameter of the enclosing
+                    // function, or `unbounded`: not a value held here.
+                    ConstantValue::Parameter { .. } | ConstantValue::Unbounded => return None,
+                    // A constant of another kind is held as it is
+                    // written, and one not inferred from a type is the
+                    // default.
+                    ConstantValue::Other(_) | ConstantValue::Unevaluated => {}
+                }
                 let declared = &signature.generics[generic];
                 let default = generic_default(&candidate.syntax, declared)?;
                 let ty = match &declared.kind {
@@ -3818,6 +3838,26 @@ fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
             };
             Some(OptionValue::Literal(value))
         }
+        // "A constant expression of those": integer and duration
+        // arithmetic, as far as the pass that reads constants in types
+        // evaluates it. `1 + 1` is `2`.
+        _ => folded(node),
+    }
+}
+
+/// The integer or duration a constant expression comes to.
+fn folded(node: &SyntaxNode) -> Option<OptionValue> {
+    constant_value(&crate::constant::fold(node, &|_| {
+        ConstantValue::Unevaluated
+    }))
+}
+
+/// A constant held as a value, for a candidate's condition to compare:
+/// an integer or a duration. `None` for one whose value is not held.
+fn constant_value(value: &ConstantValue) -> Option<OptionValue> {
+    match value {
+        ConstantValue::Int(value) => Some(OptionValue::Literal(Value::Int(*value))),
+        ConstantValue::Duration(value) => Some(OptionValue::Literal(Value::Duration(*value))),
         _ => None,
     }
 }
