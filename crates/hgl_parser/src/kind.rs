@@ -79,7 +79,7 @@ define_syntax_kinds! {
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
         KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef,
-        KwSignal, KwDelta, KwError,
+        KwSignal, KwEndpoint, KwDelta, KwError,
         LParen, RParen, LBracket, RBracket, LBrace, RBrace, Comma,
         Semicolon, Colon, ColonColon, Dot, Ellipsis, At, Question, Bang,
         Plus, Minus, Star, Slash, SlashSlash, SlashSlashEq, Percent,
@@ -176,8 +176,10 @@ define_syntax_kinds! {
         Instantiation,
 
         // ---- Native boundaries (native-boundaries.md) ----
-        /// `export native type Handle`
+        /// `export native type Handle`, with any properties
         NativeTypeDecl,
+        /// One read-only property of a native type: `now: datetime`
+        NativeProperty,
         /// `native const fn describe(value: i64) -> str`, with any contract
         /// body
         NativeFnDecl,
@@ -215,6 +217,8 @@ define_syntax_kinds! {
         RefType,
         /// `signal`
         SignalType,
+        /// `endpoint<f64>`
+        EndpointType,
         /// `atomic<Quote>`
         AtomicType,
         /// `result<f64, error>`

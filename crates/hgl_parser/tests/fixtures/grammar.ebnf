@@ -86,7 +86,9 @@ instantiate_decl = "instantiate", instantiation, { ",", instantiation }, [ "," ]
 instantiation = callable_name, "<", materialization_argument, { ",", materialization_argument }, [ "," ], ">" ;
 materialization_argument = type | const_expression | "_" ;
 # native-boundaries.md
-native_type_decl = [ "export" ], "native", "type", IDENTIFIER ;
+native_type_decl = [ "export" ], "native", "type", IDENTIFIER, [ native_type_body ] ;
+native_type_body = "{", [ NL ], [ native_property, { NL, native_property }, [ NL ] ], "}" ;
+native_property = member_name, ":", value_type ;
 native_function_decl = "native", [ "impl" ], [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], [ native_contract_body ] ;
 native_contract_body = "{", [ NL ], { ( inject_decl, [ ";" ] | native_hook ), [ NL ] }, "}" ;
 native_hook = ( "start" | "when" | "stop" ), ";" ;
@@ -112,7 +114,7 @@ gap = { ? U+0020 or U+0009 ? } ;
 error_category = ? a source category of the diagnostic catalog ? ;
 # types-and-values.md
 type = type_base, [ "?" ] ;
-type_base = scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_type | ref_type | "signal" | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
+type_base = scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_type | ref_type | "signal" | endpoint_type | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
 value_type = value_type_base, [ "?" ] ;
 value_type_base = scalar_type | named_type | value_tuple_type | value_list_type | set_type | value_dict_type | result_type | "error" | delta_type ;
 scalar_type = "bool" | "i64" | "f64" | "str" | "bytes" | "any" | "date" | "time" | "datetime" | "duration" | "civil_datetime" | "timezone" | "zoned_datetime" | "zoned_time" ;
@@ -127,6 +129,7 @@ dict_type = "dict", "<", value_type, ",", type, ">" ;
 value_dict_type = "dict", "<", value_type, ",", value_type, ">" ;
 rolling_type = "rolling", "<", value_type, ",", const_expression, [ ",", const_expression ], ">" ;
 ref_type = "ref", "<", type, ">" ;
+endpoint_type = "endpoint", "<", type, ">" ;
 result_type = "result", "<", value_type, ",", value_type, ">" ;
 delta_type = "delta", "<", type, ">" ;
 struct_decl = [ "export" ], [ "abstract" ], "struct", IDENTIFIER, [ generic_parameters ], [ ":", named_type, { ",", named_type } ], [ requires_clause ], "{", [ NL ], [ struct_member, { NL, struct_member }, [ NL ] ], "}" ;

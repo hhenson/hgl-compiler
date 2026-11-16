@@ -356,6 +356,7 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
         Type::List { element, .. } => names_parameter(element),
         Type::Set(inner)
         | Type::Ref(inner)
+        | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Nullable(inner) => names_parameter(inner),
@@ -442,6 +443,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             }
         }
         Type::Ref(inner) => Type::Ref(part(inner)),
+        Type::Endpoint(inner) => Type::Endpoint(part(inner)),
         Type::Atomic(inner) => Type::Atomic(part(inner)),
         Type::Result { value, error } => Type::Result {
             value: part(value),
@@ -470,6 +472,7 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         Type::List { element, .. } => inside(element),
         Type::Set(inner)
         | Type::Ref(inner)
+        | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Nullable(inner) => inside(inner),
@@ -498,6 +501,7 @@ fn weight(ty: &Type) -> usize {
         Type::List { element, .. } => weight(element),
         Type::Set(inner)
         | Type::Ref(inner)
+        | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Nullable(inner) => weight(inner),
@@ -1294,7 +1298,10 @@ impl Structs<'_> {
                     ..held
                 }));
             }
-            Type::Ref(inner) | Type::Delta(inner) | Type::Nullable(inner) => {
+            Type::Ref(inner)
+            | Type::Endpoint(inner)
+            | Type::Delta(inner)
+            | Type::Nullable(inner) => {
                 self.walk(inner, in_collection, may_be_empty, found, path, budget);
             }
             Type::Result { value, error } => {
@@ -1779,6 +1786,7 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
         }
         (Type::Set(given), Type::Set(applied))
         | (Type::Ref(given), Type::Ref(applied))
+        | (Type::Endpoint(given), Type::Endpoint(applied))
         | (Type::Atomic(given), Type::Atomic(applied))
         | (Type::Delta(given), Type::Delta(applied))
         | (Type::Nullable(given), Type::Nullable(applied)) => type_may_be(given, applied, found),
@@ -1945,6 +1953,7 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::List { element, .. } => grown(element, in_group),
         Type::Set(inner)
         | Type::Ref(inner)
+        | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Nullable(inner) => grown(inner, in_group),
@@ -2025,6 +2034,7 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
         }
         (Type::Set(left), Type::Set(right))
         | (Type::Ref(left), Type::Ref(right))
+        | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))
         | (Type::Nullable(left), Type::Nullable(right)) => agree(left, right),

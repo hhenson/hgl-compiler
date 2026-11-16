@@ -338,46 +338,59 @@ fn a_selector_names_its_inputs_each_by_its_name() {
     );
 }
 
-/// TIME-8: "They are capabilities, not first-class payloads. Clock
-/// properties are read-only, including `clock.evaluation_time`.
-/// Operations use direct receiver-first forms such as
-/// `schedule(scheduler, delay)` and `info(logger, value)`, with no
-/// method-call aliases. Arbitrary helpers cannot receive a capability as
-/// ordinary data." TIME-7: `out` is the node's result, read as a value.
-///
-/// Which calls are a capability's operations is core's to say, and it
-/// declares none yet: a capability given to a call of a name nothing in
-/// the program declares is not judged.
+/// TIME-8: "A capability is used within the node that injects it and is
+/// not retained: it is not the value of a `state` or a `cache`, an entry
+/// of a tuple, list, set, dictionary, or struct, what a function
+/// returns, what a node publishes, or a capture of an anonymous function
+/// (FN-14). Binding one to a `let` and giving one to a parameter of its
+/// type are uses." TIME-7: `out` is the node's result, read as a value.
 #[test]
-fn a_capability_is_not_kept_or_passed_as_data() {
+fn a_capability_is_used_and_not_retained() {
     let checked = module(concat!(
+        "struct Kept { value: i64 }\n",
         "const fn stamped(at: datetime, value: i64) -> i64 => value\n",
         "fn uses(value: i64) -> i64 {\n",
+        "    state held: i64 = 0\n",
         "    inject clock, logger, scheduler, out\n",
         "    start { schedule(scheduler, 0s) }\n",
         "    when {\n",
-        // As a capability is used.
-        "        info(logger, value)\n",
+        // Uses: a property, an argument, a `let`.
+        "        log_info(logger, \"tick\")\n",
         "        let now = (clock).evaluation_time\n",
         "        let last = stamped(clock.evaluation_time, out)\n",
-        // Not judged: nothing declares `info` or `unrelated`.
-        "        info(value, logger)\n",
-        "        unrelated(logger, value)\n",
-        // Kept, passed to a function the program declares, and held in
-        // a tuple.
-        "        let kept = clock\n",
-        "        let passed = stamped(clock, value)\n",
+        "        let bound = clock\n",
+        "        let count = get<i64>(logger, \"count\")\n",
+        // Retained: in a tuple, a list, a struct, a `state`, and what
+        // is published.
         "        let pair = (scheduler, value)\n",
-        "        return value\n",
+        "        let listed = [clock]\n",
+        "        let entry = Kept(value: logger)\n",
+        "        held = clock\n",
+        "        out = scheduler\n",
+        "        return clock\n",
         "    }\n",
         "}\n",
+        // One node injects `alarm` or `scheduler`, not both.
+        "fn both(value: i64) -> i64 {\n",
+        "    inject scheduler, alarm\n",
+        "    when { return value }\n",
+        "}\n",
     ));
+    let capability: Vec<String> = checked
+        .summary()
+        .into_iter()
+        .filter(|finding| finding.contains("injectable/"))
+        .collect();
     assert_eq!(
-        checked.summary(),
+        capability,
         [
-            "m.hgl:12:20 injectable/capability.as_value TIME-8",
-            "m.hgl:13:30 injectable/capability.as_value TIME-8",
             "m.hgl:14:21 injectable/capability.as_value TIME-8",
+            "m.hgl:15:23 injectable/capability.as_value TIME-8",
+            "m.hgl:16:33 injectable/capability.as_value TIME-8",
+            "m.hgl:17:16 injectable/capability.as_value TIME-8",
+            "m.hgl:18:15 injectable/capability.as_value TIME-8",
+            "m.hgl:19:16 injectable/capability.as_value TIME-8",
+            "m.hgl:23:23 injectable/inject.alarm_and_scheduler TIME-8",
         ]
     );
 }

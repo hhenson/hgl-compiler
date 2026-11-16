@@ -144,6 +144,7 @@ pub(crate) fn is_built_in_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwResult
             | SyntaxKind::KwRef
             | SyntaxKind::KwSignal
+            | SyntaxKind::KwEndpoint
             | SyntaxKind::KwDelta
             | SyntaxKind::KwError
     )

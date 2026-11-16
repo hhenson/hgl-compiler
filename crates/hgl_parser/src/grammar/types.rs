@@ -16,6 +16,7 @@ fn built_in(word: SyntaxKind) -> Option<SyntaxKind> {
         KwDict => DictType,
         KwRolling => RollingType,
         KwRef => RefType,
+        KwEndpoint => EndpointType,
         KwAtomic => AtomicType,
         KwResult => ResultType,
         KwDelta => DeltaType,
@@ -48,7 +49,7 @@ impl Parser<'_> {
 
     /// ```text
     /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
-    ///           | dict_type | rolling_type | ref_type | "signal"
+    ///           | dict_type | rolling_type | ref_type | "signal" | endpoint_type
     ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
     /// ```
     ///
@@ -103,6 +104,7 @@ impl Parser<'_> {
     /// rolling_type = "rolling", "<", value_type, ",", const_expression,
     ///     [ ",", const_expression ], ">" ;
     /// ref_type = "ref", "<", type, ">" ;
+    /// endpoint_type = "endpoint", "<", type, ">" ;
     /// result_type = "result", "<", value_type, ",", value_type, ">" ;
     /// delta_type = "delta", "<", type, ">" ;
     /// ```
@@ -151,7 +153,8 @@ impl Parser<'_> {
                     parser.expression();
                 }
             }
-            // `set`, `ref`, `atomic` and `delta` take one type.
+            // `set`, `ref`, `endpoint`, `atomic` and `delta` take one
+            // type.
             _ => parser.type_(),
         });
         self.close_angle();

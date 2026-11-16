@@ -136,7 +136,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-10 | analyser | partial | A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists. Left: sizes computed from other constants; an unsized pattern accepting a fixed size |
 | TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`); an omitted minimum is the maximum in identity. Left: sizes computed from other constants |
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
-| TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input. Left: what a body admits; a `signal` input's default other than `null` |
+| TYPE-12 | parser | done | `endpoint<T>` is a type of one argument, written as `ref<T>` is |
+| TYPE-12 | analyser | partial | `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`). Left: what a body admits; a `signal` input's default other than `null` |
 | TYPE-13 | analyser | partial | A result's payloads are ordinary value types. Left: typing of the envelopes |
 | TYPE-14 | parser | done | `?` after a type |
 | TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. a literal `null` is no value of a type with no `?`, and is rejected where nothing gives it a type. Left: null from other expressions |
@@ -177,7 +178,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`. Left: roles of `const fn` and a temporal `fn` in bodies |
+| FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`. A parameter of a capability's type, and `endpoint<T>` in a native value function, are admitted (TIME-8, TYPE-12). Left: roles of `const fn` and a temporal `fn` in bodies |
 | FN-2 | analyser | done | Each temporal function and temporal candidate is a graph or a node by the constructs its body holds, wherever it holds them. A node's body is its declarations and then its hooks: any other statement is rejected, but in a source, whose body is not checked |
 | FN-3 | analyser | partial | A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5). A node's hook is read as value code: a temporal parameter is a value of its declared type, and a temporal function called there is rejected (`call.role`). A graph's body calls any function: a temporal parameter and the result of a temporal or lifted call are connections, and a connection given to a `const` parameter is rejected (`connection.as_constant`). Left: what a composition body admits of a connection; what it calls; iteration and conditionals in composition |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. a call in a value function takes the value definition, and a temporal one alone is rejected. A call in a graph takes the temporal definition where there is one. Left: selection in eval |
@@ -189,7 +190,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-7 | transpiler | planned | A runtime return publishes and exits the current function evaluation, skipping later handlers; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
-| FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`). Left: an anonymous function written in a graph; a capability used outside a hook or a source's body |
+| FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8). Left: an anonymous function written in a graph; a capability used outside a hook or a source's body |
 | FN-10 | parser | done | Where an arrow body ends |
 | FN-11 | analyser | planned | Which lifted arguments need a valid input |
 | FN-11 | transpiler | planned | Default or null bound while the input is invalid |
@@ -245,8 +246,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). Left: piecewise mutation of `out` |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
-| TIME-8 | analyser | partial | `inject` names one of the listed capabilities. In a node a capability kept in a local, returned, held in a tuple or passed to a function the program declares is rejected (`capability.as_value`); before the `.` of a property it is used as one. Left: which calls are a capability's operations, which core does not declare yet (hhenson/hgl_core#30), so one given to a call of a name nothing declares is not judged; clock properties read-only and typed |
-| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument or with several inputs, and `valid` with `[]`. Their names are the language's, and are not listed as left for the prelude. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in |
+| TIME-8 | analyser | partial | `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`). A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument are uses, and a property is read with its type (NATIVE-6). Left: the pinned core declares no capability type yet (hhenson/hgl_core#30), so there a capability and its properties have no type; a capability given to a parameter written as a generic parameter or `any`; one in a dictionary, whose literal is not read yet; a capture, which the resolver reports for any local (FN-14) |
+| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument or with several inputs, and `valid` with `[]`. Their names are the language's, and are not listed as left for the prelude. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in; an `endpoint<T>` parameter of a declared function given an input by its name; the operations as core's declarations (hhenson/hgl_core#30) |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 
 ## Control flow and sources
@@ -298,7 +299,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | NATIVE-4 | driver | planned | Target selection is explicit |
 | NATIVE-4 | transpiler | planned | The provider meets the declared contract |
 | NATIVE-5 | analyser | partial | A native value function's contract injects nothing (`node.in_value_function`, with FN-9). Left: borrowed access stated in the contract; a scalar parameter gains no endpoint privilege |
-| NATIVE-6 | analyser | planned | Native type identity and capabilities |
+| NATIVE-6 | parser | done | A native type's body of properties, one to a line, each a name and a type |
+| NATIVE-6 | analyser | partial | A native type's properties are read: each an ordinary value type, no two of one name (`field.duplicate`); `value.property` has the property's type, and a name the type does not declare is `member.unknown`. Left: an assigned property; a native type constructed; identity and capabilities as a payload or key |
 | NATIVE-7 | analyser | planned | An interface is checked without loading a provider |
 | NATIVE-7 | transpiler | planned | Execution needs a compatible provider; an absent binding fails |
 

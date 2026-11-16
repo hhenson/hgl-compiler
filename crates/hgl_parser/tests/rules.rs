@@ -1193,6 +1193,42 @@ fn the_result_forms_are_calls_and_a_postfix() {
     );
 }
 
+#[test]
+fn a_native_type_may_declare_properties() {
+    // NATIVE-6: "A native type may declare read-only properties, each a
+    // name and an ordinary value type, written as a struct's typed
+    // fields are."
+    assert_eq!(
+        declarations("export native type Alarm"),
+        "NativeTypeDecl[\"export\" \"native\" \"type\" \"Alarm\"]"
+    );
+    assert_eq!(
+        declarations("native type Clock {\n    evaluation_time: datetime\n    now: datetime\n}"),
+        "NativeTypeDecl[\"native\" \"type\" \"Clock\" \"{\" \
+         NativeProperty[\"evaluation_time\" \":\" ScalarType[\"datetime\"]] \
+         NativeProperty[\"now\" \":\" ScalarType[\"datetime\"]] \"}\"]"
+    );
+    // LEX-9: a reserved word names a member.
+    assert_eq!(
+        declarations("native type Span { time: duration? }"),
+        "NativeTypeDecl[\"native\" \"type\" \"Span\" \"{\" \
+         NativeProperty[\"time\" \":\" NullableType[ScalarType[\"duration\"] \"?\"]] \"}\"]"
+    );
+}
+
+#[test]
+fn endpoint_is_a_type_of_one_argument() {
+    // TYPE-12: "`endpoint<T>` is the endpoint of a temporal value of T".
+    // The type grammar: `endpoint_type = "endpoint", "<", type, ">"`.
+    assert_eq!(
+        declarations("native const fn valid<T>(input: endpoint<T>) -> bool"),
+        "NativeFnDecl[\"native\" \"const\" \"fn\" \"valid\" \
+         GenericParams[\"<\" GenericParam[\"T\"] \">\"] \
+         ParamList[\"(\" Param[\"input\" \":\" EndpointType[\"endpoint\" \"<\" \
+         NamedType[\"T\"] \">\"]] \")\"] ReturnType[\"->\" ScalarType[\"bool\"]]]"
+    );
+}
+
 // ---- EXPR-1, EXPR-11 ----
 
 #[test]

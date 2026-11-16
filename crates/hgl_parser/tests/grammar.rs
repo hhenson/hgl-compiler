@@ -211,6 +211,12 @@ instantiate add<i64>, convert<_, f64>
 
 export native type Handle
 
+native type Clock {
+    evaluation_time: datetime
+}
+
+native const fn valid<T>(input: endpoint<T>) -> bool
+
 native fn node(value: i64) -> i64 {
     inject out
     start;

@@ -11,7 +11,7 @@ use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
 use crate::hir::Body;
-use crate::types::{CallArguments, Detail, WrittenType};
+use crate::types::{CallArguments, Detail, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
@@ -32,6 +32,49 @@ impl Program {
         self.modules
             .iter()
             .position(|module| module.path == Program::CORE)
+    }
+
+    /// The type of the capability `inject` names, when core declares
+    /// it. TIME-8: "`inject` binds each of the others to a local of its
+    /// capability's type, which core declares and names as the
+    /// capability with a capital".
+    pub fn capability_type(&self, capability: &str) -> Option<Type> {
+        let (_, name) = CAPABILITY_TYPES
+            .iter()
+            .find(|(injected, _)| *injected == capability)?;
+        let core = self.core()?;
+        let module = &self.modules[core];
+        let declaration = module.scope.get(*name)?.iter().copied().find(|&index| {
+            let declaration = &module.declarations[index];
+            declaration.kind == DeclarationKind::NativeType && declaration.is_public()
+        })?;
+        Some(Type::Named {
+            name: (*name).to_string(),
+            module: core,
+            declaration,
+            arguments: Vec::new(),
+        })
+    }
+
+    /// True for the type of a capability: one of core's native types
+    /// that TIME-8 names.
+    pub fn is_capability_type(&self, ty: &Type) -> bool {
+        let Type::Named {
+            module,
+            declaration,
+            ..
+        } = ty
+        else {
+            return false;
+        };
+        if Some(*module) != self.core() {
+            return false;
+        }
+        let declaration = &self.modules[*module].declarations[*declaration];
+        declaration.kind == DeclarationKind::NativeType
+            && CAPABILITY_TYPES
+                .iter()
+                .any(|(_, name)| *name == declaration.name)
     }
 
     /// The module with this path, written with dots: `pricing.curves`.
@@ -309,6 +352,17 @@ impl DeclarationKind {
         }
     }
 }
+
+/// Each capability that has a type, with the type's name (TIME-8):
+/// "`Logger`, `Clock`, `Scheduler`, `Alarm`, `GlobalState`". `out` is
+/// the node's result, and has none.
+pub const CAPABILITY_TYPES: [(&str, &str); 5] = [
+    ("logger", "Logger"),
+    ("clock", "Clock"),
+    ("scheduler", "Scheduler"),
+    ("alarm", "Alarm"),
+    ("global_state", "GlobalState"),
+];
 
 /// Where an operator is declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
