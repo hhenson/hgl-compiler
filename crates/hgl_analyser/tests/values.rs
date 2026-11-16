@@ -3442,6 +3442,36 @@ fn a_symbol_is_its_call_in_its_place_and_in_its_operands() {
     );
 }
 
+/// GEN-5: "A candidate that takes each integer literal as the `i64` it
+/// is outranks one for which a literal is widened to an `f64`". A
+/// literal under a symbol that is core's own arithmetic is still a
+/// literal among a sequence's entries: `[-1]` and `[1 + 2]` select the
+/// candidate for a `list<i64>`, as `[1]` does.
+#[test]
+fn a_literal_under_a_symbol_is_an_integer_first_among_entries() {
+    let checked = module(concat!(
+        "operator each<V>(values: V) -> V\n",
+        "impl const fn each(values: list<i64>) -> list<i64> => values\n",
+        "impl const fn each(values: list<f64>) -> list<f64> => values\n",
+        "const fn uses() {\n",
+        "    let plain = each([1])\n",
+        "    let minus = each([-1])\n",
+        "    let sum = each([1 + 2])\n",
+        "    let real = each([-1.5])\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses"),
+        [
+            "plain: list<i64>",
+            "minus: list<i64>",
+            "sum: list<i64>",
+            "real: list<f64>",
+        ]
+    );
+}
+
 /// GEN-5: "Whether a literal is widened is settled by the candidates'
 /// result and parameter types, before their conditions: where a
 /// candidate that gives the requested output takes every integer
