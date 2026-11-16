@@ -1265,14 +1265,14 @@ generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
 | A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
-| A sequence that is a set | `frozenset((1, 2))` |
-| `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
+| A sequence that is a set | `_py.frozenset((1, 2))` |
+| `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | A named test | A function `test_name` |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
-| A name | Itself, but where Python or the target would take it. A Python word, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
+| A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
 
 Core's native functions are the target's to provide (NATIVE-7):
@@ -1294,7 +1294,8 @@ program does not hold yet; a pack parameter; a node that no input wakes, `modifi
 `cache`, the `inject` of a capability, and sources; in a graph, a call
 lifted over connections, an `if`, and any expression but a name, a
 literal and a call; a temporal function called in a test outside an
-`eval`; loops and `switch`;
+`eval`, and an `eval` of a value function, which is lifted; loops and
+`switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 

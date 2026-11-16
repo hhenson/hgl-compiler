@@ -69,11 +69,9 @@ fn an_accepted_program_is_written() {
             .join("__init__.py"),
     )
     .unwrap();
-    assert!(
-        module.contains(
-            "def pass_(value: _hg.TS[int]) -> _hg.TS[int]:\n    return value.delta_value\n"
-        )
-    );
+    assert!(module.contains(
+        "def pass_(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n"
+    ));
     assert!(
         module
             .contains("    assert _harness.evaluate(pass_, value=[7, None, 9]) == [7, None, 9]\n")
