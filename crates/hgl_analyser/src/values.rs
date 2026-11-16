@@ -176,12 +176,16 @@ struct Typer<'a> {
     hook: Option<Hook>,
     /// The local that is a node's injected `out`, its result (TIME-7).
     out: Option<LocalId>,
-    /// The bindings a null test has proved are not null where the pass
-    /// is reading (ERR-12). A binding that is refined is immutable, so
-    /// what is proved holds to the end of the block it is proved in:
-    /// the list grows as tests are met, and is cut back to where it
-    /// stood when a branch or a block ends.
-    present: Vec<LocalId>,
+    /// What tests have proved where the pass is reading: a binding is
+    /// not null (ERR-12), or a temporal input is valid (TIME-4). A
+    /// binding that is refined is immutable, and an input's validity
+    /// does not change within an evaluation, so what is proved holds to
+    /// the end of the block it is proved in: the list grows as tests
+    /// are met, and is cut back to where it stood when a branch or a
+    /// block ends.
+    present: Vec<Fact>,
+    /// True while a `state`'s initializer is read (TIME-5).
+    initializing: bool,
     /// The operator of core's module each symbol met so far stands for,
     /// by the operator's name; `None` for one the program has not.
     identities: HashMap<&'static str, Option<OperatorRef>>,
@@ -227,6 +231,7 @@ impl<'a> Typer<'a> {
             hook: None,
             out: None,
             present: Vec::new(),
+            initializing: false,
             identities: HashMap::new(),
             candidates: HashMap::new(),
             diagnostics,
@@ -291,7 +296,11 @@ impl<'a> Typer<'a> {
         for statement in block.children() {
             match statement.kind() {
                 SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
+                    // TIME-5: "State initializers cannot read current
+                    // temporal inputs."
+                    self.initializing = statement.kind() == SyntaxKind::StateDecl;
                     statements.push(self.local(&statement));
+                    self.initializing = false;
                 }
                 SyntaxKind::InjectDecl => statements.extend(self.inject(&statement)),
                 SyntaxKind::LifecycleBlock | SyntaxKind::WhenStmt => {
@@ -347,13 +356,35 @@ impl<'a> Typer<'a> {
         let block = child(node, SyntaxKind::Block);
         // CTRL-9: what stands before the body's `{` is the condition of
         // a `when`, which may have none.
-        let condition = node
+        let header = node
             .children()
             .find(|part| part.kind() != SyntaxKind::Block)
-            .filter(|_| hook == Hook::When)
-            .map(|condition| self.condition(&condition));
-        // ERR-12: the body is reached only where the condition holds.
+            .filter(|_| hook == Hook::When);
         let frame = self.present.len();
+        // TIME-3: "`valid()` requires all temporal inputs to be valid.
+        // Omitting either selector uses the same default as its
+        // zero-argument form." So a `when` whose header sets no
+        // admission of its own runs with every temporal input valid,
+        // and one that sets it admits what its `valid` selectors name.
+        // Either holds for the whole header, whatever order its
+        // conjuncts are written in, and for the body.
+        if hook == Hook::When {
+            let admitted = header
+                .as_ref()
+                .and_then(|header| self.admission(header))
+                .unwrap_or_else(|| self.temporal_inputs());
+            self.present.extend(admitted.into_iter().map(Fact::Valid));
+        }
+        let reported = self.diagnostics.len();
+        let condition = header.map(|condition| self.condition(&condition));
+        // A header that is itself rejected says nothing sure of what it
+        // admits: the reads in its body are then not judged (ERR-9).
+        if self.diagnostics.len() != reported {
+            let inputs = self.temporal_inputs();
+            self.present.extend(inputs.into_iter().map(Fact::Valid));
+        }
+        // ERR-12, TIME-4: the body is reached only where the condition
+        // holds.
         if let Some(condition) = &condition {
             let (when_true, _) = self.null_tests(condition);
             self.present.extend(when_true);
@@ -376,6 +407,107 @@ impl<'a> Typer<'a> {
             body,
             at,
         }
+    }
+
+    /// The inputs a `when` header admits by its own `valid` selectors;
+    /// `None` when it has none, and the default stands.
+    ///
+    /// TIME-3: "A selector sets subscription or admission when it
+    /// stands alone in the header or appears as a top-level conjunct.
+    /// Selectors under negation or disjunction leave the default in
+    /// place." A selector is the language's `valid`: a name a
+    /// declaration binds is a call of that declaration, and no selector
+    /// (TIME-9).
+    fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
+        match header.kind() {
+            SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
+            SyntaxKind::BinaryExpr
+                if tokens(header).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
+            {
+                // Every selector among the conjuncts adds what it names.
+                let sets: Vec<Vec<LocalId>> = header
+                    .children()
+                    .filter_map(|operand| self.admission(&operand))
+                    .collect();
+                (!sets.is_empty()).then(|| sets.concat())
+            }
+            SyntaxKind::CallExpr => {
+                let callee = header.children().next()?;
+                let name = match callee.kind() {
+                    SyntaxKind::NameExpr => name_token(&callee)?,
+                    _ => return None,
+                };
+                if name.text() != "valid"
+                    || self.bindings.contains_key(&(self.file, name.span().start))
+                {
+                    return None;
+                }
+                let list = child(header, SyntaxKind::ArgList)?;
+                let arguments = arguments_of(&list);
+                let Some((_, first)) = arguments.first() else {
+                    // `valid()`: every temporal input.
+                    return Some(self.temporal_inputs());
+                };
+                let entries: Vec<SyntaxNode> = match first.kind() {
+                    SyntaxKind::SequenceExpr => first.children().collect(),
+                    _ => vec![first.clone()],
+                };
+                // What names no input is reported where the header is
+                // read, and admits nothing here.
+                Some(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
+                        .filter_map(|entry| self.local_of(entry))
+                        .filter(|local| self.is_temporal_input(*local))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// A read of a temporal input's payload in a node.
+    ///
+    /// TIME-4: "A payload read under manual admission must be dominated
+    /// by a successful guard": in a `when`, the input is one its header
+    /// admits, or a `valid(input)` holds where the read stands. TIME-5:
+    /// "State initializers cannot read current temporal inputs."
+    fn payload_read(&mut self, local: LocalId, at: Location) {
+        let name = self.locals[local].name.clone();
+        if self.initializing {
+            self.diagnostics.emit(error(
+                Category::Phase,
+                codes::STATE_INPUT_READ,
+                at,
+                format!(
+                    "`{name}` is a temporal input, and a `state` is given its first value \
+                     before any input has one"
+                ),
+                "TIME-5",
+            ));
+            return;
+        }
+        if self.hook != Some(Hook::When) || self.present.contains(&Fact::Valid(local)) {
+            return;
+        }
+        self.diagnostics.emit(
+            error(
+                Category::Phase,
+                codes::PAYLOAD_UNGUARDED,
+                at,
+                format!(
+                    "`{name}` may not be valid here: this `when` does not require it to be, \
+                     and no `valid({name})` guards the read"
+                ),
+                "TIME-4",
+            )
+            .with_note(format!(
+                "a guard proves it where the read stands: `if valid({name}) {{ ... }}`"
+            )),
+        );
+        // One report for one input on a path.
+        self.present.push(Fact::Valid(local));
     }
 
     /// Reports a use of the node's output where TIME-7 has none: "`out`
@@ -1078,6 +1210,9 @@ impl<'a> Typer<'a> {
             // One report for one `var`.
             self.assigned[local] = true;
         }
+        if self.is_temporal_input(local) && (self.hook.is_some() || self.initializing) {
+            self.payload_read(local, at);
+        }
         // TIME-7: "`start` neither reads nor writes it".
         if Some(local) == self.out && self.hook == Some(Hook::Start) {
             self.out_lifecycle(
@@ -1088,7 +1223,9 @@ impl<'a> Typer<'a> {
         // ERR-12: "Refine that same binding to T on paths proving a
         // non-null T? value".
         let ty = match &self.locals[local].ty {
-            Type::Nullable(inner) if self.present.contains(&local) => inner.as_ref().clone(),
+            Type::Nullable(inner) if self.present.contains(&Fact::Present(local)) => {
+                inner.as_ref().clone()
+            }
             ty => ty.clone(),
         };
         Expr {
@@ -1104,14 +1241,31 @@ impl<'a> Typer<'a> {
     /// ERR-12: "An immutable nullable parameter or local may be tested
     /// directly against null." A `var` may be given a null after its
     /// test, and so is proved nothing of.
-    fn null_tests(&self, condition: &Expr) -> (Vec<LocalId>, Vec<LocalId>) {
+    fn null_tests(&self, condition: &Expr) -> (Vec<Fact>, Vec<Fact>) {
         let refinable = |local: LocalId| {
             matches!(
                 self.locals[local].kind,
                 LocalKind::Parameter | LocalKind::Let | LocalKind::Iteration
             ) && matches!(self.locals[local].ty, Type::Nullable(_))
         };
-        null_tests(condition, &refinable)
+        null_tests(condition, &refinable, &|| self.temporal_inputs())
+    }
+
+    /// The temporal inputs of the function being read: its parameters
+    /// that are not `const` (FN-1). A parameter's local has its
+    /// position among the parameters.
+    fn temporal_inputs(&self) -> Vec<LocalId> {
+        (0..self.signature.parameters.len())
+            .filter(|&local| self.is_temporal_input(local))
+            .collect()
+    }
+
+    /// True when `local` is a temporal input of a temporal function.
+    fn is_temporal_input(&self, local: LocalId) -> bool {
+        self.signature
+            .parameters
+            .get(local)
+            .is_some_and(|parameter| !parameter.constant)
     }
 
     /// `(a, b)`. An expected tuple of as many elements gives each its
@@ -4860,34 +5014,60 @@ fn options_of<'a>(
     (selecting, options)
 }
 
-/// The bindings a condition proves are not null: those where it holds,
-/// and those where it does not. `refinable` says which bindings a test
-/// proves anything of.
+/// What a test has proved of a binding where the pass is reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fact {
+    /// It is not null (ERR-12).
+    Present(LocalId),
+    /// It is valid: a temporal input whose payload may be read
+    /// (TIME-4).
+    Valid(LocalId),
+}
+
+/// What a condition proves: where it holds, and where it does not.
+/// `refinable` says which bindings a null test proves anything of, and
+/// `inputs` gives every temporal input, for a `valid()` written with no
+/// argument.
 ///
 /// ERR-12: a binding "tested directly against null": `value != null`,
-/// `value == null`, with the `null` on either side. ERR-3: "Track
+/// `value == null`, with the `null` on either side. TIME-4: "A guard is
+/// a test of `valid(input)`, on the input by its name". ERR-3: "Track
 /// negation, short-circuit paths". A test of anything else, a field or
 /// a call, proves nothing.
 fn null_tests(
     condition: &Expr,
     refinable: &dyn Fn(LocalId) -> bool,
-) -> (Vec<LocalId>, Vec<LocalId>) {
-    let both = |first: Vec<LocalId>, second: Vec<LocalId>| -> Vec<LocalId> {
+    inputs: &dyn Fn() -> Vec<LocalId>,
+) -> (Vec<Fact>, Vec<Fact>) {
+    let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first
             .into_iter()
-            .filter(|local| second.contains(local))
+            .filter(|fact| second.contains(fact))
             .collect()
     };
-    let either = |mut first: Vec<LocalId>, second: Vec<LocalId>| -> Vec<LocalId> {
+    let either = |mut first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first.extend(second);
         first
     };
     match &condition.kind {
+        // `valid(value)`, `valid([a, b])`, `valid()`: every endpoint
+        // named is valid where it holds. Where it does not, one of them
+        // is not, and nothing is proved of any.
+        ExprKind::Endpoint {
+            operation: EndpointOperation::Valid,
+            inputs: named,
+        } => {
+            let valid = match named {
+                Some(named) => named.clone(),
+                None => inputs(),
+            };
+            (valid.into_iter().map(Fact::Valid).collect(), Vec::new())
+        }
         ExprKind::Unary {
             operator: UnaryOperator::Not,
             operand,
         } => {
-            let (when_true, when_false) = null_tests(operand, refinable);
+            let (when_true, when_false) = null_tests(operand, refinable, inputs);
             (when_false, when_true)
         }
         ExprKind::Binary {
@@ -4905,20 +5085,20 @@ fn null_tests(
                     return (Vec::new(), Vec::new());
                 }
                 match operator {
-                    BinaryOperator::NotEqual => (vec![local], Vec::new()),
-                    _ => (Vec::new(), vec![local]),
+                    BinaryOperator::NotEqual => (vec![Fact::Present(local)], Vec::new()),
+                    _ => (Vec::new(), vec![Fact::Present(local)]),
                 }
             }
             // Both hold where `&&` does; one or other fails where it
             // does not.
             BinaryOperator::And => {
-                let (left_true, left_false) = null_tests(left, refinable);
-                let (right_true, right_false) = null_tests(right, refinable);
+                let (left_true, left_false) = null_tests(left, refinable, inputs);
+                let (right_true, right_false) = null_tests(right, refinable, inputs);
                 (either(left_true, right_true), both(left_false, right_false))
             }
             BinaryOperator::Or => {
-                let (left_true, left_false) = null_tests(left, refinable);
-                let (right_true, right_false) = null_tests(right, refinable);
+                let (left_true, left_false) = null_tests(left, refinable, inputs);
+                let (right_true, right_false) = null_tests(right, refinable, inputs);
                 (both(left_true, right_true), either(left_false, right_false))
             }
             _ => (Vec::new(), Vec::new()),
@@ -6036,7 +6216,7 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         used: bool,
-        (before, before_returned, proved): (&[bool], bool, &[LocalId]),
+        (before, before_returned, proved): (&[bool], bool, &[Fact]),
     ) -> Branch {
         self.assigned = restored(before, self.locals.len(), true);
         self.returned = before_returned;
