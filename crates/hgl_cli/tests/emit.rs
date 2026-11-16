@@ -64,9 +64,14 @@ fn an_accepted_program_is_written() {
     );
     let module = fs::read_to_string(out.join("demo").join("pass.py")).unwrap();
     assert!(
-        module.contains("def pass_(value: TS[int]) -> TS[int]:\n    return value.delta_value\n")
+        module.contains(
+            "def pass_(value: _hg.TS[int]) -> _hg.TS[int]:\n    return value.delta_value\n"
+        )
     );
-    assert!(module.contains("    assert evaluate(pass_, value=[7, None, 9]) == [7, None, 9]\n"));
+    assert!(
+        module
+            .contains("    assert _harness.evaluate(pass_, value=[7, None, 9]) == [7, None, 9]\n")
+    );
     assert!(out.join("hgl_harness.py").is_file());
 }
 
