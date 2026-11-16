@@ -343,6 +343,14 @@ fn a_return_selected_at_runtime_needs_its_continuation() {
         "fn falls(price: f64, open: bool) -> f64 {\n",
         "    if open { return price }\n",
         "}\n",
+        // CTRL-10: a branch that returns gives the `if` no value, and so
+        // takes no part in what it is: `level` is the ordinary 1.0.
+        "fn sized(value: f64, const size: f64) -> f64 => value\n",
+        "fn picks(price: f64, open: bool, const wide: bool) -> f64 {\n",
+        "    let level = if wide { if open { return price } else { return price } } else { 1.0 }\n",
+        "    return sized(price, level)\n",
+        "}\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:9:4 type/return.missing FN-7"]);
+    assert_eq!(locals(&checked, "picks")[3..], ["level: f64"]);
 }

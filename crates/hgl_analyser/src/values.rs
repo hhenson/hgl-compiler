@@ -1289,17 +1289,24 @@ impl<'a> Typer<'a> {
                 value: Some(value), ..
             } => self.category(value),
             // CTRL-13: "It is a connection when its condition is one or
-            // either branch's value is".
+            // either branch's value is". CTRL-10: "A branch that returns
+            // from the function gives the `if` no value and takes no
+            // part in its type (CTRL-5)", and so none in what it is. An
+            // `if` no branch of which gives a value has none itself.
             ExprKind::If {
                 condition,
                 then,
                 otherwise,
             } => {
-                let branches = match otherwise {
-                    Some(otherwise) => join(self.category(then), self.category(otherwise)),
-                    None => self.category(then),
-                };
-                join(self.category(condition), branches)
+                let mut branches = [Some(then), otherwise.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|branch| gives_a_value(branch))
+                    .map(|branch| self.category(branch));
+                match branches.next() {
+                    Some(first) => join(self.category(condition), branches.fold(first, join)),
+                    None => Value,
+                }
             }
             _ => Value,
         }
@@ -6232,6 +6239,19 @@ fn from_place(public: &Signature, expected: Option<&Type>, found: &mut [Option<A
             _ => not_null(Some(expected)).unwrap_or(expected),
         };
         infer(result, place, &public.generics, found);
+    }
+}
+
+/// True when an expression gives a value where it stands. A block gives
+/// the one it ends in (CTRL-10), and none when it ends in a `return` or
+/// any other statement; an `if` gives one where a branch does.
+fn gives_a_value(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::Block { value, .. } => value.as_deref().is_some_and(gives_a_value),
+        ExprKind::If {
+            then, otherwise, ..
+        } => gives_a_value(then) || otherwise.as_deref().is_some_and(gives_a_value),
+        _ => true,
     }
 }
 
