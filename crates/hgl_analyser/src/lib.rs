@@ -193,6 +193,11 @@ pub mod codes {
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";
+    /// A payload read under manual admission that no guard dominates
+    /// (TIME-4).
+    pub const PAYLOAD_UNGUARDED: &str = "payload.unguarded";
+    /// A state initializer reads a temporal input (TIME-5).
+    pub const STATE_INPUT_READ: &str = "state.input_read";
     /// A window's size is neither a tick count nor a duration, or its
     /// two sizes are of different kinds (TYPE-11).
     pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";

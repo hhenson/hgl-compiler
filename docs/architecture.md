@@ -496,10 +496,28 @@ What is rejected there:
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
 
-Not read yet: which inputs a `when` header admits, and so a payload read
-that needs a guard (`payload.unguarded`); a state initializer that reads
-an input (`state.input_read`); a capability used as data
-(`capability.as_value`). A graph's body is not read: connections,
+A `when` reads an input's payload only where the input is valid
+(TIME-1). Its header says which are (TIME-3):
+
+| Header | Admits | A read of an input in the body |
+| --- | --- | --- |
+| No `valid` selector alone or as a top-level conjunct: `when { }`, `when modified() { }`, `when !valid(a) { }` | Every temporal input: the default | Free |
+| `valid(a)`, `valid([a, b])` | Those named | `a` free; any other needs a guard |
+| `valid([])` | None: manual admission | Every one needs a guard |
+
+A guard is `valid(input)`, on the input by its name, proved where the
+read stands (TIME-4) by the paths a null test is followed along: the
+branch it holds for, the right operand of the `&&` it guards, and from a
+branch that returns to the end of its block. A read with none is
+`payload.unguarded`. A saved bool proves nothing. A header that is
+itself rejected says nothing sure of what it admits, and its body's
+reads are not judged.
+
+A `state`'s initializer reads no temporal input (TIME-5): one that does
+is `state.input_read`.
+
+Not read yet: a capability used as data (`capability.as_value`); what
+`modified` subscribes to. A graph's body is not read: connections,
 lifting and an operator's temporal candidates come next, then
 conditionals and loops in composition.
 

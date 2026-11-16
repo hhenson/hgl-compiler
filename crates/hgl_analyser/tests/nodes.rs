@@ -167,3 +167,87 @@ fn a_hook_rejects_what_its_phase_has_not() {
         ]
     );
 }
+
+/// TIME-3: "`valid()` requires all temporal inputs to be valid. Omitting
+/// either selector uses the same default as its zero-argument form.
+/// `valid([])` requires no inputs to be valid. A selector sets
+/// subscription or admission when it stands alone in the header or
+/// appears as a top-level conjunct. Selectors under negation or
+/// disjunction leave the default in place." TIME-4: "A payload read
+/// under manual admission must be dominated by a successful guard. A
+/// guard is a test of `valid(input)`, on the input by its name, that
+/// holds where the read stands: in the branch it holds for, in the
+/// right operand of the `&&` it guards, and after a branch that
+/// returns".
+#[test]
+fn a_payload_is_read_where_its_input_is_admitted_or_guarded() {
+    let checked = module(concat!(
+        // The temporal chapter's `manual_forward`, with a second input.
+        "fn manual(value: i64, other: i64) -> i64 {\n",
+        "    inject out\n",
+        "    when modified() && valid([]) {\n",
+        "        if valid(value) { return value }\n",
+        "        if !valid(other) {\n",
+        "            invalidate(out)\n",
+        "            return\n",
+        "        }\n",
+        "        return other\n",
+        "    }\n",
+        "}\n",
+        // The default: every input is valid.
+        "fn defaulted(value: i64, other: i64) -> i64 {\n",
+        "    when modified(value) { return value + other }\n",
+        "}\n",
+        // A selector that names its inputs admits those.
+        "fn named(a: i64, b: i64, c: i64) -> i64 {\n",
+        "    when valid([a, b]) && a > 0 { return a + b }\n",
+        "}\n",
+        // Under a negation the default stays in place.
+        "fn negated(value: i64, flag: bool) -> i64 {\n",
+        "    when !valid(flag) || value > 0 { return value }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}
+
+/// TIME-4: an unguarded payload read under manual admission rejects. "A
+/// saved bool proves nothing." TIME-5: "State initializers cannot read
+/// current temporal inputs."
+#[test]
+fn an_unguarded_payload_read_is_rejected() {
+    let checked = module(concat!(
+        "fn unguarded(value: i64) -> i64 {\n",
+        "    when valid([]) { return value + 1 }\n",
+        "}\n",
+        // `b` is not among those the header admits.
+        "fn partial(a: i64, b: i64) -> i64 {\n",
+        "    when valid(a) { return a + b }\n",
+        "}\n",
+        "fn saved(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        let ok = valid(value)\n",
+        "        if ok { return value }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+        // The header's own condition is read under its admission.
+        "fn header(value: i64) -> i64 {\n",
+        "    when valid([]) && value > 0 { return 1 }\n",
+        "}\n",
+        "fn seeded(value: i64, const first: i64) -> i64 {\n",
+        "    state kept: i64 = first\n",
+        "    state seen: i64 = value\n",
+        "    when { return seen + kept }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:29 phase/payload.unguarded TIME-4",
+            "m.hgl:6:32 phase/payload.unguarded TIME-4",
+            "m.hgl:11:24 phase/payload.unguarded TIME-4",
+            "m.hgl:16:23 phase/payload.unguarded TIME-4",
+            "m.hgl:20:23 phase/state.input_read TIME-5",
+        ]
+    );
+}

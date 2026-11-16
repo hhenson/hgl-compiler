@@ -237,10 +237,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-1 | transpiler | planned | Endpoint observations: validity, modification, retained data, delta |
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
-| TIME-3 | analyser | partial | A `when` inside another block is rejected. Left: selectors and their defaults |
+| TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name. Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
 | TIME-3 | transpiler | planned | Handlers evaluated in source order |
-| TIME-4 | analyser | planned | Aggregate subscriptions; node-wide validity; guarded reads under manual admission |
-| TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. Left: state initialisers read no input |
+| TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
+| TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). Left: piecewise mutation of `out` |
