@@ -60,7 +60,7 @@ lambda_parameters = lambda_parameter, { ",", lambda_parameter }, [ "," ] ;
 lambda_parameter = IDENTIFIER, [ ":", type ] ;
 # generics-and-operators.md
 generic_parameters = "<", generic_parameter, { ",", generic_parameter }, [ "," ], ">" ;
-generic_parameter = IDENTIFIER | "...", IDENTIFIER, [ cardinality ] | "const", IDENTIFIER, ":", value_type ;
+generic_parameter = IDENTIFIER | "...", IDENTIFIER, [ cardinality ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] ;
 cardinality = "{", INTEGER_LITERAL, [ ":", ( INTEGER_LITERAL | "*" ) ], "}" ;
 generic_arguments = "<", generic_argument, { ",", generic_argument }, [ "," ], ">" ;
 generic_argument = type | const_expression ;

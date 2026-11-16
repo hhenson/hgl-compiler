@@ -595,6 +595,30 @@ fn const_is_a_modifier_or_a_name_by_position() {
     );
 }
 
+// ---- GEN-2 ----
+
+/// GEN-2: "A generic value parameter of a function or a candidate may
+/// have a default". The grammar: `"const", IDENTIFIER, ":", value_type,
+/// [ "=", const_expression ]`. GEN-14: "At the current generic nesting
+/// level, `>` closes the argument list", so the default ends at it.
+#[test]
+fn a_generic_value_parameter_may_have_a_default() {
+    assert_eq!(
+        declarations("fn f<const zero: Zero = .ieee, T>() {}"),
+        "FnDecl[\"fn\" \"f\" GenericParams[\"<\" GenericParam[\"const\" \"zero\" \":\" \
+         NamedType[\"Zero\"] \"=\" ImpliedMember[\".\" \"ieee\"]] \",\" GenericParam[\"T\"] \">\"] \
+         ParamList[\"(\" \")\"] Block[\"{\" \"}\"]]"
+    );
+    assert_eq!(
+        declarations("fn f<const N: i64 = 2 + 1>() {}"),
+        "FnDecl[\"fn\" \"f\" GenericParams[\"<\" GenericParam[\"const\" \"N\" \":\" \
+         ScalarType[\"i64\"] \"=\" BinaryExpr[Literal[\"2\"] \"+\" Literal[\"1\"]]] \">\"] \
+         ParamList[\"(\" \")\"] Block[\"{\" \"}\"]]"
+    );
+    // A default with nothing after the `=`.
+    assert!(!rejected(Entry::Declarations, "fn f<const N: i64 = >() {}").is_empty());
+}
+
 // ---- LEX-10 ----
 
 #[test]
