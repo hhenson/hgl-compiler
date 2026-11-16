@@ -53,7 +53,9 @@ fn locals(checked: &Checked, name: &str) -> Vec<String> {
 /// connection of T, and is wired as a constant". FN-6: a value helper
 /// "with temporal arguments in composition is lifted ... All-scalar
 /// calls execute directly". EXPR-3: "Initialization fixes a binding's
-/// value/connection category".
+/// value/connection category". EXPR-4: "Ordinary values and temporal
+/// connections remain distinct. A graph binding denotes a connection
+/// without reading a payload."
 #[test]
 fn a_graphs_values_are_connections_or_ordinary_values() {
     let checked = module(concat!(
