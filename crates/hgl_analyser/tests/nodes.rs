@@ -367,6 +367,12 @@ fn a_capability_is_used_and_not_retained() {
         "        let entry = Kept(value: logger)\n",
         "        held = clock\n",
         "        out = scheduler\n",
+        // A local a capability is bound to is that capability: the
+        // pinned core gives none a type, and it is one all the same.
+        "        let again = bound\n",
+        "        let stored = [again]\n",
+        "        var moving = if value > 0 { clock } else { bound }\n",
+        "        let moved = (moving, 1)\n",
         "        return clock\n",
         "    }\n",
         "}\n",
@@ -389,8 +395,10 @@ fn a_capability_is_used_and_not_retained() {
             "m.hgl:16:33 injectable/capability.as_value TIME-8",
             "m.hgl:17:16 injectable/capability.as_value TIME-8",
             "m.hgl:18:15 injectable/capability.as_value TIME-8",
-            "m.hgl:19:16 injectable/capability.as_value TIME-8",
-            "m.hgl:23:23 injectable/inject.alarm_and_scheduler TIME-8",
+            "m.hgl:20:23 injectable/capability.as_value TIME-8",
+            "m.hgl:22:22 injectable/capability.as_value TIME-8",
+            "m.hgl:23:16 injectable/capability.as_value TIME-8",
+            "m.hgl:27:23 injectable/inject.alarm_and_scheduler TIME-8",
         ]
     );
 }
