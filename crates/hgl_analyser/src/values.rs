@@ -1926,18 +1926,28 @@ impl<'a> Typer<'a> {
         // fact."
         // A binding written `result<T, E>?` that a null test has proved
         // present is read as its result (ERR-12), and is tested as one.
-        let tagged = |local: LocalId| {
+        // The proof may stand before the condition, or be the left
+        // operand of the connective the test is the right operand of:
+        // `outcome != null && is_ok(outcome)`.
+        let tagged = |local: LocalId, known: &[Fact]| {
+            let present = Fact::Present(local);
             let result = match &self.locals[local].ty {
                 Type::Result { .. } => true,
                 Type::Nullable(inner) => {
                     matches!(**inner, Type::Result { .. })
-                        && self.present.contains(&Fact::Present(local))
+                        && (self.present.contains(&present) || known.contains(&present))
                 }
                 _ => false,
             };
             immutable(local) && result && self.locals[local].category == ValueCategory::Value
         };
-        null_tests(condition, &refinable, &tagged, &|| self.temporal_inputs())
+        null_tests(
+            condition,
+            &refinable,
+            &tagged,
+            &|| self.temporal_inputs(),
+            &[],
+        )
     }
 
     /// The temporal inputs of the function being read: its parameters
@@ -7051,8 +7061,9 @@ enum Fact {
 fn null_tests(
     condition: &Expr,
     refinable: &dyn Fn(LocalId) -> bool,
-    tagged: &dyn Fn(LocalId) -> bool,
+    tagged: &dyn Fn(LocalId, &[Fact]) -> bool,
     inputs: &dyn Fn() -> Vec<LocalId>,
+    assumed: &[Fact],
 ) -> (Vec<Fact>, Vec<Fact>) {
     let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first
@@ -7084,7 +7095,7 @@ fn null_tests(
         // the reverse."
         ExprKind::TagTest { success, value } => {
             let local = match value.kind {
-                ExprKind::Local(local) if tagged(local) => local,
+                ExprKind::Local(local) if tagged(local, assumed) => local,
                 _ => return (Vec::new(), Vec::new()),
             };
             let (success_where, failure_where) =
@@ -7099,7 +7110,7 @@ fn null_tests(
             operator: UnaryOperator::Not,
             operand,
         } => {
-            let (when_true, when_false) = null_tests(operand, refinable, tagged, inputs);
+            let (when_true, when_false) = null_tests(operand, refinable, tagged, inputs, assumed);
             (when_false, when_true)
         }
         ExprKind::Binary {
@@ -7124,13 +7135,21 @@ fn null_tests(
             // Both hold where `&&` does; one or other fails where it
             // does not.
             BinaryOperator::And => {
-                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs);
-                let (right_true, right_false) = null_tests(right, refinable, tagged, inputs);
+                // The right operand is evaluated where the left
+                // holds: what the left proves is known there.
+                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let known = [assumed, left_true.as_slice()].concat();
+                let (right_true, right_false) =
+                    null_tests(right, refinable, tagged, inputs, &known);
                 (either(left_true, right_true), both(left_false, right_false))
             }
             BinaryOperator::Or => {
-                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs);
-                let (right_true, right_false) = null_tests(right, refinable, tagged, inputs);
+                // The right operand is evaluated where the left does
+                // not hold.
+                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let known = [assumed, left_false.as_slice()].concat();
+                let (right_true, right_false) =
+                    null_tests(right, refinable, tagged, inputs, &known);
                 (both(left_true, right_true), either(left_false, right_false))
             }
             _ => (Vec::new(), Vec::new()),
@@ -9673,7 +9692,9 @@ fn is_implied_member(node: &SyntaxNode) -> bool {
 }
 
 /// True when an expression takes its type from its place and has none
-/// of its own: `null`, and `.member`, in parentheses or not.
+/// of its own: `null`, `.member`, and `ok(value)` or `err(value)`,
+/// whose "type arguments come from the complete `result<T,E>` its place
+/// expects" (ERR-2), in parentheses or not.
 fn takes_its_type(node: &SyntaxNode) -> bool {
     match node.kind() {
         SyntaxKind::ParenExpr => node
@@ -9682,6 +9703,17 @@ fn takes_its_type(node: &SyntaxNode) -> bool {
             .is_some_and(|inner| takes_its_type(&inner)),
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
+        // ERR-13: the callee `ok` or `err` is the constructor, whatever
+        // else is in scope.
+        SyntaxKind::CallExpr => node
+            .children()
+            .next()
+            .filter(|callee| {
+                callee.kind() == SyntaxKind::NameExpr
+                    && child(callee, SyntaxKind::QualifiedName).is_none()
+            })
+            .and_then(|callee| name_token(&callee))
+            .is_some_and(|name| matches!(name.text(), "ok" | "err")),
         _ => false,
     }
 }
