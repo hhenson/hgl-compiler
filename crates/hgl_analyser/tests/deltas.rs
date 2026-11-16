@@ -226,3 +226,89 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
     );
     assert_eq!(locals(&checked, "relay")[2..], ["change: delta<set<str>>"]);
 }
+
+/// TYPE-16: "In a generic declaration it stays as written until T is
+/// known". TIME-7 and END-3, in the bodies core's eval replay and
+/// recorder have: a source of T yields the `delta<T>` an entry holds,
+/// and a recorder stores `delta_value(input)` as one. A scalar, a
+/// nullable and a set are told apart once T is known, and a value that
+/// is no delta of the output's shape is rejected.
+#[test]
+fn a_generic_delta_is_published_and_recorded() {
+    let checked = module(concat!(
+        "struct EvalEntry<T> {\n",
+        "    time: datetime\n",
+        "    value: delta<T>\n",
+        "}\n",
+        "native const fn append<T>(items: list<T>, item: T) -> list<T>\n",
+        "fn eval_replay<T>(const items: list<EvalEntry<T>>) -> T {\n",
+        "    for item in items {\n",
+        "        yield item.time: item.value\n",
+        "    }\n",
+        "}\n",
+        "fn eval_record<T>(input: T) {\n",
+        "    cache entries: list<EvalEntry<T>> = []\n",
+        "    inject clock, global_state\n",
+        "    when valid(input) && modified(input) {\n",
+        "        entries = append(entries, EvalEntry<T>(\n",
+        "            time: clock.evaluation_time,\n",
+        "            value: delta_value(input)\n",
+        "        ))\n",
+        "    }\n",
+        "    stop { put(global_state, \"result\", entries) }\n",
+        "}\n",
+        "fn positive(value: i64) -> i64 {\n",
+        "    when {\n",
+        "        if value > 0 { return value }\n",
+        "    }\n",
+        "}\n",
+        "fn wired_positive(const items: list<EvalEntry<i64>>) {\n",
+        "    let replayed = eval_replay<i64>(items)\n",
+        "    let filtered = positive(replayed)\n",
+        "    eval_record<i64>(filtered)\n",
+        "}\n",
+        // Once T is known the entry's value is that T's delta: the
+        // scalar itself, a scalar or null, a set's delta.
+        "const fn made(at: datetime, change: delta<set<str>>, members: set<str>) -> i64 {\n",
+        "    let scalar = EvalEntry<i64>(time: at, value: 7)\n",
+        "    let nullable = EvalEntry<i64?>(time: at, value: null)\n",
+        "    let structural = EvalEntry<set<str>>(time: at, value: change)\n",
+        "    let whole = EvalEntry<set<str>>(time: at, value: members)\n",
+        "    let absent = EvalEntry<i64>(time: at, value: null)\n",
+        "    return 1\n",
+        "}\n",
+        // An entry of another shape than the source's output; a whole
+        // value where the entry holds a delta.
+        "fn replay_other<T, U>(const items: list<EvalEntry<U>>) -> T {\n",
+        "    for item in items {\n",
+        "        yield item.time: item.value\n",
+        "    }\n",
+        "}\n",
+        "fn record_whole<T>(input: T) {\n",
+        "    cache entries: list<EvalEntry<T>> = []\n",
+        "    inject clock\n",
+        "    when {\n",
+        "        entries = append(entries, EvalEntry<T>(time: clock.evaluation_time, value: input))\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:37:54 type/type.mismatch EXPR-5",
+            "m.hgl:38:50 type/type.mismatch TYPE-14",
+            "m.hgl:43:26 type/type.mismatch EXPR-5",
+            "m.hgl:50:84 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "made")[3..],
+        [
+            "scalar: EvalEntry<i64>",
+            "nullable: EvalEntry<i64?>",
+            "structural: EvalEntry<set<str>>",
+            "whole: EvalEntry<set<str>>",
+            "absent: EvalEntry<i64>",
+        ]
+    );
+}
