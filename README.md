@@ -28,7 +28,7 @@ the front end. The first target is the
 | Parser | implemented: every production of the pinned grammar to a lossless syntax tree; the parser's part of 31 rules |
 | Formatter | planned |
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
-| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); running a test needs a target |
+| Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests run on hgraph (`hgl test --target hgraph`), where the target writes what they need |
 | Optimiser | planned |
 | Transpiler | hgraph, first slice: scalar nodes, value functions, graphs that call nodes, and tests with dense evals, as Python wiring (`hgl emit`) |
 
@@ -58,12 +58,16 @@ module uses with no `use`, is the one `hgl` is built with unless the
 roots hold a `module core` of their own. What an expression is,
 phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
-`# expect-error(category, "code")`, and lists its tests; no test can be run
-by `hgl test` yet. `hgl emit --out DIR` writes an accepted program as
-Python wiring for hgraph, and reports what the target does not write
-yet. Exit status is 0 when the source is accepted and
-every selected case passed, 1 when the source is rejected or a case failed,
-2 when the command could not run.
+`# expect-error(category, "code")`, and lists its tests.
+`hgl test --target hgraph` also runs the tests on hgraph, with the
+Python interpreter `--python PATH` names, which must have hgraph
+installed; a test that needs a form the target does not write yet is
+reported `not run`, with the form. `hgl emit --out DIR` writes an
+accepted program as Python wiring for hgraph, and reports what the
+target does not write yet. Exit status is 0 when the source is accepted
+and every selected case passed, 1 when the source is rejected or a case
+failed, 2 when the command could not run or a selected test was not
+run.
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper
 than 500. `--nesting-limit` and `--tree-depth-limit` raise them.

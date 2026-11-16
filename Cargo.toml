@@ -30,6 +30,7 @@ codespan-reporting = "0.13"
 # Only the graph type and the algorithms over it are used.
 petgraph = { version = "0.8", default-features = false, features = ["std"] }
 rowan = "0.17"
+tempfile = "3.27"
 walkdir = "2.5"
 
 # Lints every crate inherits with `[lints] workspace = true`.

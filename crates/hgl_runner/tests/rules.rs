@@ -8,8 +8,9 @@
 
 mod common;
 
-use common::{run_all, run_selected};
-use hgl_runner::{CaseKind, Outcome, Selection};
+use common::{run_all, run_on, run_selected};
+use hgl_analyser::Program;
+use hgl_runner::{CaseKind, Executor, Outcome, Selection};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -893,4 +894,159 @@ fn lines_are_counted_alike_under_every_line_break() {
         assert_eq!(ran.stopped, NONE, "{line_break:?}");
         assert_eq!(ran.cases, expected, "{line_break:?}");
     }
+}
+
+/// An executor that runs nothing itself: it records the tests it was
+/// asked for, and says of each what `said` holds for its position.
+struct Scripted {
+    /// The outcomes to give, in order. One too few leaves the last
+    /// test asked for with none.
+    said: Vec<Outcome>,
+    /// The tests each call asked for.
+    asked: Vec<Vec<String>>,
+    /// The modules of the program each call was given.
+    modules: Vec<Vec<String>>,
+}
+
+impl Scripted {
+    fn saying(said: Vec<Outcome>) -> Scripted {
+        Scripted {
+            said,
+            asked: Vec::new(),
+            modules: Vec::new(),
+        }
+    }
+}
+
+impl Executor for Scripted {
+    fn execute(&mut self, program: &Program, tests: &[String]) -> Vec<Outcome> {
+        self.asked.push(tests.to_vec());
+        self.modules.push(
+            program
+                .modules
+                .iter()
+                .map(|module| module.path.clone())
+                .collect(),
+        );
+        self.said.clone()
+    }
+}
+
+/// A program with a rejection case and three tests to run.
+const TO_RUN: &str = concat!(
+    "module examples.run\n",
+    "# expect-error(parse, \"string.unknown_escape\")\n",
+    "const fn bad_escape() -> str => \"a\\q\"\n",
+    "test first { assert true }\n",
+    "test second { assert true }\n",
+    "test third { assert true }\n",
+);
+
+/// TST-15: "Success requires every selected executable and required
+/// rejection case to pass. ... Report each selected case's identity,
+/// kind, and outcome". The executable cases are given to the executor
+/// once, as `module.path::name` in source order, with the surviving
+/// source analysed; what it says of each is that case's outcome, and
+/// one it says nothing of is not run.
+#[test]
+fn executable_cases_are_run_by_the_executor() {
+    let mut executor = Scripted::saying(vec![
+        Outcome::Passed,
+        Outcome::FailedRun("the assertion does not hold".to_string()),
+    ]);
+    let ran = run_on(
+        &[("run.hgl", TO_RUN)],
+        &Selection::default(),
+        Some(&mut executor),
+    );
+    assert_eq!(
+        executor.asked,
+        [[
+            "examples.run::first",
+            "examples.run::second",
+            "examples.run::third"
+        ]]
+    );
+    assert!(
+        executor.modules[0].contains(&"examples.run".to_string()),
+        "the program given is the surviving source's"
+    );
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection run.hgl:3 const fn bad_escape",
+            "passed executable examples.run::first",
+            "failed executable examples.run::second",
+            "  said the assertion does not hold",
+            "not-run executable examples.run::third",
+            "  said the target gave it no outcome",
+        ]
+    );
+    assert!(!ran.report.succeeded());
+
+    // Every case passes: the run succeeds.
+    let mut executor = Scripted::saying(vec![Outcome::Passed; 3]);
+    let ran = run_on(
+        &[("run.hgl", TO_RUN)],
+        &Selection::default(),
+        Some(&mut executor),
+    );
+    assert!(ran.report.succeeded());
+    assert_eq!(
+        ran.report
+            .count(CaseKind::Executable, |outcome| *outcome == Outcome::Passed),
+        3
+    );
+
+    // TST-14: a selector names the tests to run, and the executor is
+    // asked for those alone.
+    let mut executor = Scripted::saying(vec![Outcome::Passed]);
+    let selection = Selection {
+        tests: vec!["second".to_string()],
+        rejections_only: false,
+    };
+    let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
+    assert_eq!(executor.asked, [["examples.run::second"]]);
+    assert!(ran.report.succeeded());
+}
+
+/// TST-14: "Invalid metadata, ambiguous boundaries, or surviving-source
+/// errors prevent execution." A run that is stopped asks the executor
+/// for nothing; nor does a rejection-only run, or one with no test.
+#[test]
+fn a_stopped_run_executes_nothing() {
+    let mut executor = Scripted::saying(vec![Outcome::Passed]);
+    let ran = run_on(
+        &[(
+            "stopped.hgl",
+            concat!(
+                "module examples.stopped\n",
+                "const fn wrong() -> i64 => true\n",
+                "test first { assert true }\n",
+            ),
+        )],
+        &Selection::default(),
+        Some(&mut executor),
+    );
+    assert!(ran.report.prevented());
+    assert_eq!(executor.asked, Vec::<Vec<String>>::new());
+    assert_eq!(ran.cases, Vec::<String>::new());
+
+    let mut executor = Scripted::saying(vec![Outcome::Passed]);
+    let selection = Selection {
+        tests: Vec::new(),
+        rejections_only: true,
+    };
+    let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
+    assert_eq!(executor.asked, Vec::<Vec<String>>::new());
+    assert!(ran.report.succeeded());
+
+    let mut executor = Scripted::saying(vec![Outcome::Passed]);
+    let ran = run_on(
+        &[("none.hgl", "module examples.none\n")],
+        &Selection::default(),
+        Some(&mut executor),
+    );
+    assert_eq!(executor.asked, Vec::<Vec<String>>::new());
+    assert!(ran.report.succeeded());
 }

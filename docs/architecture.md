@@ -39,11 +39,11 @@ Rules for every stage:
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
-| `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
+| `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring | first slice: scalar nodes, value functions, graphs that call nodes, tests with dense evals |
+| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | first slice: scalar nodes, value functions, graphs that call nodes, tests with dense evals |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -1137,7 +1137,7 @@ not a stage: it drives the stages. A case is one of two kinds:
 | Kind | What it is | State |
 | --- | --- | --- |
 | Rejection | An import, declaration or named test expected to be rejected, marked with `# expect-error(category, "code")` | checked |
-| Executable | A named test | listed and reported `not run`: running one needs a target |
+| Executable | A named test | run on the target `--target` names; listed and reported `not run` with none |
 
 A rejection case is checked in four steps (TST-13):
 
@@ -1173,6 +1173,18 @@ Invalid metadata, an annotation with no owner, an unknown selector and an
 error in the surviving source stop the run before any case (TST-14). A
 case that does not match fails alone.
 
+The runner knows no target. It hands the selected tests, each named
+`module.path::name`, and the surviving source's analysed program to an
+`Executor`, which says what became of each. `hgl test --target hgraph`
+gives it one made of the hgraph target and a Python interpreter;
+without `--target` it is given none, and every test is `not run`.
+
+| Outcome of a test | When |
+| --- | --- |
+| `passed` | It ran to its end |
+| `FAILED` | An assertion did not hold or an error escaped. The line under it says which statement of the test, and what the host said |
+| `not run` | No target was named; the target does not write a form the test needs, which the line under it names; or the host did not run it to an end. Such a test shows nothing (TST-14) |
+
 Only a catalogued category and code can be expected (TST-12).
 `hgl_diagnostics::catalogue` lists them, and a test compares the list
 with the pinned chapter. Every code of the lexer and the analyser is one,
@@ -1185,7 +1197,7 @@ comment, or a second unnamed file of a module.
 | --- | --- |
 | 0 | Every selected case passed, or none was selected, which the output says |
 | 1 | A case failed, or the run was stopped |
-| 2 | Nothing failed and a selected test could not be run: there is no target yet. `--rejections-only` selects no test |
+| 2 | Nothing failed and a selected test was not run. `--rejections-only` selects no test |
 
 The program is analysed once more for each rejection case. That is simple
 and exact; it is revisited if a suite grows large enough to notice.
@@ -1235,6 +1247,8 @@ A transpiler is given a program the analyser accepted. What it cannot
 write is no fault of the source, so it is reported in the category
 `build`, which no `# expect-error` names, with a code of the target's
 own. `hgl emit` then writes nothing: half a program is of no use to run.
+`hgl test --target NAME` does run on such a program the tests that need
+nothing the target reported.
 
 ### hgraph
 
@@ -1253,6 +1267,8 @@ declarations and the packages of the modules under it side by side, and
 the `_m_` keeps the two apart, so `module demo` may declare a `util`
 beside `module demo.util`. Beside the modules are the support files a
 generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
+A name that starts with `_` is the target's own: no module's or
+declaration's Python name does.
 
 | HGL | Python |
 | --- | --- |
@@ -1272,6 +1288,7 @@ generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | A named test | A function `test_name` |
+| `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
@@ -1300,14 +1317,46 @@ literal and a call; a temporal function called in a test outside an
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 
+A module is written a piece at a time: each declaration, then each
+named test. A piece with a form that is not written is left out of the
+file, and every piece records the functions it names. A test is
+*blocked* when it, or a function it reaches through those names in any
+module, was left out; it then carries the first such report.
+
+`hgl_hgraph::run` runs the tests that are not blocked. hgraph is run
+from Python, so the host is a Python interpreter that has hgraph:
+`--python PATH`, or `python3` (`python` on Windows). The program is
+written to a temporary directory, or to the one `--keep DIR` names, and
+the interpreter is started once, with `-B` so that it writes no
+bytecode files, on a driver the target carries, `_hgl/_run_tests.py`.
+
+| File in the directory | Written by | Holds |
+| --- | --- | --- |
+| `_plan.txt` | the compiler | The tests to run, each as its Python module and its function, `test_name` |
+| `_results.txt` | the driver, as it runs | For each test `start`, then `passed`, `failed` with a line and the error's text, or `unloaded` when its module does not import |
+
+The results are a file, so nothing a program prints is taken for an
+outcome. A test with a `start` and nothing after it was running when the
+interpreter stopped; it and the tests after it are not run. For a test
+that failed, the driver gives the line of the test's own function that
+was running. The emitter recorded the line each statement of a test
+starts on, so the failure is reported at that statement in the source:
+`cases.hgl:9:5: the assertion does not hold`. An error that escapes,
+such as an `i64` result out of range (NUM-2), is reported the same way
+with its text. There is no limit yet on how long a test may run.
+
 The crate's tests compare the Python written for a small module with
-what is expected, and check that core's dense scalar eval cases are
-written whole. One more test runs the generated tests on hgraph: it
-needs a Python that has hgraph, named by the environment variable
-`HGL_HGRAPH_PYTHON`, and is run with `cargo test -p hgl_hgraph --
---ignored`. With hgraph 0.8.19 the eight tests of core's
-`scalar_eval.hgl` pass, and so do the five of `scalar_endpoints.hgl`
-that publish no null. That is a run by hand, and no conformance claim.
+what is expected, check that core's dense scalar eval cases are written
+whole, and check which tests of a program with unwritten forms are
+blocked. Tests that run on hgraph need a Python that has it, named by
+the environment variable `HGL_HGRAPH_PYTHON`, and are run with
+`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. With hgraph 0.8.19,
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 13 of
+the 24 tests of the pinned core's conformance cases: the eight of
+`scalar_eval.hgl` and the five of `scalar_endpoints.hgl` that publish
+no null. The other 11 are not run, for forms the target does not write
+yet. That is a run by hand, and no
+conformance claim.
 
 ## Finding source files
 
@@ -1353,8 +1402,9 @@ that adds a file to core fails it until the list has the file.
    `# expect-error` matching and `hgl test` for rejection cases (done);
    name resolution (done); the checks the parser left (FN-8, NATIVE-3;
    done); types for the scalar slice.
-4. Transpiler for hgraph (first slice done); `hgl test` running the core
-   conformance cases.
+4. Transpiler for hgraph (first slice done); `hgl test` running tests
+   on it (done for what the target writes); the forms the rest of
+   core's conformance cases need.
 5. Wider language coverage; optimiser passes; a second transpiler.
 
 ## Specification pin
@@ -1374,6 +1424,7 @@ the job the way the design needs is dropped.
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
+| `tempfile` | `hgl_cli` | the directory a program is written to for a test run, removed after it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 
 Hand-written where no tool fits:

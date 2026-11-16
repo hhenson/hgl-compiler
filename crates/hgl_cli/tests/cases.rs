@@ -9,10 +9,17 @@ use std::process::{Command, Output};
 
 /// Runs `hgl` with `arguments` and waits for it to finish.
 fn hgl(arguments: &[&str]) -> Output {
+    hgl_with(arguments, &[])
+}
+
+/// Runs `hgl` with `arguments` and with each of `environment`, a name
+/// and a value, set in its environment.
+fn hgl_with(arguments: &[&str], environment: &[(&str, &str)]) -> Output {
     // Cargo builds the binary before the test and puts its path in this
     // environment variable at compile time.
     Command::new(env!("CARGO_BIN_EXE_hgl"))
         .args(arguments)
+        .envs(environment.iter().copied())
         .output()
         .expect("the hgl binary runs")
 }
@@ -86,8 +93,9 @@ fn a_rejection_only_run_that_passes_exits_zero() {
 }
 
 /// TST-15: "Success requires every selected executable and required
-/// rejection case to pass." No test can be run yet, so a run that
-/// selects one does not succeed: status 2, the command could not run.
+/// rejection case to pass." A test is run on a target, so a run that
+/// selects one and names no target does not succeed: status 2, the
+/// command could not run.
 #[test]
 fn a_test_that_cannot_be_run_is_not_a_success() {
     let root = scratch("not_run");
@@ -102,7 +110,7 @@ fn a_test_that_cannot_be_run_is_not_a_success() {
                 "passed   rejection   examples.rejection::rejected\n",
                 "not run  executable  examples.rejection::survives\n",
                 "rejection cases: 2 passed, 0 failed\n",
-                "executable cases: 1 not run: this compiler has no target to run a test on yet\n",
+                "executable cases: 1 not run: no target was given to run a test on\n",
             ),
             file = file
         )
@@ -301,7 +309,7 @@ fn the_specifications_rejection_illustration_passes() {
                 "passed   rejection   {file}:4 fn invalid\n",
                 "not run  executable  examples.rejection::survives\n",
                 "rejection cases: 1 passed, 0 failed\n",
-                "executable cases: 1 not run: this compiler has no target to run a test on yet\n",
+                "executable cases: 1 not run: no target was given to run a test on\n",
             ),
             file = file
         )
@@ -374,4 +382,150 @@ fn the_specifications_rejection_illustration_passes() {
             file = file
         )
     );
+}
+
+/// A program with a test that passes, one that fails at its second
+/// statement, and one the hgraph target cannot write yet.
+const RUNNING: &str = concat!(
+    "module examples.running\n",
+    "\n",
+    "const fn doubled(value: i64) -> i64 => value * 2\n",
+    "const fn lone(value: i64) -> i64 => value\n",
+    "\n",
+    "test holds { assert doubled(2) == 4 }\n",
+    "test wrong {\n",
+    "    assert doubled(2) == 4\n",
+    "    assert doubled(2) == 5\n",
+    "}\n",
+    "test later { assert eval(lone, value: [1]) == [1] }\n",
+);
+
+/// TST-14: "crashes, and infrastructure failures cannot prove
+/// conformance". With a target and an interpreter that cannot be
+/// started, each test is not run and says why; one the target cannot
+/// write says what it needs. Nothing failed, and the run is no
+/// success: status 2.
+#[test]
+fn a_host_that_does_not_start_runs_no_test() {
+    let root = scratch("no_host");
+    let file = write(&root, "cases.hgl", RUNNING);
+    let output = hgl(&[
+        "test",
+        &argument(&root),
+        "--target",
+        "hgraph",
+        "--python",
+        "hgl-no-such-python",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    let printed = text(&output.stdout);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 8, "{printed}");
+    assert_eq!(lines[0], "not run  executable  examples.running::holds");
+    // What the system says of a program that is not there differs from
+    // one system to another.
+    let reason = "    `hgl-no-such-python` could not be started: ";
+    assert!(lines[1].starts_with(reason), "{printed}");
+    assert_eq!(lines[2], "not run  executable  examples.running::wrong");
+    assert!(lines[3].starts_with(reason), "{printed}");
+    assert_eq!(lines[4], "not run  executable  examples.running::later");
+    assert_eq!(
+        lines[5],
+        format!(
+            "    {file}:11:21: the hgraph target does not write an eval of a value function, \
+             which is lifted yet"
+        )
+    );
+    assert_eq!(lines[6], "rejection cases: 0 passed, 0 failed");
+    assert_eq!(lines[7], "executable cases: 0 passed, 0 failed, 3 not run");
+}
+
+/// The interpreter and the directory to keep are the target's, and
+/// mean nothing without one.
+#[test]
+fn a_host_option_needs_a_target() {
+    let root = scratch("no_target");
+    write(&root, "cases.hgl", RUNNING);
+    for option in ["--python", "--keep"] {
+        let output = hgl(&["test", &argument(&root), option, "somewhere"]);
+        assert_eq!(output.status.code(), Some(2), "{option}");
+        assert!(text(&output.stderr).contains("--target"), "{option}");
+    }
+}
+
+/// TST-15: "Report each selected case's identity, kind, and outcome",
+/// and TST-14, "Report executed/rejected counts separately", for tests
+/// run on hgraph. A test that fails says which statement failed, and
+/// the run is rejected: status 1. What was written for the run is
+/// kept where `--keep` says.
+///
+/// It needs a Python that has hgraph, named by the environment
+/// variable `HGL_HGRAPH_PYTHON`, so it is not among the tests run by
+/// default: `cargo test -p hgl_cli -- --ignored` runs it.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn tests_run_on_hgraph() {
+    let python = std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let root = scratch("on_hgraph");
+    let file = write(&root, "cases.hgl", RUNNING);
+    let kept = scratch("on_hgraph_kept");
+    // `PYTHONOPTIMIZE` has Python remove its own `assert` statements.
+    // An HGL assertion is checked all the same: the test that fails
+    // still fails.
+    let output = hgl_with(
+        &[
+            "test",
+            &argument(&root),
+            "--target",
+            "hgraph",
+            "--python",
+            &python,
+            "--keep",
+            &argument(&kept),
+        ],
+        &[("PYTHONOPTIMIZE", "2")],
+    );
+    assert_eq!(
+        text(&output.stdout),
+        format!(
+            concat!(
+                "passed   executable  examples.running::holds\n",
+                "FAILED   executable  examples.running::wrong\n",
+                "    {file}:9:5: the assertion does not hold\n",
+                "not run  executable  examples.running::later\n",
+                "    {file}:11:21: the hgraph target does not write an eval of a value function, ",
+                "which is lifted yet\n",
+                "rejection cases: 0 passed, 0 failed\n",
+                "executable cases: 1 passed, 1 failed, 1 not run\n",
+            ),
+            file = file
+        )
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        kept.join("_hgl/_m_examples/_m_running/__init__.py")
+            .is_file()
+    );
+
+    // Only the test that passes: the run succeeds.
+    let output = hgl(&[
+        "test",
+        &argument(&root),
+        "--test",
+        "holds",
+        "--target",
+        "hgraph",
+        "--python",
+        &python,
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "passed   executable  examples.running::holds\n",
+            "rejection cases: 0 passed, 0 failed\n",
+            "executable cases: 1 passed, 0 failed, 0 not run\n",
+        )
+    );
+    assert_eq!(output.status.code(), Some(0));
 }

@@ -1,20 +1,23 @@
-//! The hgraph target against small programs: the Python it writes, and
-//! what it reports for a form it does not write yet.
+//! The hgraph target against small programs: the Python it writes,
+//! what it reports for a form it does not write yet, and which tests
+//! can then still be run.
 
 use std::fs;
 use std::path::Path;
 
 use hgl_analyser::{ParsedFile, analyse};
-use hgl_diagnostics::{Diagnostics, render};
-use hgl_hgraph::{File, transpile};
+use hgl_diagnostics::{Diagnostics, Location, render};
+use hgl_hgraph::{Output, Ran, Test, run, transpile};
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
 use hgl_source::SourceMap;
 
 /// What the target makes of a program.
 struct Emitted {
-    /// The files written.
-    files: Vec<File>,
+    /// The program's files, to say where a place is.
+    sources: SourceMap,
+    /// The files written, and the program's tests.
+    output: Output,
     /// What the target reported, each as `file:line:column code`.
     reported: Vec<String>,
 }
@@ -23,11 +26,37 @@ impl Emitted {
     /// The text of the file at `path`.
     fn text(&self, path: &str) -> &str {
         &self
+            .output
             .files
             .iter()
             .find(|file| file.path == path)
             .unwrap_or_else(|| panic!("no file `{path}` was written"))
             .text
+    }
+
+    /// The test named `name`, and its position among the tests.
+    fn test(&self, name: &str) -> (usize, &Test) {
+        self.output
+            .tests
+            .iter()
+            .enumerate()
+            .find(|(_, test)| test.name == name)
+            .unwrap_or_else(|| panic!("no test `{name}` was written"))
+    }
+
+    /// A place as `file:line:column`.
+    fn place(&self, at: Location) -> String {
+        let source = self.sources.file(at.file);
+        format!("{}:{}", source.name(), source.line_col(at.span.start))
+    }
+
+    /// What blocks the test named `name`, as `file:line:column
+    /// message`.
+    fn blocked(&self, name: &str) -> Option<String> {
+        let (_, test) = self.test(name);
+        test.blocked
+            .as_ref()
+            .map(|diagnostic| format!("{} {}", self.place(diagnostic.primary), diagnostic.message))
     }
 }
 
@@ -63,7 +92,7 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
         render::to_string(&sources, &diagnostics)
     );
     let before = diagnostics.len();
-    let files = transpile(&program, &mut diagnostics);
+    let output = transpile(&program, &mut diagnostics);
     let reported = diagnostics.as_slice()[before..]
         .iter()
         .map(|diagnostic| {
@@ -78,7 +107,11 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
             )
         })
         .collect();
-    Emitted { files, reported }
+    Emitted {
+        sources,
+        output,
+        reported,
+    }
 }
 
 /// A file of the pinned core, by its path under `spec/hgl_core`.
@@ -164,8 +197,10 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "def test_scales():\n",
     "    seen = _harness.evaluate(wired, value=[1, None, 2])\n",
-    "    assert seen == [1, None, 12]\n",
-    "    assert _harness.evaluate(scaled, value=[5], factor=2) != []\n",
+    "    if not (seen == [1, None, 12]):\n",
+    "        raise _py.AssertionError()\n",
+    "    if not (_harness.evaluate(scaled, value=[5], factor=2) != []):\n",
+    "        raise _py.AssertionError()\n",
     "    _harness.evaluate(sink, value=[True])\n",
 );
 
@@ -174,6 +209,7 @@ fn a_module_is_written_as_python() {
     let emitted = emit(&[("demo.hgl", DEMO)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let paths: Vec<&str> = emitted
+        .output
         .files
         .iter()
         .map(|file| file.path.as_str())
@@ -208,8 +244,10 @@ fn cores_scalar_eval_cases_are_written_whole() {
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
-        "    assert _harness.evaluate(pass_i64, value=[None, 7, None, None]) == [None, 7]\n",
-        "    assert _harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]) == [\"\", None, \"\", \"a\"]\n",
+        "    if not (_harness.evaluate(pass_i64, value=[None, 7, None, None]) == [None, 7]):\n",
+        "        raise _py.AssertionError()\n",
+        "    if not (_harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]) == [\"\", None, \"\", \"a\"]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(python.contains(expected), "the module has:\n{expected}");
     }
@@ -530,8 +568,10 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         // A node's configuration, in a graph and in an eval.
         "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
         "    return offset(value=value, by=10)\n",
-        "    assert _harness.evaluate(offset, value=[1], by=10) == [11]\n",
-        "    assert _harness.evaluate(offset, value=[1], by=1) == [2]\n",
+        "    if not (_harness.evaluate(offset, value=[1], by=10) == [11]):\n",
+        "        raise _py.AssertionError()\n",
+        "    if not (_harness.evaluate(offset, value=[1], by=1) == [2]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -671,9 +711,11 @@ fn no_two_names_are_one_python_name() {
             "    return _core.add__i64_i64(lhs=_value_doubled(value=value.value), rhs=1)\n",
         ),
         "def eight():\n    return _value_doubled(value=4)\n",
-        "    assert _harness.evaluate(doubled, value=[4]) == [9]\n",
+        "    if not (_harness.evaluate(doubled, value=[4]) == [9]):\n",
+        "        raise _py.AssertionError()\n",
         // An input named as the harness's own parameter is.
-        "    assert _harness.evaluate(pass_, target=[1]) == [1]\n",
+        "    if not (_harness.evaluate(pass_, target=[1]) == [1]):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -797,6 +839,7 @@ fn modules_nest_and_empty_forms_have_a_body() {
     let emitted = emit(&NESTED);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let paths: Vec<&str> = emitted
+        .output
         .files
         .iter()
         .map(|file| file.path.as_str())
@@ -815,7 +858,8 @@ fn modules_nest_and_empty_forms_have_a_body() {
         "import _hgl._m_demo._m_util as _hgl_4demo_4util\n",
         "def kept():\n    held = None\n    return held\n",
         "@idle.start\ndef _start_idle():\n    pass\n",
-        "    assert (kept() is None)\n",
+        "    if not ((kept() is None)):\n",
+        "        raise _py.AssertionError()\n",
     ] {
         assert!(
             python.contains(expected),
@@ -889,15 +933,182 @@ fn a_form_not_written_yet_is_reported() {
     );
 }
 
-/// Runs the tests the target writes for core's scalar eval cases, on
-/// hgraph. It needs a Python that has hgraph, named by the environment
-/// variable `HGL_HGRAPH_PYTHON`, so it is not among the tests run by
-/// default: `cargo test -p hgl_hgraph -- --ignored` runs it.
+/// A program with forms that are not written: a loop in two of its
+/// functions, and an eval of a value function in one of its tests.
+const REACH: [(&str, &str); 3] = [
+    (
+        "reach.hgl",
+        concat!(
+            "module reach\n",
+            "use reach.far as far\n",
+            "\n",
+            "const fn fine(value: i64) -> i64 => value + 1\n",
+            "const fn looped(limit: i64) -> i64 {\n",
+            "    var total = 0\n",
+            "    while total < limit { total = total + 1 }\n",
+            "    return total\n",
+            "}\n",
+            "const fn outer(limit: i64) -> i64 => looped(limit) + 1\n",
+            "const fn lone(value: i64) -> i64 => value\n",
+            "\n",
+            "test direct {\n",
+            "    assert fine(1) == 2\n",
+            "    assert fine(2) == 3\n",
+            "}\n",
+            "test reaches { assert outer(1) == 2 }\n",
+            "test own { assert eval(lone, value: [1]) == [1] }\n",
+            "test across { assert far::relay(1) == 2 }\n",
+            "test wrong {\n",
+            "    assert fine(1) == 2\n",
+            "    assert fine(1) == 3\n",
+            "}\n",
+            "test overflows {\n",
+            "    let big = 9223372036854775807\n",
+            "    assert fine(big) == 0\n",
+            "}\n",
+        ),
+    ),
+    (
+        "far.hgl",
+        concat!(
+            "module reach.far\n",
+            "use reach.deep as deep\n",
+            "export const fn relay(value: i64) -> i64 => deep::counted(value)\n",
+        ),
+    ),
+    (
+        "deep.hgl",
+        concat!(
+            "module reach.deep\n",
+            "export const fn counted(limit: i64) -> i64 {\n",
+            "    var total = 0\n",
+            "    while total < limit { total = total + 1 }\n",
+            "    return total\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// A declaration or a test with a form that is not written is left out
+/// of its file. A test can be run when it reaches nothing left out,
+/// through the functions it names and those they name, in its module
+/// or another; one that cannot says the first form it needs.
+#[test]
+fn a_test_runs_when_all_it_reaches_is_written() {
+    let emitted = emit(&REACH);
+    assert_eq!(
+        emitted.reported,
+        [
+            "reach.hgl:7:5 target.unsupported",
+            "reach.hgl:18:19 target.unsupported",
+            "deep.hgl:4:5 target.unsupported",
+        ]
+    );
+    assert_eq!(emitted.blocked("direct"), None);
+    assert_eq!(emitted.blocked("wrong"), None);
+    assert_eq!(emitted.blocked("overflows"), None);
+    let statement = "the hgraph target does not write this statement yet";
+    assert_eq!(
+        emitted.blocked("reaches"),
+        Some(format!("reach.hgl:7:5 {statement}"))
+    );
+    assert_eq!(
+        emitted.blocked("across"),
+        Some(format!("deep.hgl:4:5 {statement}"))
+    );
+    assert_eq!(
+        emitted.blocked("own"),
+        Some(
+            "reach.hgl:18:19 the hgraph target does not write an eval of a value function, \
+             which is lifted yet"
+                .to_string()
+        )
+    );
+    let (_, direct) = emitted.test("direct");
+    assert_eq!(direct.identity(), "reach::direct");
+
+    let python = emitted.text("_hgl/_m_reach/__init__.py");
+    for written in [
+        "def fine(",
+        "def outer(",
+        "def test_direct(",
+        "def test_wrong(",
+    ] {
+        assert!(python.contains(written), "{written} is in:\n{python}");
+    }
+    // What has such a form itself is left out. A test that only
+    // reaches one is written, and is not run.
+    for left_out in ["def looped(", "def test_own("] {
+        assert!(
+            !python.contains(left_out),
+            "{left_out} is not in:\n{python}"
+        );
+    }
+
+    // A line of the file is traced back to the statement of the test
+    // that starts at or before it.
+    let (_, wrong) = emitted.test("wrong");
+    let line = |text: &str| {
+        1 + python
+            .lines()
+            .position(|line| line == text)
+            .unwrap_or_else(|| panic!("`{text}` is a line of:\n{python}"))
+    };
+    let defined = line("def test_wrong():");
+    assert_eq!(wrong.statement_at(defined), None);
+    let place = |line| wrong.statement_at(line).map(|at| emitted.place(at));
+    // An `assert` is two lines of Python: the `if`, and the `raise`
+    // a failure is reported on.
+    assert_eq!(place(defined + 1), Some("reach.hgl:21:5".to_string()));
+    assert_eq!(place(defined + 2), Some("reach.hgl:21:5".to_string()));
+    assert_eq!(place(defined + 3), Some("reach.hgl:22:5".to_string()));
+    assert_eq!(place(defined + 4), Some("reach.hgl:22:5".to_string()));
+}
+
+/// An interpreter that cannot be started runs no test: each is not
+/// run, with the reason, and none has failed (TST-14: "infrastructure
+/// failures cannot prove conformance").
+#[test]
+fn an_interpreter_that_does_not_start_runs_nothing() {
+    let emitted = emit(&REACH);
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_not_started");
+    fs::remove_dir_all(&directory).ok();
+    let tests = [emitted.test("direct").0, emitted.test("wrong").0];
+    let ran = run(
+        Path::new("hgl-no-such-python"),
+        &directory,
+        &emitted.output,
+        &tests,
+    );
+    assert_eq!(ran.len(), 2);
+    for outcome in ran {
+        let Ran::NotRun(reason) = outcome else {
+            panic!("the test was not run: {outcome:?}");
+        };
+        assert!(
+            reason.starts_with("`hgl-no-such-python` could not be started: "),
+            "{reason}"
+        );
+    }
+    // The program was written before the interpreter was asked for.
+    assert!(directory.join("_hgl/_m_reach/__init__.py").is_file());
+}
+
+/// The Python interpreter the tests that need hgraph run on.
+fn python_with_hgraph() -> String {
+    std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph")
+}
+
+/// Runs the tests the target writes for core's scalar eval cases and
+/// for the programs of this file, on hgraph. It needs a Python that
+/// has hgraph, named by the environment variable `HGL_HGRAPH_PYTHON`,
+/// so it is not among the tests run by default:
+/// `cargo test -p hgl_hgraph -- --ignored` runs it.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn the_generated_tests_pass_on_hgraph() {
-    let python = std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let python = python_with_hgraph();
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
     fs::remove_dir_all(&directory).ok();
     let core = core_file("tests/conformance/scalar_eval.hgl");
@@ -916,45 +1127,57 @@ fn the_generated_tests_pass_on_hgraph() {
     files.extend(PATHS);
     let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    for file in &emitted.files {
-        let path = file
-            .path
-            .split('/')
-            .fold(directory.clone(), |path, part| path.join(part));
-        fs::create_dir_all(path.parent().expect("a file is in a directory")).unwrap();
-        fs::write(path, &file.text).unwrap();
-    }
-    let driver = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run_tests.py");
-    // `-I` keeps the interpreter to its own packages, and `-B` has it
-    // write no bytecode beside them.
-    let output = std::process::Command::new(python)
-        .args(["-I", "-B"])
-        .arg(driver)
-        .arg(&directory)
-        .args([
-            "_hgl._m_conformance",
-            "_hgl._m_hgraph",
-            "_hgl._m_paths",
-            "_hgl._m_demo",
-            "_hgl._m_demo._m_scaling",
-            "_hgl._m_demo._m_endpoints",
-            "_hgl._m_demo._m_selectors",
-            "_hgl._m_demo._m_configured",
-            "_hgl._m_demo._m_names",
-            "_hgl._m_demo._m_defaults",
-            "_hgl._m_demo._m_caller",
-        ])
-        .output()
-        .expect("the interpreter runs");
-    let printed = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "every generated test passes:\n{printed}\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let not_passed: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .filter(|(_, ran)| **ran != Ran::Passed)
+        .map(|(test, ran)| format!("{}: {ran:?}", test.identity()))
+        .collect();
+    assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
-        printed.matches("ok ").count(),
+        ran.len(),
         23,
         "eight of core's, six on endpoints, and one of each demo's"
+    );
+}
+
+/// A test that fails on hgraph says which of its statements failed,
+/// and why: an assertion that does not hold, or an error that escaped
+/// (NUM-2: an `i64` result out of range). Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_failure_names_the_statement_that_failed() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_failures");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&REACH);
+    let tests = [
+        emitted.test("direct").0,
+        emitted.test("wrong").0,
+        emitted.test("overflows").0,
+    ];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    let said: Vec<String> = ran
+        .iter()
+        .map(|ran| match ran {
+            Ran::Passed => "passed".to_string(),
+            Ran::Failed { at, message } => format!(
+                "failed {} {message}",
+                at.map_or("nowhere".to_string(), |at| emitted.place(at))
+            ),
+            Ran::NotRun(reason) => format!("not run {reason}"),
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            "passed",
+            "failed reach.hgl:22:5 the assertion does not hold",
+            "failed reach.hgl:26:5 HglError: an i64 result is outside the signed 64-bit range",
+        ]
     );
 }
