@@ -589,10 +589,22 @@ reads one. None is assigned: `name.property = value` on a local of a
 native type, or on a capability, is `binding.immutable`. A native type is
 not constructed: a call of its name is `call.not_callable`. A native
 function is private unless its declaration is exported (NATIVE-1), as a
-function is; the part that implements it does not repeat `export`. `endpoint<T>` is `Type::Endpoint`, admitted only as the whole
-type of a native value function's parameter (TYPE-12,
-`endpoint.position`); a call that gives such a parameter an input by its
-name is not read yet (TIME-9).
+function is; the part that implements it does not repeat `export`.
+
+`endpoint<T>` is `Type::Endpoint`, admitted only as the whole type of a
+native value function's parameter (TYPE-12, `endpoint.position`). An
+argument given to such a parameter is an endpoint and no value (TIME-9):
+`Typer::expression` reads a place that expects an endpoint as
+`ExprKind::EndpointOf`, the input named, with no read of its payload. It
+is a temporal input of the node by its name, or `out`, in a hook;
+anything else is `endpoint.argument`, and so is any argument in a graph
+or a value function, which have no input of their own to give. A
+generic `T` under the endpoint is inferred from what the input holds.
+
+The endpoint operations are core's to declare as such functions. In a
+node's hooks their names are read as the forms they are, a selector or
+a guard among them, where nothing binds the name or core's module does:
+a node reads the same before core declares them and after.
 
 Not read yet in a node: what `modified` subscribes to.
 
