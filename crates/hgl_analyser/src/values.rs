@@ -2184,8 +2184,7 @@ impl<'a> Typer<'a> {
                     codes::TYPE_MISMATCH,
                     Location::new(self.file, callee.span()),
                     format!(
-                        "this call leaves `{}` to its default, {}, and `{}` is `{expected}` \
-                         here",
+                        "this leaves `{}` to its default, {}, and `{}` is `{expected}` here",
                         generic.name,
                         kind.described(),
                         generic.name
@@ -3794,8 +3793,22 @@ impl<'a> Typer<'a> {
                 };
                 let found = vec![None; read.generics.len()];
                 let Inferred {
-                    arguments, found, ..
+                    arguments,
+                    mut found,
+                    defaulted,
+                    ..
                 } = self.infer_arguments(name, list, &places, found, Takes::Fields);
+                // GEN-13: a default the construction takes is of its
+                // parameter's type as the construction resolves it: the
+                // `2` of `struct Hold<T, const fallback: T = 2>` is no
+                // `str`.
+                self.generic_values(
+                    name,
+                    declared,
+                    &read.generics,
+                    (&[], &defaulted),
+                    &mut found,
+                );
                 let found: Vec<Argument> = found
                     .into_iter()
                     .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))

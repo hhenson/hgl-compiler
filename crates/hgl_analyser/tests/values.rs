@@ -3119,7 +3119,7 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
     );
     assert_eq!(
         messages(&checked)[5],
-        "this call leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
+        "this leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
     );
     assert_eq!(locals(&checked, "uses")[7], "real: f64");
 }
@@ -3145,12 +3145,17 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
         // A type parameter has no default: the struct is not named bare.
         "struct Run<T, const size: i64 = 3> { values: list<T, size> }\n",
         "struct Bad<const size: i64 = \"three\"> { values: list<f64, size> }\n",
+        // A default whose type names a type parameter is of it for one
+        // construction and not another.
+        "struct Hold<T, const fallback: T = 2> { value: T }\n",
         "const fn uses(w: Window, five: Window<5>, g: Grid, xs: list<f64, 3>) {\n",
         "    let values = w.values\n",
         "    let wide = five.values\n",
         "    let cells = g.cells\n",
         // A construction that nothing else says the size of.
         "    let made = Window(values: xs)\n",
+        "    let held = Hold(value: 1.5)\n",
+        "    let text = Hold(value: \"x\")\n",
         "}\n",
         "const fn rejected(b: Box, r: Run) {}\n",
     ));
@@ -3158,8 +3163,9 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
         checked.summary(),
         [
             "m.hgl:8:30 type/type.mismatch GEN-13",
-            "m.hgl:15:22 type/generic.argument_count GEN-2",
-            "m.hgl:15:30 type/generic.argument_count GEN-2",
+            "m.hgl:16:16 type/type.mismatch GEN-13",
+            "m.hgl:18:22 type/generic.argument_count GEN-2",
+            "m.hgl:18:30 type/generic.argument_count GEN-2",
         ]
     );
     assert_eq!(
@@ -3173,6 +3179,8 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
             "wide: list<f64, 5>",
             "cells: list<list<f64, 2>, 2>",
             "made: Window<3>",
+            "held: Hold<f64, 2>",
+            "text: Hold<str, 2>",
         ]
     );
 }
