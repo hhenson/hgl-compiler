@@ -4152,10 +4152,13 @@ fn instance<'s>(
     // the `T` of `<T, const fallback: T>`. What the call gives it says
     // what that is where the result and the parameters, which are
     // declared to take the call's arguments, have not.
-    for (position, place) in bound.iter().enumerate() {
-        if let Place::Generic(index) = *place
-            && let GenericKind::Value(ty) = &generics[index].kind
-        {
+    // GEN-12: in the order they are declared, whatever order the call
+    // writes them in.
+    for (index, generic) in generics.iter().enumerate() {
+        let argument = bound
+            .iter()
+            .position(|&place| place == Place::Generic(index));
+        if let (Some(position), GenericKind::Value(ty)) = (argument, &generic.kind) {
             infer(ty, &given[position].value.ty, generics, &mut found);
         }
     }

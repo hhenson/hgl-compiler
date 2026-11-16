@@ -2639,6 +2639,14 @@ fn a_generic_value_parameters_type_may_be_generic() {
         // given says what it is.
         "operator make<V, O>(value: V) -> O\n",
         "impl const fn make<T, const fallback: T>(value: i64) -> T => fallback\n",
+        // GEN-12: the first declared that says what `T` is decides it,
+        // whatever order the call writes them in.
+        "operator both<V>(value: V) -> i64\n",
+        "impl const fn both<T, const first: T, const second: T>(value: i64) -> i64 => value\n",
+        "const fn orders() {\n",
+        "    let declared = both(0, first: 1.5, second: 2)\n",
+        "    let written = both(0, second: 2, first: 1.5)\n",
+        "}\n",
         "const fn uses() {\n",
         "    let whole = pick(1, fallback: 2)\n",
         "    let text = pick(\"a\", fallback: \"b\")\n",
@@ -2653,7 +2661,11 @@ fn a_generic_value_parameters_type_may_be_generic() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:12:17 operator/operator.no_candidate GEN-5"]
+        ["m.hgl:18:17 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(
+        locals(&checked, "orders"),
+        ["declared: i64", "written: i64"]
     );
     assert_eq!(
         locals(&checked, "uses")[..5],
