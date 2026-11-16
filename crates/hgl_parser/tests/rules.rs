@@ -2110,6 +2110,43 @@ fn a_native_candidate_is_written_with_impl() {
     assert!(!rejected(Entry::Declarations, "native const impl fn total() -> i64").is_empty());
 }
 
+// ---- NATIVE-1 ----
+
+#[test]
+fn export_stands_on_a_native_functions_declaration() {
+    // NATIVE-1: "A native function that is no candidate is private
+    // unless exported, as a function is (UNIT-3). `export` is written
+    // on its declaration, the form with no body, and nowhere else."
+    assert_eq!(
+        declarations("export native const fn describe(value: i64) -> str"),
+        "NativeFnDecl[\"export\" \"native\" \"const\" \"fn\" \"describe\" \
+         ParamList[\"(\" Param[\"value\" \":\" ScalarType[\"i64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"str\"]]]"
+    );
+    assert_eq!(
+        declarations("export native fn accumulate(value: i64) -> i64"),
+        "NativeFnDecl[\"export\" \"native\" \"fn\" \"accumulate\" \
+         ParamList[\"(\" Param[\"value\" \":\" ScalarType[\"i64\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"i64\"]]]"
+    );
+    // A candidate is reached through its operator, and the part that
+    // implements a declaration does not repeat `export`.
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "export native impl const fn total(lhs: i64, rhs: i64) -> i64"
+        ),
+        ["- 1:15: expected `fn` or `const`, found `impl`"]
+    );
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "export native const fn describe(value: i64) -> str {}"
+        ),
+        ["- 1:52: expected a line break, found `{`"]
+    );
+}
+
 // ---- NATIVE-3 ----
 
 #[test]

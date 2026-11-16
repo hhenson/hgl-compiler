@@ -125,6 +125,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "while.condition"),
     (Category::Phase, "loop.carried"),
     (Category::Type, "struct.abstract"),
+    (Category::Type, "call.not_callable"),
     (Category::Name, "member.unknown"),
     (Category::Operator, "operator.no_candidate"),
     (Category::Operator, "operator.ambiguous"),

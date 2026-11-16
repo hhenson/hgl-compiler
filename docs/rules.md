@@ -100,7 +100,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-1 | parser | done | One `module` line, with an optional `part`, opens a file |
 | UNIT-1 | analyser | done | Assembles a module's files: one scope, one unnamed file, unique part names |
 | UNIT-2 | analyser | done | Imports precede declarations and bind in their file; they and `alias::name` reach public declarations only |
-| UNIT-3 | analyser | partial | Private unless exported; operators public; `impl fn` reached through its operator; import cycles rejected. Left: export closure |
+| UNIT-3 | analyser | partial | Private unless exported, a native function and a native type among them; operators public; `impl fn` reached through its operator; import cycles rejected. Left: export closure |
 | UNIT-4 | analyser | done | Module-qualified nominal identity; an alias adds none |
 | UNIT-5 | analyser | done | Duplicate functions of one role, parameters, parts and locals rejected |
 | UNIT-6 | analyser | done | Forward reference to declarations; locals visible after declaration; test-only declarations kept out of production |
@@ -292,7 +292,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| NATIVE-1 | analyser | partial | A `native impl fn` or `native impl const fn` is a candidate of the operator it names, with its role. Left: a native declaration checked as an HGL callable |
+| NATIVE-1 | parser | done | `export` before a native function's declaration; with `impl`, or before a contract body, it is rejected |
+| NATIVE-1 | analyser | partial | A `native impl fn` or `native impl const fn` is a candidate of the operator it names, with its role. A native function whose declaration is exported is public. Left: a native declaration checked as an HGL callable |
 | NATIVE-2 | analyser | partial | An implementation completes one declaration of its name and role; duplicates rejected. A native candidate's implementation needs a candidate of its name and role. Left: the exact match of signatures, which says which candidate an implementation completes; selection |
 | NATIVE-3 | parser | done | Contract body forms: none, `{}`, hook markers |
 | NATIVE-3 | analyser | partial | `start` and `stop` need `when` and are unique; a const implementation has no hook. Left: graph or node by body, where a later pass reads it |
@@ -300,7 +301,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | NATIVE-4 | transpiler | planned | The provider meets the declared contract |
 | NATIVE-5 | analyser | partial | A native value function's contract injects nothing (`node.in_value_function`, with FN-9). Left: borrowed access stated in the contract; a scalar parameter gains no endpoint privilege |
 | NATIVE-6 | parser | done | A native type's body of properties, one to a line, each a name and a type |
-| NATIVE-6 | analyser | partial | A native type's properties are read: each an ordinary value type, no two of one name (`field.duplicate`); `value.property` has the property's type, and a name the type does not declare is `member.unknown`. Left: an assigned property; a native type constructed; identity and capabilities as a payload or key |
+| NATIVE-6 | analyser | partial | A native type's properties are read: each an ordinary value type, no two of one name (`field.duplicate`); `value.property` has the property's type, and a name the type does not declare is `member.unknown`. `name.property = value` on a local of a native type, a capability among them, is `binding.immutable`, and a call of a native type's name `call.not_callable`. Left: a property assigned through a longer place, which is not read yet; identity and capabilities as a payload or key |
 | NATIVE-7 | analyser | planned | An interface is checked without loading a provider |
 | NATIVE-7 | transpiler | planned | Execution needs a compatible provider; an absent binding fails |
 

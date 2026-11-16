@@ -214,6 +214,10 @@ fn a_native_types_properties_are_ordinary_values() {
             "    let span = handle.time\n",
             "    let missing = handle.width\n",
             "    let nothing = opaque.size\n",
+            // "None is assigned, and a native type is not constructed
+            // in HGL: a call of its name rejects."
+            "    handle.size = 2\n",
+            "    let made = Handle(size: 1)\n",
             "    return handle.size\n",
             "}\n",
         ),
@@ -225,6 +229,8 @@ fn a_native_types_properties_are_ordinary_values() {
             "m.hgl:7:11 type/type.not_ordinary TYPE-12",
             "m.hgl:13:26 name/member.unknown NATIVE-6",
             "m.hgl:14:26 name/member.unknown NATIVE-6",
+            "m.hgl:15:5 name/binding.immutable NATIVE-6",
+            "m.hgl:16:16 type/call.not_callable NATIVE-6",
         ]
     );
     assert_eq!(
@@ -236,6 +242,7 @@ fn a_native_types_properties_are_ordinary_values() {
             "span: duration",
             "missing: _",
             "nothing: _",
+            "made: _",
         ]
     );
 }
@@ -327,6 +334,92 @@ fn a_capability_is_given_only_to_a_parameter_of_its_type() {
             "m.hgl:14:27 injectable/capability.as_value TIME-8",
             "m.hgl:15:26 injectable/capability.as_value TIME-8",
             "m.hgl:16:26 injectable/capability.as_value TIME-8",
+        ]
+    );
+}
+
+/// TIME-8: a capability's "properties are read-only". NATIVE-6: "None is
+/// assigned." A capability is of a native type whether or not core has
+/// declared it.
+#[test]
+fn a_capabilitys_property_is_not_assigned() {
+    let typed = module(concat!(
+        "fn stamps(value: f64) -> f64 {\n",
+        "    inject clock\n",
+        "    when {\n",
+        "        clock.evaluation_time = clock.now\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        typed.summary(),
+        ["m.hgl:5:9 name/binding.immutable NATIVE-6"]
+    );
+    // With the core the compiler is built with, which declares no
+    // capability type yet.
+    let untyped = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn stamps(value: f64) -> f64 {\n",
+            "    inject clock\n",
+            "    when {\n",
+            "        clock.evaluation_time = clock.now\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        untyped.summary(),
+        ["m.hgl:5:9 name/binding.immutable NATIVE-6"]
+    );
+}
+
+/// NATIVE-1: "A native function that is no candidate is private unless
+/// exported, as a function is (UNIT-3). `export` is written on its
+/// declaration, the form with no body, and nowhere else." UNIT-3:
+/// "Ordinary functions and types are private unless exported, a native
+/// function and a native type among them".
+#[test]
+fn an_exported_native_function_is_another_modules_to_call() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export native type Handle {\n",
+                "    size: i64\n",
+                "}\n",
+                "export native const fn describe(value: i64) -> str\n",
+                "native const fn hidden(value: i64) -> str\n",
+                "native type Private\n",
+            ),
+        ),
+        (
+            "lib_provider.hgl",
+            concat!(
+                "module lib part provider\n",
+                // The part does not repeat `export`.
+                "native const fn describe(value: i64) -> str {}\n",
+                "native const fn hidden(value: i64) -> str {}\n",
+            ),
+        ),
+        (
+            "app.hgl",
+            concat!(
+                "module app\n",
+                "use lib::{describe, hidden, Handle, Private}\n",
+                "const fn shown(handle: Handle) -> str => describe(handle.size)\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "app.hgl:2:21 module/import.private UNIT-2",
+            "app.hgl:2:37 module/import.private UNIT-2",
         ]
     );
 }

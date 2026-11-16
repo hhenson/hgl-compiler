@@ -188,7 +188,9 @@ impl Walk<'_> {
                     (true, false) => DeclarationKind::NativeCandidate(role, None),
                     (true, true) => DeclarationKind::NativeCandidateImplementation(role),
                 };
-                (function.name(), kind, None)
+                // NATIVE-1: a native function that is no candidate "is
+                // private unless exported, as a function is".
+                (function.name(), kind, function.export())
             }
             Item::Operator(operator) => (operator.name(), DeclarationKind::Operator, None),
             Item::Struct(decl) => (decl.name(), DeclarationKind::Struct, decl.export()),
