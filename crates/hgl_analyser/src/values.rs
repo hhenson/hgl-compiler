@@ -1462,13 +1462,13 @@ impl<'a> Typer<'a> {
                 Form::Binary(BinaryOperator::Equal | BinaryOperator::NotEqual)
             )
         {
-            let operands: Vec<&Type> = given
-                .iter()
-                .filter(|given| matches!(given.key, Key::Position(_)))
-                .map(|given| &given.value.ty)
-                .collect();
-            if let [left, right] = operands[..]
-                && (self.admits(left, right) || self.admits(right, left))
+            // Only that case: two operands and no configuration, the
+            // right one of a type the left is a value of and not the
+            // other way round. Two of one type that find no candidate,
+            // for what a configuration gives say, are rejected below.
+            if let [left, right] = &given[..]
+                && self.admits(&right.value.ty, &left.value.ty)
+                && !self.admits(&left.value.ty, &right.value.ty)
             {
                 return (self.unselected(given, symbol.form), symbol.unjudged);
             }

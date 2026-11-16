@@ -165,7 +165,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-10 | parser | done | A named-entry brace directly after an operator is its configuration; an empty one rejected |
 | EXPR-10 | analyser | partial | In a value function, a symbol's configuration is bound as the named arguments of the call the symbol stands for: to the options its operator's candidates declare, a generic value parameter before a parameter; an unknown or a repeated entry, and one no candidate for the operands declares, rejected. Left: the Boolean connectives and `!`; temporal bodies |
 | EXPR-11 | parser | done | `<=>` at the comparison tier |
-| EXPR-11 | analyser | planned | `<=>` yields a comparison outcome, not a bool |
+| EXPR-11 | analyser | partial | In a value function `<=>` is core's `CmpResult`, through the candidates of `compare_`, and each other comparison a bool; an outcome where a bool is expected is rejected. Left: temporal bodies |
 | EXPR-12 | analyser | partial | In a value function, an option of an operator's call, by name or as a symbol's configuration, that a candidate's `requires` reads selects the candidate, and so the result type; one that is a generic value parameter is given a compile-time constant. Left: temporal bodies |
 | EXPR-13 | transpiler | planned | Evaluation order of a configured operator |
 | EXPR-14 | analyser | planned | Configuration introduces no temporal input |
@@ -391,7 +391,7 @@ the same numeric rules the transpiler rows give.
 | NUM-3 | transpiler | planned | Division by zero under `ieee` and `nan` |
 | NUM-4 | transpiler | planned | Exact and tolerant equality; invalid tolerance is an error |
 | NUM-5 | transpiler | planned | NaN, infinity and signed zero in equality and closeness |
-| NUM-6 | analyser | planned | A comparison outcome converts to neither bool nor number |
+| NUM-6 | analyser | partial | In a value function a comparison outcome is a `CmpResult`, and is rejected where a bool or a number is expected. Left: temporal bodies |
 | NUM-6 | transpiler | planned | `compare_` outcomes; Boolean comparisons |
 | NUM-7 | analyser | planned | Tolerance does not configure `<=>`; ordering an unordered domain needs a stated policy |
 | NUM-7 | optimiser | planned | A tolerance grants no ordering law or rewrite |

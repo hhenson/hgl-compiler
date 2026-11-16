@@ -2992,6 +2992,41 @@ fn a_symbol_selects_a_candidate_a_module_declares() {
     );
 }
 
+/// EXPR-11: "`<=>` is full comparison ... It returns core's `CmpResult`,
+/// an ordinary enum, rather than a bool; `==`, `!=`, `<`, `<=`, `>`, and
+/// `>=` return a bool." NUM-6: "An outcome has no implicit bool or
+/// numeric conversion."
+#[test]
+fn a_full_comparison_is_an_outcome_and_no_bool() {
+    let checked = module(concat!(
+        "const fn uses(a: i64, b: f64, text: str) {\n",
+        "    let outcome = a <=> b\n",
+        "    let words = text <=> \"b\"\n",
+        "    let less: bool = a < b\n",
+        // An outcome is an enum's member, and is compared as one.
+        "    let is_less = outcome == .less\n",
+        "    let flag: bool = a <=> b\n",
+        "    let number: i64 = a <=> b\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:22 type/type.mismatch EXPR-5",
+            "m.hgl:8:23 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[3..7],
+        [
+            "outcome: CmpResult",
+            "words: CmpResult",
+            "less: bool",
+            "is_less: bool"
+        ]
+    );
+}
+
 /// OPS-2: "`==` and `!=` compare two values of one type." Core's
 /// candidate is `eq_<T>(lhs: T, rhs: T)`, and the first operand that
 /// says what `T` is decides it (GEN-2): a `Shape` and then a `Round`,
@@ -3126,6 +3161,8 @@ fn a_symbols_configuration_is_checked_as_named_arguments_are() {
         "    let absent = a +{zero: .nan} b\n",
         "    let runtime = a /{zero: policy} b\n",
         "    let minus = -{zero: .nan} a\n",
+        // A tolerance is an `f64` (NUM-11).
+        "    let mistyped = a =={abs: \"wide\"} b\n",
         "}\n",
     ));
     assert_eq!(
@@ -3138,11 +3175,16 @@ fn a_symbols_configuration_is_checked_as_named_arguments_are() {
             "m.hgl:7:22 name/argument.unknown EXPR-10",
             "m.hgl:8:29 type/generic.argument_constant GEN-8",
             "m.hgl:9:19 name/argument.unknown EXPR-10",
+            "m.hgl:10:22 operator/operator.no_candidate OPS-2",
         ]
     );
     assert_eq!(
         messages(&checked)[3],
         "`//` takes no `i64` and `i64` with `zero: .nan`"
+    );
+    assert_eq!(
+        messages(&checked)[7],
+        "`==` takes no `f64` and `f64` with `abs: str`"
     );
     assert_eq!(messages(&checked)[0], "`/` has no option `zeo`");
 }
