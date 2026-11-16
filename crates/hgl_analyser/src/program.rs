@@ -10,7 +10,7 @@ use hgl_parser::SyntaxNode;
 use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
-use crate::hir::Body;
+use crate::hir::{Body, Expr};
 use crate::types::{CallArguments, Detail, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
@@ -139,6 +139,12 @@ pub struct Module {
     /// The typed block of each named test: one entry for each of
     /// `tests`, in the same order, `None` for a test with no block.
     pub test_bodies: Vec<Option<Body>>,
+    /// The default of each parameter of each callable (UNIT-8): one
+    /// entry for each of `declarations`, in the same order, and in it
+    /// one for each parameter, `None` for one with no default. It is
+    /// empty for a declaration that is no callable. A default names no
+    /// parameter (UNIT-7), so it is read with no local in scope.
+    pub defaults: Vec<Vec<Option<Expr>>>,
     /// What the body of each temporal function describes (FN-2): one
     /// entry for each of `declarations`, in the same order, `None` for
     /// a declaration that is no temporal function or has no body

@@ -39,6 +39,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         natives: false,
         harness: false,
         imports: BTreeSet::new(),
+        expanding: Vec::new(),
         text: String::new(),
     };
     emitter.declarations();
@@ -277,6 +278,10 @@ struct Emitter<'a> {
     /// The other generated modules this one names a function of, by
     /// module path.
     imports: BTreeSet<String>,
+    /// The defaults being written in place of an argument left out,
+    /// each as its module, declaration and parameter: a default is not
+    /// written inside itself.
+    expanding: Vec<(usize, usize, usize)>,
     /// The Python written so far, less its header.
     text: String,
 }
@@ -384,20 +389,12 @@ impl Emitter<'_> {
             if parameter.pack.is_some() {
                 self.unsupported(parameter.at, "a pack parameter");
             }
-            if parameter.has_default {
-                // A call that leaves the argument out is written with
-                // none, so the function must have the default, whose
-                // value the analysed program does not hold yet.
-                self.unsupported(parameter.at, "a parameter with a default");
-                parameters.push(python);
-            } else if matches!(parameter.ty, Type::Nullable(_)) {
-                // UNIT-8: "A parameter whose type is written `T?` needs
-                // no default to be omitted: it is taken to have a
-                // default of `null`".
-                parameters.push(format!("{python}=None"));
-            } else {
-                parameters.push(python);
-            }
+            // A parameter that may be left out, one with a default or
+            // one written `T?` (UNIT-8), is still always given: a call
+            // that leaves it out is written with the default, or
+            // `None`, in its place (see `arguments`). Python then has
+            // no default to order or to evaluate.
+            parameters.push(python);
         }
         self.line(0, "");
         self.line(0, "");
@@ -445,8 +442,13 @@ impl Emitter<'_> {
         }
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
-            if parameter.pack.is_some() || parameter.has_default {
-                self.unsupported(parameter.at, "a pack or a default of a temporal function");
+            // A `const` parameter's default is written where a call
+            // leaves it out. A temporal input's is "wired as a constant
+            // of its default" (UNIT-8), which is not written yet.
+            if parameter.pack.is_some() {
+                self.unsupported(parameter.at, "a pack of a temporal function");
+            } else if parameter.has_default && !parameter.constant {
+                self.unsupported(parameter.at, "a default of a temporal input");
             }
             let annotation = self
                 .annotation(&parameter.ty, !parameter.constant, parameter.at)
@@ -1098,15 +1100,23 @@ impl Emitter<'_> {
         }
     }
 
-    /// The arguments of a call, each by its parameter's name, so that
-    /// the order they are written in does not matter to Python.
+    /// The arguments of a call of `callee`, a module and a declaration
+    /// of it: each by its parameter's name, so that the order they are
+    /// written in does not matter to Python.
+    ///
+    /// UNIT-8: a parameter with a default may be left out. The call is
+    /// then written with the default in its place, read from the
+    /// analysed program: a default names no parameter and no local
+    /// (UNIT-7), so it means the same wherever it is written, and a
+    /// function it calls is named through its own module.
     fn arguments(
         &mut self,
         function: &Function,
+        callee: (usize, usize),
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
-        let written: Vec<String> = arguments
+        let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
                 let parameter = signature.parameters.get(argument.parameter?)?;
@@ -1114,6 +1124,45 @@ impl Emitter<'_> {
                 Some(format!("{}={value}", name(&parameter.name)))
             })
             .collect();
+        let program = self.program;
+        let defaults = program.modules[callee.0]
+            .defaults
+            .get(callee.1)
+            .map_or(&[][..], Vec::as_slice);
+        // A default is read with no local in scope.
+        let cold = Function {
+            locals: &[],
+            signature: None,
+            mode: Mode::Value,
+        };
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            let given = arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index));
+            if given || parameter.pack.is_some() {
+                continue;
+            }
+            if let Some(Some(default)) = defaults.get(index) {
+                // A default that calls its own function with that same
+                // argument left out would be written inside itself
+                // without end.
+                let key = (callee.0, callee.1, index);
+                if self.expanding.contains(&key) {
+                    self.unsupported(default.at, "a default that leaves itself out");
+                    written.push(format!("{}=None", name(&parameter.name)));
+                    continue;
+                }
+                self.expanding.push(key);
+                let value = self.expression(&cold, default);
+                self.expanding.pop();
+                written.push(format!("{}={value}", name(&parameter.name)));
+            } else if matches!(parameter.ty, Type::Nullable(_)) {
+                // UNIT-8: "A parameter whose type is written `T?` needs
+                // no default to be omitted: it is taken to have a
+                // default of `null`".
+                written.push(format!("{}=None", name(&parameter.name)));
+            }
+        }
         written.join(", ")
     }
 
@@ -1224,7 +1273,7 @@ impl Emitter<'_> {
             // an error, which Python's own `+` would not make it: the
             // provider's function does.
             self.natives = true;
-            let arguments = self.arguments(function, signature, arguments);
+            let arguments = self.arguments(function, (module, declaration), signature, arguments);
             return format!("_core.{native}({arguments})");
         }
         if !matches!(declared.kind, DeclarationKind::Function(_)) || Some(module) == program.core()
@@ -1233,7 +1282,7 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         let python = self.function_name(module, declaration);
-        let arguments = self.arguments(function, signature, arguments);
+        let arguments = self.arguments(function, (module, declaration), signature, arguments);
         format!("{python}({arguments})")
     }
 
@@ -1270,7 +1319,7 @@ impl Emitter<'_> {
         }
         self.harness = true;
         let target = self.function_name(*module, *declaration);
-        let arguments = self.arguments(function, signature, arguments);
+        let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
         if arguments.is_empty() {
             format!("_harness.evaluate({target})")
         } else {

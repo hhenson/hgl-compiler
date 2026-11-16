@@ -181,8 +181,43 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .test();
             test_bodies.push(body);
         }
+        // UNIT-8: "Defaults remain required-constant/cold expressions
+        // checked against the expected type. Any parameter but a pack
+        // may have one: a value function's, const configuration, or a
+        // temporal input." Each is read as a value of its parameter's
+        // type, whatever its declaration is: a function, a candidate,
+        // an operator, or the contract of a native one.
+        let mut defaults = Vec::with_capacity(module.declarations.len());
+        for (position, declaration) in module.declarations.iter().enumerate() {
+            let read = match module.details.get(position) {
+                Some(Detail::Callable(signature))
+                    if signature
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.has_default) =>
+                {
+                    Typer::new(
+                        program,
+                        module,
+                        declaration,
+                        signature,
+                        Tables {
+                            bindings: &bindings,
+                            written: &written,
+                            calls: &calls,
+                        },
+                        diagnostics,
+                    )
+                    .defaults()
+                }
+                Some(Detail::Callable(signature)) => vec![None; signature.parameters.len()],
+                _ => Vec::new(),
+            };
+            defaults.push(read);
+        }
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
+        program.modules[index].defaults = defaults;
     }
 }
 
@@ -498,6 +533,55 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The default of each parameter of the declaration (UNIT-8), read
+    /// as a value of the parameter's type; `None` for a parameter with
+    /// none.
+    ///
+    /// A default is cold: it reads no parameter and no local (UNIT-7,
+    /// which the resolver holds it to), so it is read here apart from
+    /// the body. A parameter whose type names a generic parameter has a
+    /// type only a call gives, and its default is not held to one;
+    /// neither is the default of a temporal shape that is no ordinary
+    /// value type.
+    fn defaults(mut self) -> Vec<Option<Expr>> {
+        let signature = self.signature;
+        let syntax = self.declaration.syntax.clone();
+        signature
+            .parameters
+            .iter()
+            .map(|parameter| {
+                if !parameter.has_default {
+                    return None;
+                }
+                let written = default_at(&syntax, parameter)?;
+                // "An omitted temporal argument is wired as a constant
+                // of its default, so the default is a value a constant
+                // of the parameter's type can publish." What that is
+                // for a window, an atomic or a reference is not settled
+                // here: `window: rolling<f64, 5> = []` is read, and
+                // held to no type.
+                let shaped = matches!(
+                    not_null(Some(&parameter.ty)),
+                    Some(
+                        Type::Rolling { .. }
+                            | Type::Atomic(_)
+                            | Type::Ref(_)
+                            | Type::Signal
+                            | Type::Endpoint(_)
+                    )
+                );
+                let expected = if shaped || names_parameter(&parameter.ty) {
+                    Type::Unknown
+                } else {
+                    parameter.ty.clone()
+                };
+                let value = self.expression(&written, Some(&expected));
+                let place = format!("the parameter `{}`", parameter.name);
+                Some(self.fit(value, &expected, &place))
+            })
+            .collect()
     }
 
     /// The block of a named test (TST-3): "A test is a

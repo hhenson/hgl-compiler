@@ -1263,7 +1263,8 @@ generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 | A graph | `@_hg.graph` |
 | A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
-| A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
+| A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
+| A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`). Python is given no default of its own, so it has none to put in order or to evaluate where the function is defined. A default that leaves itself out is reported |
 | A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
 | A sequence that is a set | `_py.frozenset((1, 2))` |
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
@@ -1288,8 +1289,8 @@ its last publication (TST-6).
 Reported as not written yet (`target.unsupported`): a type other than
 the four scalars above, a nullable among them; structs, enums, operators
 and their candidates declared in a program; generic temporal functions;
-a default of a value function's parameter, whose value the analysed
-program does not hold yet; a pack parameter; a node that no input wakes, `modified([])`;
+a default of a temporal input; a pack parameter; a node that no input
+wakes, `modified([])`;
 `out` or an input read in `start` or `stop`, which hgraph gives neither;
 `cache`, the `inject` of a capability, and sources; in a graph, a call
 lifted over connections, an `if`, and any expression but a name, a

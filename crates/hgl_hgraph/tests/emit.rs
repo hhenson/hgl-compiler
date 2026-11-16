@@ -330,7 +330,7 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
         // The node's own output.
         concat!(
             "def produce(command: _hg.TS[_py.int], _output: _hg.TS_OUT[_py.int] = None) -> _hg.TS[_py.int]:\n",
-            "    if _core.ne__i64_i64_f64_f64(lhs=command.value, rhs=0):\n",
+            "    if _core.ne__i64_i64_f64_f64(lhs=command.value, rhs=0, abs=0.0, rel=0.0):\n",
             "        return command.value\n",
             "    _output.invalidate()\n",
         ),
@@ -412,7 +412,7 @@ fn names_configuration_and_omitted_arguments_are_kept() {
     for expected in [
         "import _hgl._m_demo._m_left as _hgl_4demo_4left\nimport _hgl._m_demo._m_right as _hgl_4demo_5right\n",
         concat!(
-            "def chosen(fallback=None):\n",
+            "def chosen(fallback):\n",
             "    if (fallback is None):\n",
             "        return _hgl_4demo_4left.pick()\n",
             "    return _core.add__i64_i64(lhs=_hgl_4demo_5right.pick(), rhs=pick())\n",
@@ -422,7 +422,7 @@ fn names_configuration_and_omitted_arguments_are_kept() {
             "def _start_kept(first: _py.int, _state: _hg.STATE = None):\n",
             "    _state.last = first\n",
         ),
-        "    return _core.add__i64_i64(lhs=before, rhs=chosen())\n",
+        "    return _core.add__i64_i64(lhs=before, rhs=chosen(fallback=None))\n",
     ] {
         assert!(
             python.contains(expected),
@@ -488,6 +488,125 @@ fn a_headers_selectors_add_up() {
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
+
+/// Defaults: of a value function's parameter, where it calls another
+/// function, and of a node's `const` parameter.
+const DEFAULTS: &str = concat!(
+    "module demo.defaults\n",
+    "\n",
+    "const fn base() -> i64 => 2\n",
+    "\n",
+    "const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
+    "\n",
+    "fn offset(value: i64, const by: i64 = 10) -> i64 {\n",
+    "    when { return value + by }\n",
+    "}\n",
+    "\n",
+    "fn wired(value: i64) -> i64 => offset(value)\n",
+    "\n",
+    "test defaults {\n",
+    "    assert scale(3) == 6\n",
+    "    assert scale(3, 5) == 15\n",
+    "    assert eval(offset, value: [1]) == [11]\n",
+    "    assert eval(offset, value: [1], by: 1) == [2]\n",
+    "    assert eval(wired, value: [5]) == [15]\n",
+    "}\n",
+);
+
+/// UNIT-8: a parameter with a default may be left out. The call is
+/// written with the default in its place, which the analysed program
+/// holds as a typed value.
+#[test]
+fn a_default_is_written_where_a_call_leaves_it_out() {
+    let emitted = emit(&[("defaults.hgl", DEFAULTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_defaults/__init__.py");
+    for expected in [
+        // The function is always given the parameter.
+        "def scale(value, factor):\n",
+        "lhs=scale(value=3, factor=base()), rhs=6",
+        "lhs=scale(value=3, factor=5), rhs=15",
+        // A node's configuration, in a graph and in an eval.
+        "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
+        "    return offset(value=value, by=10)\n",
+        "    assert _harness.evaluate(offset, value=[1], by=10) == [11]\n",
+        "    assert _harness.evaluate(offset, value=[1], by=1) == [2]\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// A default written in one module and left out by a call in another,
+/// whose caller has a parameter named as a function the default calls;
+/// and a parameter written `T?` before one with a default.
+const DEFAULT_MODULES: [(&str, &str); 2] = [
+    (
+        "lib.hgl",
+        concat!(
+            "module demo.lib\n",
+            "const fn base() -> i64 => 2\n",
+            "export const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
+            "export const fn pick(first: i64?, second: i64 = 1) -> i64 => second\n",
+        ),
+    ),
+    (
+        "caller.hgl",
+        concat!(
+            "module demo.caller\n",
+            "use demo.lib::{scale, pick}\n",
+            "const fn caller(base: i64) -> i64 => scale(3) + base\n",
+            "test callers {\n",
+            "    assert caller(10) == 16\n",
+            "    assert pick() == 1\n",
+            "    assert pick(7, 5) == 5\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// A default means what it means where it is declared (UNIT-7): written
+/// in a caller of another module, a function it calls is named through
+/// its own module, so a caller's `base` is not taken for it. Within one
+/// module no binding takes a name already in scope (UNIT-12). A
+/// parameter written `T?` that is left out is given `None` at the call,
+/// so Python has no default to put in order.
+#[test]
+fn a_default_keeps_its_meaning_in_another_module() {
+    let emitted = emit(&DEFAULT_MODULES);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_caller/__init__.py");
+    for expected in [
+        "def caller(base):\n",
+        "_hgl_4demo_3lib.scale(value=3, factor=_hgl_4demo_3lib.base())",
+        "_hgl_4demo_3lib.pick(first=None, second=1)",
+        "_hgl_4demo_3lib.pick(first=7, second=5)",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    let library = emitted.text("_hgl/_m_demo/_m_lib/__init__.py");
+    assert!(library.contains("def pick(first, second):\n"));
+}
+
+/// A default that calls its own function with that argument left out
+/// would be written inside itself without end: it is reported.
+#[test]
+fn a_default_is_not_written_inside_itself() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn again(value: i64 = if true { 1 } else { again() }) -> i64 => value\n",
+            "const fn uses() -> i64 => again()\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:2:29 target.unsupported"]);
 }
 
 /// Names that Python, hgraph or the target would take: each is given a
@@ -733,7 +852,7 @@ fn a_form_not_written_yet_is_reported() {
             "    when { return value }\n",
             "    stop { let last = out }\n",
             "}\n",
-            "const fn scaled(value: i64, factor: i64 = 2) -> i64 => value * factor\n",
+            "fn defaulted(value: i64 = 2) -> i64 {\n    when { return value }\n}\n",
             "const fn packed(rest: ...i64) -> i64 => 1\n",
             "const fn lone(value: i64) -> i64 => value\n",
             "test timed {\n",
@@ -757,15 +876,15 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:9:10 target.unsupported",
             "m.hgl:15:44 target.unsupported",
             "m.hgl:17:12 target.unsupported",
-            "m.hgl:21:29 target.unsupported",
-            "m.hgl:22:17 target.unsupported",
+            "m.hgl:21:14 target.unsupported",
+            "m.hgl:24:17 target.unsupported",
             // A graph's `if`, then what the test holds.
-            "m.hgl:30:5 target.unsupported",
-            "m.hgl:25:30 target.unsupported",
-            "m.hgl:25:42 target.unsupported",
-            "m.hgl:26:17 target.unsupported",
+            "m.hgl:32:5 target.unsupported",
+            "m.hgl:27:30 target.unsupported",
+            "m.hgl:27:42 target.unsupported",
+            "m.hgl:28:17 target.unsupported",
             // An eval of a value function, which is lifted.
-            "m.hgl:27:12 target.unsupported",
+            "m.hgl:29:12 target.unsupported",
         ]
     );
 }
@@ -788,10 +907,12 @@ fn the_generated_tests_pass_on_hgraph() {
         ("endpoints.hgl", ENDPOINTS),
         ("selectors.hgl", SELECTORS),
         ("names.hgl", NAMES),
+        ("defaults.hgl", DEFAULTS),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
+    files.extend(DEFAULT_MODULES);
     files.extend(PATHS);
     let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
@@ -820,6 +941,8 @@ fn the_generated_tests_pass_on_hgraph() {
             "_hgl._m_demo._m_selectors",
             "_hgl._m_demo._m_configured",
             "_hgl._m_demo._m_names",
+            "_hgl._m_demo._m_defaults",
+            "_hgl._m_demo._m_caller",
         ])
         .output()
         .expect("the interpreter runs");
@@ -831,7 +954,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        21,
+        23,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }

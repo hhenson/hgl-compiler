@@ -4208,3 +4208,62 @@ fn a_place_inside_a_value_is_assigned() {
         ]
     );
 }
+
+/// UNIT-8: "Defaults remain required-constant/cold expressions checked
+/// against the expected type. Any parameter but a pack may have one: a
+/// value function's, const configuration, or a temporal input." Each
+/// default is kept, typed, for the stages after.
+#[test]
+fn a_default_is_a_value_of_its_parameters_type() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "const fn base() -> i64 => 2\n",
+        // An integer literal is an `f64` there; `.member` and `null`
+        // take the parameter's type; a call is read as any.
+        "const fn scaled(value: f64, factor: f64 = 2, side: Side = .buy, extra: i64? = null,\n",
+        "    seed: i64 = base()) -> f64 => value\n",
+        "fn node(value: i64, const by: i64 = 10, other: f64 = 1.5) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "native const fn held(first: str = \"a\") -> str\n",
+        // Of another type than the parameter's.
+        "const fn wrong(value: i64 = \"text\", flag: bool = 1) -> i64 => 1\n",
+        "fn temporal(value: i64 = 1.5) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        // A generic parameter's type is a call's to say.
+        "const fn open<T>(value: T, fallback: T = 1) -> T => value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:29 type/type.mismatch EXPR-5",
+            "m.hgl:10:50 type/type.mismatch EXPR-5",
+            "m.hgl:11:26 type/type.mismatch EXPR-5",
+        ]
+    );
+    // `scaled`: no default for `value`, and one for each of the rest.
+    let module = checked.program.module("m").expect("module m exists");
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == "scaled")
+        .expect("`scaled` is declared");
+    let defaults = &module.defaults[index];
+    let types: Vec<String> = defaults
+        .iter()
+        .map(|default| {
+            default
+                .as_ref()
+                .map_or("none".to_string(), |value| value.ty.to_string())
+        })
+        .collect();
+    assert_eq!(types, ["none", "f64", "Side", "i64?", "i64"]);
+    assert!(
+        matches!(
+            defaults[1].as_ref().map(|value| &value.kind),
+            Some(ExprKind::Widen(_))
+        ),
+        "the `2` of `factor: f64 = 2` is widened"
+    );
+}
