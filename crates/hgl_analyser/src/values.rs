@@ -2659,9 +2659,23 @@ impl<'a> Typer<'a> {
                 defaulted.push((index, default));
             }
         }
+        // A generic nothing has said anything of is left open: a type
+        // as one not known, and a value as a constant not evaluated,
+        // which agrees with any. So a `list<list<f64, cols>, rows>` with
+        // `rows` 3 and `cols` not said is still asked to have three
+        // rows.
         let explicit: Vec<Argument> = found
             .into_iter()
-            .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
+            .zip(&public.generics)
+            .map(|(found, generic)| {
+                found.unwrap_or_else(|| match generic.kind {
+                    GenericKind::Value(_) => Argument::Constant(Constant {
+                        text: "_".to_string(),
+                        value: ConstantValue::Unevaluated,
+                    }),
+                    _ => Argument::Type(Type::Unknown),
+                })
+            })
             .collect();
         let own_generics: Vec<Location> =
             public.generics.iter().map(|generic| generic.at).collect();
