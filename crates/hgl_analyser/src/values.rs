@@ -895,6 +895,78 @@ impl<'a> Typer<'a> {
         (ExprKind::Endpoint { operation, inputs }, ty)
     }
 
+    /// The generic arguments written on an endpoint operation, held to
+    /// what the operation is: core declares each with one type, the
+    /// type the endpoint holds, `valid<T>(input: endpoint<T>)` (TIME-9).
+    fn endpoint_generics(
+        &mut self,
+        name: &SyntaxToken,
+        given: Option<&CallArguments>,
+        kind: &ExprKind,
+    ) {
+        let Some(given) = given else {
+            return;
+        };
+        let [(at, argument)] = given.arguments.as_slice() else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_ARGUMENT_COUNT,
+                Location::new(self.file, name.span()),
+                format!(
+                    "`{}` takes 1 generic argument and is given {}",
+                    name.text(),
+                    given.arguments.len()
+                ),
+                "GEN-8",
+            ));
+            return;
+        };
+        let held = match argument {
+            Argument::Type(held) => held,
+            Argument::Constant(_) => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_KIND,
+                    *at,
+                    format!(
+                        "`{}` takes the type its endpoint holds, and this is a value",
+                        name.text()
+                    ),
+                    "GEN-14",
+                ));
+                return;
+            }
+        };
+        let ExprKind::Endpoint {
+            inputs: Some(inputs),
+            ..
+        } = kind
+        else {
+            return;
+        };
+        // An input that holds another type is no endpoint of the one
+        // written (EXPR-5). What is not known has been reported.
+        let other: Vec<String> = inputs
+            .iter()
+            .map(|input| &self.locals[*input])
+            .filter(|input| whole(held) && whole(&input.ty) && input.ty != *held)
+            .map(|input| format!("`{}` holds `{}`", input.name, input.ty))
+            .collect();
+        if !other.is_empty() {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                *at,
+                format!(
+                    "`{}<{held}>` takes an endpoint of `{held}`, and {}",
+                    name.text(),
+                    other.join(" and ")
+                ),
+                "EXPR-5",
+            ));
+        }
+    }
+
     /// The argument of an `endpoint<T>` parameter (TIME-9): "A call
     /// gives an `endpoint<T>` parameter a temporal input of the
     /// enclosing node by its name, or `out`, and nothing else".
@@ -6787,6 +6859,18 @@ impl<'a> Typer<'a> {
             // pass kept them, the name being a function or an operator.
             _ => {
                 let generics = self.calls.get(&(self.file, start)).copied();
+                // TIME-9: an endpoint operation written with its generic
+                // argument, `delta_value<i64>(out)`, is the form it is
+                // without one, and is held to the same rules.
+                if self.hook.is_some()
+                    && child(node, SyntaxKind::QualifiedName).is_none()
+                    && let Some(operation) = EndpointOperation::named(name.text())
+                    && self.is_the_languages(&name)
+                {
+                    let read = self.endpoint(operation, &name, &list);
+                    self.endpoint_generics(&name, generics, &read.0);
+                    return read;
+                }
                 match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {
                         self.call_named(&name, &list, found, expected, Some(generics))

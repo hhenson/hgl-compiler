@@ -116,6 +116,39 @@ fn the_endpoint_operations_are_cores_and_the_selectors_the_languages() {
     ));
 }
 
+/// TIME-9: an endpoint operation written with its generic argument is
+/// the form it is without one. TIME-7: "`out` is read in a `when` and
+/// in `stop`", so not in `start`, however the read is written. GEN-8:
+/// a call may supply its generic arguments; core declares each
+/// operation with one, the type its endpoint holds.
+#[test]
+fn an_endpoint_operation_with_a_generic_argument_is_the_same_form() {
+    let checked = module(concat!(
+        "fn typed(a: i64) -> i64 {\n",
+        "    inject out\n",
+        "    start { let first = delta_value<i64>(out) }\n",
+        "    when valid([]) {\n",
+        "        if valid<i64>(a) { return a }\n",
+        "        let texts = valid<str>(a)\n",
+        "        let two = valid<i64, i64>(a)\n",
+        "        let number = modified<3>(a)\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:25 phase/out.lifecycle TIME-7",
+            "m.hgl:7:27 type/type.mismatch EXPR-5",
+            "m.hgl:8:19 type/generic.argument_count GEN-8",
+            "m.hgl:9:31 type/generic.argument_kind GEN-14",
+        ]
+    );
+    // The guard written with its argument proves its input as the one
+    // without does: `return a` under manual admission is not reported.
+}
+
 /// TIME-9: "A call gives an `endpoint<T>` parameter a temporal input of
 /// the enclosing node by its name, or `out`, and nothing else ... Every
 /// other function takes the payload". TYPE-12: "`endpoint<T>` is the
