@@ -497,3 +497,49 @@ fn a_capability_is_used_and_not_retained() {
         ]
     );
 }
+
+/// EXPR-3: "The place's root is a `var`, a `state`, a `cache`, or, in a
+/// `when`, `out` (TIME-7)." TIME-7: "`out` is read in a `when` and in
+/// `stop`, and written only in a `when`". TIME-8: a capability is not
+/// "an entry of a tuple, list, set, dictionary, or struct".
+#[test]
+fn a_place_of_a_state_or_of_out_is_assigned() {
+    let checked = module(concat!(
+        "struct Point {\n",
+        "    x: f64\n",
+        "    y: f64\n",
+        "}\n",
+        "fn tracked(price: f64) -> Point {\n",
+        "    inject out, clock\n",
+        "    state kept: Point = Point(x: 0.0, y: 0.0)\n",
+        "    cache seen: list<f64> = [0.0]\n",
+        "    start {\n",
+        "        kept.x = 1.0\n",
+        "        out.x = 1.0\n",
+        "    }\n",
+        "    when {\n",
+        "        kept.x = price\n",
+        "        seen[0] += price\n",
+        "        out.y = price\n",
+        // A parameter of a node is a temporal input: no place of it
+        // is assigned. A capability given to an element is retained.
+        "        price.x = 1.0\n",
+        "        seen[0] = clock\n",
+        "        return kept\n",
+        "    }\n",
+        "    stop {\n",
+        "        out.x = 0.0\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:9 phase/out.lifecycle TIME-7",
+            "m.hgl:18:9 name/binding.immutable EXPR-3",
+            "m.hgl:19:19 injectable/capability.as_value TIME-8",
+            "m.hgl:19:19 type/type.mismatch EXPR-5",
+            "m.hgl:23:9 phase/out.lifecycle TIME-7",
+        ]
+    );
+}

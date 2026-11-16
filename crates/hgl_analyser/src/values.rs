@@ -1479,11 +1479,15 @@ impl<'a> Typer<'a> {
         };
         // NATIVE-6: "None is assigned." A property of a native type is
         // read-only, a capability's among them (TIME-8).
-        self.assigned_property(&place);
-        // A place inside a value, `point.x = 1` or `row[0] = 1`, is for
-        // the pass that reads members.
+        if self.assigned_property(&place) {
+            return self.unread(node);
+        }
         let local = match place.kind() {
             SyntaxKind::NameExpr => self.local_of(&place),
+            // EXPR-3: "An assignment may name a place inside a value".
+            SyntaxKind::MemberExpr | SyntaxKind::IndexExpr => {
+                return self.place_assignment(node, &place, &value);
+            }
             _ => None,
         };
         let Some(local) = local else {
@@ -1605,27 +1609,152 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// `point.x = 1`, `row[0] += 1`, `book["a"] = 1`: an assignment to
+    /// a place inside a value.
+    ///
+    /// EXPR-3: "An assignment may name a place inside a value, at any
+    /// depth ... The place's root is a `var`, a `state`, a `cache`, or,
+    /// in a `when`, `out` (TIME-7). A `let`, a parameter, and an
+    /// iteration binding are read-only all the way down. The value is
+    /// of the field's type; of a list's element type, under an `i64`
+    /// index; of a dictionary's value type, under a key of its key
+    /// type; or of a tuple's position, under a constant index ... A set
+    /// has no place to assign. A compound assignment reads the place
+    /// first".
+    ///
+    /// The place is read as the expression it is: what a field or an
+    /// element is said to be where it is read is what it takes where
+    /// it is assigned, and a set, which has no element to read, has
+    /// none to assign.
+    ///
+    /// In a graph the assignment is not read: what it is there is
+    /// proposed (EXPR-15).
+    fn place_assignment(
+        &mut self,
+        node: &SyntaxNode,
+        place: &SyntaxNode,
+        value: &SyntaxNode,
+    ) -> Stmt {
+        // "place = IDENTIFIER, { index_suffix | member_suffix }": the
+        // root is the name the chain begins with.
+        let mut root = place.clone();
+        while matches!(root.kind(), SyntaxKind::MemberExpr | SyntaxKind::IndexExpr) {
+            let Some(base) = root.children().next() else {
+                return self.unread(node);
+            };
+            root = base;
+        }
+        let local = (root.kind() == SyntaxKind::NameExpr)
+            .then(|| self.local_of(&root))
+            .flatten();
+        let Some(local) = local else {
+            return self.unread(node);
+        };
+        if self.graph {
+            return self.unread(node);
+        }
+        let at = self.at(node);
+        let operator = tokens(node).find_map(|token| compound(token.kind()));
+        let operator_at = tokens(node)
+            .find(|token| compound(token.kind()).is_some())
+            .map_or(at, |token| Location::new(self.file, token.span()));
+        // TIME-7: "`out` is read in a `when` and in `stop`, and written
+        // only in a `when`". In `start` reading the place reports it.
+        let is_out = Some(local) == self.out;
+        if is_out && self.hook == Some(Hook::Stop) {
+            self.out_lifecycle(
+                self.at(place),
+                "`out` is written only in a `when`, and this is `stop`".to_string(),
+            );
+        }
+        let writable = is_out
+            || matches!(
+                self.locals[local].kind,
+                LocalKind::Var | LocalKind::State | LocalKind::Cache
+            );
+        let target = self.expression(place, None);
+        if !writable {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::BINDING_IMMUTABLE,
+                    self.at(place),
+                    format!(
+                        "`{}` is {} and is read-only all the way down: no field or element \
+                         of it is assigned",
+                        self.locals[local].name,
+                        self.locals[local].kind.describe()
+                    ),
+                    "EXPR-3",
+                )
+                .with_related(self.locals[local].at, "declared here")
+                .with_note("copy it to a `var`, and assign into that"),
+            );
+            // The value is still read, for what it reports itself.
+            let value = self.expression(value, Some(&target.ty));
+            return Stmt::AssignPlace {
+                place: target,
+                operator,
+                value,
+                at,
+            };
+        }
+        let value = match operator {
+            None => {
+                let value = self.expression(value, Some(&target.ty));
+                self.fit(value, &target.ty, "the type of the place")
+            }
+            Some(operator) => {
+                // `place += value` assigns what `place + value` is: the
+                // place is the left operand, and has been read.
+                let left = Given::read(0, place.clone(), target.clone());
+                let right = self.operand(1, value.clone());
+                let identity = self.symbol_operator(operator.identity());
+                let (kind, result) = self.symbol(
+                    (operator, operator_at),
+                    identity,
+                    (left, right),
+                    (Vec::new(), false, false),
+                    Some(&target.ty),
+                );
+                self.conforms(&result, &target.ty, self.at(value), "the type of the place");
+                Expr {
+                    kind,
+                    ty: result,
+                    at,
+                }
+            }
+        };
+        Stmt::AssignPlace {
+            place: target,
+            operator,
+            value,
+            at,
+        }
+    }
+
     /// Reports an assignment whose place is a property of a native
-    /// type: `clock.evaluation_time = value` (NATIVE-6, TIME-8).
+    /// type: `clock.evaluation_time = value` (NATIVE-6, TIME-8). True
+    /// when it is one.
     ///
     /// Places inside a value are not read yet, so this looks at the one
     /// form it can judge without reading: `name.property`, where the
     /// name is a local of a native type, or a capability, which is of
     /// one whether or not core has declared it.
-    fn assigned_property(&mut self, place: &SyntaxNode) {
+    fn assigned_property(&mut self, place: &SyntaxNode) -> bool {
         if place.kind() != SyntaxKind::MemberExpr {
-            return;
+            return false;
         }
         // A place begins with a name: `place = IDENTIFIER, { index_suffix
         // | member_suffix }`.
         let Some(base) = place.children().next() else {
-            return;
+            return false;
         };
         let Some(local) = (base.kind() == SyntaxKind::NameExpr)
             .then(|| self.local_of(&base))
             .flatten()
         else {
-            return;
+            return false;
         };
         let native = match &self.locals[local].ty {
             Type::Named {
@@ -1639,7 +1768,7 @@ impl<'a> Typer<'a> {
             _ => false,
         };
         if !native && !self.is_capability(local) {
-            return;
+            return false;
         }
         let property = tokens(place).last();
         self.diagnostics.emit(
@@ -1657,6 +1786,7 @@ impl<'a> Typer<'a> {
             )
             .with_related(self.locals[local].at, "declared here"),
         );
+        true
     }
 
     /// The category of a graph's `var` against that of a value assigned
@@ -2273,6 +2403,11 @@ impl<'a> Typer<'a> {
                 let place = parent.children().next()?;
                 if place == used {
                     return None;
+                }
+                // `holder.clock = clock`, `kept[0] = clock`: the place
+                // is a field or an element, which keeps it.
+                if matches!(place.kind(), SyntaxKind::MemberExpr | SyntaxKind::IndexExpr) {
+                    return Some("a field or an element of a value");
                 }
                 let target = (place.kind() == SyntaxKind::NameExpr)
                     .then(|| self.local_of(&place))
@@ -8026,6 +8161,23 @@ impl<'a> Typer<'a> {
                     self.fit(index, key, "the key of the dictionary"),
                     (**value).clone(),
                 )
+            }
+            // EXPR-7: "Brackets read an element of a list or a tuple by
+            // an `i64` index, and the value a dictionary has for a
+            // key." EXPR-3: "A set has no place to assign."
+            Type::Set(_) => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    base.at,
+                    format!(
+                        "this is `{}`, and a set has no element at an index: brackets read a \
+                         list, a tuple, or a dictionary",
+                        base.ty
+                    ),
+                    "EXPR-7",
+                ));
+                (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
             }
             _ => (self.expression(&index, Some(&Type::Unknown)), Type::Unknown),
         };
