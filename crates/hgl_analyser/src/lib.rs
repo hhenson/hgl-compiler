@@ -245,6 +245,8 @@ pub mod codes {
     /// A value's type is not the type its place requires (EXPR-5),
     /// or `null` stands where the type is not nullable (TYPE-14).
     pub const TYPE_MISMATCH: &str = "type.mismatch";
+    /// A value that may be null where its payload is required (ERR-12).
+    pub const NULLABLE_REQUIRED_PRESENCE: &str = "nullable.required_presence";
     /// A `var` is read on a path that has given it no value
     /// (EXPR-3).
     pub const BINDING_UNASSIGNED: &str = "binding.unassigned";

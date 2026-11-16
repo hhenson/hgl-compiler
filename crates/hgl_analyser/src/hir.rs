@@ -141,7 +141,9 @@ pub struct Expr {
 pub enum ExprKind {
     /// A literal.
     Literal(Value),
-    /// A parameter or a local.
+    /// A parameter or a local. Its type is the local's, or the payload's
+    /// where the local is a `T?` that a test against null has proved is
+    /// not null there (ERR-12).
     Local(LocalId),
     /// `{ statements }`: a block. Its value is that of its last
     /// statement, when that is an expression (CTRL-10).

@@ -1431,7 +1431,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:14:21 type/type.mismatch EXPR-5",
+            "m.hgl:14:21 type/nullable.required_presence ERR-12",
             "m.hgl:15:33 type/type.mismatch CTRL-10",
             "m.hgl:16:21 type/type.mismatch CTRL-10",
             "m.hgl:17:17 type/type.mismatch CTRL-10",
@@ -1443,7 +1443,7 @@ fn a_block_and_an_if_have_the_value_of_their_last_expression() {
     assert_eq!(
         messages(&checked),
         [
-            "this is `i64?`, and the type written for it is `i64`",
+            "this is `i64?`, and the type written for it is `i64`: it may be null here",
             "this branch is `str`, and the other is `i64`",
             "this is `i64`, and a condition is a `bool`",
             "this has no value: a block's value is its last statement, when that is an expression",
@@ -2883,6 +2883,101 @@ fn a_default_is_read_where_its_candidate_is_declared() {
     assert_eq!(
         locals(&checked, "uses")[3..],
         ["real: f64", "whole: i64", "words: str"]
+    );
+}
+
+// ---- Null tests ----
+
+/// ERR-12: "An immutable nullable parameter or local may be tested
+/// directly against null. Refine that same binding to T on paths
+/// proving a non-null T? value, including after a terminating null
+/// branch." ERR-3: "Track negation, short-circuit paths, terminating
+/// branches, and merges."
+#[test]
+fn a_null_test_refines_an_immutable_nullable_binding() {
+    let checked = module(concat!(
+        // The types chapter's accepted example.
+        "const fn value_or_zero(value: f64?) -> f64 {\n",
+        "    if value == null { return 0.0 }\n",
+        "    return value\n",
+        "}\n",
+        "const fn guarded(value: f64?, other: f64?) -> f64 {\n",
+        // In the branch the test holds for.
+        "    if value != null { return value + 1.0 }\n",
+        // The right operand of `&&` is reached only where the left
+        // holds, and the branch only where both do.
+        "    if null != other && other > 0.0 { return other }\n",
+        // After a branch that returns, neither is null.
+        "    if value == null || other == null { return 0.0 }\n",
+        "    return value + other\n",
+        "}\n",
+        "const fn locals(xs: list<f64?>) -> f64 {\n",
+        "    var total = 0.0\n",
+        // A name a `for` binds is immutable, and so is a `let`.
+        "    for item in xs {\n",
+        "        if item != null { total += item }\n",
+        "    }\n",
+        "    let first = xs[0]\n",
+        "    if !(first == null) { return first }\n",
+        "    return total\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    // A refined read is of the payload's type: `value + other` is the
+    // call for two `f64`.
+    let Some(Stmt::Return {
+        value: Some(sum), ..
+    }) = body(&checked, "guarded").statements.last()
+    else {
+        panic!("a return with a value");
+    };
+    assert_eq!(call_of(&checked, sum).0, "add_(lhs: f64, rhs: f64) -> f64");
+}
+
+/// ERR-12: "Using it where T is required without that proof rejects
+/// with `nullable.required_presence`." ERR-3: "A saved bool, alias,
+/// fresh expression, or mutable var supplies no retained fact."
+#[test]
+fn a_nullable_is_no_payload_without_a_null_test() {
+    let checked = module(concat!(
+        // The errors chapter's deliberate rejection.
+        "const fn unchecked(value: f64?) -> f64 => value\n",
+        "const fn uses(value: f64?, other: f64?) -> f64 {\n",
+        // An operand that may be null.
+        "    let sum = value + 1.0\n",
+        "    let minus = -value\n",
+        // A `var` may be given a null after its test.
+        "    var kept: f64? = value\n",
+        "    if kept != null { return kept }\n",
+        // A saved bool proves nothing where it is read.
+        "    let present = value != null\n",
+        "    if present { return value }\n",
+        // One or the other is not null: `value` may be.
+        "    if value != null || other != null { return value }\n",
+        // A branch that does not return proves nothing after it.
+        "    if value == null { }\n",
+        "    return value\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:43 type/nullable.required_presence ERR-12",
+            "m.hgl:4:15 type/nullable.required_presence ERR-12",
+            "m.hgl:5:18 type/nullable.required_presence ERR-12",
+            "m.hgl:7:30 type/nullable.required_presence ERR-12",
+            "m.hgl:9:25 type/nullable.required_presence ERR-12",
+            "m.hgl:10:48 type/nullable.required_presence ERR-12",
+            "m.hgl:12:12 type/nullable.required_presence ERR-12",
+        ]
+    );
+    assert_eq!(
+        messages(&checked)[0],
+        "this is `f64?`, and the function's result is `f64`: it may be null here"
+    );
+    assert_eq!(
+        messages(&checked)[1],
+        "this is `f64?`, and `+` takes no `f64?` and `f64`: it may be null here"
     );
 }
 

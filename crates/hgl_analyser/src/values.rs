@@ -145,6 +145,12 @@ struct Typer<'a> {
     /// True once a statement this pass does not read has been met: it
     /// may return, so the function is not said to end with no value.
     unsure: bool,
+    /// The bindings a null test has proved are not null where the pass
+    /// is reading (ERR-12). A binding that is refined is immutable, so
+    /// what is proved holds to the end of the block it is proved in:
+    /// the list grows as tests are met, and is cut back to where it
+    /// stood when a branch or a block ends.
+    present: Vec<LocalId>,
     /// The operator of core's module each symbol met so far stands for,
     /// by the operator's name; `None` for one the program has not.
     identities: HashMap<&'static str, Option<OperatorRef>>,
@@ -187,6 +193,7 @@ impl<'a> Typer<'a> {
             rereads: REREADS,
             returned: false,
             unsure: false,
+            present: Vec::new(),
             identities: HashMap::new(),
             candidates: HashMap::new(),
             diagnostics,
@@ -760,11 +767,33 @@ impl<'a> Typer<'a> {
             // One report for one `var`.
             self.assigned[local] = true;
         }
+        // ERR-12: "Refine that same binding to T on paths proving a
+        // non-null T? value".
+        let ty = match &self.locals[local].ty {
+            Type::Nullable(inner) if self.present.contains(&local) => inner.as_ref().clone(),
+            ty => ty.clone(),
+        };
         Expr {
             kind: ExprKind::Local(local),
-            ty: self.locals[local].ty.clone(),
+            ty,
             at,
         }
+    }
+
+    /// The bindings the condition `condition` proves are not null: those
+    /// where it holds, and those where it does not.
+    ///
+    /// ERR-12: "An immutable nullable parameter or local may be tested
+    /// directly against null." A `var` may be given a null after its
+    /// test, and so is proved nothing of.
+    fn null_tests(&self, condition: &Expr) -> (Vec<LocalId>, Vec<LocalId>) {
+        let refinable = |local: LocalId| {
+            matches!(
+                self.locals[local].kind,
+                LocalKind::Parameter | LocalKind::Let | LocalKind::Iteration
+            ) && matches!(self.locals[local].ty, Type::Nullable(_))
+        };
+        null_tests(condition, &refinable)
     }
 
     /// `(a, b)`. An expected tuple of as many elements gives each its
@@ -1045,7 +1074,12 @@ impl<'a> Typer<'a> {
                 };
                 // An operand whose operators are not judged here: see
                 // `unjudged_operand`.
-                let identity = identity.filter(|_| !unjudged_operand(&value.ty));
+                // A nullable operand is an operand as another is: no
+                // candidate takes one, and the minus is then rejected
+                // (ERR-12).
+                let identity = identity.filter(|_| {
+                    matches!(value.ty, Type::Nullable(_)) || !unjudged_operand(&value.ty)
+                });
                 let Some(identity) = identity else {
                     if config.is_none() {
                         let kind = ExprKind::Unary {
@@ -1160,7 +1194,18 @@ impl<'a> Typer<'a> {
             // every path (CTRL-11, CTRL-5).
             let before = self.assigned.clone();
             let before_returned = self.returned;
+            // ERR-3 has "short-circuit paths" tracked, and ERR-12 the
+            // same of null tests: the right operand of `&&` is reached
+            // only where the left holds, and of `||` only where it does
+            // not.
+            let (when_true, when_false) = self.null_tests(&left);
+            let frame = self.present.len();
+            self.present.extend(match operator {
+                BinaryOperator::And => when_true,
+                _ => when_false,
+            });
             let right = self.expression(&right, Some(&BOOL));
+            self.present.truncate(frame);
             self.assigned = joined(
                 (&self.assigned, self.returned),
                 (&before, before_returned),
@@ -1252,8 +1297,18 @@ impl<'a> Typer<'a> {
             unjudged: if comparison { BOOL } else { Type::Unknown },
             place: place.filter(|place| !open(place)).cloned(),
         };
+        // A nullable operand of `==` or `!=` is a test of presence, or a
+        // comparison this pass does not judge. Of any other symbol it
+        // is an operand as another is: no candidate takes one, unless a
+        // module declares it, and the symbol is then rejected (ERR-12).
+        let equality = matches!(operator, Op::Equal | Op::NotEqual);
         let as_written = |operand: &Given| {
-            is_null(&operand.node) || !operand.by_place && unjudged_operand(&operand.value.ty)
+            is_null(&operand.node)
+                || !operand.by_place
+                    && match &operand.value.ty {
+                        Type::Nullable(_) => equality,
+                        ty => unjudged_operand(ty),
+                    }
         };
         let identity = identity.filter(|_| !(as_written(&left) || as_written(&right)));
         let Some(identity) = identity else {
@@ -1524,7 +1579,30 @@ impl<'a> Typer<'a> {
         if let Some(place) = &symbol.place {
             takes = format!("{takes} to give `{place}`");
         }
-        let diagnostic = if selected.is_empty() {
+        // ERR-12: "Using it where T is required without that proof
+        // rejects with `nullable.required_presence`." An operand that
+        // may be null is one no candidate takes.
+        let nullable = given.iter().find(|given| {
+            matches!(given.key, Key::Position(_))
+                && !given.by_place
+                && matches!(given.value.ty, Type::Nullable(_))
+        });
+        let diagnostic = if let (true, Some(operand)) = (selected.is_empty(), nullable) {
+            error(
+                Category::Type,
+                codes::NULLABLE_REQUIRED_PRESENCE,
+                operand.value.at,
+                format!(
+                    "this is `{}`, and `{}` takes no {takes}: it may be null here",
+                    operand.value.ty, symbol.text
+                ),
+                "ERR-12",
+            )
+            .with_note(
+                "a test against null proves an immutable binding is not: \
+                 `if value == null { return ... }`",
+            )
+        } else if selected.is_empty() {
             error(
                 Category::Operator,
                 codes::OPERATOR_NO_CANDIDATE,
@@ -3426,6 +3504,7 @@ impl<'a> Typer<'a> {
             assigned: self.assigned.clone(),
             returned: self.returned,
             unsure: self.unsure,
+            present: self.present.len(),
         }
     }
 
@@ -3443,6 +3522,7 @@ impl<'a> Typer<'a> {
         self.diagnostics.truncate(mark.diagnostics);
         self.locals.truncate(mark.locals);
         self.declared.retain(|_, local| *local < mark.locals);
+        self.present.truncate(mark.present);
         if keep_flow {
             self.assigned.truncate(mark.locals);
         } else {
@@ -4066,6 +4146,26 @@ impl<'a> Typer<'a> {
         if self.admits(expected, ty) {
             return;
         }
+        // ERR-12: "Using it where T is required without that proof
+        // rejects with `nullable.required_presence`."
+        if let Type::Nullable(payload) = ty
+            && self.admits(expected, payload)
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::NULLABLE_REQUIRED_PRESENCE,
+                    at,
+                    format!("this is `{ty}`, and {what} is `{expected}`: it may be null here"),
+                    "ERR-12",
+                )
+                .with_note(
+                    "a test against null proves an immutable binding is not: \
+                     `if value == null { return ... }`",
+                ),
+            );
+            return;
+        }
         self.diagnostics.emit(error(
             Category::Type,
             codes::TYPE_MISMATCH,
@@ -4211,6 +4311,8 @@ struct Mark {
     returned: bool,
     /// Whether a statement not read has been met.
     unsure: bool,
+    /// How many bindings are proved not null.
+    present: usize,
 }
 
 /// A value candidate of an operator: the positions of its module and of
@@ -4242,6 +4344,73 @@ fn options_of<'a>(
         .chain(selecting.iter().copied())
         .collect();
     (selecting, options)
+}
+
+/// The bindings a condition proves are not null: those where it holds,
+/// and those where it does not. `refinable` says which bindings a test
+/// proves anything of.
+///
+/// ERR-12: a binding "tested directly against null": `value != null`,
+/// `value == null`, with the `null` on either side. ERR-3: "Track
+/// negation, short-circuit paths". A test of anything else, a field or
+/// a call, proves nothing.
+fn null_tests(
+    condition: &Expr,
+    refinable: &dyn Fn(LocalId) -> bool,
+) -> (Vec<LocalId>, Vec<LocalId>) {
+    let both = |first: Vec<LocalId>, second: Vec<LocalId>| -> Vec<LocalId> {
+        first
+            .into_iter()
+            .filter(|local| second.contains(local))
+            .collect()
+    };
+    let either = |mut first: Vec<LocalId>, second: Vec<LocalId>| -> Vec<LocalId> {
+        first.extend(second);
+        first
+    };
+    match &condition.kind {
+        ExprKind::Unary {
+            operator: UnaryOperator::Not,
+            operand,
+        } => {
+            let (when_true, when_false) = null_tests(operand, refinable);
+            (when_false, when_true)
+        }
+        ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } => match operator {
+            BinaryOperator::Equal | BinaryOperator::NotEqual => {
+                let local = match (&left.kind, &right.kind) {
+                    (ExprKind::Local(local), ExprKind::Literal(Value::Null))
+                    | (ExprKind::Literal(Value::Null), ExprKind::Local(local)) => *local,
+                    _ => return (Vec::new(), Vec::new()),
+                };
+                if !refinable(local) {
+                    return (Vec::new(), Vec::new());
+                }
+                match operator {
+                    BinaryOperator::NotEqual => (vec![local], Vec::new()),
+                    _ => (Vec::new(), vec![local]),
+                }
+            }
+            // Both hold where `&&` does; one or other fails where it
+            // does not.
+            BinaryOperator::And => {
+                let (left_true, left_false) = null_tests(left, refinable);
+                let (right_true, right_false) = null_tests(right, refinable);
+                (either(left_true, right_true), both(left_false, right_false))
+            }
+            BinaryOperator::Or => {
+                let (left_true, left_false) = null_tests(left, refinable);
+                let (right_true, right_false) = null_tests(right, refinable);
+                (both(left_true, right_true), either(left_false, right_false))
+            }
+            _ => (Vec::new(), Vec::new()),
+        },
+        _ => (Vec::new(), Vec::new()),
+    }
 }
 
 /// True for a link of a chain of binary operators that is not read:
@@ -5262,6 +5431,22 @@ impl<'a> Typer<'a> {
     /// type expected and is not reported again.
     fn block(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
         let at = self.at(node);
+        // ERR-12: what a null test proves inside the block holds to its
+        // end.
+        let frame = self.present.len();
+        let (expression, outcome) = self.block_read(node, expected, used, at);
+        self.present.truncate(frame);
+        (expression, outcome)
+    }
+
+    /// The block `node`, read: see [`Typer::block`].
+    fn block_read(
+        &mut self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+        used: bool,
+        at: Location,
+    ) -> (Expr, Outcome) {
         let (statements, last) = self.block_head(node);
         let (value, outcome) = match last {
             // CTRL-5: what follows a `return` is not reached. It is read
@@ -5327,12 +5512,16 @@ impl<'a> Typer<'a> {
         node: &SyntaxNode,
         expected: Option<&Type>,
         used: bool,
-        before: &[bool],
-        before_returned: bool,
+        (before, before_returned, proved): (&[bool], bool, &[LocalId]),
     ) -> Branch {
         self.assigned = restored(before, self.locals.len(), true);
         self.returned = before_returned;
+        // ERR-12: what the condition proves holds in the branch, and no
+        // further.
+        let frame = self.present.len();
+        self.present.extend_from_slice(proved);
         let (value, outcome) = self.flow(node, expected, used);
+        self.present.truncate(frame);
         Branch {
             value,
             outcome,
@@ -5374,8 +5563,15 @@ impl<'a> Typer<'a> {
         };
         let otherwise = parts.next();
         let condition = self.condition(&condition);
+        // ERR-12: the bindings the condition proves are not null, where
+        // it holds and where it does not.
+        let (when_true, when_false) = self.null_tests(&condition);
         let before = self.assigned.clone();
         let before_returned = self.returned;
+        let (in_then, in_else) = (
+            (before.as_slice(), before_returned, when_true.as_slice()),
+            (before.as_slice(), before_returned, when_false.as_slice()),
+        );
         // The place says what a branch's value is, when it says. With
         // nothing said, a branch that is `null` or `.member` takes its
         // type from the other branch, which is then read first.
@@ -5390,39 +5586,36 @@ impl<'a> Typer<'a> {
         };
         let by_place = |branch: &SyntaxNode| branch_takes_its_type(branch);
         let (mut then, mut other) = match &otherwise {
-            None => (
-                self.branch(&then, expected, used, &before, before_returned),
-                None,
-            ),
+            None => (self.branch(&then, expected, used, in_then), None),
             Some(otherwise) if !told && by_place(&then) && !by_place(otherwise) => {
-                let other = self.branch(otherwise, expected, used, &before, before_returned);
+                let other = self.branch(otherwise, expected, used, in_else);
                 let hint = from_other(&other.outcome, &then);
-                let then = self.branch(
-                    &then,
-                    hint.as_ref().or(expected),
-                    used,
-                    &before,
-                    before_returned,
-                );
+                let then = self.branch(&then, hint.as_ref().or(expected), used, in_then);
                 (then, Some(other))
             }
             Some(otherwise) => {
-                let then = self.branch(&then, expected, used, &before, before_returned);
+                let then = self.branch(&then, expected, used, in_then);
                 let hint = if !told && by_place(otherwise) {
                     from_other(&then.outcome, otherwise)
                 } else {
                     None
                 };
-                let other = self.branch(
-                    otherwise,
-                    hint.as_ref().or(expected),
-                    used,
-                    &before,
-                    before_returned,
-                );
+                let other = self.branch(otherwise, hint.as_ref().or(expected), used, in_else);
                 (then, Some(other))
             }
         };
+        // ERR-12: "including after a terminating null branch". Where
+        // one branch returns, what follows the `if` is reached only
+        // through the other, and what that one's side of the condition
+        // proves holds to the end of the block the `if` stands in.
+        let else_returned = other
+            .as_ref()
+            .map_or(before_returned, |other| other.returned);
+        if then.returned && !else_returned {
+            self.present.extend_from_slice(&when_false);
+        } else if else_returned && !then.returned && other.is_some() {
+            self.present.extend_from_slice(&when_true);
+        }
 
         // What is assigned after: by every branch that does not return.
         let count = self.locals.len();
