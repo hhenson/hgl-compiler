@@ -2622,3 +2622,65 @@ fn a_selecting_option_is_given_a_compile_time_constant() {
     );
     assert_eq!(locals(&checked, "uses")[7], "passed: _");
 }
+
+/// GEN-13: "An explicit `const N: V` declares a value parameter of
+/// ordinary type V", and V may name another generic parameter. What a
+/// call gives it is held to that type with the candidate's generics
+/// resolved.
+#[test]
+fn a_generic_value_parameters_type_may_be_generic() {
+    let checked = module(concat!(
+        "operator pick<V, O>(value: V) -> O\n",
+        "impl const fn pick<T, const fallback: T>(value: T) -> T => value\n",
+        "const fn uses() {\n",
+        "    let whole = pick(1, fallback: 2)\n",
+        "    let text = pick(\"a\", fallback: \"b\")\n",
+        // A `str` is no `i64`.
+        "    let mixed = pick(1, fallback: \"b\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:7:17 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[..2], ["whole: i64", "text: str"]);
+}
+
+/// GEN-2: a generic value parameter's default is written in its
+/// candidate's declaration, which may be in another file than the call.
+/// TYPE-7: an enum member written in full there, `Zero.ieee`, is the
+/// constant `.ieee` is, and the candidate's condition is checked
+/// against it.
+#[test]
+fn a_default_is_read_where_its_candidate_is_declared() {
+    let checked = check(&[
+        (
+            "lib.hgl",
+            concat!(
+                "module lib\n",
+                "export enum Zero { ieee, nan, error }\n",
+                "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+                "impl const fn ratio<const zero: Zero = Zero.ieee>(lhs: f64, rhs: f64) -> f64\n",
+                "    requires zero == .ieee => lhs\n",
+                // An option that is a parameter, under a name of its
+                // own (GEN-6).
+                "impl const fn ratio(lhs: i64, rhs: i64, mode: Zero = Zero.nan) -> i64\n",
+                "    requires mode == .nan => lhs\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "use lib::{ratio}\n",
+                // Padding, so that the call is not at the default's offset.
+                "const fn uses(a: f64, n: i64) {\n",
+                "    let real = ratio(a, a)\n",
+                "    let whole = ratio(n, n)\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(locals(&checked, "uses")[2..], ["real: f64", "whole: i64"]);
+}

@@ -2080,6 +2080,36 @@ impl<'a> Typer<'a> {
         constant_of(node)
     }
 
+    /// The constant a declaration's default is, for a candidate's
+    /// condition to compare. `ty` is the type the option is declared
+    /// with.
+    ///
+    /// A default is written in its declaration's file, which may not be
+    /// the one being read, so no name in it is looked up here. An enum
+    /// member written in full, `Zero.ieee`, is known for one by the
+    /// option's type being an enum: a member of any other would not be
+    /// a value of it.
+    fn default_value(&self, node: &SyntaxNode, ty: Option<&Type>) -> Option<OptionValue> {
+        let of_enum = match ty {
+            Some(Type::Named {
+                module,
+                declaration,
+                ..
+            }) => {
+                self.program.modules[*module].declarations[*declaration].kind
+                    == DeclarationKind::Enum
+            }
+            _ => false,
+        };
+        if of_enum && node.kind() == SyntaxKind::MemberExpr {
+            // The member's name is the last token: any word (LEX-9).
+            return tokens(node)
+                .last()
+                .map(|name| OptionValue::Member(name.text().to_string()));
+        }
+        constant_of(node)
+    }
+
     /// True when an expression is a compile-time constant (GEN-8): "a
     /// literal, an enum member however it is written (TYPE-7), `Zero.nan`
     /// or `.nan`, a generic value parameter in scope, or a constant
@@ -2556,12 +2586,19 @@ impl<'a> Typer<'a> {
                 matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
             });
             if let Some(generic) = generic {
-                let written = bound
+                let argument = bound
                     .iter()
-                    .position(|&place| place == Place::Generic(generic))
-                    .map(|position| given[position].node.clone())
-                    .or_else(|| generic_default(&candidate.syntax, &signature.generics[generic]))?;
-                return this.option_value(&written);
+                    .position(|&place| place == Place::Generic(generic));
+                if let Some(position) = argument {
+                    return this.option_value(&given[position].node);
+                }
+                let declared = &signature.generics[generic];
+                let default = generic_default(&candidate.syntax, declared)?;
+                let ty = match &declared.kind {
+                    GenericKind::Value(ty) => Some(ty),
+                    _ => None,
+                };
+                return this.default_value(&default, ty);
             }
             let index = signature
                 .parameters
@@ -2581,7 +2618,9 @@ impl<'a> Typer<'a> {
                         .and_then(|parameter| default_at(&operator.syntax, parameter))
                 });
             match default {
-                Some(default) => constant_of(&default),
+                Some(default) => {
+                    this.default_value(&default, Some(&signature.parameters[index].ty))
+                }
                 // Written `T?` and left out: it is null.
                 None => Some(OptionValue::Literal(Value::Null)),
             }
@@ -3880,6 +3919,13 @@ fn instance<'s>(
     let mut taken = signature.clone();
     for parameter in &mut taken.parameters {
         parameter.ty = placed(substitute_within(&parameter.ty, &map), &own);
+    }
+    // A generic value parameter's type may name another generic
+    // parameter: the `T` of `<T, const fallback: T>`.
+    for generic in &mut taken.generics {
+        if let GenericKind::Value(ty) = &mut generic.kind {
+            *ty = placed(substitute_within(ty, &map), &own);
+        }
     }
     taken.result = taken
         .result
