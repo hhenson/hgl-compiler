@@ -196,6 +196,9 @@ pub mod codes {
     /// A payload read under manual admission that no guard dominates
     /// (TIME-4).
     pub const PAYLOAD_UNGUARDED: &str = "payload.unguarded";
+    /// A temporal connection where composition requires a constant
+    /// (FN-3).
+    pub const CONNECTION_AS_CONSTANT: &str = "connection.as_constant";
     /// A state initializer reads a temporal input (TIME-5).
     pub const STATE_INPUT_READ: &str = "state.input_read";
     /// A window's size is neither a tick count nor a duration, or its

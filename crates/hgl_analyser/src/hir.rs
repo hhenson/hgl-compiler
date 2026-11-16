@@ -16,7 +16,8 @@ use hgl_diagnostics::Location;
 use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
 
-/// The body of one function: a value function's, or a node's.
+/// The body of one function: a value function's, a node's, or a
+/// graph's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
     /// Its parameters and locals, parameters first, each in the order
@@ -118,6 +119,11 @@ pub struct Local {
     pub kind: LocalKind,
     /// Its type; [`Type::Unknown`] when nothing says.
     pub ty: Type,
+    /// True for a connection of a graph: a temporal parameter, or a
+    /// local whose first value is one (EXPR-3: "Initialization fixes a
+    /// binding's value/connection category"). False for an ordinary
+    /// value, as every local of a value function and of a hook is.
+    pub connection: bool,
 }
 
 /// One statement.
