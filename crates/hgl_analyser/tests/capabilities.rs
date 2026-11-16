@@ -16,7 +16,8 @@ use common::{Checked, check};
 /// No lines.
 const NONE: [&str; 0] = [];
 
-/// A core with the capability types and one operation on a logger.
+/// A core with the capability types, one operation on a logger, and
+/// the operator `+` stands for.
 /// `log` is native and so private to core (UNIT-3); `log_info` is the
 /// helper other modules call.
 const CORE: &str = concat!(
@@ -37,6 +38,8 @@ const CORE: &str = concat!(
     "export native type Alarm\n",
     "export native type GlobalState\n",
     "native const fn log(logger: Logger, level: LogLevel, message: str)\n",
+    // `+`, as core declares it.
+    "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "export const fn log_info(logger: Logger, message: str) {\n",
     "    log(logger, .info, message)\n",
     "}\n",
@@ -298,6 +301,9 @@ fn a_capability_is_given_only_to_a_parameter_of_its_type() {
         "const fn shown(value: any) -> i64 => 0\n",
         "operator kept<V>(value: V) -> i64\n",
         "impl const fn kept<V>(value: V) -> i64 => 0\n",
+        "const fn maybe<T>(value: T?) -> i64 => 0\n",
+        "const fn perhaps(value: any?) -> i64 => 0\n",
+        "impl const fn add_<V>(lhs: V, rhs: V) -> i64 => 0\n",
         "fn uses(value: f64) -> f64 {\n",
         "    inject clock\n",
         "    when {\n",
@@ -312,6 +318,11 @@ fn a_capability_is_given_only_to_a_parameter_of_its_type() {
         "        let again = boxed(bound)\n",
         "        let count = kept(clock)\n",
         "        let text = shown(clock)\n",
+        // With `?`, which takes what the type under it takes.
+        "        let one = maybe(clock)\n",
+        "        let two = perhaps(clock)\n",
+        // A symbol calls the candidate it selects.
+        "        let sum = clock + clock\n",
         // What is no capability is given to either.
         "        let fine = boxed(value)\n",
         "        return value\n",
@@ -321,12 +332,16 @@ fn a_capability_is_given_only_to_a_parameter_of_its_type() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:11:26 injectable/capability.as_value TIME-8",
-            "m.hgl:12:27 injectable/capability.as_value TIME-8",
-            "m.hgl:12:34 injectable/capability.as_value TIME-8",
-            "m.hgl:14:27 injectable/capability.as_value TIME-8",
-            "m.hgl:15:26 injectable/capability.as_value TIME-8",
-            "m.hgl:16:26 injectable/capability.as_value TIME-8",
+            "m.hgl:14:26 injectable/capability.as_value TIME-8",
+            "m.hgl:15:27 injectable/capability.as_value TIME-8",
+            "m.hgl:15:34 injectable/capability.as_value TIME-8",
+            "m.hgl:17:27 injectable/capability.as_value TIME-8",
+            "m.hgl:18:26 injectable/capability.as_value TIME-8",
+            "m.hgl:19:26 injectable/capability.as_value TIME-8",
+            "m.hgl:20:25 injectable/capability.as_value TIME-8",
+            "m.hgl:21:27 injectable/capability.as_value TIME-8",
+            "m.hgl:22:19 injectable/capability.as_value TIME-8",
+            "m.hgl:22:27 injectable/capability.as_value TIME-8",
         ]
     );
 }

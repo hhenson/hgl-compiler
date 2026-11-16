@@ -1188,6 +1188,9 @@ impl<'a> Typer<'a> {
                     Some(&target),
                 );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
+                // `held += clock` calls the operator as `held + clock`
+                // does.
+                self.capabilities_given(&kind);
                 Expr {
                     kind,
                     ty: result,
@@ -1376,6 +1379,9 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
+        // Every call is read to here, whatever wrote it: a name, a name
+        // with generic arguments, or a symbol.
+        self.capabilities_given(&kind);
         Expr { kind, ty, at }
     }
 
@@ -2934,7 +2940,6 @@ impl<'a> Typer<'a> {
         if let Some(callee) = callee {
             self.note_wake(&callee, &read.0);
         }
-        self.capabilities_given(&read.0);
         read
     }
 
@@ -2946,9 +2951,10 @@ impl<'a> Typer<'a> {
     /// 2026-11-16 on hhenson/hgl_spec#73, question 5).
     ///
     /// The call is read, so each argument is known for the parameter it
-    /// is given to. A capability given to a parameter of another type
-    /// written out does not fit it, and is reported as any value is
-    /// (EXPR-5).
+    /// is given to: of a function, or of the candidate an operator's
+    /// call or a symbol selected. A capability given to a parameter of
+    /// another type written out does not fit it, and is reported as any
+    /// value is (EXPR-5).
     fn capabilities_given(&mut self, kind: &ExprKind) {
         let ExprKind::Call {
             callee, arguments, ..
@@ -2986,7 +2992,12 @@ impl<'a> Typer<'a> {
             ) else {
                 continue;
             };
-            let open = match &parameter.ty {
+            // `T?` and `any?` take what `T` and `any` take, or null.
+            let mut written = &parameter.ty;
+            while let Type::Nullable(inner) = written {
+                written = inner;
+            }
+            let open = match written {
                 Type::Parameter { .. } => "a generic parameter",
                 Type::Scalar(Scalar::Any) => "`any`",
                 _ => continue,
@@ -6538,10 +6549,8 @@ impl<'a> Typer<'a> {
                     _ => self.unread_call(&list),
                 };
                 // `schedule<duration>(scheduler, delay)` asks for a wake
-                // as the call without its generic arguments does, and
-                // gives its arguments as that call does.
+                // as the call without its generic arguments does.
                 self.note_wake(&name, &read.0);
-                self.capabilities_given(&read.0);
                 read
             }
         }
