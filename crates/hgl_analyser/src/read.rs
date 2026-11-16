@@ -1570,6 +1570,7 @@ impl Reader<'_> {
                 Some(other) => format!("`{name}` is a constant of type `{other}`"),
             },
             ConstantValue::Unbounded => "this is `unbounded`".to_string(),
+            ConstantValue::Member(_) => "this is a member of an enum".to_string(),
             ConstantValue::Other(what) => format!("this is {what}"),
         };
         self.diagnostics.emit(error(

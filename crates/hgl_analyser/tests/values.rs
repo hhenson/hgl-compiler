@@ -8,8 +8,8 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::Detail;
 use hgl_analyser::hir::{BinaryOperator, Body, Callee, Expr, ExprKind, Form, Stmt, UnaryOperator};
+use hgl_analyser::{Argument, ConstantValue, Detail};
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -2611,6 +2611,47 @@ fn an_option_that_selects_is_a_generic_value_parameter() {
     assert_eq!(arguments.len(), 2);
     let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
     assert_eq!(resolved, [".error"]);
+
+    // TYPE-7: an enum member is one however it is written. What each
+    // call gives `zero`, or the default it takes, comes to the member:
+    // the default `.ieee`, `.nan`, `.error`, `Zero.error` and
+    // `(Zero.error)`.
+    let members: Vec<Option<String>> = body(&checked, "uses").statements[..5]
+        .iter()
+        .map(|statement| {
+            let Stmt::Declare {
+                value: Some(value), ..
+            } = statement
+            else {
+                panic!("a declaration with a value");
+            };
+            let ExprKind::Call {
+                callee: Callee::Candidate { generics, .. },
+                ..
+            } = &value.kind
+            else {
+                panic!("a call of a candidate: {:?}", value.kind);
+            };
+            match generics.as_slice() {
+                [Argument::Constant(constant)] => match &constant.value {
+                    ConstantValue::Member(name) => Some(name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        })
+        .collect();
+    let member = |name: &str| Some(name.to_string());
+    assert_eq!(
+        members,
+        [
+            member("ieee"),
+            member("nan"),
+            member("error"),
+            member("error"),
+            member("error"),
+        ]
+    );
 }
 
 /// GEN-8: "The value a call gives a generic value parameter is a
