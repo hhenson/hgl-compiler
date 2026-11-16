@@ -3947,7 +3947,7 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
         "enum Side { buy, sell }\n",
         "const fn priced<const side: Side>() -> i64 => 1\n",
         "operator quoted<L, O>(lhs: L) -> O\n",
-        "impl const fn quoted(lhs: f64, side: Side) -> str\n",
+        "impl const fn quoted(lhs: f64, side: Side = Side(0)) -> str\n",
         "    requires side == .buy => \"bid\"\n",
         "impl const fn quoted(lhs: f64, side: Side) -> f64\n",
         "    requires side == .sell => lhs\n",
@@ -3958,16 +3958,18 @@ fn an_enum_is_constructed_from_a_number_or_a_name() {
         "    let fixed = priced(side: Side(N))\n",
         "    let bid = quoted(price, side: Side(0))\n",
         "    let offer = quoted(price, side: Side(\"sell\"))\n",
+        // A default that is a construction: the member it names.
+        "    let plain = quoted(price)\n",
         "    return priced(side: Side(code))\n",
         "}\n",
     ));
     assert_eq!(
         generic.summary(),
-        ["m.hgl:16:25 type/generic.argument_constant GEN-8"]
+        ["m.hgl:17:25 type/generic.argument_constant GEN-8"]
     );
     assert_eq!(
         locals(&generic, "given")[6..],
-        ["bid: str", "offer: f64"],
+        ["bid: str", "offer: f64", "plain: str"],
         "a constructed member selects the candidate its member does"
     );
 }

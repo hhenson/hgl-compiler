@@ -5756,15 +5756,29 @@ impl<'a> Typer<'a> {
             .children()
             .next()
             .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
-        let list = child(node, SyntaxKind::ArgList)?;
         let name = name_token(&callee)?;
         let (module, declarations) = self.declarations(&name)?;
         let declaration = declarations.iter().copied().find(|&declaration| {
             self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
         })?;
-        let mut arguments = arguments_of(&list).into_iter();
-        let (label, argument) = arguments.next()?;
-        (label.is_none() && arguments.next().is_none()).then_some((module, declaration, argument))
+        Some((module, declaration, one_by_position(node)?))
+    }
+
+    /// The name of the member an enum's construction from `argument`
+    /// names, where that is a constant that names one.
+    fn member_name(
+        &self,
+        module: usize,
+        declaration: usize,
+        argument: &SyntaxNode,
+    ) -> Option<String> {
+        let member = self
+            .member_constructed(module, declaration, argument)?
+            .ok()?;
+        match self.program.modules[module].details.get(declaration) {
+            Some(Detail::Enum(read)) => Some(read.members[member].name.clone()),
+            _ => None,
+        }
     }
 
     /// The member an enum's construction from `argument` names, where
@@ -5831,14 +5845,9 @@ impl<'a> Typer<'a> {
         // value that is no constant here, or that names no member, is
         // not known.
         if let Some((module, declaration, argument)) = self.constructs_enum(node) {
-            let member = self
-                .member_constructed(module, declaration, &argument)?
-                .ok()?;
-            let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration)
-            else {
-                return None;
-            };
-            return Some(OptionValue::Member(read.members[member].name.clone()));
+            return self
+                .member_name(module, declaration, &argument)
+                .map(OptionValue::Member);
         }
         constant_of(node)
     }
@@ -5863,17 +5872,28 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 ..
-            }) => {
-                self.program.modules[*module].declarations[*declaration].kind
-                    == DeclarationKind::Enum
+            }) if self.program.modules[*module].declarations[*declaration].kind
+                == DeclarationKind::Enum =>
+            {
+                Some((*module, *declaration))
             }
-            _ => false,
+            _ => None,
         };
-        if of_enum && node.kind() == SyntaxKind::MemberExpr {
+        if of_enum.is_some() && node.kind() == SyntaxKind::MemberExpr {
             // The member's name is the last token: any word (LEX-9).
             return tokens(node)
                 .last()
                 .map(|name| OptionValue::Member(name.text().to_string()));
+        }
+        // `Zero(0)`, `Zero("nan")` (TYPE-7): a construction is known
+        // for one of the option's enum as a member written in full is,
+        // by the option's type, and is the member it names.
+        if let Some((module, declaration)) = of_enum
+            && node.kind() == SyntaxKind::CallExpr
+        {
+            return self
+                .member_name(module, declaration, &one_by_position(node)?)
+                .map(OptionValue::Member);
         }
         constant_of(node)
     }
@@ -10476,6 +10496,15 @@ fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
     // order.
     order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
     order
+}
+
+/// The one argument of a call that gives one value, by position:
+/// the `1` of `Side(1)`. `None` for any other call.
+fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
+    let list = child(call, SyntaxKind::ArgList)?;
+    let mut arguments = arguments_of(&list).into_iter();
+    let (label, argument) = arguments.next()?;
+    (label.is_none() && arguments.next().is_none()).then_some(argument)
 }
 
 /// The arguments of an argument list, in order: each with its name,
