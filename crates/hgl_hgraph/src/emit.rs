@@ -35,7 +35,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         program,
         module: index,
         diagnostics,
-        hgraph: BTreeSet::new(),
+        hgraph: false,
         natives: false,
         harness: false,
         imports: BTreeSet::new(),
@@ -75,23 +75,37 @@ struct Function<'a> {
     mode: Mode,
 }
 
-/// The words Python keeps for itself, and the names this target gives
-/// a node's own parameters. An HGL name that is one of them is written
-/// with a `_` after it.
-const PYTHON_WORDS: [&str; 40] = [
+/// The words a generated module leaves to Python: its keywords, and
+/// the built-in names this target writes itself.
+const PYTHON_WORDS: [&str; 42] = [
     "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
     "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
     "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
-    "with", "yield", "match", "case", "_state", "_core", "_output",
+    "with", "yield", "match", "case", "bool", "int", "float", "str", "object",
 ];
 
-/// An HGL name as a Python one.
+/// An HGL name as a Python one. Most are written as they are. The
+/// mapping gives no two HGL names one Python name, and gives none a
+/// name the target uses itself:
+///
+/// - A Python word, and one followed by any number of `_`, gets one
+///   more `_`: `lambda` is `lambda_`, and `lambda_` is `lambda__`.
+/// - Every name the target makes up starts with `_`, and a test is a
+///   function `test_name`. So a name that starts with `_` or `test_`,
+///   under any number of `hgl_` before it, gets one more `hgl_`:
+///   `_kept` is `hgl__kept`, and `hgl__kept` is `hgl_hgl__kept`.
 fn name(written: &str) -> String {
-    if PYTHON_WORDS.contains(&written) {
-        format!("{written}_")
-    } else {
-        written.to_string()
+    if PYTHON_WORDS.contains(&written.trim_end_matches('_')) {
+        return format!("{written}_");
     }
+    let mut rest = written;
+    while let Some(inner) = rest.strip_prefix("hgl_") {
+        rest = inner;
+    }
+    if rest.starts_with('_') || rest.starts_with("test_") {
+        return format!("hgl_{written}");
+    }
+    written.to_string()
 }
 
 /// The name a generated module imports the module `path` under:
@@ -179,12 +193,6 @@ impl<'a> Handler<'a> {
     /// inputs, which a selector with no argument, and one left out,
     /// stand for.
     fn of(condition: Option<&'a Expr>, body: &'a [Stmt], inputs: &[usize]) -> Handler<'a> {
-        let mut handler = Handler {
-            subscribed: inputs.to_vec(),
-            required: inputs.to_vec(),
-            conditions: Vec::new(),
-            body,
-        };
         // "when it stands alone in the header or appears as a
         // top-level conjunct": the conjuncts, through each `&&`.
         let mut conjuncts = Vec::new();
@@ -203,28 +211,40 @@ impl<'a> Handler<'a> {
                 _ => conjuncts.push(part),
             }
         }
+        // Every selector among the conjuncts adds what it names, as
+        // the analyser has it: `valid(a) && valid(b)` requires both.
+        // One with no argument names every input, and `valid([])`
+        // names none. With no selector of a kind, its default stands.
+        let mut subscribed: Option<Vec<usize>> = None;
+        let mut required: Option<Vec<usize>> = None;
+        let mut conditions = Vec::new();
+        let add = |set: &mut Option<Vec<usize>>, named: &Option<Vec<usize>>| {
+            let set = set.get_or_insert_with(Vec::new);
+            for &local in named.as_deref().unwrap_or(inputs) {
+                if !set.contains(&local) {
+                    set.push(local);
+                }
+            }
+        };
         for conjunct in conjuncts {
             match &conjunct.kind {
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Modified,
                     inputs: named,
-                } => {
-                    if let Some(named) = named {
-                        handler.subscribed = named.clone();
-                    }
-                }
+                } => add(&mut subscribed, named),
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Valid,
                     inputs: named,
-                } => {
-                    if let Some(named) = named {
-                        handler.required = named.clone();
-                    }
-                }
-                _ => handler.conditions.push(conjunct),
+                } => add(&mut required, named),
+                _ => conditions.push(conjunct),
             }
         }
-        handler
+        Handler {
+            subscribed: subscribed.unwrap_or_else(|| inputs.to_vec()),
+            required: required.unwrap_or_else(|| inputs.to_vec()),
+            conditions,
+            body,
+        }
     }
 }
 
@@ -236,8 +256,8 @@ struct Emitter<'a> {
     module: usize,
     /// Where what cannot be written is reported.
     diagnostics: &'a mut Diagnostics,
-    /// The names the text uses from hgraph, for its import line.
-    hgraph: BTreeSet<&'static str>,
+    /// True once the text names something of hgraph.
+    hgraph: bool,
     /// True once a native function of core is called.
     natives: bool,
     /// True once the eval harness is called.
@@ -275,15 +295,17 @@ impl Emitter<'_> {
         let mut out = format!(
             "# Generated by the hgl compiler for hgraph, from module `{path}`. Do not edit.\n"
         );
-        if !self.hgraph.is_empty() {
-            let names: Vec<&str> = self.hgraph.iter().copied().collect();
-            out.push_str(&format!("from hgraph import {}\n", names.join(", ")));
+        // Each import has a name of the target's own, which starts with
+        // `_` as no HGL name's Python form does: a program's `graph` or
+        // `evaluate` is then no clash with hgraph's or the harness's.
+        if self.hgraph {
+            out.push_str("import hgraph as _hg\n");
         }
         if self.natives {
             out.push_str("import hgl_core_native as _core\n");
         }
         if self.harness {
-            out.push_str("from hgl_harness import evaluate\n");
+            out.push_str("import hgl_harness as _harness\n");
         }
         for module in &self.imports {
             let python = file_path(module).trim_end_matches(".py").replace('/', ".");
@@ -363,7 +385,7 @@ impl Emitter<'_> {
             0,
             &format!(
                 "def {}({}):",
-                name(&declaration.name),
+                self.definition_name(self.module, declaration),
                 parameters.join(", ")
             ),
         );
@@ -384,8 +406,8 @@ impl Emitter<'_> {
             return None;
         };
         if temporal {
-            self.hgraph.insert("TS");
-            Some(format!("TS[{python}]"))
+            self.hgraph = true;
+            Some(format!("_hg.TS[{python}]"))
         } else {
             Some(python.to_string())
         }
@@ -508,14 +530,13 @@ impl Emitter<'_> {
                 Some(result) => result.replacen("TS[", "TS_OUT[", 1),
                 None => "object".to_string(),
             };
-            self.hgraph.insert("TS_OUT");
+            self.hgraph = true;
             parameters.push(format!("_output: {annotation} = None"));
         }
         let has_state = !states.is_empty();
         if has_state {
-            self.hgraph.insert("STATE");
-            parameters.push("_state: STATE = None".to_string());
-            lifecycle.push("_state: STATE = None".to_string());
+            parameters.push("_state: _hg.STATE = None".to_string());
+            lifecycle.push("_state: _hg.STATE = None".to_string());
         }
         let lifecycle = lifecycle.join(", ");
         // TIME-4: what the handlers ask together.
@@ -567,13 +588,13 @@ impl Emitter<'_> {
         } else {
             "sink_node"
         };
-        self.hgraph.insert(decorator);
+        self.hgraph = true;
         self.line(0, "");
         self.line(0, "");
         if options.is_empty() {
-            self.line(0, &format!("@{decorator}"));
+            self.line(0, &format!("@_hg.{decorator}"));
         } else {
-            self.line(0, &format!("@{decorator}({})", options.join(", ")));
+            self.line(0, &format!("@_hg.{decorator}({})", options.join(", ")));
         }
         let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
         self.line(
@@ -581,14 +602,33 @@ impl Emitter<'_> {
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
         let before = self.text.len();
+        // An endpoint as the node's code names it: an input by its
+        // name, and the node's own output as hgraph's `_output`.
+        let endpoint = |local: usize| {
+            let declared = &body.locals[local];
+            if declared.kind == LocalKind::Inject {
+                "_output".to_string()
+            } else {
+                name(&declared.name)
+            }
+        };
         for handler in &handlers {
-            // What this handler asks beyond what the node does.
+            // What this handler asks beyond what the node does. It is
+            // woken by fewer inputs than the node where one the node is
+            // woken by is none of its own.
             let mut guards: Vec<String> = Vec::new();
-            if handler.subscribed.len() != active.len() {
+            if handler.subscribed.is_empty() && !active.is_empty() {
+                self.unsupported(declaration.at, "a handler that no input wakes");
+                continue;
+            }
+            let narrower = active
+                .iter()
+                .any(|input| !handler.subscribed.contains(input));
+            if narrower {
                 let ticked: Vec<String> = handler
                     .subscribed
                     .iter()
-                    .map(|&local| format!("{}.modified", name(&body.locals[local].name)))
+                    .map(|&local| format!("{}.modified", endpoint(local)))
                     .collect();
                 guards.push(match ticked.as_slice() {
                     [one] => one.clone(),
@@ -597,7 +637,7 @@ impl Emitter<'_> {
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {
-                    guards.push(format!("{}.valid", name(&body.locals[local].name)));
+                    guards.push(format!("{}.valid", endpoint(local)));
                 }
             }
             for condition in &handler.conditions {
@@ -649,10 +689,10 @@ impl Emitter<'_> {
             mode: Mode::Graph,
         };
         let (parameters, result) = self.temporal_signature(declaration, signature);
-        self.hgraph.insert("graph");
+        self.hgraph = true;
         self.line(0, "");
         self.line(0, "");
-        self.line(0, "@graph");
+        self.line(0, "@_hg.graph");
         let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
         self.line(
             0,
@@ -984,13 +1024,37 @@ impl Emitter<'_> {
         written.join(", ")
     }
 
+    /// The Python name `declaration` of `module` is defined under.
+    ///
+    /// FN-4 lets one name have a temporal and a value definition: "
+    /// Composition and eval choose the temporal definition if one
+    /// exists; runtime/value evaluation chooses the value definition."
+    /// Python has one function to a name, so the value definition of
+    /// such a pair is `_value_name`, which no HGL name is written as.
+    fn definition_name(&self, module: usize, declaration: &Declaration) -> String {
+        let python = name(&declaration.name);
+        let paired = declaration.kind == DeclarationKind::Function(Role::Value)
+            && self.program.modules[module]
+                .declarations
+                .iter()
+                .any(|other| {
+                    other.name == declaration.name
+                        && other.kind == DeclarationKind::Function(Role::Temporal)
+                });
+        if paired {
+            format!("_value_{python}")
+        } else {
+            python
+        }
+    }
+
     /// The Python name of the function `declaration` of `module`. One
     /// of another module is named through that module, which is
     /// imported under a name of its own: two modules may each have a
     /// `pick`, and this one a `pick` too.
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
-        let python = name(&declared.declarations[declaration].name);
+        let python = self.definition_name(module, &declared.declarations[declaration]);
         if module == self.module {
             return python;
         }
@@ -1097,9 +1161,9 @@ impl Emitter<'_> {
         let target = self.function_name(*module, *declaration);
         let arguments = self.arguments(function, signature, arguments);
         if arguments.is_empty() {
-            format!("evaluate({target})")
+            format!("_harness.evaluate({target})")
         } else {
-            format!("evaluate({target}, {arguments})")
+            format!("_harness.evaluate({target}, {arguments})")
         }
     }
 
