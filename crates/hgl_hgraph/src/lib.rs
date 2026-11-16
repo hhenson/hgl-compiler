@@ -18,7 +18,7 @@
 //! | A `const` parameter of a node | A scalar parameter |
 //! | `state name: T = value` | A field of the node's `STATE`, set in its `start` |
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
-//! | A native candidate of core | A function of `_hgl_core_native` |
+//! | A native candidate of core | A function of `_hgl._core_native` |
 //! | A named test | A function `test_name` |
 //! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
 //!
@@ -53,33 +53,43 @@ pub struct File {
 }
 
 /// Core's native value functions for this target, as Python.
-const CORE_NATIVE: &str = include_str!("../support/_hgl_core_native.py");
+const CORE_NATIVE: &str = include_str!("../support/core_native.py");
 
 /// The eval harness a generated test calls.
-const HARNESS: &str = include_str!("../support/_hgl_harness.py");
+const HARNESS: &str = include_str!("../support/harness.py");
 
-/// The Python name of a module: its path, each part as a Python name
-/// (see the crate's naming). `examples.tests` is itself, and
-/// `demo.pass` is `demo.pass_`.
+/// The Python package every file of a program is written under. A
+/// program's modules are then in a namespace of their own: a module
+/// named `hgraph`, or as a module of Python's own library is, takes
+/// the place of nothing Python or hgraph imports.
+pub const ROOT: &str = "_hgl";
+
+/// The Python name of a module: its path under [`ROOT`], each part as
+/// a Python name (see the crate's naming). `examples.tests` is
+/// `_hgl.examples.tests`, and `demo.pass` is `_hgl.demo.pass_`.
 pub fn python_module(module: &str) -> String {
     let parts: Vec<String> = module.split('.').map(emit::name).collect();
-    parts.join(".")
+    format!("{ROOT}.{}", parts.join("."))
 }
 
 /// The file a module is written to: `examples.tests` to
-/// `examples/tests/__init__.py`. Each module is a Python package, so
-/// that one module's path may begin another's: `demo` and `demo.util`
-/// are `demo/__init__.py` and `demo/util/__init__.py`.
+/// `_hgl/examples/tests/__init__.py`. Each module is a Python package,
+/// so that one module's path may begin another's: `demo` and
+/// `demo.util` are `_hgl/demo/__init__.py` and
+/// `_hgl/demo/util/__init__.py`.
 pub fn file_path(module: &str) -> String {
     format!("{}/__init__.py", python_module(module).replace('.', "/"))
 }
 
+/// The file that makes [`ROOT`] a package.
+pub const ROOT_FILE: &str = "_hgl/__init__.py";
+
 /// The support file that provides core's native functions. Its name
 /// starts with `_`, as no module's Python name does.
-pub const CORE_NATIVE_FILE: &str = "_hgl_core_native.py";
+pub const CORE_NATIVE_FILE: &str = "_hgl/_core_native.py";
 
 /// The support file that holds the eval harness.
-pub const HARNESS_FILE: &str = "_hgl_harness.py";
+pub const HARNESS_FILE: &str = "_hgl/_harness.py";
 
 /// Writes `program` for hgraph: a file for each of its modules but
 /// core, whose native functions the target provides itself, and the
@@ -89,7 +99,10 @@ pub const HARNESS_FILE: &str = "_hgl_harness.py";
 /// write yet is reported to `diagnostics`; the files are then
 /// incomplete and are not to be used.
 pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Vec<File> {
-    let mut files = Vec::new();
+    let mut files = vec![File {
+        path: ROOT_FILE.to_string(),
+        text: "\"\"\"A program written by the hgl compiler for hgraph.\"\"\"\n".to_string(),
+    }];
     let mut natives = false;
     let mut harness = false;
     for (index, module) in program.modules.iter().enumerate() {
@@ -119,7 +132,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Vec<File> 
     files
 }
 
-/// The functions `_hgl_core_native.py` provides, read from its text: the
+/// The functions the provider of core's natives defines, read from its text: the
 /// name after each `def` at the start of a line, but for the private
 /// ones.
 pub(crate) fn provided() -> impl Iterator<Item = &'static str> {

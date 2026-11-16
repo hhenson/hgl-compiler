@@ -1243,13 +1243,14 @@ First target (owner decision, 2026-11-13): Python wiring for
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
 
-`hgl_hgraph` writes one Python file for each module but core,
-`examples.tests` to `examples/tests/__init__.py`, and beside them the support
-files a generated module imports.
-Each module is a Python package, so that one module's path may begin
-another's: `demo` and `demo.util` are `demo/__init__.py` and
-`demo/util/__init__.py`. The support files' names start with `_`, as no
-module's Python name does.
+`hgl_hgraph` writes every file under one Python package, `_hgl`, so
+that a program's modules are in a namespace of their own: a module named
+`hgraph`, or as a module of Python's library is, takes the place of
+nothing Python or hgraph imports. Each module but core is a package
+under it, `examples.tests` at `_hgl/examples/tests/__init__.py`, so that
+one module's path may begin another's. Beside them are the support files
+a generated module imports, whose names start with `_`, as no module's
+Python name does: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 
 | HGL | Python |
 | --- | --- |
@@ -1262,30 +1263,31 @@ module's Python name does.
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
 | A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`) |
-| A function of another module | `alias.name`, the module imported as `_hgl_` and its path: two modules may each have a `pick` |
+| A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl.demo.util as _hgl_demo_util`: two modules may each have a `pick` |
 | `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
-| A symbol or a call that selects a native candidate of core | A function of `_hgl_core_native`, named for the candidate and its parameter types: `add__i64_i64` |
+| A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | A named test | A function `test_name` |
-| `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl_harness` |
+| `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
 | A name | Itself, but where Python or the target would take it. A Python word, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
 
 Core's native functions are the target's to provide (NATIVE-7):
-`_hgl_core_native.py` is that provider, written by hand in the crate and
+`_hgl/_core_native.py` is that provider, written by hand in the crate and
 copied out beside the modules. It holds the `i64` operations to core's
 numeric contract, which neither wraps nor promotes. The transpiler reads
 the names it defines, and a candidate it has no function for is reported.
 
-`_hgl_harness.py` holds `evaluate`, which runs a target with a dense trace
+`_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
 for each input through hgraph's own `eval_node` and ends the result at
 its last publication (TST-6).
 
 Reported as not written yet (`target.unsupported`): a type other than
 the four scalars above, a nullable among them; structs, enums, operators
 and their candidates declared in a program; generic temporal functions;
-a default of a temporal input; a node that no input wakes, `modified([])`;
+a default of a temporal input; a pack parameter; a node that no input
+wakes, `modified([])`;
 `out` or an input read in `start` or `stop`, which hgraph gives neither;
 `cache`, the `inject` of a capability, and sources; a call lifted over
 connections in a graph; loops and `switch`;
