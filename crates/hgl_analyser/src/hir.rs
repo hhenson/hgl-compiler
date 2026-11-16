@@ -58,10 +58,11 @@ pub enum Stmt {
     Assign {
         /// The local assigned.
         local: LocalId,
-        /// The operator of a compound assignment: `+` for `+=`. The
-        /// local's value is its left operand.
+        /// The operator of a compound assignment: `+` for `+=`.
         operator: Option<BinaryOperator>,
-        /// The value, or the right operand.
+        /// What the local becomes. For a compound assignment, the
+        /// symbol with the local's value as its left operand: `name +=
+        /// value` assigns what `name + value` is.
         value: Expr,
         /// Where the statement is written.
         at: Location,
@@ -169,14 +170,15 @@ pub enum ExprKind {
         /// Where it is declared.
         at: Location,
     },
-    /// `-value` or `!value`.
+    /// `!value`, and a `-value` not read as a call: see [`Form`].
     Unary {
         /// The operator.
         operator: UnaryOperator,
         /// The operand.
         operand: Box<Expr>,
     },
-    /// `left + right`, and each other form with two operands.
+    /// `left && right`, `left || right`, and each other symbol with
+    /// two operands that is not read as a call: see [`Form`].
     Binary {
         /// The operator.
         operator: BinaryOperator,
@@ -272,19 +274,25 @@ pub enum Callee {
         /// candidate with none.
         generics: Vec<GenericArgument>,
     },
-    /// What no pass reads yet: a name left for the prelude, an
-    /// operator whose candidates are generic, a function that is
-    /// itself an expression.
+    /// No callee: a name left for the prelude, a function that is
+    /// itself an expression, or an operator of which no candidate is
+    /// selected, by its name or by a symbol.
     Unread,
 }
 
 /// How a call is written in the source.
 ///
 /// A symbol stands for the operator it binds (the generics chapter's
-/// table), so `a + b` is to be recorded as the call `add_(a, b)` is,
-/// marked as written with a symbol. Every call is [`Form::Named`] until
-/// symbols are selected through core's candidates; a symbol is an
-/// [`ExprKind::Binary`] or [`ExprKind::Unary`] until then.
+/// table), so `a + b` is recorded as the call `add_(a, b)` is, marked
+/// as written with a symbol. Its arguments are in the order EXPR-13
+/// evaluates them: the left operand, the entries of its configuration
+/// that are parameters, the right operand; for a symbol before one
+/// operand, the entries and then the operand.
+///
+/// A symbol that is not read as a call is an [`ExprKind::Binary`] or an
+/// [`ExprKind::Unary`]: `&&`, `||` and `!`, and a symbol with an operand
+/// whose operators are not judged yet. [`ExprKind::binary`] and
+/// [`ExprKind::unary`] give the operands of either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Form {
     /// `name(arguments)`.
@@ -370,7 +378,90 @@ pub enum BinaryOperator {
     Or,
 }
 
+impl ExprKind {
+    /// The operator and operands of a symbol between two operands,
+    /// however it is recorded: an [`ExprKind::Binary`], or the call the
+    /// symbol stands for.
+    pub fn binary(&self) -> Option<(BinaryOperator, &Expr, &Expr)> {
+        match self {
+            ExprKind::Binary {
+                operator,
+                left,
+                right,
+            } => Some((*operator, left, right)),
+            // The left operand is the first argument and the right the
+            // last, with the configuration between (EXPR-13).
+            ExprKind::Call {
+                form: Form::Binary(operator),
+                arguments,
+                ..
+            } if arguments.len() >= 2 => {
+                let (left, right) = (arguments.first()?, arguments.last()?);
+                Some((*operator, &left.value, &right.value))
+            }
+            _ => None,
+        }
+    }
+
+    /// The operator and operand of a symbol before one operand, however
+    /// it is recorded: an [`ExprKind::Unary`], or the call the symbol
+    /// stands for.
+    pub fn unary(&self) -> Option<(UnaryOperator, &Expr)> {
+        match self {
+            ExprKind::Unary { operator, operand } => Some((*operator, operand)),
+            // "Unary configuration precedes its operand" (EXPR-13).
+            ExprKind::Call {
+                form: Form::Unary(operator),
+                arguments,
+                ..
+            } => arguments.last().map(|operand| (*operator, &operand.value)),
+            _ => None,
+        }
+    }
+}
+
+impl UnaryOperator {
+    /// The operator as HGL writes it.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            UnaryOperator::Negate => "-",
+            UnaryOperator::Not => "!",
+        }
+    }
+
+    /// The operator of core's module the symbol stands for (the
+    /// generics chapter: "Syntax binds these core identities").
+    pub fn identity(self) -> &'static str {
+        match self {
+            UnaryOperator::Negate => "neg_",
+            UnaryOperator::Not => "not_",
+        }
+    }
+}
+
 impl BinaryOperator {
+    /// The operator of core's module the symbol stands for (the
+    /// generics chapter: "Syntax binds these core identities").
+    pub fn identity(self) -> &'static str {
+        match self {
+            BinaryOperator::Add => "add_",
+            BinaryOperator::Subtract => "sub_",
+            BinaryOperator::Multiply => "mul_",
+            BinaryOperator::Divide => "div_",
+            BinaryOperator::FloorDivide => "floordiv_",
+            BinaryOperator::Modulo => "mod_",
+            BinaryOperator::Equal => "eq_",
+            BinaryOperator::NotEqual => "ne_",
+            BinaryOperator::Less => "lt_",
+            BinaryOperator::LessEqual => "le_",
+            BinaryOperator::Greater => "gt_",
+            BinaryOperator::GreaterEqual => "ge_",
+            BinaryOperator::Compare => "compare_",
+            BinaryOperator::And => "and_",
+            BinaryOperator::Or => "or_",
+        }
+    }
+
     /// The operator as HGL writes it.
     pub fn symbol(self) -> &'static str {
         match self {

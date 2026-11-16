@@ -145,6 +145,13 @@ struct Typer<'a> {
     /// True once a statement this pass does not read has been met: it
     /// may return, so the function is not said to end with no value.
     unsure: bool,
+    /// The operator of core's module each symbol met so far stands for,
+    /// by the operator's name; `None` for one the program has not.
+    identities: HashMap<&'static str, Option<OperatorRef>>,
+    /// The value candidates of each operator called so far, by the
+    /// operator's module and declaration. A chain of symbols asks for
+    /// the same operator's at every link.
+    candidates: HashMap<(usize, usize), Vec<Candidate<'a>>>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -180,6 +187,8 @@ impl<'a> Typer<'a> {
             rereads: REREADS,
             returned: false,
             unsure: false,
+            identities: HashMap::new(),
+            candidates: HashMap::new(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -480,12 +489,24 @@ impl<'a> Typer<'a> {
                 self.fit(value, &target, "the type of the `var`")
             }
             Some(operator) => {
-                // The target is the left operand, and is read.
+                // `name += value` assigns what `name + value` is: the
+                // target is the left operand, and is read.
                 let left = self.read_local(local, &place);
                 let right = self.expression(&value, None);
-                let result = self.binary_type(operator, &left, &right, operator_at);
+                let identity = self.symbol_operator(operator.identity());
+                let (kind, result) = self.symbol(
+                    (operator, operator_at),
+                    identity,
+                    (place.clone(), left),
+                    (Vec::new(), false, false),
+                    (value.clone(), right),
+                );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
-                right
+                Expr {
+                    kind,
+                    ty: result,
+                    at,
+                }
             }
         };
         self.assigned[local] = true;
@@ -962,19 +983,25 @@ impl<'a> Typer<'a> {
         (ExprKind::Sequence(elements), ty)
     }
 
-    /// `-value`, `!value`. NUM-1: "Unary negation preserves the numeric
-    /// type." `!` is of a bool (EXPR-6; OPS-5: "`&&`, `||`, and `!` take
-    /// bools").
+    /// `-value`, `!value`.
+    ///
+    /// `-` stands for core's `neg_` (the generics chapter: "Syntax binds
+    /// these core identities"), and is read as the call of it: NUM-1,
+    /// "Unary negation preserves the numeric type", and OPS-1 are what
+    /// its candidates declare. `!` is of a bool (EXPR-6; OPS-5: "`&&`,
+    /// `||`, and `!` take bools"), and is read as it is written.
     fn unary(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
-        // An operator given configuration, `-{...} x`, is for the pass
-        // that reads configuration.
-        if child(node, SyntaxKind::OperatorConfig).is_some() {
-            return (ExprKind::Unread, Type::Unknown);
-        }
-        let (Some(token), Some(operand)) = (tokens(node).next(), node.children().next()) else {
+        let config = child(node, SyntaxKind::OperatorConfig);
+        let operand = node
+            .children()
+            .find(|part| part.kind() != SyntaxKind::OperatorConfig);
+        let (Some(token), Some(operand)) = (tokens(node).next(), operand) else {
             return (ExprKind::Unread, Type::Unknown);
         };
         match token.kind() {
+            // Configuration of `!` is for the pass that reads it through
+            // core's `not_`.
+            SyntaxKind::Bang if config.is_some() => (ExprKind::Unread, Type::Unknown),
             SyntaxKind::Bang => {
                 let operand = self.expression(&operand, Some(&BOOL));
                 let operand = self.fit(operand, &BOOL, "the operand of `!`");
@@ -987,36 +1014,51 @@ impl<'a> Typer<'a> {
             SyntaxKind::Minus => {
                 // LEX-7: 2^63 is an integer only as the operand of a
                 // minus, where the two are the least `i64`.
-                if is_least_magnitude(&operand) {
+                if config.is_none() && is_least_magnitude(&operand) {
                     return (
                         ExprKind::Literal(Value::Int(i64::MIN)),
                         Type::Scalar(Scalar::I64),
                     );
                 }
-                let operand = self.expression(&operand, None);
-                // NUM-1: "Unary negation preserves the numeric type."
-                // OPS-1: `-x` of a `duration` is a `duration`.
-                let ty = match &operand.ty {
-                    Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Duration) => {
-                        operand.ty.clone()
+                let operator = UnaryOperator::Negate;
+                let identity = self.symbol_operator(operator.identity());
+                // EXPR-13: "Unary configuration precedes its operand."
+                let (mut given, faulty) = match (&config, identity) {
+                    (Some(config), Some(identity)) => {
+                        self.configuration(operator.symbol(), config, identity)
                     }
-                    ty if unjudged_operand(ty) => Type::Unknown,
-                    ty => {
-                        self.diagnostics.emit(error(
-                            Category::Operator,
-                            codes::OPERATOR_NO_CANDIDATE,
-                            Location::new(self.file, token.span()),
-                            format!("`-` takes no `{ty}`"),
-                            "OPS-1",
-                        ));
-                        Type::Unknown
+                    // Configuration of an operator the program does not
+                    // have.
+                    (Some(_), None) => return (ExprKind::Unread, Type::Unknown),
+                    (None, _) => (Vec::new(), false),
+                };
+                let value = self.expression(&operand, None);
+                let symbol = Symbol {
+                    form: Form::Unary(operator),
+                    text: operator.symbol(),
+                    at: Location::new(self.file, token.span()),
+                    rule: "OPS-1",
+                    unjudged: Type::Unknown,
+                };
+                // An operand whose operators are not judged here: see
+                // `unjudged_operand`.
+                let identity = identity.filter(|_| !unjudged_operand(&value.ty));
+                let Some(identity) = identity else {
+                    if config.is_none() {
+                        let kind = ExprKind::Unary {
+                            operator,
+                            operand: Box::new(value),
+                        };
+                        return (kind, Type::Unknown);
                     }
+                    given.push(Given::read(0, operand, value));
+                    return (self.unselected(given, symbol.form), Type::Unknown);
                 };
-                let kind = ExprKind::Unary {
-                    operator: UnaryOperator::Negate,
-                    operand: Box::new(operand),
-                };
-                (kind, ty)
+                given.push(Given::read(0, operand, value));
+                if faulty {
+                    return (self.unselected(given, symbol.form), symbol.unjudged);
+                }
+                self.call_symbol(symbol, identity, given)
             }
             _ => (ExprKind::Unread, Type::Unknown),
         }
@@ -1027,12 +1069,12 @@ impl<'a> Typer<'a> {
         // A chain, `a + b + c`, nests to the left as deep as it is long
         // (the parser's tree depth, not its nesting). It is read from
         // its innermost link outward, in a loop, so that its length
-        // costs no stack. A link with configuration is not read, and
-        // neither is what is inside it.
+        // costs no stack. A link that is not read, `&&` or `||` with
+        // configuration, is not read inside either.
         let mut links = vec![node.clone()];
         loop {
             let last = links.last().expect("never empty");
-            if child(last, SyntaxKind::OperatorConfig).is_some() {
+            if unread_link(last) {
                 break;
             }
             match last.children().next() {
@@ -1063,14 +1105,18 @@ impl<'a> Typer<'a> {
     /// One link of a chain of binary operators: `left operator right`.
     /// `read` is the left operand, when it is the link inside this one
     /// and has been read.
+    ///
+    /// `&&` and `||` are read as they are written (EXPR-6). Every other
+    /// symbol stands for an operator of core's module (the generics
+    /// chapter: "Syntax binds these core identities independently of
+    /// local same-named functions"), and is read as the call of it: see
+    /// [`Typer::symbol`].
     fn binary_link(&mut self, node: &SyntaxNode, read: Option<Expr>) -> (ExprKind, Type) {
-        // `a /{zero: .error} b` is for the pass that reads
-        // configuration: it may select the result type (EXPR-12).
-        if child(node, SyntaxKind::OperatorConfig).is_some() {
-            return (ExprKind::Unread, Type::Unknown);
-        }
+        let config = child(node, SyntaxKind::OperatorConfig);
         let mut read = read;
-        let mut operands = node.children();
+        let mut operands = node
+            .children()
+            .filter(|part| part.kind() != SyntaxKind::OperatorConfig);
         let operator = tokens(node).find_map(|token| binary_operator(token.kind()));
         let operator_at = tokens(node)
             .find(|token| binary_operator(token.kind()).is_some())
@@ -1082,144 +1128,406 @@ impl<'a> Typer<'a> {
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let (left, right) = match operator {
+        if matches!(operator, BinaryOperator::And | BinaryOperator::Or) {
+            // Configuration of these is for the pass that reads them
+            // through core's `and_` and `or_`.
+            if config.is_some() {
+                return (ExprKind::Unread, Type::Unknown);
+            }
             // EXPR-6: "Boolean connectives short-circuit left to right."
             // Their operands are bools.
-            BinaryOperator::And | BinaryOperator::Or => {
-                let what = format!("an operand of `{}`", operator.symbol());
-                let left = match read.take() {
-                    Some(left) => left,
-                    None => self.expression(&left, Some(&BOOL)),
-                };
-                let left = self.fit(left, &BOOL, &what);
-                // EXPR-6: the right operand is not evaluated when the
-                // left decides. What it assigns is assigned only on the
-                // path that evaluates it, and a `return` in it does not
-                // end every path (CTRL-11, CTRL-5).
-                let before = self.assigned.clone();
-                let before_returned = self.returned;
-                let right = self.expression(&right, Some(&BOOL));
-                self.assigned = joined(
-                    (&self.assigned, self.returned),
-                    (&before, before_returned),
-                    self.locals.len(),
-                );
-                self.returned = before_returned;
-                (left, self.fit(right, &BOOL, &what))
+            let what = format!("an operand of `{}`", operator.symbol());
+            let left = match read.take() {
+                Some(left) => left,
+                None => self.expression(&left, Some(&BOOL)),
+            };
+            let left = self.fit(left, &BOOL, &what);
+            // EXPR-6: the right operand is not evaluated when the left
+            // decides. What it assigns is assigned only on the path
+            // that evaluates it, and a `return` in it does not end
+            // every path (CTRL-11, CTRL-5).
+            let before = self.assigned.clone();
+            let before_returned = self.returned;
+            let right = self.expression(&right, Some(&BOOL));
+            self.assigned = joined(
+                (&self.assigned, self.returned),
+                (&before, before_returned),
+                self.locals.len(),
+            );
+            self.returned = before_returned;
+            let right = self.fit(right, &BOOL, &what);
+            let kind = ExprKind::Binary {
+                operator,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+            return (kind, BOOL);
+        }
+        let identity = self.symbol_operator(operator.identity());
+        // TYPE-7: `.member` "names a member of the enum type its
+        // position expects": beside an operand, that operand's.
+        // "Parentheses select grouping" (EXPR-1): `(.buy)` is `.buy`.
+        // A `null` beside an operand is of that operand's type when it
+        // is nullable; beside any other, what it is of is not known
+        // here. So an operand that takes its type from the other is
+        // read after it.
+        let left_first = takes_its_type(&right) || !takes_its_type(&left);
+        let mut left_value = left_first.then(|| match read.take() {
+            Some(left) => left,
+            None => self.expression(&left, None),
+        });
+        // EXPR-13: "left operand, configuration entries in their
+        // written order, then right operand".
+        let (entries, faulty) = match (&config, identity) {
+            (Some(config), Some(identity)) => {
+                self.configuration(operator.symbol(), config, identity)
             }
-            // TYPE-7: `.member` "names a member of the enum type its
-            // position expects": beside an operand, that operand's.
-            // "Parentheses select grouping" (EXPR-1): `(.buy)` is
-            // `.buy`.
-            // A `null` beside an operand is of that operand's type when
-            // it is nullable; beside any other, what it is of is not
-            // known here.
-            _ if takes_its_type(&right) => {
-                let left = match read.take() {
-                    Some(left) => left,
-                    None => self.expression(&left, None),
-                };
+            // Configuration of an operator the program does not have.
+            (Some(_), None) => return (ExprKind::Unread, Type::Unknown),
+            (None, _) => (Vec::new(), false),
+        };
+        let right_value = match &left_value {
+            Some(left) if takes_its_type(&right) => {
                 let expected = beside(&right, &left.ty);
-                let right = self.expression(&right, Some(&expected));
-                (left, right)
+                self.expression(&right, Some(&expected))
             }
-            _ if takes_its_type(&left) => {
-                let right = self.expression(&right, None);
-                let expected = beside(&left, &right.ty);
-                let left = self.expression(&left, Some(&expected));
-                (left, right)
-            }
-            _ => {
-                let left = match read.take() {
-                    Some(left) => left,
-                    None => self.expression(&left, None),
-                };
-                (left, self.expression(&right, None))
+            _ => self.expression(&right, None),
+        };
+        let left_value = match left_value.take() {
+            Some(left) => left,
+            None => {
+                let expected = beside(&left, &right_value.ty);
+                self.expression(&left, Some(&expected))
             }
         };
-        let ty = self.binary_type(operator, &left, &right, operator_at);
-        let kind = ExprKind::Binary {
-            operator,
-            left: Box::new(left),
-            right: Box::new(right),
-        };
-        (kind, ty)
+        self.symbol(
+            (operator, operator_at),
+            identity,
+            (left, left_value),
+            (entries, faulty, config.is_some()),
+            (right, right_value),
+        )
     }
 
-    /// The type of `left operator right`, by core's contracts. `at` is
-    /// where the operator is written.
+    /// A symbol between two operands that are read, as the call of the
+    /// operator it stands for. `identity` is that operator, when the
+    /// program has it; `entries` the configuration's entries, whether
+    /// one of them was reported, and whether a configuration is written.
     ///
-    /// NUM-1: "For i64 operands, `+`, `-`, `*`, `//`, and `%` return
-    /// i64. Unconfigured mixed i64/f64 and f64 arithmetic returns f64;
-    /// `/` defaults to f64." OPS-1: "The symbol operators admit the
-    /// operand types of the first table below ... Every other pairing
-    /// is a source rejection." OPS-2: which types are ordered, and that
-    /// equality is between two values of one type.
+    /// The candidates of core's operators say what a symbol admits:
+    /// NUM-1 for numbers, OPS-1's table for the others, OPS-2 for the
+    /// comparisons. "Every other pairing is a source rejection."
     ///
     /// An operand whose type is not known, a generic parameter, whose
     /// operators its constraints say, and a nullable one, whose payload
-    /// needs its guard, are not judged here.
-    fn binary_type(
+    /// needs its guard, are not judged here: the symbol is then
+    /// recorded as it is written. The generics chapter: "null presence
+    /// checks ... have their own language rules; token shape alone does
+    /// not make them extensible candidate calls."
+    fn symbol(
         &mut self,
-        operator: BinaryOperator,
-        left: &Expr,
-        right: &Expr,
-        at: Location,
-    ) -> Type {
+        (operator, at): (BinaryOperator, Location),
+        identity: Option<OperatorRef>,
+        (left_node, left): (SyntaxNode, Expr),
+        (entries, faulty, configured): (Vec<Given>, bool, bool),
+        (right_node, right): (SyntaxNode, Expr),
+    ) -> (ExprKind, Type) {
         use BinaryOperator as Op;
         let comparison = matches!(
             operator,
             Op::Equal | Op::NotEqual | Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual
         );
-        // What the operator gives when nothing can be said of its
-        // operands. The type of a `<=>` outcome, core's `CmpResult`, is
-        // not declared in HGL source yet, and is not known here.
-        let unjudged = if comparison || matches!(operator, Op::And | Op::Or) {
-            BOOL
-        } else {
-            Type::Unknown
-        };
-        if matches!(operator, Op::And | Op::Or)
-            || unjudged_operand(&left.ty)
-            || unjudged_operand(&right.ty)
-        {
-            return unjudged;
-        }
-        let found = match operator {
-            Op::Equal | Op::NotEqual => {
-                // "Two values of one type", a number with a number
-                // included (NUM-2).
-                let one_type = self.admits(&left.ty, &right.ty) || self.admits(&right.ty, &left.ty);
-                (one_type || (is_number(&left.ty) && is_number(&right.ty))).then_some(BOOL)
-            }
-            _ => match (scalar_of(&left.ty), scalar_of(&right.ty)) {
-                (Some(left), Some(right)) => operator_result(operator, left, right),
-                _ => None,
+        let symbol = Symbol {
+            form: Form::Binary(operator),
+            text: operator.symbol(),
+            at,
+            rule: if comparison || matches!(operator, Op::Compare) {
+                "OPS-2"
+            } else {
+                "OPS-1"
             },
+            // What the symbol gives when no candidate is selected: a
+            // comparison is a bool whichever candidate it is.
+            unjudged: if comparison { BOOL } else { Type::Unknown },
         };
-        match found {
-            Some(_) if matches!(operator, Op::Compare) => Type::Unknown,
-            Some(ty) => ty,
-            None => {
+        let identity =
+            identity.filter(|_| !(unjudged_operand(&left.ty) || unjudged_operand(&right.ty)));
+        let Some(identity) = identity else {
+            if !configured {
+                let kind = ExprKind::Binary {
+                    operator,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
+                return (kind, symbol.unjudged);
+            }
+            let mut given = vec![Given::read(0, left_node, left)];
+            given.extend(entries);
+            given.push(Given::read(1, right_node, right));
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        };
+        let mut given = vec![Given::read(0, left_node, left)];
+        given.extend(entries);
+        given.push(Given::read(1, right_node, right));
+        if faulty {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        self.call_symbol(symbol, identity, given)
+    }
+
+    /// The operator of core's module that a symbol stands for, by its
+    /// name: `add_` for `+`. `None` when the program has no such
+    /// operator.
+    fn symbol_operator(&mut self, name: &'static str) -> Option<OperatorRef> {
+        if let Some(found) = self.identities.get(name) {
+            return *found;
+        }
+        let program = self.program;
+        let found = program.core().and_then(|core| {
+            let module = &program.modules[core];
+            module
+                .scope
+                .get(name)
+                .into_iter()
+                .flatten()
+                .copied()
+                .find(|&declaration| {
+                    module.declarations[declaration].kind == DeclarationKind::Operator
+                })
+                .map(|declaration| OperatorRef {
+                    module: core,
+                    declaration,
+                })
+        });
+        self.identities.insert(name, found);
+        found
+    }
+
+    /// The entries of a symbol's configuration, `{zero: .error}`, each
+    /// read as a named argument of a call of `operator`, and whether
+    /// one of them was reported or is of no known type.
+    ///
+    /// EXPR-10: "Bind these arguments to the same core identity as the
+    /// named arguments of a call of it: to the operator's parameters
+    /// and the options its candidates declare (GEN-6), with their
+    /// roles, defaults, and ordinary argument checks."
+    fn configuration(
+        &mut self,
+        symbol: &str,
+        config: &SyntaxNode,
+        operator: OperatorRef,
+    ) -> (Vec<Given>, bool) {
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return (Vec::new(), true);
+        };
+        let candidates = self.value_candidates(operator);
+        let (selecting, options) = options_of(public, &candidates);
+        let reported = self.diagnostics.len();
+        let mut names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut given = Vec::new();
+        for entry in config
+            .children()
+            .filter(|entry| entry.kind() == SyntaxKind::ConfigArg)
+        {
+            // The entry's name is its first token: any word (LEX-9).
+            let (Some(name), Some(value)) = (tokens(&entry).next(), entry.children().next()) else {
+                continue;
+            };
+            let text = name.text();
+            let at = Location::new(self.file, name.span());
+            // The operator's own parameters are the symbol's operands.
+            let operand = public
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name == text);
+            if !operand && !options.contains(text) {
                 self.diagnostics.emit(error(
-                    Category::Operator,
-                    codes::OPERATOR_NO_CANDIDATE,
+                    Category::Name,
+                    codes::ARGUMENT_UNKNOWN,
                     at,
-                    format!(
-                        "`{}` takes no `{}` and `{}`",
-                        operator.symbol(),
-                        left.ty,
-                        right.ty
-                    ),
-                    if comparison || matches!(operator, Op::Compare) {
-                        "OPS-2"
-                    } else {
-                        "OPS-1"
-                    },
+                    format!("`{symbol}` has no option `{text}`"),
+                    "EXPR-10",
                 ));
-                unjudged
+            } else if operand || !names.insert(text.to_string()) {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::ARGUMENT_DUPLICATE,
+                    at,
+                    format!("`{text}` is given twice"),
+                    "EXPR-10",
+                ));
+            }
+            given.push(self.give(Key::Name(text.to_string()), value));
+        }
+        self.constants_given(&mut given, &selecting);
+        let faulty = self.diagnostics.len() != reported
+            || given
+                .iter()
+                .any(|given| !given.by_place && open(&given.value.ty));
+        (given, faulty)
+    }
+
+    /// What each argument given to a generic value parameter is, as a
+    /// constant where the call stands. `selecting` is the names the
+    /// operator's candidates declare as generic value parameters.
+    ///
+    /// GEN-8: "The value a call gives a generic value parameter is a
+    /// compile-time constant ... Any other rejects."
+    fn constants_given(
+        &mut self,
+        given: &mut [Given],
+        selecting: &std::collections::HashSet<&str>,
+    ) {
+        for given in given.iter_mut() {
+            let Key::Name(name) = &given.key else {
+                continue;
+            };
+            if !selecting.contains(name.as_str()) {
+                continue;
+            }
+            given.constant = Some(self.constant_here(&given.node));
+            if !self.is_compile_time(&given.node) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    self.at(&given.node),
+                    format!(
+                        "`{name}` is a generic value parameter, and this is no compile-time \
+                         constant: it is known only when the program runs"
+                    ),
+                    "GEN-8",
+                ));
             }
         }
+    }
+
+    /// The call a symbol stands for: of `operator`, with `given`, the
+    /// operands in their places and the configuration's entries by
+    /// their names.
+    ///
+    /// GEN-5: "Select exactly one most-specific admitted candidate ...
+    /// No match rejects; tied most-specific candidates are ambiguous."
+    /// A symbol's operands select as the arguments of the call do. The
+    /// type its place expects is not asked of the candidates: the
+    /// result is checked against it where the symbol stands.
+    fn call_symbol(
+        &mut self,
+        symbol: Symbol,
+        operator: OperatorRef,
+        given: Vec<Given>,
+    ) -> (ExprKind, Type) {
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        };
+        let candidates = self.value_candidates(operator);
+        if unreadable(public, &candidates) {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        let own_generics: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
+        let wanted = Wanted {
+            place: None,
+            among: self.result_among(operator, public, &[], &own_generics),
+        };
+        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        // Which candidates admit the call cannot be told, or an entry
+        // could not be tried once the function's readings were used up
+        // (`REREADS`): the symbol is then not judged.
+        if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
+            return (self.unselected(given, symbol.form), symbol.unjudged);
+        }
+        if selected.len() == 1
+            && let Some(chosen) = selected.pop()
+        {
+            return self.called(operator, chosen, given, symbol.form);
+        }
+        // Equality between a value and one of a type it is also a value
+        // of, a `Round` and the abstract `Shape` it inherits from: the
+        // candidate for two values of one type takes them with the
+        // `Shape` first, and not the other way round (GEN-2: the first
+        // argument that says what a parameter is decides it). Whether
+        // the order of a comparison's operands is to matter is asked in
+        // hhenson/hgl_spec#51, and is not judged here.
+        if selected.is_empty()
+            && matches!(
+                symbol.form,
+                Form::Binary(BinaryOperator::Equal | BinaryOperator::NotEqual)
+            )
+        {
+            let operands: Vec<&Type> = given
+                .iter()
+                .filter(|given| matches!(given.key, Key::Position(_)))
+                .map(|given| &given.value.ty)
+                .collect();
+            if let [left, right] = operands[..]
+                && (self.admits(left, right) || self.admits(right, left))
+            {
+                return (self.unselected(given, symbol.form), symbol.unjudged);
+            }
+        }
+        // `i64` and `f64`, and after them what the configuration gives:
+        // `zero: .nan`.
+        let operands: Vec<String> = given
+            .iter()
+            .filter(|given| matches!(given.key, Key::Position(_)))
+            .map(|given| format!("`{}`", given.value.ty))
+            .collect();
+        let entries: Vec<String> = given
+            .iter()
+            .filter_map(|given| {
+                let Key::Name(name) = &given.key else {
+                    return None;
+                };
+                let value = if given.by_place {
+                    given.node.text().to_string().trim().to_string()
+                } else {
+                    given.value.ty.to_string()
+                };
+                Some(format!("`{name}: {value}`"))
+            })
+            .collect();
+        let mut takes = operands.join(" and ");
+        if !entries.is_empty() {
+            takes = format!("{takes} with {}", entries.join(", "));
+        }
+        let diagnostic = if selected.is_empty() {
+            error(
+                Category::Operator,
+                codes::OPERATOR_NO_CANDIDATE,
+                symbol.at,
+                format!("`{}` takes no {takes}", symbol.text),
+                symbol.rule,
+            )
+        } else {
+            let name = &program.modules[operator.module].declarations[operator.declaration].name;
+            let mut diagnostic = error(
+                Category::Operator,
+                codes::OPERATOR_AMBIGUOUS,
+                symbol.at,
+                format!(
+                    "{} value candidates of operator `{name}`, which `{}` stands for, take \
+                     {takes} equally",
+                    selected.len(),
+                    symbol.text
+                ),
+                "GEN-5",
+            );
+            for chosen in &selected {
+                let candidate = &program.modules[chosen.module].declarations[chosen.declaration];
+                diagnostic = diagnostic.with_related(candidate.at, "this candidate");
+            }
+            diagnostic
+        };
+        self.diagnostics.emit(diagnostic);
+        (self.unselected(given, symbol.form), symbol.unjudged)
     }
 
     // ---- Calls and constructions ----
@@ -1818,10 +2126,8 @@ impl<'a> Typer<'a> {
     /// that place. A candidate that fits with no integer literal
     /// widened is taken before one that needs it.
     ///
-    /// What is not read here: a call of an operator that has a pack, and
-    /// one that has a generic value candidate. Which of two candidates
-    /// is the more specific is for the pass that resolves generics
-    /// (GEN-12). Such a call has no type.
+    /// What is not read here: a call of an operator that has a pack, or
+    /// a candidate with one. Such a call has no type.
     fn call_operator(
         &mut self,
         name: &SyntaxToken,
@@ -1882,21 +2188,7 @@ impl<'a> Typer<'a> {
         // candidate an argument is given to, and what a call may leave
         // out, is each candidate's to say (GEN-6: "A call is matched
         // against each candidate's own signature").
-        let own = public.parameters.len();
-        // An option that selects is a generic value parameter of its
-        // candidates (GEN-6).
-        let selecting: std::collections::HashSet<&str> = candidates
-            .iter()
-            .flat_map(|(_, _, signature)| &signature.generics)
-            .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
-            .map(|generic| generic.name.as_str())
-            .collect();
-        let options: std::collections::HashSet<&str> = candidates
-            .iter()
-            .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
-            .map(|parameter| parameter.name.as_str())
-            .chain(selecting.iter().copied())
-            .collect();
+        let (selecting, options) = options_of(public, &candidates);
         let reported = self.diagnostics.len();
         let written = self.operator_arguments(name, list, public, &options);
         // Each argument, read with nothing expected of it: what it
@@ -1905,34 +2197,7 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|(key, node)| self.give(key, node))
             .collect();
-        // What a generic value parameter is given, as the constant it
-        // is where the call stands.
-        for given in &mut given {
-            if let Key::Name(name) = &given.key
-                && selecting.contains(name.as_str())
-            {
-                given.constant = Some(self.constant_here(&given.node));
-            }
-        }
-        // GEN-8: "The value a call gives a generic value parameter is a
-        // compile-time constant ... Any other rejects."
-        for given in &given {
-            if let Key::Name(name) = &given.key
-                && selecting.contains(name.as_str())
-                && !self.is_compile_time(&given.node)
-            {
-                self.diagnostics.emit(error(
-                    Category::Type,
-                    codes::GENERIC_ARGUMENT_CONSTANT,
-                    self.at(&given.node),
-                    format!(
-                        "`{name}` is a generic value parameter, and this is no compile-time \
-                         constant: it is known only when the program runs"
-                    ),
-                    "GEN-8",
-                ));
-            }
-        }
+        self.constants_given(&mut given, &selecting);
         // An argument given to no parameter, or rejected itself, has
         // been reported, and one whose type is not known says nothing
         // of the candidates: the call is then not judged (ERR-9).
@@ -1941,7 +2206,7 @@ impl<'a> Typer<'a> {
             .iter()
             .any(|given| !given.by_place && open(&given.value.ty));
         if faulty || unknown {
-            return (self.unselected(given), Type::Unknown);
+            return (self.unselected(given, Form::Named), Type::Unknown);
         }
 
         // GEN-5: "the requested output before inputs". EXPR-5: an
@@ -1960,12 +2225,12 @@ impl<'a> Typer<'a> {
         // pass reads: which candidates admit the call cannot be told,
         // and the call is not judged.
         if untold {
-            return (self.unselected(given), Type::Unknown);
+            return (self.unselected(given, Form::Named), Type::Unknown);
         }
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
         if self.rereads == 0 && given.iter().any(|given| given.by_place) {
-            return (self.unselected(given), Type::Unknown);
+            return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let at = Location::new(self.file, name.span());
         if selected.len() != 1 {
@@ -1975,7 +2240,7 @@ impl<'a> Typer<'a> {
             // `list<i64>`. The tie is then not reported, and the call
             // has no type.
             if selected.len() > 1 && expected.is_some_and(open) {
-                return (self.unselected(given), Type::Unknown);
+                return (self.unselected(given, Form::Named), Type::Unknown);
             }
             let takes: Vec<String> = given
                 .iter()
@@ -2049,10 +2314,10 @@ impl<'a> Typer<'a> {
                 diagnostic
             };
             self.diagnostics.emit(diagnostic);
-            return (self.unselected(given), Type::Unknown);
+            return (self.unselected(given, Form::Named), Type::Unknown);
         }
         let Some(chosen) = selected.pop() else {
-            return (self.unselected(given), Type::Unknown);
+            return (self.unselected(given, Form::Named), Type::Unknown);
         };
         self.called(operator, chosen, given, Form::Named)
     }
@@ -2160,7 +2425,11 @@ impl<'a> Typer<'a> {
     /// The value candidates of `operator`, wherever they are declared.
     /// GEN-5: "Library membership and registration order grant no
     /// priority."
-    fn value_candidates(&self, operator: OperatorRef) -> Vec<(usize, usize, &'a Signature)> {
+    fn value_candidates(&mut self, operator: OperatorRef) -> Vec<Candidate<'a>> {
+        let key = (operator.module, operator.declaration);
+        if let Some(found) = self.candidates.get(&key) {
+            return found.clone();
+        }
         let program = self.program;
         let mut candidates = Vec::new();
         for (module, declared) in program.modules.iter().enumerate() {
@@ -2173,6 +2442,7 @@ impl<'a> Typer<'a> {
                 }
             }
         }
+        self.candidates.insert(key, candidates.clone());
         candidates
     }
 
@@ -2534,7 +2804,7 @@ impl<'a> Typer<'a> {
     /// The call of an operator for which no candidate is selected: its
     /// arguments as they were read, and no callee. One whose first
     /// reading was taken back is read where it stands.
-    fn unselected(&mut self, given: Vec<Given>) -> ExprKind {
+    fn unselected(&mut self, given: Vec<Given>, form: Form) -> ExprKind {
         let arguments = given
             .into_iter()
             .map(|given| hir::Argument {
@@ -2549,7 +2819,7 @@ impl<'a> Typer<'a> {
         ExprKind::Call {
             callee: Callee::Unread,
             arguments,
-            form: Form::Named,
+            form,
         }
     }
 
@@ -3529,97 +3799,6 @@ fn unjudged_operand(ty: &Type) -> bool {
     open(ty) || matches!(ty, Type::Parameter { .. } | Type::Nullable(_))
 }
 
-/// True for `i64` and `f64`.
-fn is_number(ty: &Type) -> bool {
-    matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64))
-}
-
-/// The scalar a type is, when it is one.
-fn scalar_of(ty: &Type) -> Option<Scalar> {
-    match ty {
-        Type::Scalar(scalar) => Some(*scalar),
-        _ => None,
-    }
-}
-
-/// What an arithmetic or ordering operator gives for two scalars, by
-/// core's contracts; `None` for a pairing they do not admit.
-///
-/// This table stands in for core's operator declarations, which are in
-/// no HGL source yet. An operator is to be resolved as any call is, from
-/// the candidates its operator declares (GEN-4), and the table goes when
-/// core declares them (owner's note of 2026-11-15).
-///
-/// NUM-1 for numbers. OPS-1's table for the others: "An operation that
-/// commutes admits its operands in either order; one that does not
-/// admits the order shown." OPS-2: the ordered types are `str`, `bool`,
-/// `date`, `time`, `datetime`, `civil_datetime` and `duration`, and the
-/// numbers.
-fn operator_result(operator: BinaryOperator, left: Scalar, right: Scalar) -> Option<Type> {
-    use BinaryOperator as Op;
-    use Scalar::{
-        Bool, CivilDatetime, Date, Datetime, Duration, F64, I64, Str, Time, ZonedDatetime,
-    };
-    let number = |scalar: Scalar| matches!(scalar, I64 | F64);
-    let instant =
-        |scalar: Scalar| matches!(scalar, Datetime | Date | CivilDatetime | ZonedDatetime);
-    let scalar = |scalar: Scalar| Some(Type::Scalar(scalar));
-    // The result of arithmetic on two numbers.
-    let numeric = || {
-        if left == I64 && right == I64 {
-            scalar(I64)
-        } else {
-            scalar(F64)
-        }
-    };
-    match operator {
-        Op::Add => match (left, right) {
-            _ if number(left) && number(right) => numeric(),
-            (Str, Str) => scalar(Str),
-            (Duration, Duration) => scalar(Duration),
-            (at, Duration) | (Duration, at) if instant(at) => scalar(at),
-            (Date, Time) | (Time, Date) => scalar(CivilDatetime),
-            _ => None,
-        },
-        Op::Subtract => match (left, right) {
-            _ if number(left) && number(right) => numeric(),
-            (Duration, Duration) => scalar(Duration),
-            (at, Duration) if instant(at) => scalar(at),
-            (Datetime, Datetime) | (Date, Date) | (CivilDatetime, CivilDatetime) => {
-                scalar(Duration)
-            }
-            _ => None,
-        },
-        Op::Multiply => match (left, right) {
-            _ if number(left) && number(right) => numeric(),
-            (Duration, other) | (other, Duration) if number(other) => scalar(Duration),
-            (Str, I64) | (I64, Str) => scalar(Str),
-            _ => None,
-        },
-        Op::Divide => match (left, right) {
-            _ if number(left) && number(right) => scalar(F64),
-            (Duration, other) if number(other) => scalar(Duration),
-            (Duration, Duration) => scalar(F64),
-            _ => None,
-        },
-        Op::FloorDivide => match (left, right) {
-            _ if number(left) && number(right) => numeric(),
-            (Duration, Duration) => scalar(I64),
-            _ => None,
-        },
-        Op::Modulo => (number(left) && number(right)).then(numeric).flatten(),
-        Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual | Op::Compare => {
-            let ordered = matches!(
-                left,
-                Str | Bool | Date | Time | Datetime | CivilDatetime | Duration
-            );
-            ((number(left) && number(right)) || (left == right && ordered)).then_some(BOOL)
-        }
-        // Equality and the connectives are not read from this table.
-        Op::Equal | Op::NotEqual | Op::And | Op::Or => Some(BOOL),
-    }
-}
-
 /// What a reading may change, at one moment: see [`Typer::take_back`].
 struct Mark {
     /// How many diagnostics there are.
@@ -3632,6 +3811,60 @@ struct Mark {
     returned: bool,
     /// Whether a statement not read has been met.
     unsure: bool,
+}
+
+/// A value candidate of an operator: the positions of its module and of
+/// its declaration there, and its signature.
+type Candidate<'a> = (usize, usize, &'a Signature);
+
+/// The names a call of an operator may give beside the operator's own
+/// parameters: those its candidates declare as generic value
+/// parameters, which select among them (GEN-6), and those with every
+/// other option they declare.
+fn options_of<'a>(
+    public: &Signature,
+    candidates: &[Candidate<'a>],
+) -> (
+    std::collections::HashSet<&'a str>,
+    std::collections::HashSet<&'a str>,
+) {
+    let own = public.parameters.len();
+    let selecting: std::collections::HashSet<&str> = candidates
+        .iter()
+        .flat_map(|(_, _, signature)| &signature.generics)
+        .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
+        .map(|generic| generic.name.as_str())
+        .collect();
+    let options = candidates
+        .iter()
+        .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
+        .map(|parameter| parameter.name.as_str())
+        .chain(selecting.iter().copied())
+        .collect();
+    (selecting, options)
+}
+
+/// True for a link of a chain of binary operators that is not read:
+/// `&&` or `||` with configuration.
+fn unread_link(node: &SyntaxNode) -> bool {
+    child(node, SyntaxKind::OperatorConfig).is_some()
+        && tokens(node)
+            .find_map(|token| binary_operator(token.kind()))
+            .is_some_and(|operator| matches!(operator, BinaryOperator::And | BinaryOperator::Or))
+}
+
+/// A symbol being read as the call of the operator it stands for.
+struct Symbol {
+    /// How the call is written.
+    form: Form,
+    /// The symbol: `+`.
+    text: &'static str,
+    /// Where it is written.
+    at: Location,
+    /// The rule that says what the symbol admits.
+    rule: &'static str,
+    /// The type of the expression where no candidate is selected.
+    unjudged: Type,
 }
 
 /// One argument of an operator's call, before a candidate is selected.
@@ -3654,6 +3887,21 @@ struct Given {
     /// it is given by a name a candidate declares as a generic value
     /// parameter.
     constant: Option<Constant>,
+}
+
+impl Given {
+    /// An operand of a symbol, which is read before the symbol's
+    /// candidates are: in the place `position`, with the value it has.
+    fn read(position: usize, node: SyntaxNode, value: Expr) -> Given {
+        Given {
+            key: Key::Position(position),
+            node,
+            by_place: false,
+            value,
+            retried: false,
+            constant: None,
+        }
+    }
 }
 
 /// How a call writes an argument.
@@ -5230,14 +5478,14 @@ fn label_of(label: &Expr) -> Option<Label> {
         ExprKind::Literal(Value::Bool(value)) => Some(Label::Bool(*value)),
         ExprKind::Literal(Value::Str(value)) => Some(Label::Str(value.clone())),
         ExprKind::EnumMember { member, .. } => Some(Label::Member(*member)),
-        ExprKind::Unary {
-            operator: UnaryOperator::Negate,
-            operand,
-        } => match &operand.kind {
-            ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
+        // `-1`: a minus over an integer literal.
+        kind => match kind.unary() {
+            Some((UnaryOperator::Negate, operand)) => match &operand.kind {
+                ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
+                _ => None,
+            },
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -5281,36 +5529,35 @@ enum Index {
 /// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`.
 fn constant_index(index: &Expr) -> Index {
     match &index.kind {
-        ExprKind::Literal(Value::Int(value)) => Index::Known(*value),
-        ExprKind::GenericValue { .. } => Index::Unevaluated,
-        ExprKind::Unary {
-            operator: UnaryOperator::Negate,
-            operand,
-        } => match constant_index(operand) {
+        ExprKind::Literal(Value::Int(value)) => return Index::Known(*value),
+        ExprKind::GenericValue { .. } => return Index::Unevaluated,
+        _ => {}
+    }
+    // A symbol, as it is written or as the call it stands for.
+    if let Some((UnaryOperator::Negate, operand)) = index.kind.unary() {
+        return match constant_index(operand) {
             // `checked_neg` gives `None` where the result does not fit.
             Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
             other => other,
-        },
-        ExprKind::Binary {
-            operator,
-            left,
-            right,
-        } => match (constant_index(left), constant_index(right)) {
-            (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
-            (Index::Known(left), Index::Known(right)) => {
-                let value = match operator {
-                    BinaryOperator::Add => left.checked_add(right),
-                    BinaryOperator::Subtract => left.checked_sub(right),
-                    BinaryOperator::Multiply => left.checked_mul(right),
-                    // Division and remainder follow core's numeric
-                    // contract, which this pass does not evaluate.
-                    _ => None,
-                };
-                value.map_or(Index::Unevaluated, Index::Known)
-            }
-            _ => Index::Unevaluated,
-        },
-        _ => Index::NotConstant,
+        };
+    }
+    let Some((operator, left, right)) = index.kind.binary() else {
+        return Index::NotConstant;
+    };
+    match (constant_index(left), constant_index(right)) {
+        (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
+        (Index::Known(left), Index::Known(right)) => {
+            let value = match operator {
+                BinaryOperator::Add => left.checked_add(right),
+                BinaryOperator::Subtract => left.checked_sub(right),
+                BinaryOperator::Multiply => left.checked_mul(right),
+                // Division and remainder follow core's numeric
+                // contract, which this pass does not evaluate.
+                _ => None,
+            };
+            value.map_or(Index::Unevaluated, Index::Known)
+        }
+        _ => Index::Unevaluated,
     }
 }
 
@@ -5681,11 +5928,12 @@ fn is_null(node: &SyntaxNode) -> bool {
 fn is_integer_literal(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Literal(Value::Int(_)) => true,
-        ExprKind::Unary {
-            operator: UnaryOperator::Negate,
-            operand,
-        } => is_integer_literal(operand),
-        _ => false,
+        // `-1`, as it is written or as the call of `neg_` it stands
+        // for.
+        kind => match kind.unary() {
+            Some((UnaryOperator::Negate, operand)) => is_integer_literal(operand),
+            _ => false,
+        },
     }
 }
 
