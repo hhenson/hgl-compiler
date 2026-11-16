@@ -3827,6 +3827,16 @@ fn a_const_parameter_takes_what_is_fixed() {
         "    let doubled = factor * 2\n",
         "    return scaled(value, doubled)\n",
         "}\n",
+        // A symbol calls the candidate it selects: each link of a
+        // chain, and a compound assignment.
+        "native impl const fn add_(lhs: Store, const rhs: str) -> Store\n",
+        "const fn joined(store: Store) -> Store => store + \"a\" + \"b\"\n",
+        "const fn chained(store: Store, key: str) -> Store => store + key + key\n",
+        "const fn grown(store: Store, key: str) -> Store {\n",
+        "    var total = store\n",
+        "    total += key\n",
+        "    return total\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -3836,6 +3846,9 @@ fn a_const_parameter_takes_what_is_fixed() {
             "m.hgl:15:75 type/argument.constant FN-1",
             "m.hgl:15:80 type/argument.constant FN-1",
             "m.hgl:20:30 type/argument.constant FN-1",
+            "m.hgl:29:62 type/argument.constant FN-1",
+            "m.hgl:29:68 type/argument.constant FN-1",
+            "m.hgl:32:14 type/argument.constant FN-1",
         ]
     );
 }
