@@ -4426,29 +4426,31 @@ impl<'a> Typer<'a> {
 
     /// What the enclosing declaration's requirements say of a call of
     /// `operator` with the arguments `given`: `Some` when one of them
-    /// is that call, with the result its arrow states and the
-    /// parameter of the operator each argument is given to.
+    /// is that call.
     ///
     /// GEN-7: "A generic body is checked under its stated
     /// requirements". A requirement is the call when it names the
     /// operator and is supplied with the arguments' types, each in its
     /// place: under `requires add_(T, T) -> T`, `add_(lhs, rhs)` of two
-    /// `T` is a `T`, and so is `add_(rhs: b, lhs: a)`. It speaks for
-    /// arguments of which one is of a type that names a generic
+    /// `T` is a `T`, and so is `add_(rhs: b, lhs: a)`. An argument with
+    /// no type of its own, a sequence or a tuple written out, is tried
+    /// as the type the requirement supplies in its place: `[a] + [b]`
+    /// under `requires add_(list<T>, list<T>) -> list<T>`.
+    ///
+    /// A requirement speaks for types of which one names a generic
     /// parameter of the declaration: any other call selects its
     /// candidate here, as it does in a body that has no generic
     /// parameter.
-    fn required(
-        &self,
-        operator: OperatorRef,
-        given: &[&Given],
-    ) -> Option<(Option<Type>, Vec<usize>)> {
+    fn required(&mut self, operator: OperatorRef, given: &[&Given]) -> Option<Required> {
         let own: Vec<Location> = self
             .signature
             .generics
             .iter()
             .map(|generic| generic.at)
             .collect();
+        if own.is_empty() {
+            return None;
+        }
         let Some(Detail::Callable(public)) = self.program.modules[operator.module]
             .details
             .get(operator.declaration)
@@ -4458,12 +4460,14 @@ impl<'a> Typer<'a> {
         // EXPR-2: "Named arguments use the selected public callable's
         // parameter names". Each argument is given to one of the
         // operator's own parameters, by its position or by that
-        // parameter's name (GEN-4), and has a type of its own. A name
-        // the operator does not declare is an option of a candidate,
-        // which no requirement speaks for.
+        // parameter's name (GEN-4). A name the operator does not
+        // declare is an option of a candidate, which no requirement
+        // speaks for.
         let mut places = Vec::with_capacity(given.len());
         for argument in given {
-            if argument.by_place || argument.retried {
+            // One read as the type of its place whose first reading
+            // stands was reported itself: the call is not judged here.
+            if argument.by_place && !argument.retried {
                 return None;
             }
             let place = match &argument.key {
@@ -4480,39 +4484,68 @@ impl<'a> Typer<'a> {
             }
             places.push(place);
         }
-        if !given.iter().any(|given| mentions(&given.value.ty, &own)) {
+        // Past the function's bound no argument is tried, and the call
+        // is left to be not judged where its candidates are read.
+        if self.rereads == 0 && given.iter().any(|argument| argument.retried) {
             return None;
         }
-        // The type given to each place, in the operator's order.
-        let mut supplied: Vec<&Type> = vec![&Type::Unknown; given.len()];
-        for (given, &place) in given.iter().zip(&places) {
-            supplied[place] = &given.value.ty;
+        // The argument given to each place, in the operator's order.
+        let mut ordered: Vec<&Given> = given.to_vec();
+        for (argument, &place) in given.iter().zip(&places) {
+            ordered[place] = argument;
         }
-        self.requirements()
-            .into_iter()
-            .find(|requirement| {
-                requirement.operator == operator
-                    && requirement.operands.len() == supplied.len()
-                    && requirement
-                        .operands
-                        .iter()
-                        .zip(&supplied)
-                        .all(|(operand, supplied)| operand == *supplied)
-            })
-            .map(|requirement| (requirement.result, places))
+        for requirement in self.requirements() {
+            if requirement.operator != operator
+                || requirement.operands.len() != ordered.len()
+                || !requirement
+                    .operands
+                    .iter()
+                    .any(|operand| mentions(operand, &own))
+            {
+                continue;
+            }
+            let mut supplied = true;
+            for (operand, argument) in requirement.operands.iter().zip(&ordered) {
+                supplied &= if argument.retried {
+                    // Read again as the type supplied; what the trial
+                    // reports is taken back.
+                    self.fits_place(&argument.node, operand, false)
+                } else {
+                    *operand == argument.value.ty
+                };
+                if !supplied {
+                    break;
+                }
+            }
+            if supplied {
+                return Some(Required {
+                    result: requirement.result,
+                    operands: requirement.operands,
+                    places,
+                });
+            }
+        }
+        None
     }
 
     /// The call of an operation the enclosing declaration requires
     /// (GEN-7): of the type the requirement's arrow states, and of no
     /// known type where it states none. No candidate is selected: that
-    /// is done where the generic parameters are known.
+    /// is done where the generic parameters are known. An argument
+    /// whose first reading was taken back is read where it stands, as
+    /// the type the requirement supplies.
     fn call_required(
         &mut self,
         operator: OperatorRef,
-        (result, places): (Option<Type>, Vec<usize>),
+        required: Required,
         given: Vec<Given>,
         form: Form,
     ) -> (ExprKind, Type) {
+        let Required {
+            result,
+            operands,
+            places,
+        } = required;
         // The operator's own parameters, in the order it declares them
         // (GEN-4).
         let parameters = match self.program.modules[operator.module]
@@ -4525,9 +4558,18 @@ impl<'a> Typer<'a> {
         let arguments = given
             .into_iter()
             .zip(places)
-            .map(|(given, place)| hir::Argument {
-                parameter: (place < parameters).then_some(place),
-                value: given.value,
+            .map(|(given, place)| {
+                let value = if given.retried {
+                    let operand = &operands[place];
+                    let value = self.expression(&given.node, Some(operand));
+                    self.fit(value, operand, "the operand its requirement supplies")
+                } else {
+                    given.value
+                };
+                hir::Argument {
+                    parameter: (place < parameters).then_some(place),
+                    value,
+                }
             })
             .collect();
         let kind = ExprKind::Call {
@@ -5810,6 +5852,18 @@ struct Requirement {
     operands: Vec<Type>,
     /// The result its arrow states, when it has one.
     result: Option<Type>,
+}
+
+/// The requirement of the enclosing declaration that a call is
+/// (GEN-7): see [`Typer::required`].
+struct Required {
+    /// The result its arrow states, when it has one.
+    result: Option<Type>,
+    /// The types it is supplied with, in the operator's order.
+    operands: Vec<Type>,
+    /// The place among them each argument of the call is given to, in
+    /// the order the call writes them.
+    places: Vec<usize>,
 }
 
 /// The constraint calls of a condition that hold wherever the condition
