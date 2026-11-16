@@ -62,8 +62,7 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
 
 /// Every node of a function's own body: what stands under `root`,
 /// but for what an anonymous function inside it holds. That is a
-/// function of its own (FN-14), a value helper that may inject a
-/// capability (FN-9), and what it holds is not `root`'s.
+/// function of its own (FN-14), and what it holds is not `root`'s.
 fn own_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
     fn collect(node: &SyntaxNode, found: &mut Vec<SyntaxNode>) {
         for child in node.children() {
@@ -141,6 +140,7 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
                     Some(Detail::Callable(signature)) if signature.result.is_none()
                 );
                 node_body(declaration, file, outputless, diagnostics);
+                in_anonymous_function(declaration, file, diagnostics);
             }
         }
     }
@@ -190,6 +190,45 @@ fn in_value_function(declaration: &Declaration, file: FileId, diagnostics: &mut 
             )
         };
         diagnostics.emit(diagnostic);
+    }
+}
+
+/// An anonymous function written in a node is value code: a hook
+/// "calls only value functions" (FN-3), so it can be called from
+/// nowhere else. It has no state and no hooks, and no capability
+/// (FN-9: "A value function has none"), as a `const fn` has none.
+///
+/// One written in a graph is not judged here: what it may be there is
+/// not stated.
+fn in_anonymous_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
+    for node in declaration.syntax.descendants() {
+        if !is_node_construct(node.kind())
+            || !node
+                .ancestors()
+                .any(|ancestor| ancestor.kind() == SyntaxKind::FnExpr)
+        {
+            continue;
+        }
+        let Some((word, at)) = keyword(&node, file) else {
+            continue;
+        };
+        let (what, rule) = if node.kind() == SyntaxKind::InjectDecl {
+            ("no capability", "FN-9")
+        } else {
+            ("no state and no hooks", "FN-3")
+        };
+        diagnostics.emit(error(
+            Category::Phase,
+            codes::NODE_IN_VALUE_FUNCTION,
+            at,
+            format!(
+                "`{}` is a node's, and this anonymous function is called from the hooks of \
+                 `{}`: a value function has {what}",
+                word.text(),
+                declaration.name
+            ),
+            rule,
+        ));
     }
 }
 

@@ -189,7 +189,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-7 | transpiler | planned | A runtime return publishes and exits the current function evaluation, skipping later handlers; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
-| FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, or the contract of a native value function is rejected (`node.in_value_function`). Left: a capability used outside a hook or a source's body; a capability passed as data (TIME-8) |
+| FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`). Left: an anonymous function written in a graph; a capability used outside a hook or a source's body |
 | FN-10 | parser | done | Where an arrow body ends |
 | FN-11 | analyser | planned | Which lifted arguments need a valid input |
 | FN-11 | transpiler | planned | Default or null bound while the input is invalid |

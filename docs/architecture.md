@@ -469,6 +469,7 @@ else".
 | `inject out` in a function that declares no result | `inject.out_without_result` | TIME-7 |
 | `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
 | `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
+| `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
 
 A value function has no capability (owner's decision of 2026-11-16 on
 hhenson/hgl_spec#57): what it needs of one is its argument, which the
@@ -851,6 +852,10 @@ read from both sides.
 | The same body, an operation nothing states | GEN-7 | Selected as any call is. `a + b` of two `T` finds no candidate and is `operator.no_candidate`; `a == b` is taken by core's `eq_<T>`, which is for any one type |
 | At a call that selects the candidate that states it | GEN-16, GEN-5 | Tested with the candidate's generic parameters in place: `add_(f64, f64) -> f64` holds when one most-specific value candidate of `add_` takes two `f64` and gives an `f64`. A requirement of a graph is tested against every candidate, as a call in composition selects |
 | At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement, and otherwise when a candidate takes them as they are, as core's `eq_<T>` takes any one type |
+
+Where two requirements name one operator with the same types and
+different results, the call is the one that gives what its place
+expects (GEN-5), and the first stated where nothing is asked.
 
 A requirement joined to others by `&&` holds wherever the condition
 does, and is one the body may use; one under `!` or `||` is tested at a

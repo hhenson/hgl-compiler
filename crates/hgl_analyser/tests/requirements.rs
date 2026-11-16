@@ -218,6 +218,32 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
     );
 }
 
+/// GEN-5: "Match candidates against the requested output before
+/// inputs". Two requirements may name one operator with the same types
+/// and different results (GEN-16: "A result arrow constrains that
+/// operator's result type"): the call is the one that gives what its
+/// place expects, whichever is written first.
+#[test]
+fn a_requirement_is_chosen_by_the_result_asked_for() {
+    let checked = module(concat!(
+        "operator measure<V, O>(value: V) -> O\n",
+        "const fn wide<T>(a: T) -> f64\n",
+        "    requires measure(T) -> i64 && measure(T) -> f64 => measure(a)\n",
+        "const fn narrow<T>(a: T) -> i64\n",
+        "    requires measure(T) -> i64 && measure(T) -> f64 => measure(a)\n",
+        "const fn either<T>(a: T) requires measure(T) -> i64 && measure(T) -> f64 {\n",
+        "    let real: f64 = measure(a)\n",
+        // Nothing is asked for: the first stated.
+        "    let first = measure(a)\n",
+        "}\n",
+        // Neither gives a `str`: the first stands, and does not fit.
+        "const fn neither<T>(a: T) -> str\n",
+        "    requires measure(T) -> i64 && measure(T) -> f64 => measure(a)\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:12:56 type/type.mismatch EXPR-5"]);
+    assert_eq!(locals(&checked, "either")[1..], ["real: f64", "first: i64"]);
+}
+
 /// GEN-16: "a named operator requirement tests callability with the
 /// supplied types. A result arrow constrains that operator's result
 /// type". GEN-5: "Match candidates against the requested output before

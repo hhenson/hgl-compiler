@@ -1829,7 +1829,7 @@ impl<'a> Typer<'a> {
                 // GEN-7: `-value` under `requires neg_(T) -> T`.
                 if config.is_none()
                     && let Some(operator) = identity
-                    && let Some(result) = self.required(operator, &[&only])
+                    && let Some(result) = self.required(operator, &[&only], expected)
                 {
                     return self.call_required(operator, result, vec![only], symbol.form);
                 }
@@ -2081,7 +2081,7 @@ impl<'a> Typer<'a> {
         if !configured
             && !faulty
             && let Some(operator) = identity
-            && let Some(result) = self.required(operator, &[&left, &right])
+            && let Some(result) = self.required(operator, &[&left, &right], place)
         {
             return self.call_required(operator, result, vec![left, right], symbol.form);
         }
@@ -3414,7 +3414,8 @@ impl<'a> Typer<'a> {
         // requirements": what the enclosing declaration requires of its
         // generic parameters is callable in its body.
         if generics.is_none()
-            && let Some(result) = self.required(operator, &given.iter().collect::<Vec<_>>())
+            && let Some(result) =
+                self.required(operator, &given.iter().collect::<Vec<_>>(), expected)
         {
             return self.call_required(operator, result, given, Form::Named);
         }
@@ -4522,8 +4523,13 @@ impl<'a> Typer<'a> {
     /// A requirement speaks for types of which one names a generic
     /// parameter of the declaration: any other call selects its
     /// candidate here, as it does in a body that has no generic
-    /// parameter.
-    fn required(&mut self, operator: OperatorRef, given: &[&Given]) -> Option<Required> {
+    /// parameter. `expected` is the type the call's place expects.
+    fn required(
+        &mut self,
+        operator: OperatorRef,
+        given: &[&Given],
+        expected: Option<&Type>,
+    ) -> Option<Required> {
         let own: Vec<Location> = self
             .signature
             .generics
@@ -4571,6 +4577,9 @@ impl<'a> Typer<'a> {
         if self.rereads == 0 && given.iter().any(|argument| argument.retried) {
             return None;
         }
+        // What the call's place expects, where that is known.
+        let wanted = expected.filter(|expected| !open(expected));
+        let mut first: Option<Required> = None;
         // The argument given to each place, in the operator's order.
         let mut ordered: Vec<&Given> = given.to_vec();
         for (argument, &place) in given.iter().zip(&places) {
@@ -4599,15 +4608,31 @@ impl<'a> Typer<'a> {
                     break;
                 }
             }
-            if supplied {
-                return Some(Required {
-                    result: requirement.result,
-                    operands: requirement.operands,
-                    places,
-                });
+            if !supplied {
+                continue;
             }
+            // GEN-5: "Match candidates against the requested output
+            // before inputs". Of two requirements supplied alike, the
+            // one whose arrow gives what the call's place expects is
+            // the call: under `convert(T) -> i64 && convert(T) -> f64`
+            // a place that expects an `f64` takes the second.
+            let gives = match (wanted, &requirement.result) {
+                (Some(wanted), Some(result)) => self.admits(wanted, result),
+                _ => true,
+            };
+            let required = Required {
+                result: requirement.result,
+                operands: requirement.operands,
+                places: places.clone(),
+            };
+            if gives {
+                return Some(required);
+            }
+            // With none that gives it, the first supplied stands, and
+            // its type is reported where it does not fit.
+            first.get_or_insert(required);
         }
-        None
+        first
     }
 
     /// The call of an operation the enclosing declaration requires
