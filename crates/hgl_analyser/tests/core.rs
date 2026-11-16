@@ -113,6 +113,37 @@ fn divisions_zero_option_selects_the_result_type() {
     );
 }
 
+/// NUM-9: "`zero` is a generic value parameter of the candidates that
+/// declare it, and a call gives it a compile-time constant." OPS-8:
+/// `invalid` "is a generic value parameter of those conversions, and a
+/// call gives it a compile-time constant. `rounding` and `nan` are
+/// parameters." GEN-8: a value known only when the program runs is
+/// rejected for the first two, and is what a parameter takes.
+#[test]
+fn an_option_that_selects_the_result_type_is_given_a_constant() {
+    let checked = with_core(concat!(
+        "const fn uses(a: f64, b: f64, policy: ZeroPolicy, strict: InvalidPolicy, mode: Rounding) {\n",
+        "    let runtime = div_(a, b, zero: policy)\n",
+        "    let forced = convert<i64>(a, invalid: strict)\n",
+        // `rounding` does not select: a parameter.
+        "    let rounded = convert<i64>(a, rounding: mode)\n",
+        // TYPE-7: an enum member written in full.
+        "    let full = div_(a, b, zero: ZeroPolicy.error)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:36 type/generic.argument_constant GEN-8",
+            "m.hgl:4:43 type/generic.argument_constant GEN-8",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[7..],
+        ["rounded: result<i64, error>", "full: result<f64, error>"]
+    );
+}
+
 /// NUM-12: "Every division takes `zero`: `/`, `//`, and `%`, of numbers
 /// and of durations (OPS-1). The policies one admits, and its default,
 /// follow from what its result can hold". NUM-3: `.fail` makes a zero
