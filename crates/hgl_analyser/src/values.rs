@@ -1409,6 +1409,54 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// True when the capability named at `node` is known to be used as
+    /// ordinary data.
+    ///
+    /// TIME-8: "Clock properties are read-only, including
+    /// `clock.evaluation_time`. Operations use direct receiver-first
+    /// forms such as `schedule(scheduler, delay)` and
+    /// `info(logger, value)` ... Arbitrary helpers cannot receive a
+    /// capability as ordinary data." Before the `.` of a property a
+    /// capability is used as one. Which calls are its operations is
+    /// core's to say, and core declares none yet (hhenson/hgl_core#30):
+    /// so one given to a call of a name nothing in the program declares
+    /// is not judged, whichever argument it is. Anywhere else it is
+    /// kept or passed on: a local's value, what is returned, an entry
+    /// of a tuple, an argument of a function the program declares.
+    fn used_as_data(&self, node: &SyntaxNode) -> bool {
+        // "Parentheses select grouping" (EXPR-1).
+        let mut used = node.clone();
+        while let Some(parent) = used.parent()
+            && parent.kind() == SyntaxKind::ParenExpr
+        {
+            used = parent;
+        }
+        let Some(parent) = used.parent() else {
+            return true;
+        };
+        match parent.kind() {
+            SyntaxKind::MemberExpr => parent.children().next().as_ref() != Some(&used),
+            SyntaxKind::Arg => {
+                let call = parent
+                    .parent()
+                    .and_then(|list| list.parent())
+                    .filter(|call| call.kind() == SyntaxKind::CallExpr);
+                // A name nothing binds, and no endpoint intrinsic
+                // (TIME-9): left for the prelude.
+                let undeclared = call
+                    .and_then(|call| call.children().next())
+                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                    .and_then(|callee| name_token(&callee))
+                    .is_some_and(|name| {
+                        !self.bindings.contains_key(&(self.file, name.span().start))
+                            && EndpointOperation::named(name.text()).is_none()
+                    });
+                !undeclared
+            }
+            _ => true,
+        }
+    }
+
     /// A read of the local `local`, written at `node`. EXPR-3: "every
     /// path reaching a read must assign it."
     fn read_local(&mut self, local: LocalId, node: &SyntaxNode) -> Expr {
@@ -1438,6 +1486,33 @@ impl<'a> Typer<'a> {
             self.out_lifecycle(
                 at,
                 "`out` is neither read nor written in `start`".to_string(),
+            );
+        }
+        // TIME-8: "They are capabilities, not first-class payloads ...
+        // Arbitrary helpers cannot receive a capability as ordinary
+        // data." `out` is the node's result, read as a value is.
+        if self.locals[local].kind == LocalKind::Inject
+            && Some(local) != self.out
+            && self.used_as_data(node)
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{}` is a capability, and is used here as a value: it is neither \
+                         kept nor passed on",
+                        self.locals[local].name
+                    ),
+                    "TIME-8",
+                )
+                .with_note(
+                    "a capability is the receiver of its own operations, \
+                     `schedule(scheduler, delay)`, and the owner of its properties, \
+                     `clock.evaluation_time`: pass the value a function needs, not the \
+                     capability",
+                ),
             );
         }
         // ERR-12: "Refine that same binding to T on paths proving a
