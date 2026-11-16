@@ -16,15 +16,92 @@ use hgl_diagnostics::Location;
 use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
 
-/// The body of one function.
+/// The body of one function: a value function's, or a node's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
     /// Its parameters and locals, parameters first, each in the order
     /// it is declared. A [`LocalId`] is a position in this list.
     pub locals: Vec<Local>,
     /// Its statements, in order. An arrow body, `=> value`, is one
-    /// [`Stmt::Return`].
+    /// [`Stmt::Return`]. A node's are its declarations, [`Stmt::Declare`]
+    /// for a `state` or a `cache` and [`Stmt::Inject`], and then its
+    /// hooks, each a [`Stmt::Hook`] (FN-2).
     pub statements: Vec<Stmt>,
+}
+
+/// A hook of a node (TIME-3, TIME-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hook {
+    /// `start { ... }`: runs once, when the node starts.
+    Start,
+    /// `when condition { ... }`: a handler, run when the node is
+    /// evaluated and its condition admits it.
+    When,
+    /// `stop { ... }`: runs once, when the node stops.
+    Stop,
+}
+
+impl Hook {
+    /// The keyword the hook is written with.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Hook::Start => "start",
+            Hook::When => "when",
+            Hook::Stop => "stop",
+        }
+    }
+}
+
+/// An operation on an endpoint: an intrinsic of the language (TIME-9).
+/// Core's endpoint contract says what each returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointOperation {
+    /// `valid(input)`: whether the endpoint holds a value.
+    Valid,
+    /// `modified(input)`: whether it published in this cycle.
+    Modified,
+    /// `delta_value(input)`: what it published in this cycle.
+    DeltaValue,
+    /// `last_modified(input)`: when it last published.
+    LastModified,
+    /// `invalidate(out)`: clears the output.
+    Invalidate,
+    /// `scheduled()`: the scheduler's handler selector.
+    Scheduled,
+    /// `activate(input)`: subscribes to the input again.
+    Activate,
+    /// `passivate(input)`: stops subscribing to it.
+    Passivate,
+}
+
+impl EndpointOperation {
+    /// Every operation, with the name it is written by.
+    pub const ALL: [(&'static str, EndpointOperation); 8] = [
+        ("valid", EndpointOperation::Valid),
+        ("modified", EndpointOperation::Modified),
+        ("delta_value", EndpointOperation::DeltaValue),
+        ("last_modified", EndpointOperation::LastModified),
+        ("invalidate", EndpointOperation::Invalidate),
+        ("scheduled", EndpointOperation::Scheduled),
+        ("activate", EndpointOperation::Activate),
+        ("passivate", EndpointOperation::Passivate),
+    ];
+
+    /// The operation written `name`, when it is one.
+    pub fn named(name: &str) -> Option<EndpointOperation> {
+        Self::ALL
+            .iter()
+            .find(|(written, _)| *written == name)
+            .map(|(_, operation)| *operation)
+    }
+
+    /// The name the operation is written by.
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(_, operation)| *operation == self)
+            .map_or("", |(written, _)| written)
+    }
 }
 
 /// The position of a local in [`Body::locals`].
@@ -65,6 +142,27 @@ pub enum Stmt {
         /// value` assigns what `name + value` is.
         value: Expr,
         /// Where the statement is written.
+        at: Location,
+    },
+    /// `inject name`: a capability of a node, one statement for each
+    /// name (TIME-8). `out` is the node's result (TIME-7).
+    Inject {
+        /// The local that names the capability.
+        local: LocalId,
+        /// Where the name is written.
+        at: Location,
+    },
+    /// `start { ... }`, `when condition { ... }` or `stop { ... }`: a
+    /// hook of a node.
+    Hook {
+        /// Which hook it is.
+        hook: Hook,
+        /// The condition of a `when`, when it has one.
+        condition: Option<Expr>,
+        /// Its statements. A temporal parameter is read there as a
+        /// value of its declared type (FN-3).
+        body: Vec<Stmt>,
+        /// Where the hook is written.
         at: Location,
     },
     /// `return`, `return value`, or the value of an arrow body.
@@ -141,6 +239,17 @@ pub struct Expr {
 pub enum ExprKind {
     /// A literal.
     Literal(Value),
+    /// An operation on an endpoint (TIME-9): `valid(value)`,
+    /// `modified()`, `invalidate(out)`.
+    Endpoint {
+        /// The operation.
+        operation: EndpointOperation,
+        /// The endpoints it is given: temporal parameters of the node,
+        /// or the injected `out`. `None` for one written with no
+        /// argument, which in a `when` header stands for every temporal
+        /// input (TIME-3); an empty list for `valid([])`.
+        inputs: Option<Vec<LocalId>>,
+    },
     /// A parameter or a local. Its type is the local's, or the payload's
     /// where the local is a `T?` that a test against null has proved is
     /// not null there (ERR-12).
