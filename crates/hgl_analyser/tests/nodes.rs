@@ -142,6 +142,10 @@ fn a_hook_rejects_what_its_phase_has_not() {
         // endpoints.
         "    when valid(seen) && modified(step) {\n",
         "        let late = delta_value(value + 1)\n",
+        // A sequence is a selector's form: `delta_value` takes one
+        // endpoint by its name.
+        "        let both = delta_value([value, other])\n",
+        "        let none = last_modified([])\n",
         "        return other\n",
         "    }\n",
         "    when { return doubled(value) }\n",
@@ -160,10 +164,12 @@ fn a_hook_rejects_what_its_phase_has_not() {
             "m.hgl:10:16 phase/endpoint.argument TIME-9",
             "m.hgl:10:34 phase/endpoint.argument TIME-9",
             "m.hgl:11:32 phase/endpoint.argument TIME-9",
-            "m.hgl:12:16 type/type.mismatch EXPR-5",
-            "m.hgl:14:19 function-kind/call.role FN-3",
-            "m.hgl:16:9 phase/out.lifecycle TIME-7",
-            "m.hgl:17:9 phase/out.lifecycle TIME-7",
+            "m.hgl:12:32 phase/endpoint.argument TIME-9",
+            "m.hgl:13:34 phase/endpoint.argument TIME-9",
+            "m.hgl:14:16 type/type.mismatch EXPR-5",
+            "m.hgl:16:19 function-kind/call.role FN-3",
+            "m.hgl:18:9 phase/out.lifecycle TIME-7",
+            "m.hgl:19:9 phase/out.lifecycle TIME-7",
         ]
     );
 }
