@@ -479,6 +479,7 @@ The pass is built form by form. So far it reads:
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
 | `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
+| A test against null | ERR-12, ERR-3 | `value == null` and `value != null` prove an immutable nullable parameter, `let` or loop binding is not null: in the branch the test holds for, in the right operand of `&&` or `\|\|` it guards, and from a branch that returns to the end of the block the `if` stands in. There the binding is read as its payload's type. A `var`, a saved bool and a test of anything else prove nothing |
 | `let`, `var`, assignment | EXPR-3 | A local has the type written or its first value's. Only a `var` is assigned, with a value of its type, and it is read only once assigned |
 | `return`, `=> value` | FN-7 | Of the function's result type. A `return` with no value is rejected where a result is declared, and one with a value where none is |
 | A call | EXPR-2, FN-4, UNIT-8 | Of the value function its name is bound to. Each argument is given to a parameter, by place and then by name; one given twice, to no parameter, or too many is rejected, and so is a parameter left with nothing that has no default and no `?`. A temporal function is not called from a value function |
@@ -492,7 +493,9 @@ A value fits its place when its type is the one expected, when it is a
 struct it inherits from is expected. An integer literal, under a minus
 or not, is an `f64` where one is expected, and is written down as
 widened (EXPR-5). A value that has a type is not converted: an `i64`
-binding where an `f64` is expected is rejected.
+binding where an `f64` is expected is rejected. A `T?` where a `T` is
+expected, or as an operand no candidate takes, is
+`nullable.required_presence` (ERR-12): it may be null there.
 
 What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a

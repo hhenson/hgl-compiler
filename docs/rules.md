@@ -320,7 +320,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-10 | parser | done | `@suppress_warning("...")` before a named function |
 | ERR-10 | analyser | planned | The string is checked against the warning catalogue; the warning `statement.no_effect` |
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
-| ERR-12 | analyser | planned | A null test refines an immutable nullable binding |
+| ERR-12 | analyser | partial | In a value function a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns. A nullable where its payload is required, or as an operand no candidate takes, is `nullable.required_presence`. Left: temporal bodies |
 
 ## Tests and eval
 
