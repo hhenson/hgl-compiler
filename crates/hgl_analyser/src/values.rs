@@ -1424,25 +1424,56 @@ impl<'a> Typer<'a> {
     /// relay a set with `return delta_value(input)`. A result of
     /// `atomic<V>` is published whole, as a V (TYPE-9: "`atomic<V>`
     /// stops expansion at a complete ordinary V").
+    ///
+    /// A value written out takes its type from its place (EXPR-5), and
+    /// the place here is one or the other: `(1.0, null)` is no
+    /// `tuple<f64, f64>` and is its delta. So what does not read as a
+    /// complete value is read again as the delta, and stands as that
+    /// where it reads clean; otherwise the complete value's reading
+    /// stands, with what it reports.
     fn published(&mut self, node: &SyntaxNode, result: &Type, what: &str) -> Expr {
         let whole = match result {
             Type::Atomic(value) => (**value).clone(),
             other => other.clone(),
         };
-        let value = self.expression(node, Some(&whole));
-        if open(&value.ty) {
-            return value;
-        }
-        // The result's own type: a complete value, and what an atomic
-        // input is read as.
-        if self.admits(result, &value.ty) {
-            return value;
-        }
         let delta = Type::delta(result.clone());
-        if delta != whole && self.admits(&delta, &value.ty) {
-            return value;
+        let mark = self.mark();
+        let value = self.expression(node, Some(&whole));
+        let clean = self.diagnostics.len() == mark.diagnostics;
+        if clean {
+            if open(&value.ty) {
+                return value;
+            }
+            // The result's own type: a complete value, and what an
+            // atomic input is read as. Or a delta, read as one whatever
+            // was expected of it: `delta_value(input)`.
+            if self.admits(result, &value.ty) || (delta != whole && self.admits(&delta, &value.ty))
+            {
+                return value;
+            }
+        }
+        // Not a complete value as it reads: as the delta, where the
+        // result has one that is another type.
+        let fitted = clean && self.fits_whole(&value, &whole);
+        if !fitted && delta != whole && self.may_reread() {
+            self.take_back(mark, false);
+            let mark = self.mark();
+            let as_delta = self.expression(node, Some(&delta));
+            let as_delta = self.fit(as_delta, &delta, what);
+            if self.diagnostics.len() == mark.diagnostics {
+                return as_delta;
+            }
+            self.take_back(mark, false);
+            let value = self.expression(node, Some(&whole));
+            return self.fit(value, &whole, what);
         }
         self.fit(value, &whole, what)
+    }
+
+    /// True when `value` is one the place of type `whole` takes: of that
+    /// type, or an integer literal where an `f64` is expected (EXPR-5).
+    fn fits_whole(&self, value: &Expr, whole: &Type) -> bool {
+        self.admits(whole, &value.ty) || (is_integer_literal(value) && accepts_float(whole))
     }
 
     /// FN-7: "A value return yields an ordinary value." EXPR-5: the

@@ -191,6 +191,20 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         "fn source() -> set<str> {\n",
         "    yield 1s: 7\n",
         "}\n",
+        // A delta written out takes its type from the result's delta: a
+        // position that did not change is null. What is neither a
+        // complete value nor the delta is reported once, as the value.
+        "fn pairs(first: f64, second: f64) -> tuple<f64, f64> {\n",
+        "    inject out\n",
+        "    when {\n",
+        "        out = (first, null)\n",
+        "        out = (first, second)\n",
+        "        return (1, null)\n",
+        "    }\n",
+        "}\n",
+        "fn wrong_pairs(first: f64) -> tuple<f64, f64> {\n",
+        "    when { return (first, \"a\") }\n",
+        "}\n",
         // A `signal` and a `ref` publish nothing of their own.
         "fn ticked(probe: signal, pointer: ref<f64>) -> bool {\n",
         "    when {\n",
@@ -205,8 +219,9 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         [
             "m.hgl:33:19 type/type.mismatch EXPR-5",
             "m.hgl:36:15 type/type.mismatch EXPR-5",
-            "m.hgl:40:21 shape/delta.unsupported_shape TYPE-16",
-            "m.hgl:41:22 shape/delta.unsupported_shape TYPE-16",
+            "m.hgl:47:27 type/type.mismatch EXPR-5",
+            "m.hgl:51:21 shape/delta.unsupported_shape TYPE-16",
+            "m.hgl:52:22 shape/delta.unsupported_shape TYPE-16",
         ]
     );
     assert_eq!(locals(&checked, "relay")[2..], ["change: delta<set<str>>"]);
