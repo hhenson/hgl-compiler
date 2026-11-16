@@ -4577,6 +4577,16 @@ impl<'a> Typer<'a> {
         if unfit.is_some() {
             return Some(false);
         }
+        // The arrow is what the place of the call would expect. Where
+        // the operator's defaults make the call's output another type,
+        // the call does not give the arrow's: with
+        // `operator count<T, const mode: i64 = 0>(value: T) -> i64`,
+        // `requires count(bool) -> str` holds for no candidate.
+        if let (Some(requested), Some(arrow)) = (&requested, result)
+            && !self.admits(arrow, requested)
+        {
+            return Some(false);
+        }
         // What the call asks of the result: with the operator's
         // defaults, or as its arrow says.
         let asked: Option<Type> = requested.or_else(|| result.cloned());
@@ -4642,7 +4652,9 @@ impl<'a> Typer<'a> {
     /// names would (GEN-8): the operator's result with its arrow, the
     /// types it is supplied with and the operator's defaults in place,
     /// or its arrow where those say nothing. The outer `None` is for a
-    /// default that call would take and that does not fit (GEN-13).
+    /// requirement no call meets: a default that call would take does
+    /// not fit (GEN-13), or its arrow is not what the operator's result
+    /// is with those in place.
     fn asked_by(&self, requirement: &Requirement) -> Option<Option<Type>> {
         let operator = requirement.operator;
         let arrow = requirement.result.as_ref();
@@ -4660,6 +4672,12 @@ impl<'a> Typer<'a> {
         let Requested { place, unfit, .. } =
             self.output_requested(operator, public, found, &supplied, false);
         if unfit.is_some() {
+            return None;
+        }
+        // An arrow the call's own output cannot be: see `callable`.
+        if let (Some(place), Some(arrow)) = (&place, arrow)
+            && !self.admits(arrow, place)
+        {
             return None;
         }
         Some(place.or_else(|| arrow.cloned()))

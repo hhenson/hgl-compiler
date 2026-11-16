@@ -353,6 +353,14 @@ fn a_requirement_is_tested_as_its_call_would_select() {
         "impl const fn same(left: Shape, right: Shape) -> Shape => left\n",
         "operator paired<A, B>(a: A, b: B) -> A\n",
         "impl const fn paired<A, B>(a: A, b: B) -> A requires same(A, B) => a\n",
+        // The arrow is held to as well as the default: `count` gives an
+        // `i64` whatever its `mode`, and so no `str`.
+        "operator count<T, const mode: i64 = 0>(value: T) -> i64\n",
+        "impl const fn count(value: bool) -> i64 => 1\n",
+        "operator texted<T>(a: T) -> T\n",
+        "impl const fn texted<T>(a: T) -> T requires count(T) -> str => a\n",
+        "operator counted<T>(a: T) -> T\n",
+        "impl const fn counted<T>(a: T) -> T requires count(T) -> i64 => a\n",
         "const fn uses(x: f64, text: str, round: Round, shape: Shape) {\n",
         "    let three = framed(x)\n",
         "    let five = wide(x)\n",
@@ -361,14 +369,17 @@ fn a_requirement_is_tested_as_its_call_would_select() {
         "    let whole = chosen(1)\n",
         "    let words = chosen(text)\n",
         "    let widened = paired(round, shape)\n",
+        "    let no = texted(true)\n",
+        "    let yes = counted(true)\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:28:16 operator/operator.no_candidate GEN-5",
-            "m.hgl:29:16 operator/operator.no_candidate GEN-5",
-            "m.hgl:31:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:34:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:35:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:37:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:39:14 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
@@ -381,6 +392,8 @@ fn a_requirement_is_tested_as_its_call_would_select() {
             "whole: i64",
             "words: _",
             "widened: Round",
+            "no: _",
+            "yes: bool",
         ]
     );
 }
