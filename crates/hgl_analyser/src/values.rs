@@ -1766,6 +1766,7 @@ impl<'a> Typer<'a> {
             .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
             .map(|generic| generic.name.as_str())
             .collect();
+        let callee = &program.modules[module].declarations[declaration];
         let reported = self.diagnostics.len();
         let named = self.named_generics(list, generics, &mut found);
 
@@ -1803,19 +1804,20 @@ impl<'a> Typer<'a> {
             settled: !expected.is_some_and(open),
             aside: &value_names,
             values: &named,
+            defaults: generics
+                .iter()
+                .map(|generic| {
+                    generic_default(&callee.syntax, generic).map(|default| constant_at(&default))
+                })
+                .collect(),
         };
         let Inferred {
             arguments,
             mut found,
             unknown,
+            defaulted,
         } = self.infer_arguments(name, list, &places, found, Takes::Parameters);
-        self.generic_values(
-            name,
-            &program.modules[module].declarations[declaration],
-            generics,
-            &named,
-            &mut found,
-        );
+        self.generic_values(name, callee, generics, (&named, &defaulted), &mut found);
 
         // GEN-8: "A call rejects when it leaves a generic parameter
         // unresolved." Not where something else was reported, or an
@@ -1963,7 +1965,7 @@ impl<'a> Typer<'a> {
         callee: &SyntaxToken,
         declaration: &Declaration,
         generics: &[GenericParameter],
-        named: &[(usize, SyntaxNode)],
+        (named, defaulted): (&[(usize, SyntaxNode)], &[usize]),
         found: &mut [Option<Argument>],
     ) {
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();
@@ -2004,17 +2006,14 @@ impl<'a> Typer<'a> {
             self.fit(value, &expected, &place);
         }
         let program = self.program;
-        for (index, generic) in generics.iter().enumerate() {
+        for &index in defaulted {
+            let generic = &generics[index];
             let GenericKind::Value(declared) = &generic.kind else {
                 continue;
             };
-            if found[index].is_some() {
-                continue;
-            }
             let Some(default) = generic_default(&declaration.syntax, generic) else {
                 continue;
             };
-            found[index] = Some(Argument::Constant(constant_at(&default)));
             // A default that is not of the type as it is declared is
             // reported there (`signatures`). One whose type names a
             // type parameter is of it for one call and not another: the
@@ -2146,6 +2145,7 @@ impl<'a> Typer<'a> {
             settled,
             aside,
             values: named,
+            defaults,
         } = places;
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
@@ -2243,6 +2243,20 @@ impl<'a> Typer<'a> {
             infer(pattern, &value.ty, generics, &mut found);
             self.take_back(mark, false);
         }
+        // GEN-8: "A generic value parameter the call does not give takes
+        // its default, when it has one." Nothing has said what it is,
+        // and it is its default before any argument is held to its
+        // place: `sized([1, 2, 3])` for `sized<const N: i64 = 2>(items:
+        // list<i64, N>)` gives three entries to a list of two.
+        let mut defaulted = Vec::new();
+        for (index, default) in defaults.iter().enumerate() {
+            if found[index].is_none()
+                && let Some(default) = default
+            {
+                found[index] = Some(Argument::Constant(default.clone()));
+                defaulted.push(index);
+            }
+        }
         // Every argument is of its place's type with what was found in
         // place: `Pair(first: 1, second: "x")` gives `second: T` a `str`
         // where `T` is `i64`.
@@ -2307,6 +2321,7 @@ impl<'a> Typer<'a> {
             arguments,
             found,
             unknown,
+            defaulted,
         }
     }
 
@@ -3436,6 +3451,7 @@ impl<'a> Typer<'a> {
                     settled,
                     aside: &[],
                     values: &[],
+                    defaults: Vec::new(),
                 };
                 let found = vec![None; read.generics.len()];
                 let Inferred {
@@ -5802,6 +5818,9 @@ struct Places<'s> {
     /// What the call gives those: each with the position of its
     /// parameter among `generics`.
     values: &'s [(usize, SyntaxNode)],
+    /// The default of each generic value parameter that has one (GEN-2):
+    /// an entry for each of `generics`, or none at all.
+    defaults: Vec<Option<Constant>>,
 }
 
 /// What [`Typer::infer_arguments`] read.
@@ -5813,6 +5832,9 @@ struct Inferred {
     /// True when an argument other than `null` and `.member`, which
     /// have no type of their own, has no whole type.
     unknown: bool,
+    /// The generic value parameters that took their defaults, by their
+    /// positions among the generic parameters.
+    defaulted: Vec<usize>,
 }
 
 /// What takes the arguments of a call.

@@ -2965,6 +2965,7 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
     let checked = module(concat!(
         "const fn scale<const factor: i64 = 3>(value: i64) -> i64 => value * factor\n",
         "const fn hold<T, const fallback: T = 2>(value: T) -> T => fallback\n",
+        "const fn sized<const N: i64 = 2>(items: list<i64, N>) -> i64 => N\n",
         "const fn uses(n: i64, count: i64) {\n",
         // A parameter is known only when the program runs.
         "    let runtime = scale(n, factor: count)\n",
@@ -2979,18 +2980,22 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
         // What `fallback` is given says `T` is an `i64`, before the
         // argument is held to it: a `null` is no `i64`.
         "    let absent = hold(null, fallback: 1)\n",
+        // The default says what `N` is before the entries are counted.
+        "    let pair = sized([1, 2])\n",
+        "    let triple = sized([1, 2, 3])\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:36 type/generic.argument_constant GEN-8",
-            "m.hgl:6:37 type/type.mismatch EXPR-5",
-            "m.hgl:7:29 name/argument.duplicate EXPR-2",
-            "m.hgl:8:37 name/argument.duplicate EXPR-2",
-            "m.hgl:9:28 name/argument.unknown EXPR-2",
-            "m.hgl:11:16 type/type.mismatch GEN-13",
-            "m.hgl:12:23 type/type.mismatch TYPE-14",
+            "m.hgl:6:36 type/generic.argument_constant GEN-8",
+            "m.hgl:7:37 type/type.mismatch EXPR-5",
+            "m.hgl:8:29 name/argument.duplicate EXPR-2",
+            "m.hgl:9:37 name/argument.duplicate EXPR-2",
+            "m.hgl:10:28 name/argument.unknown EXPR-2",
+            "m.hgl:12:16 type/type.mismatch GEN-13",
+            "m.hgl:13:23 type/type.mismatch TYPE-14",
+            "m.hgl:15:24 type/type.mismatch TYPE-10",
         ]
     );
     assert_eq!(
