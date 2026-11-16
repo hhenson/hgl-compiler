@@ -375,3 +375,172 @@ fn a_return_selected_at_runtime_needs_its_continuation() {
     assert_eq!(checked.summary(), ["m.hgl:9:4 type/return.missing FN-7"]);
     assert_eq!(locals(&checked, "picks")[3..], ["level: f64"]);
 }
+
+/// CTRL-15: "`for item in items` over an ordinary list, set, or
+/// dictionary composes its body once for each element, with ordinary
+/// values bound, and may carry a `var` from one pass to the next. Over a
+/// connection of `list<T, N>` it composes its body `N` times, `item` a
+/// connection of `T`; over a connection of a tuple it rejects. Over a
+/// connection of `list<T>`, `set<T>`, or `dict<K, V>` it makes one child
+/// for each member (CTRL-7): `item` is a connection of `T` for a list
+/// and an ordinary `T`, the member itself, for a set; `key` is an
+/// ordinary `K` and `value` a connection of `V` for a dictionary. In
+/// such a loop an assignment to a `var` declared outside it rejects
+/// (CTRL-8), and so does a `return`."
+#[test]
+fn a_loop_in_a_graph_binds_values_or_connections() {
+    let checked = module(concat!(
+        "fn log_tick(value: f64) {\n",
+        "    when { }\n",
+        "}\n",
+        "fn loops(\n",
+        "    price: f64,\n",
+        "    const factors: list<f64>,\n",
+        "    fixed: list<f64, 3>,\n",
+        "    growing: list<f64>,\n",
+        "    names: set<str>,\n",
+        "    book: dict<str, f64>,\n",
+        "    pair: tuple<f64, f64>,\n",
+        ") -> f64 {\n",
+        "    var running = price\n",
+        // Ordinary data: unrolled while the graph is built.
+        "    for factor in factors {\n",
+        "        running = running * factor\n",
+        "    }\n",
+        // A fixed list of connections: composed three times.
+        "    for slot in fixed {\n",
+        "        running = running + slot\n",
+        "    }\n",
+        // One child for each member: nothing is carried, and nothing
+        // returns.
+        "    for item in growing {\n",
+        "        var scaled = item\n",
+        "        scaled = scaled * 2.0\n",
+        "        log_tick(scaled)\n",
+        "        running = running + item\n",
+        "        return item\n",
+        "    }\n",
+        "    for name in names {\n",
+        "        log_tick(price)\n",
+        "    }\n",
+        "    for key, value in book {\n",
+        "        log_tick(value)\n",
+        "    }\n",
+        "    for piece in pair {\n",
+        "        log_tick(price)\n",
+        "    }\n",
+        "    return running\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:25:9 phase/loop.carried CTRL-15",
+            "m.hgl:26:9 phase/loop.carried CTRL-15",
+            "m.hgl:34:18 type/type.mismatch CTRL-15",
+        ]
+    );
+    let bound: Vec<String> = locals(&checked, "loops")
+        .into_iter()
+        .filter(|local| {
+            ["factor", "slot", "item", "name", "key", "value"]
+                .iter()
+                .any(|name| local.starts_with(&format!("{name}:")))
+        })
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            "factor: f64",
+            "slot: f64 (connection)",
+            "item: f64 (connection)",
+            "name: str",
+            "key: str",
+            "value: f64 (connection)",
+        ]
+    );
+}
+
+/// CTRL-15: "In composition a `switch` over an ordinary value composes
+/// the one case selected, and over a connection each case is a child
+/// graph selected at runtime. The selector is a `bool`, `i64`, `str`, or
+/// enum value and each label a constant (CTRL-12); a case's assignments
+/// and returns follow CTRL-14." FN-3: "Where a constant is required, a
+/// `switch` label ... a connection rejects."
+#[test]
+fn a_switch_in_a_graph_composes_or_selects() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "fn picks(price: f64, side: Side, const mode: i64, level: i64) -> f64 {\n",
+        "    var chosen = price\n",
+        "    var size = 1.0\n",
+        // An ordinary selector: one case is composed.
+        "    switch mode {\n",
+        "        case 1: size = 2.0\n",
+        "        default: size = 3.0\n",
+        "    }\n",
+        // A connection: each case is selected at runtime.
+        "    switch side {\n",
+        "        case .buy: chosen = price * 2.0\n",
+        "        case .sell: size = 4.0\n",
+        "    }\n",
+        // A label that is a connection, and a selector that is no
+        // `bool`, `i64`, `str` or enum.
+        "    switch mode {\n",
+        "        case level: chosen = price\n",
+        "        default: chosen = price\n",
+        "    }\n",
+        "    switch price {\n",
+        "        default: chosen = price\n",
+        "    }\n",
+        "    return chosen\n",
+        "}\n",
+        // CTRL-14: a `return` in a case selected at runtime needs the
+        // continuation to return too.
+        "fn early(price: f64, side: Side) -> f64 {\n",
+        "    switch side {\n",
+        "        case .buy: return price\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:28 type/binding.category CTRL-14",
+            "m.hgl:15:14 phase/connection.as_constant FN-3",
+            "m.hgl:18:12 type/type.mismatch CTRL-15",
+            "m.hgl:23:4 type/return.missing FN-7",
+        ]
+    );
+}
+
+/// CTRL-15: "The condition of a `while` is an ordinary `bool`, tested
+/// while the graph is built: a connection there rejects (FN-3), and the
+/// form with no condition is a source's (SOURCE-4)."
+#[test]
+fn a_while_in_a_graph_takes_an_ordinary_condition() {
+    let checked = module(concat!(
+        "fn repeats(price: f64, open: bool, const count: i64) -> f64 {\n",
+        "    var running = price\n",
+        "    var left = count\n",
+        "    while left > 0 {\n",
+        "        running = running * 2.0\n",
+        "        left -= 1\n",
+        "    }\n",
+        "    while open {\n",
+        "        running = running * 2.0\n",
+        "    }\n",
+        "    while {\n",
+        "        running = running * 2.0\n",
+        "    }\n",
+        "    return running\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:11 phase/connection.as_constant FN-3",
+            "m.hgl:12:5 phase/while.condition CTRL-15",
+        ]
+    );
+}
