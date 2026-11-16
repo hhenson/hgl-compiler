@@ -456,6 +456,21 @@ fn an_empty_subscription_needs_what_wakes_it() {
         own.summary(),
         ["m.hgl:6:10 phase/modified.no_driver TIME-3"]
     );
+    // Nor is a local that holds a function and has the name.
+    let local = module(concat!(
+        "fn fooled(a: f64) -> f64 {\n",
+        "    inject scheduler\n",
+        "    start {\n",
+        "        let schedule = fn(timer: i64, delay: duration) { }\n",
+        "        schedule(scheduler, 1s)\n",
+        "    }\n",
+        "    when modified([]) { return a }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        local.summary(),
+        ["m.hgl:8:10 phase/modified.no_driver TIME-3"]
+    );
 }
 
 /// TIME-8: "A capability is used within the node that injects it and is
