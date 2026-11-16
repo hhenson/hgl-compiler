@@ -359,6 +359,7 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => names_parameter(inner),
         Type::Dict { key, value } => names_parameter(key) || names_parameter(value),
         Type::Rolling { value, .. } => names_parameter(value),
@@ -454,6 +455,10 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
         Type::Delta(inner) => Type::delta(substitute(inner, map)),
+        Type::Trace { cell, style } => Type::Trace {
+            cell: part(cell),
+            style: *style,
+        },
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
         Type::Nullable(inner) => match substitute(inner, map) {
@@ -484,6 +489,7 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => inside(inner),
         Type::Dict { key, value } => inside(key) || inside(value),
         Type::Rolling { value, .. } => inside(value),
@@ -513,6 +519,7 @@ fn weight(ty: &Type) -> usize {
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => weight(inner),
         Type::Dict { key, value } => weight(key) + weight(value),
         Type::Rolling { value, .. } => weight(value),
@@ -1311,6 +1318,7 @@ impl Structs<'_> {
             Type::Ref(inner)
             | Type::Endpoint(inner)
             | Type::Delta(inner)
+            | Type::Trace { cell: inner, .. }
             | Type::Nullable(inner) => {
                 self.walk(inner, in_collection, may_be_empty, found, path, budget);
             }
@@ -1966,6 +1974,7 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => grown(inner, in_group),
         Type::Dict { key, value } => grown(key, in_group).or_else(|| grown(value, in_group)),
         Type::Rolling { value, .. } => grown(value, in_group),
@@ -2047,7 +2056,10 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
         | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))
-        | (Type::Nullable(left), Type::Nullable(right)) => agree(left, right),
+        | (Type::Nullable(left), Type::Nullable(right))
+        // A trace's style is judged where two traces meet (TST-7), and
+        // is no part of what the trace is of.
+        | (Type::Trace { cell: left, .. }, Type::Trace { cell: right, .. }) => agree(left, right),
         (
             Type::Dict { key, value },
             Type::Dict {

@@ -490,6 +490,26 @@ pub enum ExprKind {
     /// place expects makes a dictionary (EXPR-9). Each pair is its key
     /// and its value.
     Pairs(Vec<(Expr, Expr)>),
+    /// `eval(target, ...)` (TST-5): the call of the target it stands
+    /// for, with a trace given to each temporal parameter and
+    /// configuration to each `const` one. Its type is a trace of the
+    /// target's result, or none for a target with no result (TST-8).
+    Eval(Box<Expr>),
+    /// A trace written out (TST-5, TST-7): `[7, _, 9]`, dense, or
+    /// `[0s: 7, 2s: 9]`, timed.
+    Trace(Vec<Cell>),
+    /// `left == right` or `left != right` of two traces (TST-4):
+    /// "Harness comparison is intrinsic: compare presence, exact
+    /// present data, and shape/length; overload candidates cannot
+    /// change it."
+    TraceCompare {
+        /// The left trace.
+        left: Box<Expr>,
+        /// The right trace.
+        right: Box<Expr>,
+        /// True for `!=`.
+        negated: bool,
+    },
     /// An expression no pass reads yet, or one that has been reported.
     Unread,
 }
@@ -572,6 +592,18 @@ pub enum Form {
     Binary(BinaryOperator),
     /// `-value`: a symbol before one operand.
     Unary(UnaryOperator),
+}
+
+/// One cell of a trace written out (TST-5): "Each cell is one cycle's
+/// publication".
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cell {
+    /// When it is published, in a timed trace: a `duration` from the
+    /// run's start or a `datetime` (TST-7). None in a dense trace, whose
+    /// cell stands at its place.
+    pub time: Option<Expr>,
+    /// What is published. None for `_`, no publication.
+    pub value: Option<Expr>,
 }
 
 /// One argument of a call or a constructor.
