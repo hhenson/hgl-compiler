@@ -558,12 +558,16 @@ A parameter of a capability's type in a value function is held to the
 same rule as the injected local it was given. The pinned core declares
 no capability type yet (hhenson/hgl_core#30): with it a capability has
 no type, its properties have none, and only what is retained is
-reported. A property assigned, and a capability in a dictionary, whose
-literal is not read yet, are not reported yet.
+reported. A capability in a dictionary, whose literal is not read yet,
+is not reported yet.
 
 A native type's properties are kept as `Detail::Native`, each a name
 and an ordinary value type, and a member access on a value of the type
-reads one. `endpoint<T>` is `Type::Endpoint`, admitted only as the whole
+reads one. None is assigned: `name.property = value` on a local of a
+native type, or on a capability, is `binding.immutable`. A native type is
+not constructed: a call of its name is `call.not_callable`. A native
+function is private unless its declaration is exported (NATIVE-1), as a
+function is; the part that implements it does not repeat `export`. `endpoint<T>` is `Type::Endpoint`, admitted only as the whole
 type of a native value function's parameter (TYPE-12,
 `endpoint.position`); a call that gives such a parameter an input by its
 name is not read yet (TIME-9).

@@ -784,16 +784,29 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// native_function_decl = "native", [ "impl" ], [ "const" ], "fn",
+    /// native_function_decl = [ "export" ], "native", [ "const" ], "fn",
     ///     callable_name, [ generic_parameters ], function_signature,
-    ///     [ requires_clause ], [ native_contract_body ] ;
+    ///     [ requires_clause ]
+    ///   | "native", [ "impl" ], [ "const" ], "fn", callable_name,
+    ///     [ generic_parameters ], function_signature, [ requires_clause ],
+    ///     [ native_contract_body ] ;
     /// ```
+    ///
+    /// NATIVE-1: "A native function that is no candidate is private
+    /// unless exported, as a function is (UNIT-3). `export` is written
+    /// on its declaration, the form with no body, and nowhere else."
     fn native_function_decl(&mut self) {
         self.start(NativeFnDecl);
-        self.no_export();
+        let exported = self.eat(KwExport);
         self.expect_word("native");
         // NATIVE-1: `native impl` declares a candidate of an operator.
         if self.at(KwImpl) && !self.cut() {
+            if exported {
+                // The grammar has `export` or `impl`, and no form with
+                // both: a candidate is reached through its operator
+                // (UNIT-3).
+                self.expected("`fn` or `const`");
+            }
             self.bump();
         }
         if self.at_word("const") && !self.cut() {
@@ -806,6 +819,12 @@ impl Parser<'_> {
         // implementations. Nothing but the body can begin with `{` here,
         // so one on the next line is a misplaced body (LEX-5).
         if self.at(LBrace) {
+            if exported {
+                // The exported form is the declaration, which has no
+                // body: the part that implements it does not repeat
+                // `export`.
+                self.expected("a line break");
+            }
             self.header_brace();
             self.native_contract_body();
         }

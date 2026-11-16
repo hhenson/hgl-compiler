@@ -1107,6 +1107,9 @@ impl<'a> Typer<'a> {
         let (Some(place), Some(value)) = (parts.next(), parts.next()) else {
             return self.unread(node);
         };
+        // NATIVE-6: "None is assigned." A property of a native type is
+        // read-only, a capability's among them (TIME-8).
+        self.assigned_property(&place);
         // A place inside a value, `point.x = 1` or `row[0] = 1`, is for
         // the pass that reads members.
         let local = match place.kind() {
@@ -1233,6 +1236,60 @@ impl<'a> Typer<'a> {
             value,
             at,
         }
+    }
+
+    /// Reports an assignment whose place is a property of a native
+    /// type: `clock.evaluation_time = value` (NATIVE-6, TIME-8).
+    ///
+    /// Places inside a value are not read yet, so this looks at the one
+    /// form it can judge without reading: `name.property`, where the
+    /// name is a local of a native type, or a capability, which is of
+    /// one whether or not core has declared it.
+    fn assigned_property(&mut self, place: &SyntaxNode) {
+        if place.kind() != SyntaxKind::MemberExpr {
+            return;
+        }
+        // A place begins with a name: `place = IDENTIFIER, { index_suffix
+        // | member_suffix }`.
+        let Some(base) = place.children().next() else {
+            return;
+        };
+        let Some(local) = (base.kind() == SyntaxKind::NameExpr)
+            .then(|| self.local_of(&base))
+            .flatten()
+        else {
+            return;
+        };
+        let native = match &self.locals[local].ty {
+            Type::Named {
+                module,
+                declaration,
+                ..
+            } => {
+                self.program.modules[*module].declarations[*declaration].kind
+                    == DeclarationKind::NativeType
+            }
+            _ => false,
+        };
+        if !native && !self.is_capability(local) {
+            return;
+        }
+        let property = tokens(place).last();
+        self.diagnostics.emit(
+            error(
+                Category::Name,
+                codes::BINDING_IMMUTABLE,
+                self.at(place),
+                format!(
+                    "`{}.{}` is a property of a native type, and a property is read and \
+                     not assigned",
+                    self.locals[local].name,
+                    property.as_ref().map_or("", |name| name.text())
+                ),
+                "NATIVE-6",
+            )
+            .with_related(self.locals[local].at, "declared here"),
+        );
     }
 
     /// The category of a graph's `var` against that of a value assigned
@@ -3192,6 +3249,26 @@ impl<'a> Typer<'a> {
                     | DeclarationKind::NativeFunction(Role::Temporal)
             )
         });
+        // NATIVE-6: "a native type is not constructed in HGL: a call of
+        // its name rejects."
+        let native = declarations
+            .iter()
+            .any(|&declaration| kind_of(declaration) == DeclarationKind::NativeType);
+        if native {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::CALL_NOT_CALLABLE,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "`{}` is a native type, and no call constructs one",
+                        name.text()
+                    ),
+                    "NATIVE-6",
+                )
+                .with_note("a value of a native type comes from a native function"),
+            );
+        }
         if temporal {
             // FN-3: "A runtime body calls only value functions, and so
             // does a value function." FN-4: "A bad selected signature

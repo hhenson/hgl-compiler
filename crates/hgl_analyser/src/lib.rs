@@ -175,6 +175,9 @@ pub mod codes {
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
     /// `inject out` in a function that declares no result (TIME-7).
     pub const INJECT_OUT_WITHOUT_RESULT: &str = "inject.out_without_result";
+    /// A call of a native type's name, which no call constructs
+    /// (NATIVE-6).
+    pub const CALL_NOT_CALLABLE: &str = "call.not_callable";
     /// A capability retained, or a capability type written where one
     /// would be (TIME-8).
     pub const CAPABILITY_AS_VALUE: &str = "capability.as_value";

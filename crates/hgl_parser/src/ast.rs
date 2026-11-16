@@ -373,6 +373,11 @@ impl NativeFnDecl {
         name_after(&self.syntax, SyntaxKind::KwFn)
     }
 
+    /// The `export` before the function, when it has one (NATIVE-1).
+    pub fn export(&self) -> Option<SyntaxToken> {
+        tokens(&self.syntax).find(|token| token.kind() == SyntaxKind::KwExport)
+    }
+
     /// True for `native const fn`: a value function (NATIVE-1).
     pub fn is_const(&self) -> bool {
         has_word_before(&self.syntax, "const", SyntaxKind::KwFn)
