@@ -455,11 +455,28 @@ an invalid nested position", so the pass looks only at which constructs
 a body holds, and reports nothing. A conditional or a loop does not
 make a body runtime (FN-3).
 
-Nothing more is read of a temporal body yet. The order planned, and
-what the chapters leave open for it, is in hhenson/hgl_spec#53: the
-structure of a node's body; hooks read as value code, with the
-operations on an endpoint; graphs, with connections, lifting and an
-operator's temporal candidates; conditionals and loops in composition.
+A node's body is then held to its shape (FN-2, owner's decisions of
+2026-11-16 on hhenson/hgl_spec#53): "its `state`, `cache`, and `inject`
+declarations and then its `start`, `when`, and `stop` hooks, and nothing
+else".
+
+| Written | Rejected as | Rule |
+| --- | --- | --- |
+| A declaration or a hook inside another block | `node.nested` | TIME-3, TIME-5 |
+| `state`, `cache` or `inject` after a hook | `node.declaration_order` | TIME-5 |
+| A second `start`, or a second `stop` | `node.duplicate_hook` | TIME-5 |
+| Any other statement of the body | `node.statement` | FN-2 |
+| `inject out` in a function that declares no result | `inject.out_without_result` | TIME-7 |
+| `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
+
+A `const fn` may inject a capability (FN-9). A source, a body with
+`yield`, is a node of another form whose contract is proposed
+(SOURCE-1), and its body is not checked.
+
+Nothing is read inside a hook or a graph yet. The order planned, agreed
+in the same issue: hooks read as value code, with the operations on an
+endpoint and `out`; graphs, with connections, lifting and an operator's
+temporal candidates; conditionals and loops in composition.
 
 ### Value expressions
 

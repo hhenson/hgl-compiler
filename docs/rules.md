@@ -177,8 +177,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded. Left: roles of `const fn` and a temporal `fn` in bodies |
-| FN-2 | analyser | done | Each temporal function and temporal candidate is a graph or a node by the constructs its body holds, wherever it holds them, before anything else is read of it |
+| FN-1 | analyser | partial | A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `start`, `when` or `stop`. Left: roles of `const fn` and a temporal `fn` in bodies |
+| FN-2 | analyser | done | Each temporal function and temporal candidate is a graph or a node by the constructs its body holds, wherever it holds them. A node's body is its declarations and then its hooks: any other statement is rejected, but in a source, whose body is not checked |
 | FN-3 | analyser | partial | A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5). Left: phase rules for iteration, conditionals and hooks; what a runtime body and a composition body call |
 | FN-4 | analyser | partial | A temporal and a value definition may share a name. a call in a value function takes the value definition, and a temporal one alone is rejected. Left: selection in composition and eval |
 | FN-5 | parser | done | `const` is a modifier only where one is admitted |
@@ -237,13 +237,13 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-1 | transpiler | planned | Endpoint observations: validity, modification, retained data, delta |
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
-| TIME-3 | analyser | planned | `when` selectors and their defaults; a nested `when` rejected |
+| TIME-3 | analyser | partial | A `when` inside another block is rejected. Left: selectors and their defaults |
 | TIME-3 | transpiler | planned | Handlers evaluated in source order |
 | TIME-4 | analyser | planned | Aggregate subscriptions; node-wide validity; guarded reads under manual admission |
-| TIME-5 | analyser | planned | Declarations precede hooks; one `start`, one `stop`; state initialisers read no input |
+| TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. Left: state initialisers read no input |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
 | TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
-| TIME-7 | analyser | planned | `inject out` needs an output and is used during evaluation |
+| TIME-7 | analyser | partial | `inject out` needs a result. Left: where `out` is read and written |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
 | TIME-8 | analyser | partial | `inject` names one of the listed capabilities. Left: capabilities used receiver-first and never passed as data; clock properties read-only |
 | TIME-9 | analyser | planned | `scheduled()`, `activate` and `passivate` are reserved; helpers inherit capabilities |
