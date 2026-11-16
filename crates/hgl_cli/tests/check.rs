@@ -304,9 +304,11 @@ fn the_conformance_cases_are_one_module() {
 }
 
 /// UNIT-11: "every module binds its public declarations without a
-/// `use`". The compiler supplies core's module, the one it is built
-/// with, to a program whose source roots hold none. It is not counted
-/// or listed: the counts and the listing are of what the roots hold.
+/// `use`". Core is the part every program has, so a program is always
+/// checked with core's module: the compiler supplies the one it is
+/// built with to a program whose source roots hold none. It is not
+/// counted or listed: the counts and the listing are of what the roots
+/// hold.
 #[test]
 fn core_is_supplied_when_the_roots_hold_none() {
     let directory = scratch("core_supplied");
@@ -333,13 +335,6 @@ fn core_is_supplied_when_the_roots_hold_none() {
     assert!(stdout.contains("module examples.core_use\n"), "{stdout}");
     assert!(!stdout.contains("module core\n"), "{stdout}");
     assert!(!stdout.contains("left for the prelude"), "{stdout}");
-
-    // Without it the names core declares are bound to nothing.
-    let without = hgl(&["check", "--no-core", &root]);
-    let stdout = text(&without.stdout);
-    assert!(stdout.contains("left for the prelude"), "{stdout}");
-    assert!(stdout.contains(" div_\n"), "{stdout}");
-    assert!(stdout.contains(" convert\n"), "{stdout}");
 
     // A program that brings its own `module core` is checked with that
     // one, which is then counted and listed with the rest.
