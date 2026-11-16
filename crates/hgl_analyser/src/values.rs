@@ -4427,9 +4427,10 @@ impl<'a> Typer<'a> {
     /// under `requires add_(list<T>, list<T>) -> list<T>`.
     ///
     /// A requirement speaks for types of which one names a generic
-    /// parameter of the declaration: any other call selects its
-    /// candidate here, as it does in a body that has no generic
-    /// parameter. `expected` is the type the call's place expects.
+    /// parameter of the declaration, its result's among them: any
+    /// other call selects its candidate here, as it does in a body
+    /// that has no generic parameter. `expected` is the type the
+    /// call's place expects.
     fn required(
         &mut self,
         operator: OperatorRef,
@@ -4492,12 +4493,17 @@ impl<'a> Typer<'a> {
             ordered[place] = argument;
         }
         for requirement in self.requirements() {
+            // One that names a generic parameter of the declaration,
+            // among the types it is supplied with or in its result:
+            // `make() -> T`.
+            let generic = requirement
+                .operands
+                .iter()
+                .chain(&requirement.result)
+                .any(|ty| mentions(ty, &own));
             if requirement.operator != operator
                 || requirement.operands.len() != ordered.len()
-                || !requirement
-                    .operands
-                    .iter()
-                    .any(|operand| mentions(operand, &own))
+                || !generic
             {
                 continue;
             }
