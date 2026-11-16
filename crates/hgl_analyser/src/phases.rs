@@ -112,11 +112,12 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 }
 
 /// FN-1: "A `const fn` is a value function." It has no state and no
-/// hooks: each of a node's constructs in one is rejected, at its
-/// keyword.
+/// hooks: each of those in one is rejected, at its keyword. It may
+/// inject a capability, which its caller then needs (FN-9: "Injection
+/// does not turn a value function into a node").
 fn in_value_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
     for node in declaration.syntax.descendants() {
-        if !is_node_construct(node.kind()) {
+        if !is_node_construct(node.kind()) || node.kind() == SyntaxKind::InjectDecl {
             continue;
         }
         let Some((word, at)) = keyword(&node, file) else {
@@ -190,10 +191,31 @@ fn node_body(
     // Where `start` and `stop` were first written.
     let mut lifecycle: Vec<(String, Location)> = Vec::new();
     for statement in body.children() {
+        let kind = statement.kind();
+        if !is_node_construct(kind) {
+            // FN-2: "and nothing else: a local that every hook reads is
+            // a `cache`, and work done once belongs in `start`."
+            diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::NODE_STATEMENT,
+                    Location::new(file, statement.span()),
+                    format!(
+                        "`{}` is a node, and its body holds only its declarations and its hooks",
+                        declaration.name
+                    ),
+                    "FN-2",
+                )
+                .with_note(
+                    "a local that every hook reads is a `cache`, and work done once belongs \
+                     in `start`",
+                ),
+            );
+            continue;
+        }
         let Some((word, at)) = keyword(&statement, file) else {
             continue;
         };
-        let kind = statement.kind();
         if is_declaration(kind) {
             // TIME-5: "State/cache/inject declarations precede
             // executable hooks."
@@ -248,25 +270,6 @@ fn node_body(
                     None => lifecycle.push((word.text().to_string(), at)),
                 }
             }
-        } else {
-            // FN-2: "and nothing else: a local that every hook reads is
-            // a `cache`, and work done once belongs in `start`."
-            diagnostics.emit(
-                error(
-                    Category::Phase,
-                    codes::NODE_STATEMENT,
-                    Location::new(file, statement.span()),
-                    format!(
-                        "`{}` is a node, and its body holds only its declarations and its hooks",
-                        declaration.name
-                    ),
-                    "FN-2",
-                )
-                .with_note(
-                    "a local that every hook reads is a `cache`, and work done once belongs \
-                     in `start`",
-                ),
-            );
         }
     }
 }

@@ -5,9 +5,6 @@ mod common;
 
 use common::check;
 
-/// No lines.
-const NONE: [&str; 0] = [];
-
 /// FN-2: "An ordinary temporal body with no node-only construct
 /// describes composition: the function is a graph. `state`, `cache`,
 /// `inject`, `start`, `when`, `stop`, or `yield` classifies that
@@ -59,7 +56,16 @@ fn a_temporal_body_is_a_graph_or_a_node() {
             "impl fn pass(value: f64) -> f64 => value\n",
         ),
     )]);
-    assert_eq!(checked.summary(), NONE);
+    // TIME-3: the nested `when` is rejected, and so is the `if` it
+    // stands in, a statement of a node's body that is no hook (FN-2).
+    // It classifies its body all the same.
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:24:5 phase/node.statement FN-2",
+            "m.hgl:25:9 phase/node.nested TIME-3",
+        ]
+    );
     let module = checked.program.module("m").expect("module m exists");
     let phases: Vec<String> = module
         .declarations
@@ -152,21 +158,21 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:15:5 phase/node.declaration_order TIME-5",
-            "m.hgl:17:5 phase/node.duplicate_hook TIME-5",
-            "m.hgl:19:5 phase/node.duplicate_hook TIME-5",
-            "m.hgl:22:5 phase/node.statement FN-2",
-            "m.hgl:24:5 phase/node.statement FN-2",
-            "m.hgl:28:9 phase/node.nested TIME-5",
-            "m.hgl:32:9 phase/node.nested TIME-3",
-            "m.hgl:36:12 injectable/inject.out_without_result TIME-7",
+            "m.hgl:16:5 phase/node.declaration_order TIME-5",
+            "m.hgl:18:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:20:5 phase/node.duplicate_hook TIME-5",
+            "m.hgl:23:5 phase/node.statement FN-2",
+            "m.hgl:25:5 phase/node.statement FN-2",
+            "m.hgl:29:9 phase/node.nested TIME-5",
+            "m.hgl:33:9 phase/node.nested TIME-3",
+            "m.hgl:37:12 injectable/inject.out_without_result TIME-7",
         ]
     );
 }
 
-/// FN-1: "A `const fn` is a value function." FN-2 has `state`, `cache`,
-/// `inject`, `start`, `when` and `stop` classify a temporal body: a
-/// value function has none of them.
+/// FN-1: "A `const fn` is a value function." It has no state and no
+/// hooks. FN-9: "Injection does not turn a value function into a node":
+/// it may inject a capability.
 #[test]
 fn a_value_function_has_no_state_and_no_hooks() {
     let checked = check(&[(
@@ -191,7 +197,6 @@ fn a_value_function_has_no_state_and_no_hooks() {
         [
             "m.hgl:3:5 phase/node.in_value_function FN-1",
             "m.hgl:4:5 phase/node.in_value_function FN-1",
-            "m.hgl:9:5 phase/node.in_value_function FN-1",
             "m.hgl:10:5 phase/node.in_value_function FN-1",
         ]
     );
