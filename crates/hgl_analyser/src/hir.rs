@@ -119,11 +119,26 @@ pub struct Local {
     pub kind: LocalKind,
     /// Its type; [`Type::Unknown`] when nothing says.
     pub ty: Type,
-    /// True for a connection of a graph: a temporal parameter, or a
-    /// local whose first value is one (EXPR-3: "Initialization fixes a
-    /// binding's value/connection category"). False for an ordinary
-    /// value, as every local of a value function and of a hook is.
-    pub connection: bool,
+    /// Whether it is a connection of a graph or an ordinary value
+    /// (EXPR-3: "Initialization fixes a binding's value/connection
+    /// category").
+    pub category: ValueCategory,
+}
+
+/// What a value of a body is (FN-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueCategory {
+    /// An ordinary value, known while the graph is built. Every local
+    /// of a value function and of a hook is one.
+    Value,
+    /// A connection of a graph: a temporal parameter, or what a
+    /// temporal or lifted call gives.
+    Connection,
+    /// One or the other, which is not known until the graph's generic
+    /// parameters are: what an operation the graph requires gives when
+    /// it is given no connection (GEN-7). A temporal candidate would
+    /// make it a connection, and a value candidate a value (GEN-5).
+    Unsettled,
 }
 
 /// One statement.
@@ -390,6 +405,16 @@ pub enum Callee {
         /// this call (GEN-2), in the order declared. Empty for a
         /// candidate with none.
         generics: Vec<GenericArgument>,
+    },
+    /// An operation the enclosing declaration requires of its generic
+    /// parameters (GEN-7, GEN-16): the `add_(lhs, rhs)` of a body under
+    /// `requires add_(T, T) -> T`. Which candidate it is is selected
+    /// where the parameters are known, not here.
+    Required {
+        /// The operator called: the position of its module in
+        /// `Program::modules`, and its position in that module's
+        /// `declarations`.
+        operator: (usize, usize),
     },
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
