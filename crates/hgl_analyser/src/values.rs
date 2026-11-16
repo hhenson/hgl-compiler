@@ -7904,9 +7904,12 @@ impl<'a> Typer<'a> {
         for (local, category) in names.iter().zip(categories) {
             self.locals[*local].category = category;
         }
-        // The outermost such loop says which `var`s are outside.
+        // Each such loop says which `var`s are outside it: one declared
+        // in an enclosing loop's body is outside the loop nested there.
+        // A loop that makes no children keeps the boundary of the one
+        // it stands in.
         let outer = self.dynamic;
-        if children && outer.is_none() {
+        if children {
             self.dynamic = Some(outside);
         }
         let body = self.loop_body(child(node, SyntaxKind::Block).as_ref());

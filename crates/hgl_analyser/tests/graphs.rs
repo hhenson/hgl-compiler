@@ -440,6 +440,26 @@ fn a_loop_in_a_graph_binds_values_or_connections() {
             "m.hgl:34:18 type/type.mismatch CTRL-15",
         ]
     );
+    // A loop nested in another has a boundary of its own: a `var` of
+    // the outer loop's body is outside the inner one. A loop over
+    // ordinary data inside keeps the boundary of the loop it stands in.
+    let nested = module(concat!(
+        "fn nested(rows: list<f64>, columns: list<f64>, const weights: list<f64>) {\n",
+        "    for row in rows {\n",
+        "        var total = row\n",
+        "        for weight in weights {\n",
+        "            total = total * weight\n",
+        "        }\n",
+        "        for column in columns {\n",
+        "            var inner = column\n",
+        "            inner = inner + row\n",
+        "            total = total + column\n",
+        "        }\n",
+        "        total = total + row\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(nested.summary(), ["m.hgl:11:13 phase/loop.carried CTRL-15"]);
     let bound: Vec<String> = locals(&checked, "loops")
         .into_iter()
         .filter(|local| {
