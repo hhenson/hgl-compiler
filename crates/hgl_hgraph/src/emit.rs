@@ -193,12 +193,6 @@ impl<'a> Handler<'a> {
     /// inputs, which a selector with no argument, and one left out,
     /// stand for.
     fn of(condition: Option<&'a Expr>, body: &'a [Stmt], inputs: &[usize]) -> Handler<'a> {
-        let mut handler = Handler {
-            subscribed: inputs.to_vec(),
-            required: inputs.to_vec(),
-            conditions: Vec::new(),
-            body,
-        };
         // "when it stands alone in the header or appears as a
         // top-level conjunct": the conjuncts, through each `&&`.
         let mut conjuncts = Vec::new();
@@ -217,28 +211,40 @@ impl<'a> Handler<'a> {
                 _ => conjuncts.push(part),
             }
         }
+        // Every selector among the conjuncts adds what it names, as
+        // the analyser has it: `valid(a) && valid(b)` requires both.
+        // One with no argument names every input, and `valid([])`
+        // names none. With no selector of a kind, its default stands.
+        let mut subscribed: Option<Vec<usize>> = None;
+        let mut required: Option<Vec<usize>> = None;
+        let mut conditions = Vec::new();
+        let add = |set: &mut Option<Vec<usize>>, named: &Option<Vec<usize>>| {
+            let set = set.get_or_insert_with(Vec::new);
+            for &local in named.as_deref().unwrap_or(inputs) {
+                if !set.contains(&local) {
+                    set.push(local);
+                }
+            }
+        };
         for conjunct in conjuncts {
             match &conjunct.kind {
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Modified,
                     inputs: named,
-                } => {
-                    if let Some(named) = named {
-                        handler.subscribed = named.clone();
-                    }
-                }
+                } => add(&mut subscribed, named),
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Valid,
                     inputs: named,
-                } => {
-                    if let Some(named) = named {
-                        handler.required = named.clone();
-                    }
-                }
-                _ => handler.conditions.push(conjunct),
+                } => add(&mut required, named),
+                _ => conditions.push(conjunct),
             }
         }
-        handler
+        Handler {
+            subscribed: subscribed.unwrap_or_else(|| inputs.to_vec()),
+            required: required.unwrap_or_else(|| inputs.to_vec()),
+            conditions,
+            body,
+        }
     }
 }
 
@@ -596,14 +602,33 @@ impl Emitter<'_> {
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
         let before = self.text.len();
+        // An endpoint as the node's code names it: an input by its
+        // name, and the node's own output as hgraph's `_output`.
+        let endpoint = |local: usize| {
+            let declared = &body.locals[local];
+            if declared.kind == LocalKind::Inject {
+                "_output".to_string()
+            } else {
+                name(&declared.name)
+            }
+        };
         for handler in &handlers {
-            // What this handler asks beyond what the node does.
+            // What this handler asks beyond what the node does. It is
+            // woken by fewer inputs than the node where one the node is
+            // woken by is none of its own.
             let mut guards: Vec<String> = Vec::new();
-            if handler.subscribed.len() != active.len() {
+            if handler.subscribed.is_empty() && !active.is_empty() {
+                self.unsupported(declaration.at, "a handler that no input wakes");
+                continue;
+            }
+            let narrower = active
+                .iter()
+                .any(|input| !handler.subscribed.contains(input));
+            if narrower {
                 let ticked: Vec<String> = handler
                     .subscribed
                     .iter()
-                    .map(|&local| format!("{}.modified", name(&body.locals[local].name)))
+                    .map(|&local| format!("{}.modified", endpoint(local)))
                     .collect();
                 guards.push(match ticked.as_slice() {
                     [one] => one.clone(),
@@ -612,7 +637,7 @@ impl Emitter<'_> {
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {
-                    guards.push(format!("{}.valid", name(&body.locals[local].name)));
+                    guards.push(format!("{}.valid", endpoint(local)));
                 }
             }
             for condition in &handler.conditions {

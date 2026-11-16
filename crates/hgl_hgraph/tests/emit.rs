@@ -422,6 +422,65 @@ fn names_configuration_and_omitted_arguments_are_kept() {
     }
 }
 
+/// Headers whose selectors add up, repeat an input, or name the node's
+/// own output.
+const SELECTORS: &str = concat!(
+    "module demo.selectors\n",
+    "\n",
+    "fn both_valid(a: i64, b: i64, c: i64) -> i64 {\n",
+    "    when valid(a) && valid(b) { return a + b }\n",
+    "}\n",
+    "\n",
+    "fn repeated(a: i64, b: i64) -> i64 {\n",
+    "    when modified(a, a) { return a }\n",
+    "    when modified(b) { return b }\n",
+    "}\n",
+    "\n",
+    "fn recovering(command: i64) -> i64 {\n",
+    "    inject out\n",
+    "    when valid(out) && valid(command) && command > 0 { return command }\n",
+    "    when { return 1 }\n",
+    "}\n",
+    "\n",
+    "test selectors {\n",
+    "    assert eval(both_valid, a: [1, _], b: [_, 2], c: []) == [_, 3]\n",
+    "    assert eval(repeated, a: [1, _, 3], b: [_, 2, _]) == [_, 2, 3]\n",
+    "    assert eval(recovering, command: [0, 5]) == [1, 5]\n",
+    "}\n",
+);
+
+/// TIME-3: every selector among a header's conjuncts adds what it
+/// names, so `valid(a) && valid(b)` requires both. A subscription is a
+/// set: an input named twice is one. The node's output named in a
+/// header is hgraph's `_output`.
+#[test]
+fn a_headers_selectors_add_up() {
+    let emitted = emit(&[("selectors.hgl", SELECTORS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("demo/selectors.py");
+    for expected in [
+        "@_hg.compute_node(valid=(\"a\", \"b\"))\ndef both_valid(",
+        concat!(
+            "@_hg.compute_node\n",
+            "def repeated(a: _hg.TS[int], b: _hg.TS[int]) -> _hg.TS[int]:\n",
+            "    if a.modified:\n",
+            "        return a.value\n",
+            "    if b.modified:\n",
+            "        return b.value\n",
+        ),
+        concat!(
+            "    if _output.valid and _core.gt__T_T(lhs=command.value, rhs=0):\n",
+            "        return command.value\n",
+            "    return 1\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// Names that Python, hgraph or the target would take: each is given a
 /// Python name of its own. FN-4: "Composition and eval choose the
 /// temporal definition if one exists; runtime/value evaluation chooses
@@ -548,6 +607,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("scalar_eval.hgl", core.as_str()),
         ("demo.hgl", DEMO),
         ("endpoints.hgl", ENDPOINTS),
+        ("selectors.hgl", SELECTORS),
         ("names.hgl", NAMES),
     ];
     files.extend(MODULES);
@@ -572,6 +632,7 @@ fn the_generated_tests_pass_on_hgraph() {
             "conformance",
             "demo.scaling",
             "demo.endpoints",
+            "demo.selectors",
             "demo.configured",
             "demo.names",
         ])
@@ -585,7 +646,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        17,
+        18,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
