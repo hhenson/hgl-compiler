@@ -1293,17 +1293,146 @@ fn a_division_takes_its_zero_policy() {
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
 
-    // NUM-9: "division with `zero: .error` returns `result<f64,
-    // error>`", which is not written yet.
-    let emitted = emit(&[(
-        "checked.hgl",
+/// Results and errors in value functions, and a `?` in a `when`.
+const RESULTS: &str = concat!(
+    "module demo.results\n",
+    "\n",
+    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
+    "\n",
+    "const fn halved(a: f64, b: f64) -> result<f64, error> {\n",
+    "    let ratio = checked(a, b)?\n",
+    "    return ok(ratio / 2)\n",
+    "}\n",
+    "\n",
+    "const fn described(a: f64, b: f64) -> str {\n",
+    "    let outcome = checked(a, b)\n",
+    "    if is_ok(outcome) { return \"fine\" }\n",
+    "    return outcome.error.message\n",
+    "}\n",
+    "\n",
+    "const fn code_of(a: f64, b: f64) -> str? {\n",
+    "    let outcome = checked(a, b)\n",
+    "    if is_err(outcome) { return outcome.error.code }\n",
+    "    return null\n",
+    "}\n",
+    "\n",
+    "const fn value_or(a: f64, b: f64, fallback: f64) -> f64 {\n",
+    "    let outcome = checked(a, b)\n",
+    "    if is_ok(outcome) { return outcome.value }\n",
+    "    return fallback\n",
+    "}\n",
+    "\n",
+    "const fn failing(reason: str) -> result<i64, error> =>\n",
+    "    err(error(message: reason, code: \"demo.failed\"))\n",
+    "\n",
+    "const fn plain(reason: str) -> error => error(message: reason)\n",
+    "\n",
+    "const fn fail(text: str) -> result<str, str> => err(text)\n",
+    "const fn ordered() -> result<error, str> =>\n",
+    "    ok(error(code: fail(\"code\")?, message: fail(\"message\")?))\n",
+    "const fn met() -> str {\n",
+    "    let outcome = ordered()\n",
+    "    if is_err(outcome) { return outcome.error }\n",
+    "    return \"none\"\n",
+    "}\n",
+    "\n",
+    "fn ratios(a: f64, b: f64) -> f64 {\n",
+    "    when { return checked(a, b)? }\n",
+    "}\n",
+    "\n",
+    "test results {\n",
+    "    assert value_or(6.0, 4.0, 0.0) == 1.5\n",
+    // NUM-9: a zero divisor gives an `err`, and no other does.
+    "    assert value_or(6.0, 0.0, -1.0) == -1.0\n",
+    "    assert described(6.0, 4.0) == \"fine\"\n",
+    "    assert described(6.0, 0.0) == \"a division by zero\"\n",
+    "    assert code_of(6.0, 0.0) != null\n",
+    "    assert code_of(6.0, 4.0) == null\n",
+    "    assert plain(\"no\").code == null\n",
+    // ERR-5: a failure leaves the function as the same error.
+    "    assert is_ok(halved(6.0, 4.0))\n",
+    "    assert is_err(halved(6.0, 0.0))\n",
+    "    assert halved(6.0, 0.0) == checked(1.0, 0.0)\n",
+    // ERR-2: equality compares the tag, then the payload.
+    "    assert halved(6.0, 4.0) == halved(3.0, 2.0)\n",
+    "    assert failing(\"no\") != failing(\"yes\")\n",
+    "    assert failing(\"no\") == failing(\"no\")\n",
+    "    assert plain(\"no\") == plain(\"no\")\n",
+    // EXPR-2: the failure met first is the one written first.
+    "    assert met() == \"code\"\n",
+    "    assert eval(ratios, a: [6.0], b: [4.0]) == [1.5]\n",
+    "}\n",
+);
+
+/// A node whose `?` meets a failure.
+const RESULT_FAILS: &str = concat!(
+    "module demo.results.fails\n",
+    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
+    "fn ratios(a: f64, b: f64) -> f64 {\n",
+    "    when { return checked(a, b)? }\n",
+    "}\n",
+    "test node_fails { eval(ratios, a: [6.0], b: [0.0]) }\n",
+);
+
+/// ERR-2: "`ok(value)` constructs a success and `err(value)` a
+/// failure." ERR-3: `is_ok` and `is_err` give a `bool`, and
+/// `binding.value` and `binding.error` the payload. ERR-4: an `error`
+/// has a message and a code that may be null. They are values of the
+/// provider's.
+///
+/// ERR-5: "Postfix `?` evaluates once. Success yields T. In a value
+/// function returning `result<U,E>`, failure returns the same E as
+/// Err. In when, only `result<T,error>` may propagate to node failure."
+///
+/// NUM-9: "division with `zero: .error` returns `result<f64, error>`".
+/// NUM-10: "A checked-division Err is ordinary result data. It neither
+/// implicitly fails a node nor requires an exception."
+#[test]
+fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
+    let emitted = emit(&[("results.hgl", RESULTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_results/__init__.py");
+    for expected in [
+        "def checked(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")\n",
+        // A `?` is inside an expression, where Python has no `return`:
+        // the function returns what the provider raises.
         concat!(
-            "module demo.checked\n",
-            "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
+            "def halved(a, b):\n",
+            "    try:\n",
+            "        ratio = _core.propagated(checked(a=a, b=b))\n",
+            "        return _core.Ok(_core.div__f64_i64(lhs=ratio, rhs=2, zero=\"ieee\"))\n",
+            "    except _core.Propagated as _left:\n",
+            "        return _left.failure\n",
         ),
-    )]);
-    assert_eq!(emitted.reported, ["checked.hgl:2:59 target.unsupported"]);
+        concat!(
+            "    if _py.isinstance(outcome, _core.Ok):\n",
+            "        return \"fine\"\n",
+            "    return outcome.error.message\n",
+        ),
+        concat!(
+            "    if _py.isinstance(outcome, _core.Err):\n",
+            "        return outcome.error.code\n",
+        ),
+        "        return outcome.value\n",
+        "    return _core.Err(_core.Error(message=reason, code=\"demo.failed\"))\n",
+        "    return _core.Error(message=reason, code=None)\n",
+        // The parts of an error are evaluated in the order written.
+        concat!(
+            "        return _core.Ok(_core.Error(code=_core.propagated(fail(text=\"code\")), ",
+            "message=_core.propagated(fail(text=\"message\"))))\n",
+        ),
+        // In a `when` a failure fails the node.
+        "    return _core.succeeded(checked(a=a.value, b=b.value))\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // A function with no `?` catches nothing.
+    assert_eq!(python.matches("except _core.Propagated").count(), 2);
 }
 
 /// A program with forms that are not written: a loop in two of its
@@ -1492,6 +1621,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("lift.hgl", LIFTS),
         ("mixed.hgl", CANDIDATES),
         ("div.hgl", DIVISION),
+        ("results.hgl", RESULTS),
     ];
     files.extend(MODULES);
     files.extend(NESTED);
@@ -1513,7 +1643,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        26,
+        27,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }
@@ -1522,7 +1652,8 @@ fn the_generated_tests_pass_on_hgraph() {
 /// and why: an assertion that does not hold, or an error that escaped
 /// (NUM-2: an `i64` result out of range; NUM-3: "The `fail` policy
 /// makes a zero divisor an HGL error with code
-/// `numeric.division_by_zero`"). Needs hgraph, as above.
+/// `numeric.division_by_zero`"). ERR-5: a failure a `?` meets in a
+/// `when` fails the node, and the test with it. Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -1531,6 +1662,7 @@ fn a_failure_names_the_statement_that_failed() {
     fs::remove_dir_all(&directory).ok();
     let mut files = REACH.to_vec();
     files.push(("fails.hgl", DIVISION_FAILS));
+    files.push(("node.hgl", RESULT_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -1560,5 +1692,21 @@ fn a_failure_names_the_statement_that_failed() {
             "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
             "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
         ]
+    );
+
+    // hgraph words a node's failure itself, and the error's own line
+    // is in what it says.
+    let node = [emitted.test("node_fails").0];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &node);
+    let [Ran::Failed { at, message }] = ran.as_slice() else {
+        panic!("the test failed: {ran:?}");
+    };
+    assert_eq!(
+        at.map(|at| emitted.place(at)),
+        Some("node.hgl:6:19".to_string())
+    );
+    assert!(
+        message.contains("HglError: numeric.division_by_zero: a division by zero"),
+        "{message}"
     );
 }

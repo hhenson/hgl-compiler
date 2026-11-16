@@ -15,8 +15,8 @@
 use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
-    Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, Expr, ExprKind, Hook, Local,
-    Stmt, UnaryOperator, Value, ValueCategory,
+    Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, ErrorPart, Expr, ExprKind,
+    Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
@@ -79,6 +79,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         lifts: Vec::new(),
         lifted: 0,
         candidates: BTreeSet::new(),
+        propagates: false,
         piece: Piece::default(),
         declared: Vec::new(),
         tested: Vec::new(),
@@ -371,6 +372,10 @@ struct Emitter<'a> {
     lifted: usize,
     /// The Python names of the candidates the module has written.
     candidates: BTreeSet<String>,
+    /// True once the value function being written has a `?`: a
+    /// failure then leaves the function through an exception of the
+    /// provider's, which the function catches and returns (ERR-5).
+    propagates: bool,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -571,7 +576,24 @@ impl Emitter<'_> {
             signature: Some(signature),
             mode: Mode::Value,
         };
+        let start = self.text.len();
+        self.propagates = false;
         self.block(&function, &body.statements, 1);
+        if std::mem::take(&mut self.propagates) {
+            // ERR-5: "In a value function returning `result<U,E>`,
+            // failure returns the same E as Err." A `?` is inside an
+            // expression, where Python has no `return`: the provider
+            // raises, and the function returns what was raised.
+            let body: String = self.text[start..]
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect();
+            self.text.truncate(start);
+            self.line(1, "try:");
+            self.text.push_str(&body);
+            self.line(1, "except _core.Propagated as _left:");
+            self.line(2, "return _left.failure");
+        }
     }
 
     /// The annotation of a parameter or a result of a temporal
@@ -1263,6 +1285,82 @@ impl Emitter<'_> {
                 let right = self.expression(function, right);
                 format!("{left} {symbol} {right}")
             }
+            // ERR-2: "`ok(value)` constructs a success and
+            // `err(value)` a failure."
+            ExprKind::Tagged { success, payload } => {
+                self.natives = true;
+                let payload = self.expression(function, payload);
+                let tag = if *success { "Ok" } else { "Err" };
+                format!("_core.{tag}({payload})")
+            }
+            // ERR-3: `is_ok(value)` and `is_err(value)` give a `bool`.
+            ExprKind::TagTest { success, value } => {
+                self.natives = true;
+                let value = self.expression(function, value);
+                let tag = if *success { "Ok" } else { "Err" };
+                format!("_py.isinstance({value}, _core.{tag})")
+            }
+            // ERR-3: "`binding.value` is the T and `binding.error` the
+            // E", where a guard has proved which the binding is.
+            ExprKind::Payload { success, result } => {
+                let result = self.expression(function, result);
+                let part = if *success { "value" } else { "error" };
+                format!("{result}.{part}")
+            }
+            // ERR-4: `error(message: text, code: optional_code)`, the
+            // code null when it is left out.
+            ExprKind::Error { message, code } => {
+                self.natives = true;
+                // EXPR-2: arguments are evaluated in the order
+                // written, and Python evaluates keyword arguments in
+                // theirs. With `code` written first, a `?` in it is
+                // met before one in `message`.
+                let code_first = code
+                    .as_ref()
+                    .is_some_and(|code| code.at.span.start < message.at.span.start);
+                let mut written = Vec::new();
+                if !code_first {
+                    written.push(format!("message={}", self.expression(function, message)));
+                }
+                written.push(match code {
+                    Some(code) => format!("code={}", self.expression(function, code)),
+                    None => "code=None".to_string(),
+                });
+                if code_first {
+                    written.push(format!("message={}", self.expression(function, message)));
+                }
+                format!("_core.Error({})", written.join(", "))
+            }
+            ExprKind::ErrorPart { base, part } => {
+                let base = self.expression(function, base);
+                let part = match part {
+                    ErrorPart::Message => "message",
+                    ErrorPart::Code => "code",
+                };
+                format!("{base}.{part}")
+            }
+            // ERR-5: "Postfix `?` evaluates once. Success yields T. In
+            // a value function returning `result<U,E>`, failure
+            // returns the same E as Err. In when, only
+            // `result<T,error>` may propagate to node failure."
+            ExprKind::Propagate(result) => {
+                let called = match function.mode {
+                    Mode::Value => {
+                        self.propagates = true;
+                        "propagated"
+                    }
+                    Mode::Node => "succeeded",
+                    // The analyser rejects a `?` anywhere else
+                    // (`result.propagation_phase`).
+                    _ => {
+                        self.unsupported(value.at, "a `?` here");
+                        return "None".to_string();
+                    }
+                };
+                self.natives = true;
+                let result = self.expression(function, result);
+                format!("_core.{called}({result})")
+            }
             _ => {
                 self.unsupported(value.at, "this expression");
                 "None".to_string()
@@ -1718,13 +1816,6 @@ impl Emitter<'_> {
                     at,
                     &format!("the candidate `{}({})`", declared.name, types.join(", ")),
                 );
-                return "None".to_string();
-            }
-            // NUM-9: a division under `zero: .error` gives a `result`,
-            // which is not written yet. It is a candidate of its own
-            // with the parameter types of the one that gives a number.
-            if matches!(signature.result, Some(Type::Result { .. })) {
-                self.unsupported(at, "a native candidate that gives a `result`");
                 return "None".to_string();
             }
             Some(native)
