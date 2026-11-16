@@ -1388,6 +1388,62 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// True when the capability named at `node` is used as ordinary
+    /// data, and not as a capability is.
+    ///
+    /// TIME-8: "Clock properties are read-only, including
+    /// `clock.evaluation_time`. Operations use direct receiver-first
+    /// forms such as `schedule(scheduler, delay)` and
+    /// `info(logger, value)`". So a capability stands before the `.` of
+    /// one of its properties, or first among the arguments of one of
+    /// its operations. Those are core's, which does not declare them
+    /// yet: an operation is a call of a name nothing binds. Anywhere
+    /// else it is kept or passed on.
+    fn used_as_data(&self, node: &SyntaxNode) -> bool {
+        // "Parentheses select grouping" (EXPR-1).
+        let mut used = node.clone();
+        while let Some(parent) = used.parent()
+            && parent.kind() == SyntaxKind::ParenExpr
+        {
+            used = parent;
+        }
+        let Some(parent) = used.parent() else {
+            return true;
+        };
+        match parent.kind() {
+            SyntaxKind::MemberExpr => parent.children().next().as_ref() != Some(&used),
+            SyntaxKind::Arg => {
+                let list = parent.parent();
+                let call = list
+                    .as_ref()
+                    .and_then(|list| list.parent())
+                    .filter(|call| call.kind() == SyntaxKind::CallExpr);
+                let (Some(list), Some(call)) = (list, call) else {
+                    return true;
+                };
+                // The receiver: the first argument, given by position.
+                let receiver = list
+                    .children()
+                    .find(|argument| argument.kind() == SyntaxKind::Arg)
+                    .is_some_and(|first| first == parent)
+                    && !has_token(&parent, SyntaxKind::Colon);
+                // An operation of core's: a name nothing binds, and no
+                // endpoint intrinsic (TIME-9).
+                let operation = call
+                    .children()
+                    .next()
+                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                    .and_then(|callee| name_token(&callee))
+                    .is_some_and(|name| {
+                        !self.bindings.contains_key(&(self.file, name.span().start))
+                            && EndpointOperation::named(name.text()).is_none()
+                    });
+                !(receiver && operation)
+            }
+            _ => true,
+        }
+    }
+
     /// A read of the local `local`, written at `node`. EXPR-3: "every
     /// path reaching a read must assign it."
     fn read_local(&mut self, local: LocalId, node: &SyntaxNode) -> Expr {
@@ -1417,6 +1473,32 @@ impl<'a> Typer<'a> {
             self.out_lifecycle(
                 at,
                 "`out` is neither read nor written in `start`".to_string(),
+            );
+        }
+        // TIME-8: "They are capabilities, not first-class payloads ...
+        // Arbitrary helpers cannot receive a capability as ordinary
+        // data." `out` is the node's result, read as a value is.
+        if self.locals[local].kind == LocalKind::Inject
+            && Some(local) != self.out
+            && self.used_as_data(node)
+        {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{}` is a capability, and is used here as a value: it is neither \
+                         kept nor passed on",
+                        self.locals[local].name
+                    ),
+                    "TIME-8",
+                )
+                .with_note(
+                    "a capability is the receiver of its own operations, \
+                     `schedule(scheduler, delay)`, and the owner of its properties, \
+                     `clock.evaluation_time`",
+                ),
             );
         }
         // ERR-12: "Refine that same binding to T on paths proving a

@@ -175,6 +175,8 @@ pub mod codes {
     pub const INJECT_UNKNOWN_CAPABILITY: &str = "inject.unknown_capability";
     /// `inject out` in a function that declares no result (TIME-7).
     pub const INJECT_OUT_WITHOUT_RESULT: &str = "inject.out_without_result";
+    /// A capability passed or kept as ordinary data (TIME-8).
+    pub const CAPABILITY_AS_VALUE: &str = "capability.as_value";
     /// A node's construct inside a block of a temporal function
     /// (TIME-3, TIME-5).
     pub const NODE_NESTED: &str = "node.nested";

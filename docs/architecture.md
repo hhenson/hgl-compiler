@@ -500,6 +500,7 @@ What is rejected there:
 | A second input given to `modified`, or to any operation but `valid` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
+| A capability kept, returned, held in a tuple or passed to a function: `let kept = clock`, `stamped(clock, value)` | `capability.as_value` | TIME-8 |
 
 A `when` reads an input's payload only where the input is valid
 (TIME-1). Its header says which are (TIME-3):
@@ -521,8 +522,14 @@ reads are not judged.
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
 
-Not read yet in a node: a capability used as data
-(`capability.as_value`); what `modified` subscribes to.
+A capability is used as one in two places (TIME-8): before the `.` of a
+property, `clock.evaluation_time`, and first among the arguments of one
+of its operations, `schedule(scheduler, 0s)`. Core does not declare
+those operations yet, so an operation is a call of a name nothing binds,
+and what a property is is not known: `clock.evaluation_time` has no
+type here.
+
+Not read yet in a node: what `modified` subscribes to.
 
 A graph's body describes composition, and is read into the same typed
 form. Every value in it is one of two things (FN-3, EXPR-3, EXPR-4):
