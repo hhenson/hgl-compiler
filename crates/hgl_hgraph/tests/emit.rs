@@ -211,6 +211,139 @@ fn cores_scalar_eval_cases_are_written_whole() {
     );
 }
 
+/// Core's scalar endpoint cases that publish no null, and a node with
+/// two handlers: `when` headers with selectors, and the node's own
+/// output.
+const ENDPOINTS: &str = concat!(
+    "module demo.endpoints\n",
+    "\n",
+    "fn watched_valid(watched: i64, probe: bool) -> bool {\n",
+    "    when valid([]) {\n",
+    "        return valid(watched)\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn watched_modified(watched: i64, probe: bool) -> bool {\n",
+    "    when modified() && valid([]) {\n",
+    "        return modified(watched)\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn sample_on_probe(watched: i64, probe: bool) -> i64 {\n",
+    "    when modified(probe) && valid() {\n",
+    "        return watched\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test silence_preserves_validity {\n",
+    "    assert eval(watched_valid,\n",
+    "                watched: [_, 7, _, _],\n",
+    "                probe: [true, true, true, true]) == [false, true, true, true]\n",
+    "}\n",
+    "\n",
+    "test equal_publication_is_modified_and_idle_is_not {\n",
+    "    assert eval(watched_modified,\n",
+    "                watched: [_, 7, _, 7],\n",
+    "                probe: [true, true, true, _]) == [false, true, false, true]\n",
+    "}\n",
+    "\n",
+    "test retained_value_is_read_without_a_new_tick {\n",
+    "    assert eval(sample_on_probe,\n",
+    "                watched: [_, 7, _, _, 9, _],\n",
+    "                probe: [true, _, true, true, _, true]) == [_, _, 7, 7, _, 9]\n",
+    "}\n",
+    "\n",
+    "fn produce(command: i64) -> i64 {\n",
+    "    inject out\n",
+    "    when {\n",
+    "        if command != 0 { return command }\n",
+    "        invalidate(out)\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn watch(input: i64) -> bool {\n",
+    "    when valid([]) { return valid(input) }\n",
+    "}\n",
+    "\n",
+    "fn observe(command: i64) -> bool => watch(produce(command))\n",
+    "\n",
+    "test publish_invalidate_recover {\n",
+    "    assert eval(observe, command: [7, 0, 0, 7]) == [true, false, _, true]\n",
+    "}\n",
+    "\n",
+    "fn publish_value(value: i64) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "\n",
+    "fn read_modified(watched: i64, probe: bool) -> bool {\n",
+    "    when modified(probe) && valid([]) { return modified(watched) }\n",
+    "}\n",
+    "\n",
+    "fn observe_modified(value: i64, probe: bool) -> bool =>\n",
+    "    read_modified(publish_value(value), probe)\n",
+    "\n",
+    "test equal_publications_are_modified {\n",
+    "    assert eval(observe_modified,\n",
+    "                value: [_, 7, _, 7],\n",
+    "                probe: [true, true, true, true]) == [false, true, false, true]\n",
+    "}\n",
+    "\n",
+    "fn two_handlers(a: i64, b: i64) -> i64 {\n",
+    "    when modified(a) && a > 5 {\n",
+    "        return a\n",
+    "    }\n",
+    "    when modified(b) && valid(b) {\n",
+    "        return b\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test handlers_in_order {\n",
+    "    assert eval(two_handlers, a: [1, 9, _, 9], b: [_, _, 3, 4]) == [_, _, 3, 9]\n",
+    "}\n",
+);
+
+/// TIME-3: a selector in a `when` header sets what wakes the handler
+/// and what it requires valid. TIME-4: "Aggregate subscriptions cover
+/// every handler. Node-wide validity includes only requirements common
+/// to executable handlers; other guards stay per-handler." TIME-7 and
+/// END-4: `inject out` is the node's output, which `invalidate` clears.
+#[test]
+fn a_when_header_says_what_wakes_and_admits_a_node() {
+    let emitted = emit(&[("endpoints.hgl", ENDPOINTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("demo/endpoints.py");
+    for expected in [
+        // `valid([])`: no input need be valid.
+        "@compute_node(valid=())\ndef watched_valid(watched: TS[int], probe: TS[bool]) -> TS[bool]:\n    return watched.valid\n",
+        // `modified(probe) && valid()`: only `probe` wakes it.
+        "@compute_node(active=(\"probe\",))\ndef sample_on_probe(",
+        "@compute_node(active=(\"probe\",), valid=())\ndef read_modified(",
+        // The node's own output.
+        concat!(
+            "def produce(command: TS[int], _output: TS_OUT[int] = None) -> TS[int]:\n",
+            "    if _core.ne__i64_i64_f64_f64(lhs=command.value, rhs=0):\n",
+            "        return command.value\n",
+            "    _output.invalidate()\n",
+        ),
+        // Two handlers: the node is woken by either input and requires
+        // what both require; each is guarded by the rest of what it
+        // asks, in the order written.
+        concat!(
+            "@compute_node(valid=(\"b\",))\n",
+            "def two_handlers(a: TS[int], b: TS[int]) -> TS[int]:\n",
+            "    if a.modified and a.valid and _core.gt__T_T(lhs=a.value, rhs=5):\n",
+            "        return a.value\n",
+            "    if b.modified:\n",
+            "        return b.value\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
@@ -224,7 +357,8 @@ fn a_form_not_written_yet_is_reported() {
             "    bid: f64\n",
             "}\n",
             "fn gated(value: i64, gate: bool) -> i64 {\n",
-            "    when modified(value) { return value }\n",
+            "    inject clock\n",
+            "    when { return value }\n",
             "}\n",
             "fn maybe(value: i64?) -> i64 {\n",
             "    when { return 1 }\n",
@@ -242,11 +376,11 @@ fn a_form_not_written_yet_is_reported() {
         emitted.reported,
         [
             "m.hgl:2:8 target.unsupported",
-            "m.hgl:6:5 target.unsupported",
-            "m.hgl:8:10 target.unsupported",
-            "m.hgl:14:44 target.unsupported",
-            "m.hgl:16:30 target.unsupported",
-            "m.hgl:16:42 target.unsupported",
+            "m.hgl:6:12 target.unsupported",
+            "m.hgl:9:10 target.unsupported",
+            "m.hgl:15:44 target.unsupported",
+            "m.hgl:17:30 target.unsupported",
+            "m.hgl:17:42 target.unsupported",
         ]
     );
 }
@@ -263,7 +397,11 @@ fn the_generated_tests_pass_on_hgraph() {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
     fs::remove_dir_all(&directory).ok();
     let core = core_file("tests/conformance/scalar_eval.hgl");
-    let emitted = emit(&[("scalar_eval.hgl", &core), ("demo.hgl", DEMO)]);
+    let emitted = emit(&[
+        ("scalar_eval.hgl", &core),
+        ("demo.hgl", DEMO),
+        ("endpoints.hgl", ENDPOINTS),
+    ]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     for file in &emitted.files {
         let path = file
@@ -280,7 +418,7 @@ fn the_generated_tests_pass_on_hgraph() {
         .args(["-I", "-B"])
         .arg(driver)
         .arg(&directory)
-        .args(["conformance", "demo.scaling"])
+        .args(["conformance", "demo.scaling", "demo.endpoints"])
         .output()
         .expect("the interpreter runs");
     let printed = String::from_utf8_lossy(&output.stdout);
@@ -291,7 +429,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        9,
-        "eight of core's and one of the demo's"
+        15,
+        "eight of core's, one of the demo's, and six on endpoints"
     );
 }

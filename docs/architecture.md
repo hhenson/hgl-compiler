@@ -1251,6 +1251,8 @@ files a generated module imports.
 | --- | --- |
 | `const fn` | A plain function |
 | A node, a `fn` with a `when` | `@compute_node`, or `@sink_node` where it has no result |
+| A `when` header's selectors | The node's `active=` is every input a handler subscribes to and its `valid=` the inputs every handler requires (TIME-3, TIME-4). A handler is guarded by what it asks beyond those: that one of its own inputs ticked, that the inputs only it requires are valid, and the rest of its condition. Handlers are tried in the order written |
+| `inject out` | `_output: TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
 | A graph | `@graph` |
 | A temporal parameter | `name: TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter |
@@ -1274,8 +1276,8 @@ its last publication (TST-6).
 Reported as not written yet (`target.unsupported`): a type other than
 the four scalars above, a nullable among them; structs, enums, operators
 and their candidates declared in a program; generic temporal functions;
-a `when` with a condition, and a second `when`; `cache`, `inject` and
-sources; a call lifted over connections in a graph; loops and `switch`;
+a node that no input wakes, `modified([])`; `cache`, the `inject` of a
+capability, and sources; a call lifted over connections in a graph; loops and `switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 
@@ -1285,7 +1287,8 @@ written whole. One more test runs the generated tests on hgraph: it
 needs a Python that has hgraph, named by the environment variable
 `HGL_HGRAPH_PYTHON`, and is run with `cargo test -p hgl_hgraph --
 --ignored`. With hgraph 0.8.19 the eight tests of core's
-`scalar_eval.hgl` pass. That is a run by hand, and no conformance claim.
+`scalar_eval.hgl` pass, and so do the five of `scalar_endpoints.hgl`
+that publish no null. That is a run by hand, and no conformance claim.
 
 ## Finding source files
 
