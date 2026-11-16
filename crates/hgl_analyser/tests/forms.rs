@@ -186,11 +186,19 @@ fn an_options_name_is_one_kind_across_an_operators_candidates() {
             "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
             "impl const fn ratio<const zero: bool = false>(lhs: f64, rhs: f64) -> f64 => lhs\n",
             "impl const fn ratio<const zero: bool>(lhs: i64, rhs: i64) -> i64 => lhs\n",
+            // GEN-13: a plain parameter used as a size is a value, and
+            // so a generic value parameter as one written `const` is.
+            "operator count<V>(value: V) -> i64\n",
+            "impl const fn count<N>(value: list<i64, N>) -> i64 => 1\n",
+            "impl const fn count(value: i64, N: i64 = 2) -> i64 => 1\n",
         ),
     )]);
     assert_eq!(
         checked.summary(),
-        ["m.hgl:3:42 operator/impl.option_kind GEN-6"]
+        [
+            "m.hgl:3:42 operator/impl.option_kind GEN-6",
+            "m.hgl:13:33 operator/impl.option_kind GEN-6",
+        ]
     );
     assert_eq!(
         checked.findings[0].message,

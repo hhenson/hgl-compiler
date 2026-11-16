@@ -2780,6 +2780,27 @@ fn a_candidates_condition_is_checked_against_the_value_resolved() {
     assert_eq!(locals[6..], ["default: i64", "given: i64"]);
 }
 
+/// GEN-8: "a generic value parameter in scope" is a compile-time
+/// constant. One passed on to a callee's generic value parameter is
+/// still that parameter there: the result of `keep(value, N: M)` is a
+/// list of `M`, and nothing says `M` is 2.
+#[test]
+fn a_generic_value_parameter_passed_on_is_still_that_parameter() {
+    let checked = module(concat!(
+        "operator keep<V, O>(value: V) -> O\n",
+        "impl const fn keep<const N: i64>(value: list<i64, N>) -> list<i64, N> => value\n",
+        "const fn uses<const M: i64>(value: list<i64, M>) {\n",
+        "    let kept = keep(value, N: M)\n",
+        "    let two: list<i64, 2> = keep(value, N: M)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:29 operator/operator.no_candidate GEN-5"]
+    );
+    assert_eq!(locals(&checked, "uses")[1], "kept: list<i64, M>");
+}
+
 /// GEN-2: a generic value parameter's default is written in its
 /// candidate's declaration, which may be in another file than the call.
 /// TYPE-7: an enum member written in full there, `Zero.ieee`, is the

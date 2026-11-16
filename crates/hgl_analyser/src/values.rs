@@ -53,7 +53,6 @@ use crate::{codes, error};
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
-    generic_defaults(program, diagnostics);
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         // What each name resolved to, by where it is used (UNIT-10).
@@ -1902,10 +1901,19 @@ impl<'a> Typer<'a> {
         let written = self.operator_arguments(name, list, public, &options);
         // Each argument, read with nothing expected of it: what it
         // reports itself is reported here, once.
-        let given: Vec<Given> = written
+        let mut given: Vec<Given> = written
             .into_iter()
             .map(|(key, node)| self.give(key, node))
             .collect();
+        // What a generic value parameter is given, as the constant it
+        // is where the call stands.
+        for given in &mut given {
+            if let Key::Name(name) = &given.key
+                && selecting.contains(name.as_str())
+            {
+                given.constant = Some(self.constant_here(&given.node));
+            }
+        }
         // GEN-8: "The value a call gives a generic value parameter is a
         // compile-time constant ... Any other rejects."
         for given in &given {
@@ -2186,6 +2194,33 @@ impl<'a> Typer<'a> {
             value,
             retried,
             node,
+            constant: None,
+        }
+    }
+
+    /// The compile-time constant `node` is, read where it stands: a
+    /// generic value parameter of the enclosing declaration is kept as
+    /// that parameter, so that `keep(value, N: M)` gives `N` the `M` it
+    /// names and not a constant of which nothing is known.
+    fn constant_here(&self, node: &SyntaxNode) -> Constant {
+        let name = |used: &SyntaxNode| {
+            let Some(name) = name_token(used) else {
+                return ConstantValue::Unevaluated;
+            };
+            match self.bindings.get(&(self.file, name.span().start)) {
+                Some(Binding::Local {
+                    at,
+                    kind: LocalKind::GenericParameter,
+                }) => ConstantValue::Parameter {
+                    name: name.text().to_string(),
+                    at: *at,
+                },
+                _ => ConstantValue::Unevaluated,
+            }
+        };
+        Constant {
+            text: node.text().to_string().trim().to_string(),
+            value: crate::constant::fold(node, &name),
         }
     }
 
@@ -3613,6 +3648,10 @@ struct Given {
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
     retried: bool,
+    /// The compile-time constant it is, read where the call stands, when
+    /// it is given by a name a candidate declares as a generic value
+    /// parameter.
+    constant: Option<Constant>,
 }
 
 /// How a call writes an argument.
@@ -3740,7 +3779,10 @@ fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<V
 
 /// The default a declaration writes for its generic value parameter
 /// `generic` (GEN-2).
-fn generic_default(declaration: &SyntaxNode, generic: &GenericParameter) -> Option<SyntaxNode> {
+pub(crate) fn generic_default(
+    declaration: &SyntaxNode,
+    generic: &GenericParameter,
+) -> Option<SyntaxNode> {
     let written = child(declaration, SyntaxKind::GenericParams)?
         .children()
         .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
@@ -3873,7 +3915,7 @@ fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
 
 /// What a compile-time constant is, as far as how it is written says:
 /// no name in it is looked up.
-enum Written {
+pub(crate) enum Written {
     /// An integer literal, under a minus or not. It is an `f64` where
     /// one is expected (EXPR-5).
     Integer,
@@ -3895,7 +3937,7 @@ enum Written {
 
 impl Written {
     /// As a message names it.
-    fn described(&self) -> String {
+    pub(crate) fn described(&self) -> String {
         match self {
             Written::Integer | Written::Whole => "an `i64`".to_string(),
             Written::Float => "an `f64`".to_string(),
@@ -3909,7 +3951,7 @@ impl Written {
 }
 
 /// What the constant `node` is, when how it is written says.
-fn written(node: &SyntaxNode) -> Option<Written> {
+pub(crate) fn written(node: &SyntaxNode) -> Option<Written> {
     match node.kind() {
         SyntaxKind::ParenExpr => written(&node.children().next()?),
         SyntaxKind::ImpliedMember => tokens(node)
@@ -3945,7 +3987,7 @@ fn written(node: &SyntaxNode) -> Option<Written> {
 /// Whether the compile-time constant `node` is a value of `ty`, told
 /// from how it is written. `None` where that does not say: a constant
 /// that names something, or a type that is not known.
-fn constant_fits(program: &Program, node: &SyntaxNode, ty: &Type) -> Option<bool> {
+pub(crate) fn constant_fits(program: &Program, node: &SyntaxNode, ty: &Type) -> Option<bool> {
     let kind = written(node)?;
     // TYPE-14: a `T?` is "either a T or null".
     let (ty, optional) = match ty {
@@ -3984,62 +4026,6 @@ fn constant_fits(program: &Program, node: &SyntaxNode, ty: &Type) -> Option<bool
             _ => None,
         },
         _ => None,
-    }
-}
-
-/// GEN-13: "An explicit `const N: V` declares a value parameter of
-/// ordinary type V", and the default a callable gives it (GEN-2) is a
-/// V. A default is checked here as far as how it is written says what
-/// it is; one whose type names another generic parameter,
-/// `<T, const fallback: T = 2>`, is checked where a call resolves `T`.
-fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
-    for module in &program.modules {
-        for (index, declaration) in module.declarations.iter().enumerate() {
-            let Some(Detail::Callable(signature)) = module.details.get(index) else {
-                continue;
-            };
-            let file = module.files[declaration.file].file;
-            for generic in &signature.generics {
-                let GenericKind::Value(ty) = &generic.kind else {
-                    continue;
-                };
-                let Some(default) = generic_default(&declaration.syntax, generic) else {
-                    continue;
-                };
-                if constant_fits(program, &default, ty) != Some(false) {
-                    continue;
-                }
-                let at = Location::new(file, default.span());
-                let Some(kind) = written(&default) else {
-                    continue;
-                };
-                // TYPE-7: `.member` "names a member of the enum type its
-                // position expects".
-                if let (Written::Member(name), Some(Type::Named { .. })) =
-                    (&kind, not_null(Some(ty)))
-                {
-                    diagnostics.emit(error(
-                        Category::Name,
-                        codes::MEMBER_UNKNOWN,
-                        at,
-                        format!("`{ty}` has no member `{name}`"),
-                        "TYPE-7",
-                    ));
-                    continue;
-                }
-                diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    at,
-                    format!(
-                        "this is {}, and the generic value parameter `{}` is `{ty}`",
-                        kind.described(),
-                        generic.name
-                    ),
-                    "GEN-13",
-                ));
-            }
-        }
     }
 }
 
@@ -4132,7 +4118,12 @@ fn instance<'s>(
     // for a list of three, and a list of two is then no argument for it.
     for (position, place) in bound.iter().enumerate() {
         if let Place::Generic(index) = *place {
-            found[index] = Some(Argument::Constant(constant_at(&given[position].node)));
+            let given = &given[position];
+            let constant = given
+                .constant
+                .clone()
+                .unwrap_or_else(|| constant_at(&given.node));
+            found[index] = Some(Argument::Constant(constant));
         }
     }
     if let (Some(place), Some(result)) = (wanted.place, &signature.result) {

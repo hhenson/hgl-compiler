@@ -582,22 +582,6 @@ fn cardinality(node: Option<SyntaxNode>) -> (u64, Option<u64>) {
     }
 }
 
-/// The name of a parameter: the last name before its `:`, so that in
-/// `const zero: Zero` it is `zero`.
-pub(crate) fn parameter_name(parameter: &SyntaxNode) -> Option<SyntaxToken> {
-    names_before_colon(parameter).pop()
-}
-
-/// The names of the generic value parameters a declaration writes:
-/// the `zero` of `<const zero: Zero>`.
-pub(crate) fn generic_value_names(declaration: &SyntaxNode) -> Vec<SyntaxToken> {
-    generic_forms(declaration)
-        .into_iter()
-        .filter(|(_, _, form)| matches!(form, Form::Value))
-        .map(|(_, name, _)| name)
-        .collect()
-}
-
 /// The generic parameters of a declaration, as written.
 fn generic_forms(declaration: &SyntaxNode) -> Vec<(SyntaxNode, SyntaxToken, Form)> {
     child(declaration, SyntaxKind::GenericParams)

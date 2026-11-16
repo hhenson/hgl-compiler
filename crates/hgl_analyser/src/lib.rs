@@ -37,7 +37,10 @@
 //!   GEN-14);
 //! * `declared` reads the declarations against one another: a struct's
 //!   parents and fields, the structs that hold themselves, and an
-//!   enum's numbering (TYPE-3, TYPE-4, TYPE-6, TYPE-7).
+//!   enum's numbering (TYPE-3, TYPE-4, TYPE-6, TYPE-7);
+//! * `signatures` checks each callable's signature with its types read:
+//!   a generic value parameter's default is of its type, and an option
+//!   is one kind across an operator's candidates (GEN-13, GEN-6).
 //!
 //! What an expression is, phases and constants are not checked yet.
 //!
@@ -68,6 +71,7 @@ mod imports;
 mod program;
 mod read;
 mod resolve;
+mod signatures;
 mod types;
 mod values;
 
@@ -364,6 +368,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     forms::check(&program, diagnostics);
     read::read(&mut program, diagnostics);
     declared::check(&mut program, diagnostics);
+    signatures::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
     program
 }
