@@ -35,6 +35,8 @@ pub(crate) struct Written {
     pub(crate) natives: bool,
     /// True when it calls the eval harness.
     pub(crate) harness: bool,
+    /// The other modules it imports, by module path.
+    pub(crate) imports: BTreeSet<String>,
     /// A piece for each declaration of the module, in the order
     /// declared.
     pub(crate) declarations: Vec<Piece>,
@@ -76,6 +78,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         prelude: String::new(),
         lifts: Vec::new(),
         lifted: 0,
+        candidates: BTreeSet::new(),
         piece: Piece::default(),
         declared: Vec::new(),
         tested: Vec::new(),
@@ -87,6 +90,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         text,
         natives: emitter.natives,
         harness: emitter.harness,
+        imports: emitter.imports,
         declarations: emitter.declared,
         tests: emitter.tested,
     }
@@ -355,6 +359,8 @@ struct Emitter<'a> {
     lifts: Vec<(String, String)>,
     /// How many lifted nodes the module has been given names for.
     lifted: usize,
+    /// The Python names of the candidates the module has written.
+    candidates: BTreeSet<String>,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -478,7 +484,25 @@ impl Emitter<'_> {
         let body = module.bodies.get(index).and_then(Option::as_ref);
         match (declaration.kind, signature, body) {
             (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
-                self.value_function(declaration, signature, body);
+                self.value_function(index, signature, body);
+            }
+            // GEN-4: a value candidate of an operator with a body of
+            // its own is a function as any other, under a name of the
+            // target's: an operator may have many.
+            (DeclarationKind::Implementation(Role::Value, _), Some(signature), Some(body)) => {
+                // Two candidates that differ only in what they require
+                // would be one Python function.
+                if self
+                    .candidates
+                    .insert(self.definition_name(self.module, index))
+                {
+                    self.value_function(index, signature, body);
+                } else {
+                    self.unsupported(
+                        declaration.at,
+                        "a candidate with the parameter types of another of its module",
+                    );
+                }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
                 match module.phases.get(index).copied().flatten() {
@@ -487,11 +511,13 @@ impl Emitter<'_> {
                     None => self.unsupported(declaration.at, "this function"),
                 }
             }
+            // An operator is a name for its candidates, which are the
+            // functions: it has nothing of its own to write.
+            (DeclarationKind::Operator, _, _) => {}
             _ => {
                 let what = match declaration.kind {
                     DeclarationKind::Struct => "a struct",
                     DeclarationKind::Enum => "an enum",
-                    DeclarationKind::Operator => "an operator",
                     DeclarationKind::NativeType => "a native type",
                     kind if kind.candidate().is_some() => "an operator's candidate",
                     _ => "a native function",
@@ -501,8 +527,9 @@ impl Emitter<'_> {
         }
     }
 
-    /// `const fn name(a, b) -> T`: a plain Python function.
-    fn value_function(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+    /// `const fn name(a, b) -> T`, the declaration `index` of the
+    /// module: a plain Python function.
+    fn value_function(&mut self, index: usize, signature: &Signature, body: &Body) {
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
             let python = name(&parameter.name);
@@ -525,7 +552,7 @@ impl Emitter<'_> {
             0,
             &format!(
                 "def {}({}):",
-                self.definition_name(self.module, declaration),
+                self.definition_name(self.module, index),
                 parameters.join(", ")
             ),
         );
@@ -1522,16 +1549,32 @@ impl Emitter<'_> {
     /// exists; runtime/value evaluation chooses the value definition."
     /// Python has one function to a name, so the value definition of
     /// such a pair is `_value_name`, which no HGL name is written as.
-    fn definition_name(&self, module: usize, declaration: &Declaration) -> String {
+    ///
+    /// A candidate of an operator binds no name (UNIT-12), and an
+    /// operator may have many. Each is `_impl_` and then the operator
+    /// and the types of the candidate's parameters:
+    /// `_impl_add__f64_i64`. The `_` first makes the name the target's
+    /// own, as no name of a program is.
+    fn definition_name(&self, module: usize, index: usize) -> String {
+        let declared = &self.program.modules[module];
+        let declaration = &declared.declarations[index];
+        if let DeclarationKind::Implementation(..) = declaration.kind {
+            let types: Vec<String> = match declared.details.get(index) {
+                Some(Detail::Callable(signature)) => signature
+                    .parameters
+                    .iter()
+                    .map(|parameter| mangled(&parameter.ty))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            return format!("_impl_{}_{}", declaration.name, types.join("_"));
+        }
         let python = name(&declaration.name);
         let paired = declaration.kind == DeclarationKind::Function(Role::Value)
-            && self.program.modules[module]
-                .declarations
-                .iter()
-                .any(|other| {
-                    other.name == declaration.name
-                        && other.kind == DeclarationKind::Function(Role::Temporal)
-                });
+            && declared.declarations.iter().any(|other| {
+                other.name == declaration.name
+                    && other.kind == DeclarationKind::Function(Role::Temporal)
+            });
         if paired {
             format!("_value_{python}")
         } else {
@@ -1545,7 +1588,7 @@ impl Emitter<'_> {
     /// `pick`, and this one a `pick` too.
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
-        let python = self.definition_name(module, &declared.declarations[declaration]);
+        let python = self.definition_name(module, declaration);
         self.piece.uses.insert((module, declaration));
         if module == self.module {
             return python;
@@ -1597,8 +1640,14 @@ impl Emitter<'_> {
             );
             return "None".to_string();
         }
-        // A candidate of core is a function of the target's provider.
-        let native = if candidate {
+        // A candidate with a body of its own is a function of its
+        // module. One with none is native, and a native candidate of
+        // core is a function of the target's provider.
+        let bodied = matches!(
+            declared.kind,
+            DeclarationKind::Implementation(Role::Value, _)
+        );
+        let native = if candidate && !bodied {
             let types: Vec<String> = signature
                 .parameters
                 .iter()
@@ -1649,8 +1698,7 @@ impl Emitter<'_> {
             let arguments = self.arguments(function, (module, declaration), signature, arguments);
             return format!("_core.{native}({arguments})");
         }
-        if !matches!(declared.kind, DeclarationKind::Function(_)) || Some(module) == program.core()
-        {
+        if !bodied && !matches!(declared.kind, DeclarationKind::Function(_)) {
             self.unsupported(at, &format!("a call of `{}`", declared.name));
             return "None".to_string();
         }
