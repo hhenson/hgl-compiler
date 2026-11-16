@@ -398,7 +398,7 @@ the same numeric rules the transpiler rows give.
 | NUM-8 | analyser | planned | Configuration selects the same operator; omitted options take its public defaults |
 | NUM-8 | optimiser | planned | Folding alters no default or outcome |
 | NUM-8 | transpiler | planned | Value and temporal execution give the same numbers |
-| NUM-9 | analyser | partial | A division by name through core's candidates in a value function: its own type, or a `result` of it under `zero: .error`. Left: the symbols and their configuration; temporal bodies |
+| NUM-9 | analyser | partial | A division by name through core's candidates in a value function: its own type, or a `result` of it under `zero: .error`; `zero` is a generic value parameter, so one given no compile-time constant is rejected. Left: the symbols and their configuration; temporal bodies |
 | NUM-9 | transpiler | planned | `zero: error` gives `err` with `numeric.division_by_zero` for a zero divisor |
 | NUM-10 | transpiler | planned | A checked-division `Err` is data; `?` propagation |
 | NUM-11 | analyser | partial | `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other. Left: the symbol's configuration; temporal bodies |
@@ -416,7 +416,7 @@ the same numeric rules the transpiler rows give.
 | OPS-6 | transpiler | planned | What each conversion yields |
 | OPS-7 | analyser | planned | A conversion's options, and the `result` its checked error policy returns |
 | OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
-| OPS-8 | analyser | partial | The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T, and an option is admitted only for the conversions that declare it. Left: temporal bodies |
+| OPS-8 | analyser | partial | The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T and is given a compile-time constant, `rounding` and `nan` are parameters, and an option is admitted only for the conversions that declare it. Left: temporal bodies |
 | OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
