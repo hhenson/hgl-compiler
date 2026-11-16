@@ -1252,6 +1252,12 @@ impl<'a> Typer<'a> {
                 }
             }
             SyntaxKind::MemberExpr => self.member(node),
+            // An anonymous function's body is for a later part. What it
+            // captures of a capability is reported here.
+            SyntaxKind::FnExpr => {
+                self.captured_capabilities(node);
+                (ExprKind::Unread, Type::Unknown)
+            }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
             SyntaxKind::IndexExpr => self.index(node),
             // A block or an `if` whose value is used.
@@ -1615,6 +1621,41 @@ impl<'a> Typer<'a> {
                         .is_some_and(|otherwise| self.gives_capability(otherwise))
             }
             _ => false,
+        }
+    }
+
+    /// TIME-8: a capability is not "a capture of an anonymous function
+    /// (FN-14)". FN-14 has the resolver reject the use of an injected
+    /// capability by its own name (`name.captured`); a `let` it is
+    /// bound to, and a parameter of a capability's type, may be used
+    /// there as any `let` or parameter is, and are reported here.
+    fn captured_capabilities(&mut self, function: &SyntaxNode) {
+        let captured: Vec<(LocalId, Location)> = function
+            .descendants()
+            .filter(|name| name.kind() == SyntaxKind::NameExpr)
+            .filter_map(|name| {
+                // A name of the function's own is no local of this
+                // body, and is found by none.
+                let local = self.local_of(&name)?;
+                (self.locals[local].kind != LocalKind::Inject && self.is_capability(local))
+                    .then(|| (local, self.at(&name)))
+            })
+            .collect();
+        for (local, at) in captured {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::CAPABILITY_AS_VALUE,
+                    at,
+                    format!(
+                        "`{}` is a capability, and is not retained: this is a capture of an \
+                         anonymous function",
+                        self.locals[local].name
+                    ),
+                    "TIME-8",
+                )
+                .with_note("give the function what it needs of the capability as an argument"),
+            );
         }
     }
 

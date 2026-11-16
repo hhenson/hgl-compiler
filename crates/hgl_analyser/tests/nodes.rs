@@ -373,6 +373,9 @@ fn a_capability_is_used_and_not_retained() {
         "        let stored = [again]\n",
         "        var moving = if value > 0 { clock } else { bound }\n",
         "        let moved = (moving, 1)\n",
+        // FN-14 lets an anonymous function use a `let` around it: one
+        // a capability is bound to is a capture of the capability.
+        "        let reader = fn() => again\n",
         "        return clock\n",
         "    }\n",
         "}\n",
@@ -397,8 +400,9 @@ fn a_capability_is_used_and_not_retained() {
             "m.hgl:18:15 injectable/capability.as_value TIME-8",
             "m.hgl:20:23 injectable/capability.as_value TIME-8",
             "m.hgl:22:22 injectable/capability.as_value TIME-8",
-            "m.hgl:23:16 injectable/capability.as_value TIME-8",
-            "m.hgl:27:23 injectable/inject.alarm_and_scheduler TIME-8",
+            "m.hgl:23:30 injectable/capability.as_value TIME-8",
+            "m.hgl:24:16 injectable/capability.as_value TIME-8",
+            "m.hgl:28:23 injectable/inject.alarm_and_scheduler TIME-8",
         ]
     );
 }
