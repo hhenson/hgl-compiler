@@ -147,7 +147,7 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "\n",
     "@scaled.start\n",
-    "def _scaled_start(_state: STATE = None):\n",
+    "def _scaled_start(factor: int, _state: STATE = None):\n",
     "    _state.seen = 0\n",
     "\n",
     "\n",
@@ -344,6 +344,84 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
     }
 }
 
+/// Three modules: two that each export a `pick`, and one that has a
+/// `pick` of its own, calls both, leaves a nullable argument out, and
+/// gives a `state` its first value from a `const` parameter.
+const MODULES: [(&str, &str); 3] = [
+    (
+        "left.hgl",
+        concat!("module demo.left\n", "export const fn pick() -> i64 => 1\n",),
+    ),
+    (
+        "right.hgl",
+        concat!(
+            "module demo.right\n",
+            "export const fn pick() -> i64 => 2\n",
+        ),
+    ),
+    (
+        "configured.hgl",
+        concat!(
+            "module demo.configured\n",
+            "use demo.left as l\n",
+            "use demo.right as r\n",
+            "\n",
+            "const fn pick() -> i64 => 100\n",
+            "\n",
+            "const fn chosen(fallback: i64?) -> i64 {\n",
+            "    if fallback == null { return l::pick() }\n",
+            "    return r::pick() + pick()\n",
+            "}\n",
+            "\n",
+            "fn kept(value: i64, const first: i64) -> i64 {\n",
+            "    state last: i64 = first\n",
+            "    when {\n",
+            "        let before = last\n",
+            "        last = value\n",
+            "        return before + chosen()\n",
+            "    }\n",
+            "}\n",
+            "\n",
+            "test keeps {\n",
+            "    assert eval(kept, value: [5, 6], first: 9) == [10, 6]\n",
+            "    assert chosen(1) == 102\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// A function of another module is named through its module, so that
+/// two modules' functions of one name, and this module's own, stay
+/// apart. A lifecycle hook is a function of its own to hgraph, and is
+/// given the node's `const` parameters. UNIT-8: a parameter written
+/// `T?` may be left out, and is then null.
+#[test]
+fn names_configuration_and_omitted_arguments_are_kept() {
+    let emitted = emit(&MODULES);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("demo/configured.py");
+    for expected in [
+        "import demo.left as _hgl_demo_left\nimport demo.right as _hgl_demo_right\n",
+        concat!(
+            "def chosen(fallback=None):\n",
+            "    if (fallback is None):\n",
+            "        return _hgl_demo_left.pick()\n",
+            "    return _core.add__i64_i64(lhs=_hgl_demo_right.pick(), rhs=pick())\n",
+        ),
+        concat!(
+            "@kept.start\n",
+            "def _kept_start(first: int, _state: STATE = None):\n",
+            "    _state.last = first\n",
+        ),
+        "    return _core.add__i64_i64(lhs=before, rhs=chosen())\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
@@ -367,6 +445,7 @@ fn a_form_not_written_yet_is_reported() {
             "    when { return value }\n",
             "}\n",
             "fn summed(left: i64, right: i64) -> i64 => left + right\n",
+            "const fn scaled(value: i64, factor: i64 = 2) -> i64 => value * factor\n",
             "test timed {\n",
             "    assert eval(pass, value: [0s: 7]) == [0s: 7]\n",
             "}\n",
@@ -379,8 +458,9 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:6:12 target.unsupported",
             "m.hgl:9:10 target.unsupported",
             "m.hgl:15:44 target.unsupported",
-            "m.hgl:17:30 target.unsupported",
-            "m.hgl:17:42 target.unsupported",
+            "m.hgl:16:29 target.unsupported",
+            "m.hgl:18:30 target.unsupported",
+            "m.hgl:18:42 target.unsupported",
         ]
     );
 }
@@ -397,11 +477,13 @@ fn the_generated_tests_pass_on_hgraph() {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
     fs::remove_dir_all(&directory).ok();
     let core = core_file("tests/conformance/scalar_eval.hgl");
-    let emitted = emit(&[
-        ("scalar_eval.hgl", &core),
+    let mut files = vec![
+        ("scalar_eval.hgl", core.as_str()),
         ("demo.hgl", DEMO),
         ("endpoints.hgl", ENDPOINTS),
-    ]);
+    ];
+    files.extend(MODULES);
+    let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
     for file in &emitted.files {
         let path = file
@@ -418,7 +500,12 @@ fn the_generated_tests_pass_on_hgraph() {
         .args(["-I", "-B"])
         .arg(driver)
         .arg(&directory)
-        .args(["conformance", "demo.scaling", "demo.endpoints"])
+        .args([
+            "conformance",
+            "demo.scaling",
+            "demo.endpoints",
+            "demo.configured",
+        ])
         .output()
         .expect("the interpreter runs");
     let printed = String::from_utf8_lossy(&output.stdout);
@@ -429,7 +516,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        15,
-        "eight of core's, one of the demo's, and six on endpoints"
+        16,
+        "eight of core's, six on endpoints, and one of each demo's"
     );
 }

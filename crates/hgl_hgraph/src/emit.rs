@@ -6,7 +6,7 @@
 //! yet is reported once, where it is written, and `None` stands in its
 //! place: the file is then incomplete, and the caller does not use it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, Expr, ExprKind, Hook, Local,
@@ -38,7 +38,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         hgraph: BTreeSet::new(),
         natives: false,
         harness: false,
-        imports: BTreeMap::new(),
+        imports: BTreeSet::new(),
         text: String::new(),
     };
     emitter.declarations();
@@ -92,6 +92,13 @@ fn name(written: &str) -> String {
     } else {
         written.to_string()
     }
+}
+
+/// The name a generated module imports the module `path` under:
+/// `_hgl_demo_util` for `demo.util`. A `_` of the path is doubled, so
+/// that two paths never give one name.
+fn alias(path: &str) -> String {
+    format!("_hgl_{}", path.replace('_', "__").replace('.', "_"))
 }
 
 /// A string as a Python literal.
@@ -235,8 +242,9 @@ struct Emitter<'a> {
     natives: bool,
     /// True once the eval harness is called.
     harness: bool,
-    /// The names used from other generated modules, by module path.
-    imports: BTreeMap<String, BTreeSet<String>>,
+    /// The other generated modules this one names a function of, by
+    /// module path.
+    imports: BTreeSet<String>,
     /// The Python written so far, less its header.
     text: String,
 }
@@ -277,10 +285,9 @@ impl Emitter<'_> {
         if self.harness {
             out.push_str("from hgl_harness import evaluate\n");
         }
-        for (module, names) in &self.imports {
+        for module in &self.imports {
             let python = file_path(module).trim_end_matches(".py").replace('/', ".");
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            out.push_str(&format!("from {python} import {}\n", names.join(", ")));
+            out.push_str(&format!("import {python} as {}\n", alias(module)));
         }
         out.push_str(&self.text);
         out
@@ -332,11 +339,24 @@ impl Emitter<'_> {
 
     /// `const fn name(a, b) -> T`: a plain Python function.
     fn value_function(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
-        let parameters: Vec<String> = signature
-            .parameters
-            .iter()
-            .map(|parameter| name(&parameter.name))
-            .collect();
+        let mut parameters = Vec::new();
+        for parameter in &signature.parameters {
+            let python = name(&parameter.name);
+            if parameter.has_default {
+                // A call that leaves the argument out is written with
+                // none, so the function must have the default, whose
+                // value the analysed program does not hold yet.
+                self.unsupported(parameter.at, "a parameter with a default");
+                parameters.push(python);
+            } else if matches!(parameter.ty, Type::Nullable(_)) {
+                // UNIT-8: "A parameter whose type is written `T?` needs
+                // no default to be omitted: it is taken to have a
+                // default of `null`".
+                parameters.push(format!("{python}=None"));
+            } else {
+                parameters.push(python);
+            }
+        }
         self.line(0, "");
         self.line(0, "");
         self.line(
@@ -429,6 +449,16 @@ impl Emitter<'_> {
             mode: Mode::Node,
         };
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
+        // The `const` parameters, as written for the node: a `start`
+        // and a `stop` are functions of their own to hgraph, and are
+        // given the configuration they may read by naming it.
+        let mut lifecycle: Vec<String> = signature
+            .parameters
+            .iter()
+            .zip(&parameters)
+            .filter(|(parameter, _)| parameter.constant)
+            .map(|(_, written)| written.clone())
+            .collect();
         // The temporal inputs, as positions among the locals.
         let inputs: Vec<usize> = (0..body.locals.len())
             .filter(|&local| Self::is_input(&function, local))
@@ -485,7 +515,9 @@ impl Emitter<'_> {
         if has_state {
             self.hgraph.insert("STATE");
             parameters.push("_state: STATE = None".to_string());
+            lifecycle.push("_state: STATE = None".to_string());
         }
+        let lifecycle = lifecycle.join(", ");
         // TIME-4: what the handlers ask together.
         let active: Vec<usize> = inputs
             .iter()
@@ -587,12 +619,7 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{python}.start"));
-            let state = if has_state {
-                "_state: STATE = None"
-            } else {
-                ""
-            };
-            self.line(0, &format!("def _{python}_start({state}):"));
+            self.line(0, &format!("def _{python}_start({lifecycle}):"));
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
@@ -609,12 +636,7 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{python}.stop"));
-            let state = if has_state {
-                "_state: STATE = None"
-            } else {
-                ""
-            };
-            self.line(0, &format!("def _{python}_stop({state}):"));
+            self.line(0, &format!("def _{python}_stop({lifecycle}):"));
             self.block(&function, stop, 1);
         }
     }
@@ -861,6 +883,21 @@ impl Emitter<'_> {
                 let right = self.expression(function, right);
                 format!("({left} {word} {right})")
             }
+            // A test against `null` is the language's own, and is
+            // recorded as it is written (ERR-12).
+            ExprKind::Binary {
+                operator: operator @ (BinaryOperator::Equal | BinaryOperator::NotEqual),
+                left,
+                right,
+            } if is_null(left) || is_null(right) => {
+                let tested = if is_null(left) { right } else { left };
+                let tested = self.expression(function, tested);
+                if *operator == BinaryOperator::Equal {
+                    format!("({tested} is None)")
+                } else {
+                    format!("({tested} is not None)")
+                }
+            }
             ExprKind::Call {
                 callee, arguments, ..
             } => self.call(function, callee, arguments, value.at),
@@ -947,18 +984,18 @@ impl Emitter<'_> {
         written.join(", ")
     }
 
-    /// The Python name of the function `declaration` of `module`, which
-    /// is imported where the module is another one.
+    /// The Python name of the function `declaration` of `module`. One
+    /// of another module is named through that module, which is
+    /// imported under a name of its own: two modules may each have a
+    /// `pick`, and this one a `pick` too.
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
-        if module != self.module {
-            self.imports
-                .entry(declared.path.clone())
-                .or_default()
-                .insert(python.clone());
+        if module == self.module {
+            return python;
         }
-        python
+        self.imports.insert(declared.path.clone());
+        format!("{}.{python}", alias(&declared.path))
     }
 
     /// A call: of a function of the program, or of a native candidate
@@ -1093,6 +1130,11 @@ impl Emitter<'_> {
             .collect();
         format!("[{}]", written.join(", "))
     }
+}
+
+/// True for the literal `null`.
+fn is_null(value: &Expr) -> bool {
+    matches!(value.kind, ExprKind::Literal(Value::Null))
 }
 
 /// Where a statement is written. A declaration is where its local is.

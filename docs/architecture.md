@@ -1255,7 +1255,9 @@ files a generated module imports.
 | `inject out` | `_output: TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
 | A graph | `@graph` |
 | A temporal parameter | `name: TS[type]`; in a hook its payload is `name.value` |
-| A `const` parameter of a temporal function | A scalar parameter |
+| A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
+| A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
+| A function of another module | `alias.name`, the module imported as `_hgl_` and its path: two modules may each have a `pick` |
 | `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
@@ -1276,8 +1278,10 @@ its last publication (TST-6).
 Reported as not written yet (`target.unsupported`): a type other than
 the four scalars above, a nullable among them; structs, enums, operators
 and their candidates declared in a program; generic temporal functions;
-a node that no input wakes, `modified([])`; `cache`, the `inject` of a
-capability, and sources; a call lifted over connections in a graph; loops and `switch`;
+a default of a value function's parameter, whose value the analysed
+program does not hold yet; a node that no input wakes, `modified([])`;
+`cache`, the `inject` of a capability, and sources; a call lifted over
+connections in a graph; loops and `switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 
