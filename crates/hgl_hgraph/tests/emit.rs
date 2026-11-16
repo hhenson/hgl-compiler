@@ -950,6 +950,8 @@ const LIFTS: &str = concat!(
     "fn twice(left: i64, right: i64) -> i64 => (left + right) + (left + right)\n",
     "fn positive(price: f64) -> bool => price > 0.0\n",
     "fn fixed(value: i64, const factor: i64) -> i64 => relay(value) + doubled(factor)\n",
+    "const fn label(value: i64, text: str = \"{NAME}\") -> str => text\n",
+    "fn labelled(value: i64) -> str => label(value)\n",
     "const fn note(value: i64) {}\n",
     "fn watched(value: i64) -> i64 {\n",
     "    note(value)\n",
@@ -969,6 +971,7 @@ const LIFTS: &str = concat!(
     "    assert eval(fixed, value: [1, 2], factor: 5) == [11, 12]\n",
     "    assert eval(scale, value: [1.0, _, 3.0], factor: [_, 4.0]) == [2.0, 4.0, 12.0]\n",
     "    assert eval(watched, value: [1, 2]) == [1, 2]\n",
+    "    assert eval(labelled, value: [1]) == [\"{NAME}\"]\n",
     "}\n",
 );
 
@@ -1035,15 +1038,20 @@ fn a_value_function_given_a_connection_is_lifted() {
         // "All-scalar calls execute directly and invent no source
         // timing."
         "rhs=doubled(value=factor))\n",
+        // A string a program wrote is its own, whatever is in it.
+        concat!(
+            "def _lift_10_label(value: _hg.TS[_py.int]) -> _hg.TS[_py.str]:\n",
+            "    return label(value=value.value, text=\"{NAME}\")\n",
+        ),
         // "An outputless helper lifts to a sink."
         concat!(
             "@_hg.sink_node\n",
-            "def _lift_10_note(value: _hg.TS[_py.int]):\n",
+            "def _lift_11_note(value: _hg.TS[_py.int]):\n",
             "    note(value=value.value)\n",
         ),
         // An eval of a value function runs it lifted.
         concat!(
-            "    if not (_harness.evaluate(_lift_11_doubled, value=[1, None, 3]) == [2, None, 6]):\n",
+            "    if not (_harness.evaluate(_lift_12_doubled, value=[1, None, 3]) == [2, None, 6]):\n",
             "        raise _py.AssertionError()\n",
         ),
     ] {
