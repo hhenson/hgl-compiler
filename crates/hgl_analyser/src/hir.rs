@@ -410,11 +410,15 @@ pub enum ExprKind {
         /// The number, an `i64`, or the name, a `str`.
         value: Box<Expr>,
     },
-    /// A field of a struct value: `quote.bid`.
+    /// A field of a struct value, `quote.bid`; a property of a native
+    /// value, `clock.now`; or a property of a set's delta,
+    /// `change.added` (TYPE-16).
     Field {
-        /// The struct value.
+        /// The value.
         base: Box<Expr>,
-        /// The field's position among the struct's `members`.
+        /// The field's position among the struct's `members`, or the
+        /// property's among the native type's. For a set's delta, 0 is
+        /// `added` and 1 is `removed`.
         member: usize,
     },
     /// `base[index]`.

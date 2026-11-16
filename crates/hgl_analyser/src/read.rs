@@ -35,7 +35,8 @@ use crate::program::{
 };
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter,
-    Member, NativeType, Pack, Parameter, Scalar, Signature, StructType, Type, WrittenType,
+    Member, NamedKind, NativeType, Pack, Parameter, Scalar, Signature, StructType, Type,
+    WrittenType,
 };
 use crate::{codes, error};
 
@@ -1133,7 +1134,7 @@ impl Reader<'_> {
                 ))
             }
             SyntaxKind::ResultType => self.result(node),
-            SyntaxKind::DeltaType => Type::Delta(Box::new(self.inner(node, Position::PLAIN))),
+            SyntaxKind::DeltaType => self.delta(node),
             _ => Type::Unknown,
         }
     }
@@ -1691,6 +1692,11 @@ impl Reader<'_> {
                     module: *module,
                     declaration: index,
                     arguments,
+                    kind: match declaration.kind {
+                        DeclarationKind::Enum => NamedKind::Enum,
+                        DeclarationKind::NativeType => NamedKind::Native,
+                        _ => NamedKind::Struct,
+                    },
                 }
             }
         }
@@ -2459,6 +2465,43 @@ impl Reader<'_> {
         is_callable && !is_type
     }
 
+    /// `delta<T>` as it is written (TYPE-16): what the table gives for
+    /// T, or the delta itself where it is a type of its own or T is not
+    /// yet known. "`ref<V>`, `signal`: None: `delta.unsupported_shape`".
+    fn delta(&mut self, node: &SyntaxNode) -> Type {
+        // What the delta is of, under a `?`.
+        let mut of = type_child(node);
+        while let Some(inner) = of
+            .as_ref()
+            .filter(|of| of.kind() == SyntaxKind::NullableType)
+        {
+            of = type_child(inner);
+        }
+        let none =
+            of.filter(|of| matches!(of.kind(), SyntaxKind::RefType | SyntaxKind::SignalType));
+        if let Some(of) = none {
+            self.diagnostics.emit(
+                error(
+                    Category::Shape,
+                    codes::DELTA_UNSUPPORTED_SHAPE,
+                    self.at(node.span()),
+                    format!("`{}` has no delta", text_of(&of)),
+                    "TYPE-16",
+                )
+                .with_note(
+                    "a `ref` designates an endpoint and a `signal` has no payload: neither \
+                     publishes a value of its own",
+                ),
+            );
+            // What the `ref` is of is still read, for what it reports.
+            if of.kind() == SyntaxKind::RefType {
+                self.inner(&of, Position::PLAIN);
+            }
+            return Type::Unknown;
+        }
+        Type::delta(self.inner(node, Position::PLAIN))
+    }
+
     /// `delta<list<f64>>(added: values)`: the shape a delta is of.
     fn delta_constructor(&mut self, node: &SyntaxNode) {
         let Some(list) = child(node, SyntaxKind::GenericArgs) else {
@@ -2469,7 +2512,7 @@ impl Reader<'_> {
             return;
         }
         let shape = self.inner(&list, Position::PLAIN);
-        self.record(span, Type::Delta(Box::new(shape)));
+        self.record(span, Type::delta(shape));
     }
 }
 

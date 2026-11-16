@@ -45,8 +45,8 @@ use crate::program::{
 };
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter, Pack,
-    Scalar, Signature, Type,
+    Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
+    NamedKind, Pack, Scalar, Signature, Type,
 };
 use crate::{RESULT_FORMS, codes, error, warning};
 
@@ -613,10 +613,7 @@ impl<'a> Typer<'a> {
         let time = self.expression(&time, None);
         let result = self.signature.result.clone();
         let value = match &result {
-            Some(result) => {
-                let value = self.expression(&value, Some(result));
-                self.fit(value, result, "the source's result")
-            }
+            Some(result) => self.published(&value, result, "the source's result"),
             // A source with no result has nothing for a value to be:
             // it is read for what it reports itself.
             None => self.expression(&value, Some(&Type::Unknown)),
@@ -1006,12 +1003,41 @@ impl<'a> Typer<'a> {
             EndpointOperation::Valid
             | EndpointOperation::Modified
             | EndpointOperation::Scheduled => BOOL,
-            // END-3: "`delta_value(x)` returns the scalar value `x`
-            // published this cycle".
-            EndpointOperation::DeltaValue => inputs
-                .as_ref()
-                .and_then(|inputs| inputs.first())
-                .map_or(Type::Unknown, |input| self.locals[*input].ty.clone()),
+            // END-3: "`delta_value(x)` returns what `x` published this
+            // cycle, a `delta<T>` for an endpoint of T (the language's
+            // TYPE-16). For a scalar it is the value published".
+            EndpointOperation::DeltaValue => {
+                let of = inputs
+                    .as_ref()
+                    .and_then(|inputs| inputs.first())
+                    .map(|input| self.locals[*input].ty.clone());
+                // TYPE-16: "`ref<V>`, `signal`: None". An input that
+                // may be left out is its shape under a `?`.
+                let none = of.as_ref().is_some_and(|of| {
+                    matches!(not_null(Some(of)), Some(Type::Ref(_) | Type::Signal))
+                });
+                if none {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Shape,
+                            codes::DELTA_UNSUPPORTED_SHAPE,
+                            at,
+                            format!(
+                                "`{}` has no delta",
+                                of.as_ref().map_or(String::new(), ToString::to_string)
+                            ),
+                            "TYPE-16",
+                        )
+                        .with_note(
+                            "a `ref` designates an endpoint and a `signal` has no payload: \
+                             neither publishes a value of its own",
+                        ),
+                    );
+                    Type::Unknown
+                } else {
+                    of.map_or(Type::Unknown, Type::delta)
+                }
+            }
             // END-6: a `datetime?`.
             EndpointOperation::LastModified => nullable(Type::Scalar(Scalar::Datetime)),
             EndpointOperation::Invalidate
@@ -1389,10 +1415,77 @@ impl<'a> Typer<'a> {
         Stmt::Unread { at: self.at(node) }
     }
 
+    /// A value a node publishes to its result: by a `return` in a
+    /// hook, an assignment to `out`, or a source's `yield`.
+    ///
+    /// TIME-7: "A runtime return publishes to its result." What is
+    /// published is a complete value of the result, or what the result
+    /// publishes in one cycle, its `delta<T>` (TYPE-16): core's cases
+    /// relay a set with `return delta_value(input)`. A result of
+    /// `atomic<V>` is published whole, as a V (TYPE-9: "`atomic<V>`
+    /// stops expansion at a complete ordinary V").
+    ///
+    /// A value written out takes its type from its place (EXPR-5), and
+    /// the place here is one or the other: `(1.0, null)` is no
+    /// `tuple<f64, f64>` and is its delta. So what does not read as a
+    /// complete value is read again as the delta, and stands as that
+    /// where it reads clean; otherwise the complete value's reading
+    /// stands, with what it reports.
+    fn published(&mut self, node: &SyntaxNode, result: &Type, what: &str) -> Expr {
+        let whole = match result {
+            Type::Atomic(value) => (**value).clone(),
+            other => other.clone(),
+        };
+        let delta = Type::delta(result.clone());
+        let mark = self.mark();
+        let value = self.expression(node, Some(&whole));
+        let clean = self.diagnostics.len() == mark.diagnostics;
+        if clean {
+            if open(&value.ty) {
+                return value;
+            }
+            // The result's own type: a complete value, and what an
+            // atomic input is read as. Or a delta, read as one whatever
+            // was expected of it: `delta_value(input)`.
+            if self.admits(result, &value.ty) || (delta != whole && self.admits(&delta, &value.ty))
+            {
+                return value;
+            }
+        }
+        // Not a complete value as it reads: as the delta, where the
+        // result has one that is another type.
+        let fitted = clean && self.fits_whole(&value, &whole);
+        if !fitted && delta != whole && self.may_reread() {
+            self.take_back(mark, false);
+            let mark = self.mark();
+            let as_delta = self.expression(node, Some(&delta));
+            let as_delta = self.fit(as_delta, &delta, what);
+            if self.diagnostics.len() == mark.diagnostics {
+                return as_delta;
+            }
+            self.take_back(mark, false);
+            let value = self.expression(node, Some(&whole));
+            return self.fit(value, &whole, what);
+        }
+        self.fit(value, &whole, what)
+    }
+
+    /// True when `value` is one the place of type `whole` takes: of that
+    /// type, or an integer literal where an `f64` is expected (EXPR-5).
+    fn fits_whole(&self, value: &Expr, whole: &Type) -> bool {
+        self.admits(whole, &value.ty) || (is_integer_literal(value) && accepts_float(whole))
+    }
+
     /// FN-7: "A value return yields an ordinary value." EXPR-5: the
     /// result type is the type expected of it.
     fn returned(&mut self, node: &SyntaxNode) -> Expr {
         let result = self.signature.result.clone();
+        // TIME-7: "A runtime return publishes to its result."
+        if let Some(result) = &result
+            && (self.hook.is_some() || self.generating)
+        {
+            return self.published(node, result, "the function's result");
+        }
         let value = self.expression(node, result.as_ref());
         match &result {
             Some(result) => self.fit(value, result, "the function's result"),
@@ -1545,6 +1638,8 @@ impl<'a> Typer<'a> {
             };
         }
         let value = match operator {
+            // TIME-7: an assignment to `out` publishes to the result.
+            None if is_out => self.published(&value, &target, "the node's result"),
             None => {
                 let value = self.expression(&value, Some(&target));
                 self.fit(value, &target, "the type of the `var`")
@@ -1673,18 +1768,17 @@ impl<'a> Typer<'a> {
                 LocalKind::Var | LocalKind::State | LocalKind::Cache
             );
         let target = self.expression(place, None);
-        // NATIVE-6: "None is assigned." A property is read-only
-        // wherever the native value is reached from: `items[0].size`.
-        if let Some(holder) = self.native_property(&target) {
+        // NATIVE-6: "None is assigned." TYPE-16: a delta that is a type
+        // of its own "has properties, none is assigned". Each is
+        // read-only wherever the value is reached from:
+        // `items[0].size`.
+        if let Some((what, rule)) = Self::read_only_inside(&target) {
             self.diagnostics.emit(error(
                 Category::Name,
                 codes::BINDING_IMMUTABLE,
                 self.at(place),
-                format!(
-                    "this is a property of `{holder}`, a native type, and a property is read \
-                     and not assigned"
-                ),
-                "NATIVE-6",
+                format!("this is a property of {what}, and a property is read and not assigned"),
+                rule,
             ));
             let value = self.expression(value, Some(&target.ty));
             return Stmt::AssignPlace {
@@ -1754,25 +1848,57 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// The native type a place reaches into, when it does: the place is
-    /// a property of a native value or something inside one, however
-    /// that value is reached. `items[0].size`, with `items` a list of a
+    /// A property of a delta that is a type of its own (TYPE-16):
+    /// `change.added`, of a set's delta. The properties of a
+    /// dictionary's and of a struct's delta are proposed, and are not
+    /// read.
+    fn delta_property(&mut self, base: Expr, name: &SyntaxToken, of: &Type) -> (ExprKind, Type) {
+        let Type::Set(_) = of else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        // The properties, in the order the rule names them.
+        let Some(member) = ["added", "removed"]
+            .iter()
+            .position(|property| *property == name.text())
+        else {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    Location::new(self.file, name.span()),
+                    format!("`{}` has no property `{}`", base.ty, name.text()),
+                    "TYPE-16",
+                )
+                .with_note("a set's delta has `added` and `removed`"),
+            );
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        let ty = of.clone();
+        let kind = ExprKind::Field {
+            base: Box::new(base),
+            member,
+        };
+        (kind, ty)
+    }
+
+    /// What a place reaches into that takes no assignment, and the rule
+    /// that says so: a native value, whose properties are read-only
+    /// (NATIVE-6), or a delta that is a type of its own (TYPE-16). The
+    /// place is a property of one or something inside one, however the
+    /// value is reached: `items[0].size`, with `items` a list of a
     /// native type, is one.
-    fn native_property(&self, place: &Expr) -> Option<Type> {
+    fn read_only_inside(place: &Expr) -> Option<(String, &'static str)> {
         let (ExprKind::Field { base, .. } | ExprKind::Index { base, .. }) = &place.kind else {
             return None;
         };
-        if let Type::Named {
-            module,
-            declaration,
-            ..
-        } = &base.ty
-            && self.program.modules[*module].declarations[*declaration].kind
-                == DeclarationKind::NativeType
-        {
-            return Some(base.ty.clone());
+        match &base.ty {
+            Type::Named {
+                kind: NamedKind::Native,
+                ..
+            } => Some((format!("`{}`, a native type", base.ty), "NATIVE-6")),
+            Type::Delta(_) => Some((format!("`{}`, a delta", base.ty), "TYPE-16")),
+            _ => Self::read_only_inside(base),
         }
-        self.native_property(base)
     }
 
     /// Reports an assignment whose place is a property of a native
@@ -4077,6 +4203,7 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             arguments: Vec::new(),
+            kind: NamedKind::Enum,
         };
         let Some(argument) = self.one_argument(name, list, "TYPE-7") else {
             return (ExprKind::Unread, ty);
@@ -7754,6 +7881,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 arguments: arguments_of_type,
+                kind: NamedKind::Struct,
             }
         };
         let kind = ExprKind::Construct {
@@ -7987,6 +8115,9 @@ impl<'a> Typer<'a> {
                 return self.payload(base, &name, sides);
             }
             Type::Error => return self.error_part(base, &name),
+            // TYPE-16: a set's delta has "the properties `added` and
+            // `removed`, each a `set<K>`".
+            Type::Delta(of) => return self.delta_property(base.clone(), &name, of),
             _ => {}
         }
         let Type::Named {
@@ -8066,6 +8197,7 @@ impl<'a> Typer<'a> {
             module,
             declaration,
             arguments: Vec::new(),
+            kind: NamedKind::Enum,
         };
         let member = match program.modules[module].details.get(declaration) {
             Some(Detail::Enum(read)) => read

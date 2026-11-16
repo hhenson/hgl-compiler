@@ -99,6 +99,19 @@ impl Scalar {
     }
 }
 
+/// What a named type is declared as. A type carries it so that what its
+/// delta is (TYPE-16) can be said from the type alone, wherever a
+/// generic parameter is replaced by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedKind {
+    /// A struct: its delta is a type of its own.
+    Struct,
+    /// An enum: it publishes whole, and is its own delta.
+    Enum,
+    /// A native type: it publishes whole, and is its own delta.
+    Native,
+}
+
 /// What a written type means.
 ///
 /// `Box<Type>` is a `Type` stored elsewhere and pointed to: a type that
@@ -122,6 +135,8 @@ pub enum Type {
         /// The generic arguments, in order; empty for a type that takes
         /// none.
         arguments: Vec<Argument>,
+        /// What the name is declared as.
+        kind: NamedKind,
     },
     /// A generic parameter of the declaration the type is written in:
     /// the `T` of `fn first<T>(items: list<T>) -> T`.
@@ -187,6 +202,80 @@ pub enum Type {
     /// Not known. The name is left for the prelude, or the type has been
     /// reported; nothing is reported about a use of it (ERR-9).
     Unknown,
+}
+
+impl Type {
+    /// `delta<of>`: "the ordinary value type of what a temporal value of
+    /// T publishes in one cycle" (TYPE-16).
+    ///
+    /// For most T it is another type the language has, and that type is
+    /// what this returns: `f64` for `f64`, `dict<i64, f64>` for
+    /// `list<f64>`. A set's, a dictionary's and a struct's delta is a
+    /// type of its own, `Type::Delta`. So is the delta of a type not
+    /// yet known, a generic parameter's: "In a generic declaration it
+    /// stays as written until T is known", and it is formed again, here,
+    /// when the parameter is replaced.
+    pub fn delta(of: Type) -> Type {
+        let optional = |ty: Type| match ty {
+            Type::Nullable(_) => ty,
+            other => Type::Nullable(Box::new(other)),
+        };
+        match of {
+            // "A scalar, an enum, a `result`, an `error`, a native type,
+            // a delta that is a type of its own: T itself".
+            Type::Scalar(_) | Type::Error | Type::Result { .. } => of,
+            Type::Named {
+                kind: NamedKind::Enum | NamedKind::Native,
+                ..
+            } => of,
+            Type::Delta(ref inner)
+                if !matches!(**inner, Type::Parameter { .. } | Type::Unknown) =>
+            {
+                of
+            }
+            // "`atomic<V>`: V: an atomic publishes whole";
+            // "`rolling<V, Max, Min>`: V: the value that arrived".
+            Type::Atomic(value) | Type::Rolling { value, .. } => *value,
+            // "`dict<i64, delta<V>>`: for each position that changed,
+            // its delta".
+            Type::List { element, .. } => Type::Dict {
+                key: Box::new(Type::Scalar(Scalar::I64)),
+                value: Box::new(Type::delta(*element)),
+            },
+            // "each position's delta, null where it did not change".
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .into_iter()
+                    .map(|element| optional(Type::delta(element)))
+                    .collect(),
+            ),
+            // "`V?`, V an ordinary value type: `delta<V>?`: null for a
+            // published null"; where V is none, "the `?` marks an
+            // argument or a field that may be left out, and is no part
+            // of what is published".
+            Type::Nullable(inner) => match *inner {
+                inner @ (Type::Rolling { .. } | Type::Atomic(_) | Type::Ref(_) | Type::Signal) => {
+                    Type::delta(inner)
+                }
+                inner => optional(Type::delta(inner)),
+            },
+            // A type of its own; one not yet known; and one that has no
+            // delta, a `ref` or a `signal`, which is reported where it
+            // is written (`delta.unsupported_shape`).
+            Type::Set(_)
+            | Type::Dict { .. }
+            | Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            }
+            | Type::Delta(_)
+            | Type::Parameter { .. }
+            | Type::Ref(_)
+            | Type::Signal
+            | Type::Endpoint(_)
+            | Type::Unknown => Type::Delta(Box::new(of)),
+        }
+    }
 }
 
 /// One generic argument: a type, or a constant.

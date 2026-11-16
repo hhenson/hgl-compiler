@@ -11,7 +11,7 @@ use hgl_parser::ast::SourceFile;
 use hgl_source::FileId;
 
 use crate::hir::Body;
-use crate::types::{CallArguments, Detail, Type, WrittenType};
+use crate::types::{CallArguments, Detail, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
@@ -54,6 +54,7 @@ impl Program {
             module: core,
             declaration,
             arguments: Vec::new(),
+            kind: NamedKind::Native,
         })
     }
 
