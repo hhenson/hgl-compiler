@@ -17,7 +17,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
-use crate::{codes, file_path, provided};
+use crate::{codes, provided, python_module};
 
 /// What writing a module gave.
 pub(crate) struct Written {
@@ -94,7 +94,7 @@ const PYTHON_WORDS: [&str; 42] = [
 ///   function `test_name`. So a name that starts with `_` or `test_`,
 ///   under any number of `hgl_` before it, gets one more `hgl_`:
 ///   `_kept` is `hgl__kept`, and `hgl__kept` is `hgl_hgl__kept`.
-fn name(written: &str) -> String {
+pub(crate) fn name(written: &str) -> String {
     if PYTHON_WORDS.contains(&written.trim_end_matches('_')) {
         return format!("{written}_");
     }
@@ -230,13 +230,13 @@ impl Emitter<'_> {
             out.push_str("import hgraph as _hg\n");
         }
         if self.natives {
-            out.push_str("import hgl_core_native as _core\n");
+            out.push_str("import _hgl_core_native as _core\n");
         }
         if self.harness {
-            out.push_str("import hgl_harness as _harness\n");
+            out.push_str("import _hgl_harness as _harness\n");
         }
         for module in &self.imports {
-            let python = file_path(module).trim_end_matches(".py").replace('/', ".");
+            let python = python_module(module);
             out.push_str(&format!("import {python} as {}\n", alias(module)));
         }
         out.push_str(&self.text);
@@ -464,7 +464,8 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{python}.start"));
-            self.line(0, &format!("def _{python}_start({lifecycle}):"));
+            self.line(0, &format!("def _start_{python}({lifecycle}):"));
+            let before = self.text.len();
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
@@ -476,12 +477,16 @@ impl Emitter<'_> {
             if let Some(start) = start {
                 self.statements(&function, start, 1);
             }
+            // A `start` with nothing in it is still a function.
+            if self.text.len() == before {
+                self.line(1, "pass");
+            }
         }
         if let Some(stop) = stop {
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{python}.stop"));
-            self.line(0, &format!("def _{python}_stop({lifecycle}):"));
+            self.line(0, &format!("def _stop_{python}({lifecycle}):"));
             self.block(&function, stop, 1);
         }
     }
@@ -567,13 +572,20 @@ impl Emitter<'_> {
     fn statement(&mut self, function: &Function, statement: &Stmt, depth: usize) {
         match statement {
             Stmt::Declare { local, value } => {
-                // A `var` declared with no value has none to write: the
-                // analyser has held every read to an assignment.
                 if let Some(value) = value {
                     let value = self.expression(function, value);
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
+                } else if matches!(function.locals[*local].ty, Type::Nullable(_)) {
+                    // CTRL-11: a `var` whose type is written `T?` "is
+                    // null instead, and is assigned from its
+                    // declaration".
+                    let target = self.place(function, *local);
+                    self.line(depth, &format!("{target} = None"));
                 }
+                // Any other `var` declared with no value has none to
+                // write: the analyser has held every read of it to an
+                // assignment.
             }
             // A compound assignment's value is already the symbol with
             // the target as its left operand.
@@ -856,7 +868,7 @@ impl Emitter<'_> {
     }
 
     /// A call: of a function of the program, or of a native candidate
-    /// of core, which the target's own `hgl_core_native` provides.
+    /// of core, which the target's own `_hgl_core_native` provides.
     fn call(
         &mut self,
         function: &Function,
