@@ -81,6 +81,57 @@ fn divisions_zero_option_selects_the_result_type() {
     );
 }
 
+/// NUM-12: "Every division takes `zero`: `/`, `//`, and `%`, of numbers
+/// and of durations (OPS-1). The policies one admits, and its default,
+/// follow from what its result can hold". NUM-3: `.fail` makes a zero
+/// divisor an HGL error, and so keeps the division's own type. NUM-9: a
+/// division returns a `result` of its type under `zero: .error`.
+#[test]
+fn every_division_takes_the_policies_its_result_can_hold() {
+    let checked = with_core(concat!(
+        "const fn uses(a: f64, n: i64, span: duration, gap: duration) {\n",
+        // A result that holds no infinity or NaN: `.fail`, the default,
+        // and `.error`.
+        "    let whole = floordiv_(n, n)\n",
+        "    let rest = mod_(n, n, zero: .fail)\n",
+        "    let checked = floordiv_(n, n, zero: .error)\n",
+        "    let piece = div_(span, n)\n",
+        "    let pieces = div_(span, a, zero: .error)\n",
+        "    let count = floordiv_(span, gap, zero: .error)\n",
+        // A result that is an `f64`: every policy.
+        "    let raised = div_(a, a, zero: .fail)\n",
+        "    let real = floordiv_(a, n, zero: .nan)\n",
+        "    let ratio = div_(span, gap)\n",
+        "    let safe = div_(span, gap, zero: .error)\n",
+        // An `i64` and a `duration` hold no NaN or infinity.
+        "    let bad1 = floordiv_(n, n, zero: .nan)\n",
+        "    let bad2 = div_(span, n, zero: .ieee)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:16 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:16 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[4..14],
+        [
+            "whole: i64",
+            "rest: i64",
+            "checked: result<i64, error>",
+            "piece: duration",
+            "pieces: result<duration, error>",
+            "count: result<i64, error>",
+            "raised: f64",
+            "real: f64",
+            "ratio: f64",
+            "safe: result<f64, error>",
+        ]
+    );
+}
+
 /// OPS-4: "`convert<T>(value)` converts a value to the type T ... It
 /// admits the conversions of the second table below and rejects every
 /// other." OPS-8: "`invalid` determines the result type ... A

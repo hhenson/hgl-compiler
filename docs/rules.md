@@ -397,11 +397,13 @@ the same numeric rules the transpiler rows give.
 | NUM-8 | analyser | planned | Configuration selects the same operator; omitted options take its public defaults |
 | NUM-8 | optimiser | planned | Folding alters no default or outcome |
 | NUM-8 | transpiler | planned | Value and temporal execution give the same numbers |
-| NUM-9 | analyser | partial | `div_(a, b, zero: ...)` by name through core's candidates in a value function: `f64`, or `result<f64, error>` under `.error`. Left: the symbol `/` and its configuration; temporal bodies |
+| NUM-9 | analyser | partial | A division by name through core's candidates in a value function: its own type, or a `result` of it under `zero: .error`. Left: the symbols and their configuration; temporal bodies |
 | NUM-9 | transpiler | planned | `zero: error` gives `err` with `numeric.division_by_zero` for a zero divisor |
 | NUM-10 | transpiler | planned | A checked-division `Err` is data; `?` propagation |
 | NUM-11 | analyser | partial | `eq_(a, b, abs: ..., rel: ...)` by name through core's candidates in a value function: the tolerances are options of the candidates for numbers, and of no other. Left: the symbol's configuration; temporal bodies |
 | NUM-11 | transpiler | planned | Tolerances bound at graph construction in composition |
+| NUM-12 | analyser | partial | Every division by name through core's candidates in a value function: a division whose result is an `f64` admits each policy, one whose result is an `i64` or a `duration` only `.error` and `.fail`, and `.error` gives a `result`. Left: the symbols and their configuration; temporal bodies |
+| NUM-12 | transpiler | planned | A zero divisor under each policy a division admits |
 | OPS-1 | analyser | partial | In a value function, the operand types the symbol operators admit beyond numbers, in either order where the operation commutes; any other pairing rejected (`operator.no_candidate`). Left: temporal bodies; configured operators |
 | OPS-1 | transpiler | planned | The operators on strings, durations and instants |
 | OPS-2 | analyser | partial | In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol from the compiler's own table and by name through core's candidates. Left: symbols through core's candidates; temporal bodies |
