@@ -3230,7 +3230,11 @@ fn an_operators_default_is_part_of_the_output_requested() {
         "impl const fn grid() -> list<list<f64, 2>, 3> => [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
         "impl const fn grid() -> list<list<f64, 2>, 5> =>\n",
         "    [[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]\n",
+        // TYPE-14: a result is a value of the optional type requested.
+        "operator make<T, const n: i64 = 3>() -> list<T, n>?\n",
+        "impl const fn make() -> list<f64, 3> => [1.0, 2.0, 3.0]\n",
         "const fn resolved(shape: Shape, round: Round) {\n",
+        "    let made = make()\n",
         "    let rows = grid()\n",
         "    let whole = choose(1)\n",
         "    let text = choose(\"x\")\n",
@@ -3242,12 +3246,13 @@ fn an_operators_default_is_part_of_the_output_requested() {
         checked.summary(),
         [
             "m.hgl:14:31 type/type.mismatch EXPR-5",
-            "m.hgl:30:16 type/type.mismatch GEN-13",
+            "m.hgl:33:16 type/type.mismatch GEN-13",
         ]
     );
     assert_eq!(
         locals(&checked, "resolved")[2..],
         [
+            "made: list<f64, 3>",
             "rows: list<list<f64, 2>, 3>",
             "whole: i64",
             "text: _",
