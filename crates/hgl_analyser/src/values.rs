@@ -4413,7 +4413,12 @@ impl<'a> Typer<'a> {
                         .all(|(stated, (_, ty))| stated == ty)
                     && (result.is_none() || requirement.result.as_ref() == result)
             });
-            if stated {
+            // What the declaration being read states holds for the
+            // candidates its own body selects among: any, in a graph,
+            // and the value ones otherwise (GEN-5). So a graph's
+            // requirement does not say a value candidate exists, which
+            // is what a value candidate or a node asks here (FN-3).
+            if stated && (composes || !self.graph) {
                 return Some(true);
             }
         }
@@ -4456,9 +4461,59 @@ impl<'a> Typer<'a> {
                 Given::read(position, node, value)
             })
             .collect();
+        // GEN-8: an operator's generic value parameter "takes part in
+        // the output requested, in GEN-2's order: what the call writes,
+        // then what its place expects, then its arguments, and the
+        // default where none of them says." A requirement writes no
+        // generic argument: its arrow is what its place expects, and
+        // the types it is supplied with are its arguments.
+        let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
+        if let (Some(declared), Some(result)) = (&public.result, result) {
+            infer(declared, result, &public.generics, &mut found);
+        }
+        for (parameter, given) in public.parameters.iter().zip(&given) {
+            infer(&parameter.ty, &given.value.ty, &public.generics, &mut found);
+        }
+        let operator_syntax =
+            &program.modules[operator.module].declarations[operator.declaration].syntax;
+        // True when one of the operator's parameters takes its default,
+        // which then says something of the output.
+        let mut asked = false;
+        for (generic, found) in public.generics.iter().zip(found.iter_mut()) {
+            if found.is_none()
+                && let Some(default) = generic_default(operator_syntax, generic)
+            {
+                *found = Some(Argument::Constant(constant_at(&default)));
+                asked = true;
+            }
+        }
+        let explicit: Vec<Argument> = found
+            .into_iter()
+            .zip(&public.generics)
+            .map(|(found, generic)| {
+                found.unwrap_or_else(|| match generic.kind {
+                    GenericKind::Value(_) => Argument::Constant(unsaid()),
+                    _ => Argument::Type(Type::Unknown),
+                })
+            })
+            .collect();
+        let own_generics: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<(Location, &Argument)> = fixed(&public.generics).zip(&explicit).collect();
+        let requested: Option<Type> = asked
+            .then(|| {
+                public
+                    .result
+                    .as_ref()
+                    .map(|declared| placed(substitute_within(declared, &map), &own_generics))
+                    .filter(|requested| !matches!(requested, Type::Unknown))
+            })
+            .flatten();
+        // GEN-4: the operator's own requirement of its result.
+        let among = self.result_among(operator, public, &map, &own_generics);
         let wanted = Wanted {
-            place: result,
-            among: None,
+            place: requested.as_ref().or(result),
+            among,
         };
         self.requiring += 1;
         let (selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
