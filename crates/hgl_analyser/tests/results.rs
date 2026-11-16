@@ -149,6 +149,14 @@ fn a_constructor_takes_its_types_from_its_place() {
         "    if flag { return ok(1.0) }\n",
         "    return err(\"never\")\n",
         "}\n",
+        // An argument of an operator's call is read as the candidate's
+        // parameter, and the call is selected and typed: no candidate
+        // gives a `str`, and none takes a failure of `i64` (GEN-5).
+        "operator consume<V>(outcome: V) -> i64\n",
+        "impl const fn consume(outcome: result<i64, str>) -> i64 => 0\n",
+        "const fn right() -> i64 => consume(ok(1))\n",
+        "const fn wrong() -> str => consume(ok(1))\n",
+        "const fn mixed() -> i64 => consume(err(1))\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -161,6 +169,8 @@ fn a_constructor_takes_its_types_from_its_place() {
             "m.hgl:10:41 type/argument.unexpected ERR-2",
             "m.hgl:11:39 name/argument.unknown ERR-2",
             "m.hgl:12:35 type/generic.argument_count ERR-2",
+            "m.hgl:19:28 operator/operator.no_candidate GEN-5",
+            "m.hgl:20:28 operator/operator.no_candidate GEN-5",
         ]
     );
     assert_eq!(
@@ -212,6 +222,13 @@ fn a_guard_proves_a_results_tag() {
         "    if is_err(outcome) { return 0 }\n",
         "    return outcome.value\n",
         "}\n",
+        // In one condition: the right operand of `&&` is read where the
+        // left has proved the result present.
+        "const fn joined(outcome: result<i64, str>?) -> i64 {\n",
+        "    if outcome != null && is_ok(outcome) { return outcome.value }\n",
+        "    if outcome == null || is_err(outcome) { return 0 }\n",
+        "    return outcome.value\n",
+        "}\n",
         // Any other type rejects, and a result has two parts.
         "const fn tests(value: i64, outcome: result<i64, str>) -> bool {\n",
         "    let odd = if is_ok(outcome) { outcome.payload } else { 0 }\n",
@@ -227,8 +244,8 @@ fn a_guard_proves_a_results_tag() {
             "m.hgl:13:36 type/result.required_variant ERR-3",
             "m.hgl:14:28 type/result.required_variant ERR-3",
             "m.hgl:16:43 type/result.required_variant ERR-3",
-            "m.hgl:26:43 name/member.unknown ERR-3",
-            "m.hgl:27:18 type/type.mismatch ERR-3",
+            "m.hgl:31:43 name/member.unknown ERR-3",
+            "m.hgl:32:18 type/type.mismatch ERR-3",
         ]
     );
     assert_eq!(
