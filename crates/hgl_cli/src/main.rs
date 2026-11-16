@@ -76,6 +76,8 @@ enum Command {
     /// Run the cases of a program: its tests and its `# expect-error`
     /// rejection cases.
     Test(TestArgs),
+    /// Write a program for a target, into a directory.
+    Emit(EmitArgs),
 }
 
 /// Arguments of `hgl tokens`.
@@ -145,6 +147,33 @@ struct TestArgs {
     limits: LimitArgs,
 }
 
+/// Arguments of `hgl emit`.
+#[derive(Args)]
+struct EmitArgs {
+    /// Source roots, as for `hgl check`.
+    #[arg(required = true, value_name = "ROOT")]
+    roots: Vec<PathBuf>,
+
+    /// The target to write for.
+    #[arg(long, value_enum, default_value_t = Target::Hgraph)]
+    target: Target,
+
+    /// The directory to write into. It is made when it is not there,
+    /// and a file already in it with a written file's name is replaced.
+    #[arg(long, value_name = "DIR")]
+    out: PathBuf,
+
+    #[command(flatten)]
+    limits: LimitArgs,
+}
+
+/// What `hgl emit` writes for. Each is a transpiler crate of its own.
+#[derive(Clone, Copy, ValueEnum)]
+enum Target {
+    /// Python wiring for hgraph.
+    Hgraph,
+}
+
 /// The path of core's module (UNIT-11).
 const CORE_MODULE: &str = Program::CORE;
 
@@ -202,6 +231,10 @@ fn main() -> ExitCode {
         Command::Test(arguments) => {
             let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || test(&arguments))
+        }
+        Command::Emit(arguments) => {
+            let stack = analysis_stack(arguments.limits.limits());
+            on_stack_of(stack, move || emit(&arguments))
         }
     }
 }
@@ -562,6 +595,57 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run"
     );
     print!("{}", list_prelude_names(&sources, &program));
+    report(&sources, diagnostics)
+}
+
+/// `hgl emit`: checks the program, and writes it for the target when
+/// it is accepted and the target can write all of it. Nothing is
+/// written otherwise: half a program is of no use to run.
+fn emit(arguments: &EmitArgs) -> ExitCode {
+    let Parsed {
+        sources,
+        files: parsed,
+        mut diagnostics,
+        ..
+    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+        Ok(program) => program,
+        Err(status) => return status,
+    };
+    let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    if diagnostics.has_errors() {
+        println!("nothing written: the program is rejected");
+        return report(&sources, diagnostics);
+    }
+    let (name, files) = match arguments.target {
+        Target::Hgraph => (
+            hgl_hgraph::TARGET,
+            hgl_hgraph::transpile(&program, &mut diagnostics),
+        ),
+    };
+    if diagnostics.has_errors() {
+        println!("nothing written: the {name} target does not write all of the program yet");
+        return report(&sources, diagnostics);
+    }
+    for file in &files {
+        // A written path has `/` between its parts on every system.
+        let path = file
+            .path
+            .split('/')
+            .fold(arguments.out.clone(), |path, part| path.join(part));
+        let written = path
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&path, &file.text));
+        if let Err(error) = written {
+            eprintln!("hgl: cannot write {}: {error}", path.display());
+            return ExitCode::from(EXIT_FAILED);
+        }
+    }
+    println!(
+        "wrote {} for {name} to {}",
+        count(files.len(), "file"),
+        arguments.out.display()
+    );
     report(&sources, diagnostics)
 }
 

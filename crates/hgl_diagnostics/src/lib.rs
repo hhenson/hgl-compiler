@@ -28,11 +28,12 @@ pub enum Severity {
     Warning,
 }
 
-/// The specification's source-rejection categories (diagnostic catalog).
+/// The specification's diagnostic categories (diagnostic catalog).
 ///
-/// The catalog also names `build`, which is infrastructure failure rather
-/// than a property of the source; it is deliberately absent here because it
-/// "cannot satisfy a source-rejection expectation".
+/// All but one are the source-rejection categories. The catalog also
+/// names `build`, which is infrastructure failure rather than a property
+/// of the source: it "cannot satisfy a source-rejection expectation", so
+/// it is not among [`Category::ALL`] and no annotation names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Category {
     /// Malformed source text or syntax.
@@ -55,10 +56,14 @@ pub enum Category {
     Operator,
     /// Module, part, import or export structure is wrong.
     Module,
+    /// Infrastructure: the tool chain or a target could not do its work
+    /// on source the language accepts. No source category.
+    Build,
 }
 
 impl Category {
-    /// Every category, in the specification's order.
+    /// Every source-rejection category, in the specification's order.
+    /// [`Category::Build`] is not one.
     pub const ALL: [Category; 10] = [
         Category::Parse,
         Category::Name,
@@ -94,6 +99,7 @@ impl Category {
             Category::Injectable => "injectable",
             Category::Operator => "operator",
             Category::Module => "module",
+            Category::Build => "build",
         }
     }
 }

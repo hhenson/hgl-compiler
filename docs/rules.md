@@ -191,7 +191,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-6 | analyser | partial | In a graph a value function or a value candidate called with a connection among its arguments gives a connection, and one called with ordinary values alone an ordinary value. Left: which arguments are inputs and which configuration, recorded for the lifted node; an outputless helper as a sink |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
 | FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type. Left: a composition return; an anonymous function's context |
-| FN-7 | transpiler | planned | A runtime return publishes and exits the current function evaluation, skipping later handlers; no write, no tick |
+| FN-7 | transpiler | partial | hgraph: a `return` with a value publishes it and ends the evaluation; a body that ends with none publishes nothing. Left: several handlers; `out` |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
 | FN-9 | analyser | partial | An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8). Left: an anonymous function written in a graph; a capability used outside a hook or a source's body |
@@ -243,11 +243,11 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
 | TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none. `modified(a, b)` names the inputs it subscribes to, each by its name, and `modified([])` none: where the node injects neither `scheduler` nor `alarm`, or its `start` does not use the one it injects, the selector is warned of (`node.no_activation`) and the source accepted; any use in `start` counts, and `@suppress_warning("node.no_activation")` before the function acknowledges it. A sequence that names inputs is no selector's form (`endpoint.argument`). Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
-| TIME-3 | transpiler | planned | Conditions checked in source order; a satisfied body runs, then checking continues unless it returns |
+| TIME-3 | transpiler | partial | hgraph: one `when` with no condition, which every input wakes and which needs every input valid. Left: a condition and its selectors; several handlers; `modified([])` |
 | TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
 | TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
-| TIME-6 | transpiler | planned | State is recordable history; cache is rebuilt on every start |
+| TIME-6 | transpiler | partial | hgraph: a `state` is a field of the node's state, given its value in `start`. Left: recording and restoring; `cache` |
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3). What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)` |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
 | TIME-8 | analyser | partial | `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`). A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6). A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here |
@@ -352,6 +352,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | partial | An eval's first argument names a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). Its other arguments are bound as a call's are: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. Left: a generic target given structural cells |
+| TST-6 | transpiler | partial | hgraph: a generated test gives each input its dense trace, a step a cell, and the harness ends the result at its last publication, empty where there was none. Core's eight scalar cases pass on hgraph 0.8.19 when run by hand. Left: timed traces; a published null |
 | TST-6 | runner | planned | Dense traces: positions, `_` placeholders, a result ending at its last publication |
 | TST-7 | analyser | partial | A timed trace's keys are all durations or all datetimes; constant duration keys strictly increase (`trace.key_order`); it has no `_` (`trace.placeholder`); an eval's traces and its expectation are of one style (`trace.style`). Left: the order of datetime keys, which are not evaluated |
 | TST-7 | runner | planned | Sparse expectations match the actual ticks and times |
@@ -406,7 +407,7 @@ the same numeric rules the transpiler rows give.
 | --- | --- | --- | --- |
 | NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions, through core's candidates. Left: temporal bodies |
 | NUM-1 | transpiler | planned | Floor division and modulo rounding |
-| NUM-2 | transpiler | planned | i64 overflow is an error; IEEE float arithmetic; exact mixed comparison |
+| NUM-2 | transpiler | partial | hgraph: `+`, `-`, `*` and negation of `i64` raise where the result leaves the signed 64-bit range; float arithmetic is the host's binary64. Left: division; comparison within a tolerance |
 | NUM-3 | transpiler | planned | Division by zero under `ieee` and `nan` |
 | NUM-4 | transpiler | planned | Exact and tolerant equality; invalid tolerance is an error |
 | NUM-5 | transpiler | planned | NaN, infinity and signed zero in equality and closeness |
@@ -442,7 +443,7 @@ the same numeric rules the transpiler rows give.
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. Left: proof that `x` is valid and modified |
-| END-3 | transpiler | planned | `delta_value` returns the value published this cycle |
+| END-3 | transpiler | partial | hgraph: `delta_value(input)` of a scalar input. Left: a published null; structural inputs |
 | END-4 | transpiler | planned | Invalidation |
 | END-5 | transpiler | planned | Active and passive affect scheduling only; repeated writes in one evaluation |
 | END-6 | analyser | planned | `last_modified` has type `datetime?` |

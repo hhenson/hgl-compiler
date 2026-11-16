@@ -17,7 +17,7 @@ syntax tree ---------> formatter (planned) ---------> source text
 analysed program ----> error reporting (`check`)
     |  optimiser (planned)
 analysed program
-    |  one transpiler per target (planned)
+    |  one transpiler per target (`hgl_hgraph`)
 target output
 ```
 
@@ -40,10 +40,10 @@ Rules for every stage:
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases listed, run with the first target |
-| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test` |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| transpilers | Analysed program to one target each | planned |
+| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring | first slice: scalar nodes, value functions, graphs that call nodes, tests with dense evals |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -1198,7 +1198,9 @@ does not (ERR-1). The catalogue lists a warning by its code alone
 counts it after the errors, and no `# expect-error` names one (ERR-10).
 
 A diagnostic has a category from the specification's list, a code, a primary
-location, and the rule it enforces. It may point at related places as
+location, and the rule it enforces. The list's `build` is for
+infrastructure, a transpiler's report of what its target does not write
+among them: it is no source category, and no annotation names it. It may point at related places as
 well, such as the first of two declarations. A code is *catalogued* (it appears in the
 specification's catalogue) or *local* (the specification rejects the
 condition but names no code). Only a catalogued code may satisfy
@@ -1222,16 +1224,68 @@ names one (LEX-12, LEX-25):
 | Empty zone component, as in `@[Europe//London]` | `date_time.invalid_zone` |
 | Backslash directly before a line break in a text block | `string.unknown_escape` |
 
-## Adding a transpiler (planned)
+## Transpilers
 
 A transpiler is a crate that depends on the analysed-program crate and the
-diagnostics crate, and on no other transpiler. `hgl_cli` selects one by
-target name. The front end does not change.
+diagnostics crate, and on no other transpiler. `hgl emit --target NAME
+--out DIR` selects one by name and writes what it gives. The front end
+does not change, and no stage before a transpiler knows a target.
+
+A transpiler is given a program the analyser accepted. What it cannot
+write is no fault of the source, so it is reported in the category
+`build`, which no `# expect-error` names, with a code of the target's
+own. `hgl emit` then writes nothing: half a program is of no use to run.
+
+### hgraph
 
 First target (owner decision, 2026-11-13): Python wiring for
 [hgraph](https://github.com/hhenson/hgraph) running on its C++ runtime.
 Behaviour that Python wiring cannot express faithfully is added to hgraph on
 its `0.9.x` branch, not approximated in generated code.
+
+`hgl_hgraph` writes one Python file for each module but core,
+`examples.tests` to `examples/tests.py`, and beside them the support
+files a generated module imports.
+
+| HGL | Python |
+| --- | --- |
+| `const fn` | A plain function |
+| A node, a `fn` with a `when` | `@compute_node`, or `@sink_node` where it has no result |
+| A graph | `@graph` |
+| A temporal parameter | `name: TS[type]`; in a hook its payload is `name.value` |
+| A `const` parameter of a temporal function | A scalar parameter |
+| `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
+| `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
+| `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
+| A symbol or a call that selects a native candidate of core | A function of `hgl_core_native`, named for the candidate and its parameter types: `add__i64_i64` |
+| A named test | A function `test_name` |
+| `eval(target, input: [7, _, 9])` | `evaluate(target, input=[7, None, 9])` of `hgl_harness` |
+
+Core's native functions are the target's to provide (NATIVE-7):
+`hgl_core_native.py` is that provider, written by hand in the crate and
+copied out beside the modules. It holds the `i64` operations to core's
+numeric contract, which neither wraps nor promotes. The transpiler reads
+the names it defines, and a candidate it has no function for is reported.
+
+`hgl_harness.py` holds `evaluate`, which runs a target with a dense trace
+for each input through hgraph's own `eval_node` and ends the result at
+its last publication (TST-6).
+
+Reported as not written yet (`target.unsupported`): a type other than
+the four scalars above, a nullable among them; structs, enums, operators
+and their candidates declared in a program; generic temporal functions;
+a `when` with a condition, and a second `when`; `cache`, `inject` and
+sources; a call lifted over connections in a graph; loops and `switch`;
+durations, dates and times; timed traces and a published null in a
+trace; and a candidate of core the provider has no function for.
+
+The crate's tests compare the Python written for a small module with
+what is expected, and check that core's dense scalar eval cases are
+written whole. One more test runs the generated tests on hgraph: it
+needs a Python that has hgraph, named by the environment variable
+`HGL_HGRAPH_PYTHON`, and is run with `cargo test -p hgl_hgraph --
+--ignored`. With hgraph 0.8.19 the eight tests of core's
+`scalar_eval.hgl` pass. That is a run by hand, and no conformance claim.
 
 ## Finding source files
 
@@ -1277,7 +1331,8 @@ that adds a file to core fails it until the list has the file.
    `# expect-error` matching and `hgl test` for rejection cases (done);
    name resolution (done); the checks the parser left (FN-8, NATIVE-3;
    done); types for the scalar slice.
-4. Transpiler for hgraph; `hgl test` running the core conformance cases.
+4. Transpiler for hgraph (first slice done); `hgl test` running the core
+   conformance cases.
 5. Wider language coverage; optimiser passes; a second transpiler.
 
 ## Specification pin

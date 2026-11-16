@@ -30,7 +30,7 @@ the front end. The first target is the
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
 | Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); running a test needs a target |
 | Optimiser | planned |
-| Transpiler | planned |
+| Transpiler | hgraph, first slice: scalar nodes, value functions, graphs that call nodes, and tests with dense evals, as Python wiring (`hgl emit`) |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
 Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
@@ -59,7 +59,9 @@ roots hold a `module core` of their own. What an expression is,
 phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
 `# expect-error(category, "code")`, and lists its tests; no test can be run
-until there is a target. Exit status is 0 when the source is accepted and
+by `hgl test` yet. `hgl emit --out DIR` writes an accepted program as
+Python wiring for hgraph, and reports what the target does not write
+yet. Exit status is 0 when the source is accepted and
 every selected case passed, 1 when the source is rejected or a case failed,
 2 when the command could not run.
 

@@ -1,0 +1,934 @@
+//! Writes one module as Python.
+//!
+//! The typed bodies the analyser made (`hgl_analyser::hir`) say what
+//! each function does without its syntax. This walks them and writes
+//! the Python that does the same on hgraph. A form with no Python here
+//! yet is reported once, where it is written, and `None` stands in its
+//! place: the file is then incomplete, and the caller does not use it.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use hgl_analyser::hir::{
+    Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, Expr, ExprKind, Hook, Local,
+    Stmt, UnaryOperator, Value,
+};
+use hgl_analyser::{
+    Declaration, DeclarationKind, Detail, LocalKind, Phase, Program, Role, Scalar, Signature, Type,
+};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+
+use crate::{codes, file_path, provided};
+
+/// What writing a module gave.
+pub(crate) struct Written {
+    /// The module's Python text.
+    pub(crate) text: String,
+    /// True when it calls a native function of core.
+    pub(crate) natives: bool,
+    /// True when it calls the eval harness.
+    pub(crate) harness: bool,
+}
+
+/// Writes module `index` of `program`.
+pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnostics) -> Written {
+    let mut emitter = Emitter {
+        program,
+        module: index,
+        diagnostics,
+        hgraph: BTreeSet::new(),
+        natives: false,
+        harness: false,
+        imports: BTreeMap::new(),
+        text: String::new(),
+    };
+    emitter.declarations();
+    emitter.tests();
+    let text = emitter.finish();
+    Written {
+        text,
+        natives: emitter.natives,
+        harness: emitter.harness,
+    }
+}
+
+/// What kind of body is being written, which says how a name is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// A value function: every name is an ordinary Python value.
+    Value,
+    /// A node's hook: a temporal parameter is an hgraph input, read
+    /// through `.value`, and a `state` is a field of the node's state.
+    Node,
+    /// A graph: a temporal parameter is a port, passed on as it is.
+    Graph,
+    /// A named test: ordinary values, and evals.
+    Test,
+}
+
+/// The function a body belongs to.
+struct Function<'a> {
+    /// Its locals, which the body's expressions name by position.
+    locals: &'a [Local],
+    /// Its signature; a test has none.
+    signature: Option<&'a Signature>,
+    /// How its names are read.
+    mode: Mode,
+}
+
+/// The words Python keeps for itself, and the names this target gives
+/// a node's own parameters. An HGL name that is one of them is written
+/// with a `_` after it.
+const PYTHON_WORDS: [&str; 39] = [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield", "match", "case", "_state", "_core",
+];
+
+/// An HGL name as a Python one.
+fn name(written: &str) -> String {
+    if PYTHON_WORDS.contains(&written) {
+        format!("{written}_")
+    } else {
+        written.to_string()
+    }
+}
+
+/// A string as a Python literal.
+fn string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Any other control character, by its number.
+            control if control.is_control() => {
+                out.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A number with a fraction as a Python literal.
+fn float(value: f64) -> String {
+    if value.is_nan() {
+        "float(\"nan\")".to_string()
+    } else if value.is_infinite() {
+        let sign = if value < 0.0 { "-" } else { "" };
+        format!("float(\"{sign}inf\")")
+    } else {
+        // `{:?}` writes the shortest text that reads back as the same
+        // number, and always with a `.` or an exponent.
+        format!("{value:?}")
+    }
+}
+
+/// The Python type of a scalar this target writes, `int` for `i64`.
+fn scalar(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Scalar(Scalar::Bool) => Some("bool"),
+        Type::Scalar(Scalar::I64) => Some("int"),
+        Type::Scalar(Scalar::F64) => Some("float"),
+        Type::Scalar(Scalar::Str) => Some("str"),
+        _ => None,
+    }
+}
+
+/// A type as part of a native function's name: `i64` as it is, and any
+/// other character than a letter or a digit as `_`.
+fn mangled(ty: &Type) -> String {
+    ty.to_string()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The writer of one module.
+struct Emitter<'a> {
+    /// The program the module is of.
+    program: &'a Program,
+    /// The module's position in it.
+    module: usize,
+    /// Where what cannot be written is reported.
+    diagnostics: &'a mut Diagnostics,
+    /// The names the text uses from hgraph, for its import line.
+    hgraph: BTreeSet<&'static str>,
+    /// True once a native function of core is called.
+    natives: bool,
+    /// True once the eval harness is called.
+    harness: bool,
+    /// The names used from other generated modules, by module path.
+    imports: BTreeMap<String, BTreeSet<String>>,
+    /// The Python written so far, less its header.
+    text: String,
+}
+
+impl Emitter<'_> {
+    /// Reports a form this target does not write yet.
+    fn unsupported(&mut self, at: Location, what: &str) {
+        self.diagnostics.emit(Diagnostic::error(
+            Category::Build,
+            Code::Local(codes::UNSUPPORTED),
+            at,
+            format!("the hgraph target does not write {what} yet"),
+        ));
+    }
+
+    /// Adds one line at `depth` levels of indentation.
+    fn line(&mut self, depth: usize, text: &str) {
+        for _ in 0..depth {
+            self.text.push_str("    ");
+        }
+        self.text.push_str(text);
+        self.text.push('\n');
+    }
+
+    /// The header and the import lines, then the text.
+    fn finish(&mut self) -> String {
+        let path = &self.program.modules[self.module].path;
+        let mut out = format!(
+            "# Generated by the hgl compiler for hgraph, from module `{path}`. Do not edit.\n"
+        );
+        if !self.hgraph.is_empty() {
+            let names: Vec<&str> = self.hgraph.iter().copied().collect();
+            out.push_str(&format!("from hgraph import {}\n", names.join(", ")));
+        }
+        if self.natives {
+            out.push_str("import hgl_core_native as _core\n");
+        }
+        if self.harness {
+            out.push_str("from hgl_harness import evaluate\n");
+        }
+        for (module, names) in &self.imports {
+            let python = file_path(module).trim_end_matches(".py").replace('/', ".");
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            out.push_str(&format!("from {python} import {}\n", names.join(", ")));
+        }
+        out.push_str(&self.text);
+        out
+    }
+
+    // ---- Declarations ----
+
+    /// Every declaration of the module, in the order declared.
+    fn declarations(&mut self) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        for (index, declaration) in module.declarations.iter().enumerate() {
+            // A declaration of a test context is the tests' own, and is
+            // written with them once they are.
+            if declaration.test_only {
+                self.unsupported(declaration.at, "a declaration of a test context");
+                continue;
+            }
+            let signature = match module.details.get(index) {
+                Some(Detail::Callable(signature)) => Some(signature),
+                _ => None,
+            };
+            let body = module.bodies.get(index).and_then(Option::as_ref);
+            match (declaration.kind, signature, body) {
+                (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
+                    self.value_function(declaration, signature, body);
+                }
+                (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
+                    match module.phases.get(index).copied().flatten() {
+                        Some(Phase::Node) => self.node(declaration, signature, body),
+                        Some(Phase::Graph) => self.graph(declaration, signature, body),
+                        None => self.unsupported(declaration.at, "this function"),
+                    }
+                }
+                _ => {
+                    let what = match declaration.kind {
+                        DeclarationKind::Struct => "a struct",
+                        DeclarationKind::Enum => "an enum",
+                        DeclarationKind::Operator => "an operator",
+                        DeclarationKind::NativeType => "a native type",
+                        kind if kind.candidate().is_some() => "an operator's candidate",
+                        _ => "a native function",
+                    };
+                    self.unsupported(declaration.at, what);
+                }
+            }
+        }
+    }
+
+    /// `const fn name(a, b) -> T`: a plain Python function.
+    fn value_function(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+        let parameters: Vec<String> = signature
+            .parameters
+            .iter()
+            .map(|parameter| name(&parameter.name))
+            .collect();
+        self.line(0, "");
+        self.line(0, "");
+        self.line(
+            0,
+            &format!(
+                "def {}({}):",
+                name(&declaration.name),
+                parameters.join(", ")
+            ),
+        );
+        let function = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Value,
+        };
+        self.block(&function, &body.statements, 1);
+    }
+
+    /// The annotation of a parameter or a result of a temporal
+    /// function: `TS[int]` for a temporal `i64`, `int` for a `const`
+    /// one. `None`, reported, for a type not written yet.
+    fn annotation(&mut self, ty: &Type, temporal: bool, at: Location) -> Option<String> {
+        let Some(python) = scalar(ty) else {
+            self.unsupported(at, &format!("the type `{ty}`"));
+            return None;
+        };
+        if temporal {
+            self.hgraph.insert("TS");
+            Some(format!("TS[{python}]"))
+        } else {
+            Some(python.to_string())
+        }
+    }
+
+    /// The parameters of a temporal function as Python writes them, and
+    /// its result's annotation.
+    fn temporal_signature(
+        &mut self,
+        declaration: &Declaration,
+        signature: &Signature,
+    ) -> (Vec<String>, Option<String>) {
+        if !signature.generics.is_empty() {
+            self.unsupported(declaration.at, "a generic temporal function");
+        }
+        let mut parameters = Vec::new();
+        for parameter in &signature.parameters {
+            if parameter.pack.is_some() || parameter.has_default {
+                self.unsupported(parameter.at, "a pack or a default of a temporal function");
+            }
+            let annotation = self
+                .annotation(&parameter.ty, !parameter.constant, parameter.at)
+                .unwrap_or_else(|| "object".to_string());
+            parameters.push(format!("{}: {annotation}", name(&parameter.name)));
+        }
+        let result = signature
+            .result
+            .as_ref()
+            .and_then(|result| self.annotation(result, true, declaration.at));
+        (parameters, result)
+    }
+
+    /// A node: `@compute_node`, or `@sink_node` where it has no result.
+    ///
+    /// TIME-3: "Omitting either selector uses the same default as its
+    /// zero-argument form", so a `when` with no condition is woken by
+    /// every input and needs every input valid, which is what hgraph
+    /// gives a node that says nothing else.
+    ///
+    /// TIME-6: "State is persistent, recordable node history." Its
+    /// `state` declarations are fields of the node's `STATE`, given
+    /// their values in its `start`.
+    fn node(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+        let function = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Node,
+        };
+        let (mut parameters, result) = self.temporal_signature(declaration, signature);
+        // What the body is made of: the declarations, and each hook.
+        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
+        let mut start: Option<&[Stmt]> = None;
+        let mut stop: Option<&[Stmt]> = None;
+        let mut when: Option<&[Stmt]> = None;
+        for statement in &body.statements {
+            match statement {
+                Stmt::Declare { local, value } if body.locals[*local].kind == LocalKind::State => {
+                    states.push((*local, value));
+                }
+                Stmt::Hook {
+                    hook: Hook::Start,
+                    body,
+                    ..
+                } => start = Some(body),
+                Stmt::Hook {
+                    hook: Hook::Stop,
+                    body,
+                    ..
+                } => stop = Some(body),
+                Stmt::Hook {
+                    hook: Hook::When,
+                    condition,
+                    body,
+                    at,
+                } => {
+                    if condition.is_some() {
+                        self.unsupported(*at, "a `when` with a condition");
+                    }
+                    if when.is_some() {
+                        self.unsupported(*at, "a second `when`");
+                    }
+                    when = Some(body);
+                }
+                Stmt::Declare { local, .. } => {
+                    self.unsupported(body.locals[*local].at, "a `cache`");
+                }
+                Stmt::Inject { at, .. } => self.unsupported(*at, "an `inject`"),
+                other => self.unsupported(at_of(other, &body.locals), "this statement of a node"),
+            }
+        }
+        let has_state = !states.is_empty();
+        if has_state {
+            self.hgraph.insert("STATE");
+            parameters.push("_state: STATE = None".to_string());
+        }
+        let python = name(&declaration.name);
+        let decorator = if result.is_some() {
+            "compute_node"
+        } else {
+            "sink_node"
+        };
+        self.hgraph.insert(decorator);
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, &format!("@{decorator}"));
+        let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
+        self.line(
+            0,
+            &format!("def {python}({}){returns}:", parameters.join(", ")),
+        );
+        self.block(&function, when.unwrap_or(&[]), 1);
+        // `start`: the state's first values, then the hook's own
+        // statements.
+        if has_state || start.is_some() {
+            self.line(0, "");
+            self.line(0, "");
+            self.line(0, &format!("@{python}.start"));
+            let state = if has_state {
+                "_state: STATE = None"
+            } else {
+                ""
+            };
+            self.line(0, &format!("def _{python}_start({state}):"));
+            for (local, value) in &states {
+                let field = name(&body.locals[*local].name);
+                let value = match value {
+                    Some(value) => self.expression(&function, value),
+                    None => "None".to_string(),
+                };
+                self.line(1, &format!("_state.{field} = {value}"));
+            }
+            if let Some(start) = start {
+                self.statements(&function, start, 1);
+            }
+        }
+        if let Some(stop) = stop {
+            self.line(0, "");
+            self.line(0, "");
+            self.line(0, &format!("@{python}.stop"));
+            let state = if has_state {
+                "_state: STATE = None"
+            } else {
+                ""
+            };
+            self.line(0, &format!("def _{python}_stop({state}):"));
+            self.block(&function, stop, 1);
+        }
+    }
+
+    /// A graph: `@graph`, whose body wires the nodes it calls.
+    fn graph(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+        let function = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Graph,
+        };
+        let (parameters, result) = self.temporal_signature(declaration, signature);
+        self.hgraph.insert("graph");
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, "@graph");
+        let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
+        self.line(
+            0,
+            &format!(
+                "def {}({}){returns}:",
+                name(&declaration.name),
+                parameters.join(", ")
+            ),
+        );
+        self.block(&function, &body.statements, 1);
+    }
+
+    /// Every named test of the module: a function `test_name`, which a
+    /// Python test runner finds by that name.
+    fn tests(&mut self) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        for (index, test) in module.tests.iter().enumerate() {
+            let Some(body) = module.test_bodies.get(index).and_then(Option::as_ref) else {
+                continue;
+            };
+            self.line(0, "");
+            self.line(0, "");
+            self.line(0, &format!("def test_{}():", test.name));
+            let function = Function {
+                locals: &body.locals,
+                signature: None,
+                mode: Mode::Test,
+            };
+            self.block(&function, &body.statements, 1);
+        }
+    }
+
+    // ---- Statements ----
+
+    /// The statements of a body, or `pass` where it writes none.
+    fn block(&mut self, function: &Function, statements: &[Stmt], depth: usize) {
+        if self.statements(function, statements, depth) == 0 {
+            self.line(depth, "pass");
+        }
+    }
+
+    /// Writes `statements`, and says how many lines of them it wrote.
+    fn statements(&mut self, function: &Function, statements: &[Stmt], depth: usize) -> usize {
+        let before = self.text.len();
+        for statement in statements {
+            self.statement(function, statement, depth);
+        }
+        self.text[before..].lines().count()
+    }
+
+    /// What a local is written as where it is assigned or read as it
+    /// is: a field of the node's state for a `state`, its name
+    /// otherwise.
+    fn place(&mut self, function: &Function, local: usize) -> String {
+        let declared = &function.locals[local];
+        match declared.kind {
+            LocalKind::State => format!("_state.{}", name(&declared.name)),
+            LocalKind::Cache | LocalKind::Inject => {
+                self.unsupported(declared.at, "a `cache` or an injected capability");
+                "None".to_string()
+            }
+            _ => name(&declared.name),
+        }
+    }
+
+    fn statement(&mut self, function: &Function, statement: &Stmt, depth: usize) {
+        match statement {
+            Stmt::Declare { local, value } => {
+                // A `var` declared with no value has none to write: the
+                // analyser has held every read to an assignment.
+                if let Some(value) = value {
+                    let value = self.expression(function, value);
+                    let target = self.place(function, *local);
+                    self.line(depth, &format!("{target} = {value}"));
+                }
+            }
+            // A compound assignment's value is already the symbol with
+            // the target as its left operand.
+            Stmt::Assign { local, value, .. } => {
+                let value = self.expression(function, value);
+                let target = self.place(function, *local);
+                self.line(depth, &format!("{target} = {value}"));
+            }
+            // FN-7: a `return` with a value publishes it and ends the
+            // evaluation; with none, and where a body ends, nothing is
+            // published. hgraph has a node that returns `None` not tick.
+            Stmt::Return { value: None, .. } => self.line(depth, "return"),
+            Stmt::Return {
+                value: Some(value), ..
+            } => {
+                let value = self.expression(function, value);
+                self.line(depth, &format!("return {value}"));
+            }
+            Stmt::Assert { condition, .. } => {
+                let condition = self.expression(function, condition);
+                self.line(depth, &format!("assert {condition}"));
+            }
+            Stmt::Expr(Expr {
+                kind:
+                    ExprKind::If {
+                        condition,
+                        then,
+                        otherwise,
+                    },
+                ..
+            }) => self.if_statement(function, condition, then, otherwise.as_deref(), depth),
+            Stmt::Expr(value) => {
+                let value = self.expression(function, value);
+                self.line(depth, &value);
+            }
+            other => self.unsupported(at_of(other, function.locals), "this statement"),
+        }
+    }
+
+    /// `if condition { ... } else { ... }` standing as a statement.
+    fn if_statement(
+        &mut self,
+        function: &Function,
+        condition: &Expr,
+        then: &Expr,
+        otherwise: Option<&Expr>,
+        depth: usize,
+    ) {
+        let condition = self.expression(function, condition);
+        self.line(depth, &format!("if {condition}:"));
+        self.branch(function, then, depth + 1);
+        if let Some(otherwise) = otherwise {
+            self.line(depth, "else:");
+            self.branch(function, otherwise, depth + 1);
+        }
+    }
+
+    /// A branch of an `if` that stands as a statement: the statements
+    /// of its block, and its last expression as one more.
+    fn branch(&mut self, function: &Function, branch: &Expr, depth: usize) {
+        let before = self.text.len();
+        match &branch.kind {
+            ExprKind::Block { statements, value } => {
+                self.statements(function, statements, depth);
+                if let Some(value) = value {
+                    self.statement(function, &Stmt::Expr((**value).clone()), depth);
+                }
+            }
+            // `else if`: the next `if`, as the one statement of the
+            // `else`.
+            _ => self.statement(function, &Stmt::Expr(branch.clone()), depth),
+        }
+        if self.text.len() == before {
+            self.line(depth, "pass");
+        }
+    }
+
+    // ---- Expressions ----
+
+    /// True when `local` is a temporal input of the node being written:
+    /// a parameter that is not `const`.
+    fn is_input(function: &Function, local: usize) -> bool {
+        let declared = &function.locals[local];
+        declared.kind == LocalKind::Parameter
+            && function.signature.is_some_and(|signature| {
+                signature
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.name == declared.name && !parameter.constant)
+            })
+    }
+
+    /// An expression as Python. One with no Python here yet is reported
+    /// and written `None`.
+    fn expression(&mut self, function: &Function, value: &Expr) -> String {
+        match &value.kind {
+            ExprKind::Literal(literal) => self.literal(literal, value.at),
+            ExprKind::Local(local) => {
+                let read = self.place(function, *local);
+                // In a hook a temporal input is read through its
+                // payload.
+                if function.mode == Mode::Node && Self::is_input(function, *local) {
+                    format!("{read}.value")
+                } else {
+                    read
+                }
+            }
+            ExprKind::Endpoint {
+                operation,
+                inputs: Some(inputs),
+            } if inputs.len() == 1 => {
+                let input = name(&function.locals[inputs[0]].name);
+                match operation {
+                    EndpointOperation::Valid => format!("{input}.valid"),
+                    EndpointOperation::Modified => format!("{input}.modified"),
+                    // END-3: what the input published this cycle.
+                    EndpointOperation::DeltaValue => format!("{input}.delta_value"),
+                    other => {
+                        self.unsupported(value.at, &format!("`{}`", other.name()));
+                        "None".to_string()
+                    }
+                }
+            }
+            ExprKind::Widen(inner) => format!("float({})", self.expression(function, inner)),
+            ExprKind::Unary {
+                operator: UnaryOperator::Not,
+                operand,
+            } => format!("(not {})", self.expression(function, operand)),
+            ExprKind::Binary {
+                operator: operator @ (BinaryOperator::And | BinaryOperator::Or),
+                left,
+                right,
+            } => {
+                let word = if *operator == BinaryOperator::And {
+                    "and"
+                } else {
+                    "or"
+                };
+                let left = self.expression(function, left);
+                let right = self.expression(function, right);
+                format!("({left} {word} {right})")
+            }
+            ExprKind::Call {
+                callee, arguments, ..
+            } => self.call(function, callee, arguments, value.at),
+            // A block that is only its value, and an `if` between two
+            // such.
+            ExprKind::Block { statements, value } if statements.is_empty() => match value {
+                Some(value) => self.expression(function, value),
+                None => "None".to_string(),
+            },
+            ExprKind::If {
+                condition,
+                then,
+                otherwise: Some(otherwise),
+            } => {
+                let condition = self.expression(function, condition);
+                let then = self.expression(function, then);
+                let otherwise = self.expression(function, otherwise);
+                format!("({then} if {condition} else {otherwise})")
+            }
+            ExprKind::Tuple(entries) => {
+                let entries: Vec<String> = entries
+                    .iter()
+                    .map(|entry| self.expression(function, entry))
+                    .collect();
+                format!("({},)", entries.join(", "))
+            }
+            ExprKind::Sequence(entries) => {
+                let entries: Vec<String> = entries
+                    .iter()
+                    .map(|entry| self.expression(function, entry))
+                    .collect();
+                format!("[{}]", entries.join(", "))
+            }
+            ExprKind::Eval(call) => self.eval(function, call),
+            ExprKind::Trace(cells) => self.trace(function, cells, value.at),
+            ExprKind::TraceCompare {
+                left,
+                right,
+                negated,
+            } => {
+                let symbol = if *negated { "!=" } else { "==" };
+                let left = self.expression(function, left);
+                let right = self.expression(function, right);
+                format!("{left} {symbol} {right}")
+            }
+            _ => {
+                self.unsupported(value.at, "this expression");
+                "None".to_string()
+            }
+        }
+    }
+
+    fn literal(&mut self, literal: &Value, at: Location) -> String {
+        match literal {
+            Value::Int(value) => value.to_string(),
+            Value::Float(value) => float(*value),
+            Value::Bool(true) => "True".to_string(),
+            Value::Bool(false) => "False".to_string(),
+            Value::Str(text) => string(text),
+            Value::Null => "None".to_string(),
+            Value::Duration(_) | Value::Temporal(_) => {
+                self.unsupported(at, "a duration, a date or a time");
+                "None".to_string()
+            }
+        }
+    }
+
+    /// The arguments of a call, each by its parameter's name, so that
+    /// the order they are written in does not matter to Python.
+    fn arguments(
+        &mut self,
+        function: &Function,
+        signature: &Signature,
+        arguments: &[Argument],
+    ) -> String {
+        let written: Vec<String> = arguments
+            .iter()
+            .filter_map(|argument| {
+                let parameter = signature.parameters.get(argument.parameter?)?;
+                let value = self.expression(function, &argument.value);
+                Some(format!("{}={value}", name(&parameter.name)))
+            })
+            .collect();
+        written.join(", ")
+    }
+
+    /// The Python name of the function `declaration` of `module`, which
+    /// is imported where the module is another one.
+    fn function_name(&mut self, module: usize, declaration: usize) -> String {
+        let declared = &self.program.modules[module];
+        let python = name(&declared.declarations[declaration].name);
+        if module != self.module {
+            self.imports
+                .entry(declared.path.clone())
+                .or_default()
+                .insert(python.clone());
+        }
+        python
+    }
+
+    /// A call: of a function of the program, or of a native candidate
+    /// of core, which the target's own `hgl_core_native` provides.
+    fn call(
+        &mut self,
+        function: &Function,
+        callee: &Callee,
+        arguments: &[Argument],
+        at: Location,
+    ) -> String {
+        let program = self.program;
+        let (module, declaration, candidate) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration, false),
+            Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration, true),
+            Callee::Required { .. } | Callee::Unread => {
+                self.unsupported(at, "this call");
+                return "None".to_string();
+            }
+        };
+        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        else {
+            self.unsupported(at, "this call");
+            return "None".to_string();
+        };
+        let declared = &program.modules[module].declarations[declaration];
+        // In a graph a symbol or a value function is lifted over the
+        // connections it is given, which is not written yet.
+        let lifted = function.mode == Mode::Graph
+            && (candidate || declared.kind.role() == Some(Role::Value));
+        if lifted {
+            self.unsupported(at, "a call that is lifted over connections");
+            return "None".to_string();
+        }
+        if candidate {
+            let types: Vec<String> = signature
+                .parameters
+                .iter()
+                .map(|parameter| mangled(&parameter.ty))
+                .collect();
+            let native = format!("{}_{}", declared.name, types.join("_"));
+            let core = Some(module) == program.core();
+            if !core || !provided().any(|provided| provided == native) {
+                self.unsupported(
+                    at,
+                    &format!("the candidate `{}({})`", declared.name, types.join(", ")),
+                );
+                return "None".to_string();
+            }
+            // NUM-2: an `i64` result outside the signed 64-bit range is
+            // an error, which Python's own `+` would not make it: the
+            // provider's function does.
+            self.natives = true;
+            let arguments = self.arguments(function, signature, arguments);
+            return format!("_core.{native}({arguments})");
+        }
+        if !matches!(declared.kind, DeclarationKind::Function(_)) || Some(module) == program.core()
+        {
+            self.unsupported(at, &format!("a call of `{}`", declared.name));
+            return "None".to_string();
+        }
+        let python = self.function_name(module, declaration);
+        let arguments = self.arguments(function, signature, arguments);
+        format!("{python}({arguments})")
+    }
+
+    /// `eval(target, ...)`: the harness's `evaluate`, given the target
+    /// and each argument by its parameter's name.
+    fn eval(&mut self, function: &Function, call: &Expr) -> String {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                },
+            arguments,
+            ..
+        } = &call.kind
+        else {
+            self.unsupported(call.at, "this eval");
+            return "None".to_string();
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[*module].details.get(*declaration)
+        else {
+            self.unsupported(call.at, "this eval");
+            return "None".to_string();
+        };
+        self.harness = true;
+        let target = self.function_name(*module, *declaration);
+        let arguments = self.arguments(function, signature, arguments);
+        if arguments.is_empty() {
+            format!("evaluate({target})")
+        } else {
+            format!("evaluate({target}, {arguments})")
+        }
+    }
+
+    /// A dense trace written out: a list with `None` where it has `_`
+    /// (TST-6: "Dense position i denotes the simulation start plus i
+    /// minimum engine steps").
+    fn trace(&mut self, function: &Function, cells: &[Cell], at: Location) -> String {
+        if cells.iter().any(|cell| cell.time.is_some()) {
+            self.unsupported(at, "a timed trace");
+            return "None".to_string();
+        }
+        let written: Vec<String> = cells
+            .iter()
+            .map(|cell| match &cell.value {
+                None => "None".to_string(),
+                // hgraph's harness has `None` for no publication, so a
+                // published null would read as silence.
+                Some(Expr {
+                    kind: ExprKind::Literal(Value::Null),
+                    at,
+                    ..
+                }) => {
+                    self.unsupported(*at, "a published null in a trace");
+                    "None".to_string()
+                }
+                Some(value) => self.expression(function, value),
+            })
+            .collect();
+        format!("[{}]", written.join(", "))
+    }
+}
+
+/// Where a statement is written. A declaration is where its local is.
+fn at_of(statement: &Stmt, locals: &[Local]) -> Location {
+    match statement {
+        Stmt::Assign { at, .. }
+        | Stmt::AssignPlace { at, .. }
+        | Stmt::Inject { at, .. }
+        | Stmt::Hook { at, .. }
+        | Stmt::Return { at, .. }
+        | Stmt::Assert { at, .. }
+        | Stmt::AssertRaises { at, .. }
+        | Stmt::Yield { at, .. }
+        | Stmt::For { at, .. }
+        | Stmt::While { at, .. }
+        | Stmt::Switch { at, .. }
+        | Stmt::Unread { at } => *at,
+        Stmt::Expr(value) => value.at,
+        Stmt::Declare { local, .. } => locals[*local].at,
+    }
+}
