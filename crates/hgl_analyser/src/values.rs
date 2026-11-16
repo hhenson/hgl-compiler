@@ -3437,8 +3437,9 @@ impl<'a> Typer<'a> {
     ) -> Admits {
         let result_fits = match (wanted.place, &signature.result) {
             // An output requested in part, a `list<T, 3>` with `T` not
-            // said, is matched as far as it is known.
-            (Some(wanted), Some(result)) if !whole(wanted) => agree(wanted, result),
+            // said, is matched as far as it is known: `admits` compares
+            // what each type says and lets what is not said pass, and
+            // keeps a `T` a value of a `T?` (TYPE-14).
             (Some(wanted), Some(result)) => self.admits(wanted, result),
             (Some(_), None) => false,
             (None, _) => true,
