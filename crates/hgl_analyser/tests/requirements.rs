@@ -119,6 +119,9 @@ fn a_generic_body_calls_what_its_requirements_state() {
         "    let mixed = sub_(a, rhs: b)\n",
         "    return sub_(rhs: b, lhs: a)\n",
         "}\n",
+        // The parameter may stand in the result alone.
+        "operator make<O>() -> O\n",
+        "const fn build<T>() -> T requires make() -> T => make()\n",
         // With no arrow the requirement says only that the call is
         // admitted: what it gives is not known.
         "const fn loose<T>(a: T) requires add_(T, T) {\n",
@@ -134,6 +137,7 @@ fn a_generic_body_calls_what_its_requirements_state() {
         ["mul_", "add_", "add_", "add_"]
     );
     assert_eq!(callees(&checked, "named"), ["sub_", "sub_", "sub_"]);
+    assert_eq!(callees(&checked, "build"), ["make"]);
     // Each argument is recorded with the operator's parameter it is
     // given to: `sub_(rhs: b, lhs: a)` gives `b` to the second.
     let Some(Stmt::Return {
