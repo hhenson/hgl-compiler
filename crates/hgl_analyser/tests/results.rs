@@ -493,11 +493,20 @@ fn a_capture_covers_a_temporal_call_in_a_graph() {
         // The call's own arguments, by name, and checked as its are.
         "    let named = capture(required, value: value)\n",
         "    let typed = capture(required, \"text\")\n",
-        // No callable: nothing, an expression, and a local.
+        // No callable: nothing, an expression, a local, and a struct,
+        // whose name constructs a value.
         "    let nothing = capture()\n",
         "    let unnamed = capture(1 + 2, value)\n",
         "    let local = capture(value, value)\n",
+        "    let built = capture(Kept, value: 1)\n",
+        // The call is held to what it is anywhere in a graph: a `const`
+        // parameter is given no connection (FN-3).
+        "    let limited = capture(bounded, value, value)\n",
         "    failures(named.error)\n",
+        "}\n",
+        "struct Kept { value: i64 }\n",
+        "fn bounded(const limit: i64, value: i64) -> i64 {\n",
+        "    when { return value }\n",
         "}\n",
         // A value function, and a hook.
         "const fn valued(value: i64) -> i64 {\n",
@@ -521,8 +530,10 @@ fn a_capture_covers_a_temporal_call_in_a_graph() {
             "m.hgl:23:19 type/argument.missing ERR-7",
             "m.hgl:24:27 phase/capture.phase ERR-7",
             "m.hgl:25:25 phase/capture.phase ERR-7",
-            "m.hgl:29:16 phase/capture.phase ERR-7",
-            "m.hgl:34:20 phase/capture.phase ERR-7",
+            "m.hgl:26:25 phase/capture.phase ERR-7",
+            "m.hgl:27:36 phase/connection.as_constant FN-3",
+            "m.hgl:35:16 phase/capture.phase ERR-7",
+            "m.hgl:40:20 phase/capture.phase ERR-7",
         ]
     );
 }

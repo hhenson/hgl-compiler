@@ -3561,10 +3561,29 @@ impl<'a> Typer<'a> {
         };
         // The call it names, read as that call is: from the same list,
         // less the name.
-        let outer = self.callable.replace(callable);
+        let outer = self.callable.replace(callable.clone());
         let (kind, ty) = self.call_named(&callee, list, found, None, None);
         self.callable = outer;
+        // The call is held to what any call in a graph is: a `const`
+        // parameter is given no connection (FN-3).
+        self.constants_of(&kind);
         let call = Expr { kind, ty, at };
+        // "It names a callable": a struct's name constructs a value,
+        // and is no call that a boundary covers.
+        if matches!(call.kind, ExprKind::Construct { .. }) {
+            self.diagnostics.emit(error(
+                Category::Phase,
+                codes::CAPTURE_PHASE,
+                self.at(&callable),
+                format!(
+                    "`capture` names the callable it covers, and `{}` is a struct: a \
+                     construction is no temporal call",
+                    callee.text()
+                ),
+                "ERR-7",
+            ));
+            return (ExprKind::Unread, Type::Unknown);
+        }
         // "Capture of wiring-time scalar work rejects": a call that
         // composes nothing, all its arguments ordinary values.
         if matches!(call.kind, ExprKind::Call { .. })
