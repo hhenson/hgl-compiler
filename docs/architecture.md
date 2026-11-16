@@ -783,15 +783,15 @@ subdirectories, or a single file. Linked directories are followed. A file
 reached twice is read once. A module that an import names must be under
 one of the roots given: nothing is searched for elsewhere.
 
-Core's module is the exception. Every module binds its public
-declarations with no `use` (UNIT-11), so a program is checked with it
-whether or not its roots hold it:
+Core's module is the exception. Core is the part of the language every
+program has, and every module binds its public declarations with no
+`use` (UNIT-11). So a program is always checked with core's module, and
+no option leaves it out:
 
 | The source roots | Core's module |
 | --- | --- |
 | Hold no `module core` | The compiler supplies its own: the files of the `spec/hgl_core` pin, built into `hgl` when it is compiled |
 | Hold a `module core` | That one. This is how core itself is checked |
-| Any, with `--no-core` | None is supplied. The names core declares are then bound to nothing |
 
 A module the compiler supplied is not counted in `hgl check`'s summary
 or listed by `--modules`; a diagnostic in it names its file as

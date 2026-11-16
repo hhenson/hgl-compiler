@@ -121,9 +121,6 @@ struct CheckArgs {
     modules: bool,
 
     #[command(flatten)]
-    core: CoreArgs,
-
-    #[command(flatten)]
     limits: LimitArgs,
 }
 
@@ -145,28 +142,16 @@ struct TestArgs {
     rejections_only: bool,
 
     #[command(flatten)]
-    core: CoreArgs,
-
-    #[command(flatten)]
     limits: LimitArgs,
-}
-
-/// Whether the compiler supplies core's module.
-#[derive(Args)]
-struct CoreArgs {
-    /// Do not supply core's module. A program whose source roots hold no
-    /// `module core` is then checked without one: the names core
-    /// declares are left unbound.
-    #[arg(long)]
-    no_core: bool,
 }
 
 /// Core's module as the pinned `hgl_core` declares it, built into the
 /// compiler: each file's name for diagnostics, and its text.
 ///
 /// UNIT-11: every module binds core's public declarations with no
-/// `use`. A program is therefore checked with core's module whether or
-/// not its source roots hold it. `include_str!` puts the file's text in
+/// `use`. Core is the part of the language every program has, so a
+/// program is always checked with core's module: its own where its
+/// source roots hold one, and this one where they do not. `include_str!` puts the file's text in
 /// the compiler when the compiler is built, so the module supplied is
 /// the one at the `spec/hgl_core` pin. The test
 /// `the_core_supplied_is_every_file_of_the_pinned_core` fails when the
@@ -233,11 +218,11 @@ fn main() -> ExitCode {
         // A command that analyses needs the analyser's stack too, which
         // is the larger.
         Command::Check(arguments) => {
-            let stack = analysis_stack(arguments.limits.limits(), &arguments.core);
+            let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || check(&arguments))
         }
         Command::Test(arguments) => {
-            let stack = analysis_stack(arguments.limits.limits(), &arguments.core);
+            let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || test(&arguments))
         }
     }
@@ -247,14 +232,10 @@ fn main() -> ExitCode {
 /// analyser's, whichever is the larger, for trees as deep as `limits`
 /// admit. Core's module, when the compiler supplies it, is read under
 /// the default limits, so the stack is for those at least.
-fn analysis_stack(limits: Limits, core: &CoreArgs) -> usize {
-    let deepest = if core.no_core {
-        limits
-    } else {
-        Limits {
-            nesting: limits.nesting.max(Limits::DEFAULT.nesting),
-            tree_depth: limits.tree_depth.max(Limits::DEFAULT.tree_depth),
-        }
+fn analysis_stack(limits: Limits) -> usize {
+    let deepest = Limits {
+        nesting: limits.nesting.max(Limits::DEFAULT.nesting),
+        tree_depth: limits.tree_depth.max(Limits::DEFAULT.tree_depth),
     };
     deepest.stack_size().max(hgl_analyser::stack_size(deepest))
 }
@@ -479,9 +460,8 @@ struct Parsed {
 }
 
 /// Finds, reads, lexes and parses every source file under `roots`, and
-/// core's module when `supply_core` asks for it and no file under the
-/// roots belongs to `module core`.
-fn parse_program(roots: &[PathBuf], limits: Limits, supply_core: bool) -> Result<Parsed, ExitCode> {
+/// core's module when no file under the roots belongs to `module core`.
+fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> {
     let paths = find_sources(roots)?;
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
@@ -513,7 +493,7 @@ fn parse_program(roots: &[PathBuf], limits: Limits, supply_core: bool) -> Result
             .is_some_and(|path| path.dotted() == CORE_MODULE)
     });
     let mut supplied = 0;
-    if supply_core && !has_core {
+    if !has_core {
         for (name, text) in CORE {
             let file = match sources.add(name, text) {
                 Ok(file) => file,
@@ -560,11 +540,7 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         files: parsed,
         mut diagnostics,
         supplied,
-    } = match parse_program(
-        &arguments.roots,
-        arguments.limits.limits(),
-        !arguments.core.no_core,
-    ) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
         Ok(program) => program,
         Err(status) => return status,
     };
@@ -623,11 +599,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
         files: parsed,
         diagnostics: front_end,
         ..
-    } = match parse_program(
-        &arguments.roots,
-        arguments.limits.limits(),
-        !arguments.core.no_core,
-    ) {
+    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
         Ok(program) => program,
         Err(status) => return status,
     };
