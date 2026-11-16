@@ -1296,6 +1296,7 @@ only where the program reaches it, at core's source.
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
+| A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `operator` | Nothing: its candidates are the functions |
 | A named test | A function `test_name` |
@@ -1327,7 +1328,9 @@ and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 loops and `switch`;
 durations, dates and times; timed traces and a published null in a
-trace; and a candidate of core the provider has no function for.
+trace; a native candidate that gives a `result`, as a division under
+`zero: .error` does; and a candidate of core the provider has no
+function for.
 
 A module is written a piece at a time: each declaration, then each
 named test. A piece with a form that is not written is left out of the
