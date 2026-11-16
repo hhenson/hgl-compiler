@@ -602,7 +602,18 @@ What a call gives a generic value parameter is a compile-time constant
 (GEN-8): a literal, an enum member, a generic value parameter in scope,
 or an expression of those. Any other is `generic.argument_constant`. It
 is kept among the call's generic arguments in the typed body, and is not
-one of its arguments. Where it is a generic value parameter of the
+one of its arguments. What the call writes for it decides before any
+argument's type does (GEN-2), and its condition reads the value so
+resolved, the default only where nothing else said. Its own type may
+name a type parameter, `<T, const fallback: T>`: the parameters decide
+`T` first, and what `fallback` is given decides it where they do not.
+
+A default is of its parameter's type (GEN-13). One that is not, as far
+as how it is written says, is `type.mismatch` where it is declared, and
+a call that would take it is not judged. Where the type names a type
+parameter, `<T, const fallback: T = 2>`, the default is checked against
+what the call resolves `T` to, and the candidate is not for a call
+where it does not fit. Where it is a generic value parameter of the
 enclosing function, which candidate it selects is known only where that
 function is called, and the call is not judged here.
 

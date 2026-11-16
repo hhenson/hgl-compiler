@@ -2635,18 +2635,81 @@ fn a_generic_value_parameters_type_may_be_generic() {
     let checked = module(concat!(
         "operator pick<V, O>(value: V) -> O\n",
         "impl const fn pick<T, const fallback: T>(value: T) -> T => value\n",
+        // `T` is in the type of no parameter here: what `fallback` is
+        // given says what it is.
+        "operator make<V, O>(value: V) -> O\n",
+        "impl const fn make<T, const fallback: T>(value: i64) -> T => fallback\n",
         "const fn uses() {\n",
         "    let whole = pick(1, fallback: 2)\n",
         "    let text = pick(\"a\", fallback: \"b\")\n",
+        // The parameter decides `T` first: an integer literal is then
+        // an `f64` where one is expected (EXPR-5).
+        "    let real = pick(1.5, fallback: 2)\n",
+        "    let made = make(1, fallback: 2)\n",
+        "    let word = make(1, fallback: \"b\")\n",
         // A `str` is no `i64`.
         "    let mixed = pick(1, fallback: \"b\")\n",
         "}\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:7:17 operator/operator.no_candidate GEN-5"]
+        ["m.hgl:12:17 operator/operator.no_candidate GEN-5"]
     );
-    assert_eq!(locals(&checked, "uses")[..2], ["whole: i64", "text: str"]);
+    assert_eq!(
+        locals(&checked, "uses")[..5],
+        [
+            "whole: i64",
+            "text: str",
+            "real: f64",
+            "made: i64",
+            "word: str"
+        ]
+    );
+}
+
+/// GEN-13: "An explicit `const N: V` declares a value parameter of
+/// ordinary type V", and the default a callable gives it (GEN-2) is a
+/// V. A default that is not is reported where it is declared, and a
+/// call that takes it is not judged (ERR-9). One whose type names
+/// another generic parameter is checked where a call resolves that.
+#[test]
+fn a_generic_value_parameters_default_is_of_its_type() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan }\n",
+        "operator pick<V>(value: V) -> i64\n",
+        "impl const fn pick<const N: i64 = \"bad\">(value: i64) -> i64 => N\n",
+        "impl const fn pick<const mode: Zero = .none>(value: str) -> i64 => 1\n",
+        "impl const fn pick<const exact: bool = 1.5>(value: f64) -> i64 => 1\n",
+        "operator hold<V, O>(value: V) -> O\n",
+        "impl const fn hold<T, const fallback: T = 2>(value: T) -> T => fallback\n",
+        "const fn uses() {\n",
+        "    let bad = pick(1)\n",
+        // Given by name, the default is not what the call takes.
+        "    let given = pick(1, N: 3)\n",
+        "    let whole = hold(1)\n",
+        // EXPR-5: an integer literal is an `f64` where one is expected.
+        "    let real = hold(1.5)\n",
+        // The default, `2`, is no `str`.
+        "    let text = hold(\"a\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:35 type/type.mismatch GEN-13",
+            "m.hgl:5:39 name/member.unknown TYPE-7",
+            "m.hgl:6:40 type/type.mismatch GEN-13",
+            "m.hgl:14:16 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "this is a `str`, and the generic value parameter `N` is `i64`"
+    );
+    assert_eq!(
+        locals(&checked, "uses"),
+        ["bad: _", "given: i64", "whole: i64", "real: f64", "text: _"]
+    );
 }
 
 /// GEN-2: "A call resolves a generic of its callee from what it writes

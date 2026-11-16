@@ -53,6 +53,7 @@ use crate::{codes, error};
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    generic_defaults(program, diagnostics);
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         // What each name resolved to, by where it is used (UNIT-10).
@@ -2218,11 +2219,36 @@ impl<'a> Typer<'a> {
                 let candidate = &program.modules[module].declarations[declaration];
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
-                let Some((taken, generics)) =
+                let Some((taken, generics, defaulted)) =
                     instance((candidate, signature), public, given, wanted)
                 else {
                     continue;
                 };
+                // GEN-13: a generic value parameter has an ordinary
+                // type, and the default it takes is of that type as
+                // this call resolves it: the `2` of
+                // `<T, const fallback: T = 2>` is no `str`. A default
+                // that is not of the type as it is declared is reported
+                // there, and a call that takes it is not judged
+                // (ERR-9).
+                let unfit = defaulted.iter().find_map(|&index| {
+                    let default = generic_default(&candidate.syntax, &signature.generics[index])?;
+                    let (GenericKind::Value(resolved), GenericKind::Value(declared)) =
+                        (&taken.generics[index].kind, &signature.generics[index].kind)
+                    else {
+                        return None;
+                    };
+                    (constant_fits(program, &default, resolved) == Some(false))
+                        .then(|| constant_fits(program, &default, declared) == Some(false))
+                });
+                match unfit {
+                    Some(true) => {
+                        untold = true;
+                        continue;
+                    }
+                    Some(false) => continue,
+                    None => {}
+                }
                 let admits = self.admits_call(
                     (candidate, &taken),
                     (operator_declaration, public),
@@ -3845,6 +3871,178 @@ fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
     }
 }
 
+/// What a compile-time constant is, as far as how it is written says:
+/// no name in it is looked up.
+enum Written {
+    /// An integer literal, under a minus or not. It is an `f64` where
+    /// one is expected (EXPR-5).
+    Integer,
+    /// Integer arithmetic: an `i64`.
+    Whole,
+    /// A float literal.
+    Float,
+    /// A string literal.
+    Str,
+    /// `true` or `false`.
+    Bool,
+    /// `null`.
+    Null,
+    /// A duration literal, or arithmetic of them.
+    Duration,
+    /// `.member`, by its name.
+    Member(String),
+}
+
+impl Written {
+    /// As a message names it.
+    fn described(&self) -> String {
+        match self {
+            Written::Integer | Written::Whole => "an `i64`".to_string(),
+            Written::Float => "an `f64`".to_string(),
+            Written::Str => "a `str`".to_string(),
+            Written::Bool => "a `bool`".to_string(),
+            Written::Null => "`null`".to_string(),
+            Written::Duration => "a `duration`".to_string(),
+            Written::Member(name) => format!("the enum member `.{name}`"),
+        }
+    }
+}
+
+/// What the constant `node` is, when how it is written says.
+fn written(node: &SyntaxNode) -> Option<Written> {
+    match node.kind() {
+        SyntaxKind::ParenExpr => written(&node.children().next()?),
+        SyntaxKind::ImpliedMember => tokens(node)
+            .last()
+            .map(|name| Written::Member(name.text().to_string())),
+        SyntaxKind::Literal => match tokens(node).next()?.kind() {
+            SyntaxKind::Int => Some(Written::Integer),
+            SyntaxKind::Float => Some(Written::Float),
+            SyntaxKind::Str => Some(Written::Str),
+            SyntaxKind::KwTrue | SyntaxKind::KwFalse => Some(Written::Bool),
+            SyntaxKind::KwNull => Some(Written::Null),
+            SyntaxKind::Duration => Some(Written::Duration),
+            // A date or a time: which, its text says, and is not read
+            // here.
+            _ => None,
+        },
+        SyntaxKind::UnaryExpr if has_token(node, SyntaxKind::Minus) => {
+            match written(&node.children().last()?)? {
+                kind @ (Written::Integer | Written::Whole | Written::Float | Written::Duration) => {
+                    Some(kind)
+                }
+                _ => None,
+            }
+        }
+        _ => match crate::constant::fold(node, &|_| ConstantValue::Unevaluated) {
+            ConstantValue::Int(_) => Some(Written::Whole),
+            ConstantValue::Duration(_) => Some(Written::Duration),
+            _ => None,
+        },
+    }
+}
+
+/// Whether the compile-time constant `node` is a value of `ty`, told
+/// from how it is written. `None` where that does not say: a constant
+/// that names something, or a type that is not known.
+fn constant_fits(program: &Program, node: &SyntaxNode, ty: &Type) -> Option<bool> {
+    let kind = written(node)?;
+    // TYPE-14: a `T?` is "either a T or null".
+    let (ty, optional) = match ty {
+        Type::Nullable(inner) => (inner.as_ref(), true),
+        other => (other, false),
+    };
+    match ty {
+        // An `any` holds a value of any type (TYPE-8).
+        Type::Scalar(Scalar::Any) => None,
+        Type::Scalar(scalar) => match kind {
+            Written::Integer => Some(matches!(scalar, Scalar::I64 | Scalar::F64)),
+            // Whether arithmetic of integer literals is an `f64` where
+            // one is expected is not judged here.
+            Written::Whole => match scalar {
+                Scalar::I64 => Some(true),
+                Scalar::F64 => None,
+                _ => Some(false),
+            },
+            Written::Float => Some(*scalar == Scalar::F64),
+            Written::Str => Some(*scalar == Scalar::Str),
+            Written::Bool => Some(*scalar == Scalar::Bool),
+            Written::Duration => Some(*scalar == Scalar::Duration),
+            Written::Null => Some(optional),
+            Written::Member(_) => Some(false),
+        },
+        Type::Named {
+            module,
+            declaration,
+            ..
+        } => match program.modules[*module].details.get(*declaration) {
+            Some(Detail::Enum(read)) => Some(match kind {
+                Written::Member(name) => read.members.iter().any(|member| member.name == name),
+                Written::Null => optional,
+                _ => false,
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// GEN-13: "An explicit `const N: V` declares a value parameter of
+/// ordinary type V", and the default a callable gives it (GEN-2) is a
+/// V. A default is checked here as far as how it is written says what
+/// it is; one whose type names another generic parameter,
+/// `<T, const fallback: T = 2>`, is checked where a call resolves `T`.
+fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
+    for module in &program.modules {
+        for (index, declaration) in module.declarations.iter().enumerate() {
+            let Some(Detail::Callable(signature)) = module.details.get(index) else {
+                continue;
+            };
+            let file = module.files[declaration.file].file;
+            for generic in &signature.generics {
+                let GenericKind::Value(ty) = &generic.kind else {
+                    continue;
+                };
+                let Some(default) = generic_default(&declaration.syntax, generic) else {
+                    continue;
+                };
+                if constant_fits(program, &default, ty) != Some(false) {
+                    continue;
+                }
+                let at = Location::new(file, default.span());
+                let Some(kind) = written(&default) else {
+                    continue;
+                };
+                // TYPE-7: `.member` "names a member of the enum type its
+                // position expects".
+                if let (Written::Member(name), Some(Type::Named { .. })) =
+                    (&kind, not_null(Some(ty)))
+                {
+                    diagnostics.emit(error(
+                        Category::Name,
+                        codes::MEMBER_UNKNOWN,
+                        at,
+                        format!("`{ty}` has no member `{name}`"),
+                        "TYPE-7",
+                    ));
+                    continue;
+                }
+                diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "this is {}, and the generic value parameter `{}` is `{ty}`",
+                        kind.described(),
+                        generic.name
+                    ),
+                    "GEN-13",
+                ));
+            }
+        }
+    }
+}
+
 /// The integer or duration a constant expression comes to.
 fn folded(node: &SyntaxNode) -> Option<OptionValue> {
     constant_value(&crate::constant::fold(node, &|_| {
@@ -3917,10 +4115,14 @@ fn instance<'s>(
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
-) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>)> {
+) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
     if generics.is_empty() {
-        return Some((std::borrow::Cow::Borrowed(signature), Vec::new()));
+        return Some((
+            std::borrow::Cow::Borrowed(signature),
+            Vec::new(),
+            Vec::new(),
+        ));
     }
     let bound = bound(signature, public, given)?;
     let mut found: Vec<Option<Argument>> = vec![None; generics.len()];
@@ -3953,17 +4155,30 @@ fn instance<'s>(
             );
         }
     }
+    // A generic value parameter's own type may name a type parameter:
+    // the `T` of `<T, const fallback: T>`. What the call gives it says
+    // what that is where the result and the parameters, which are
+    // declared to take the call's arguments, have not.
+    for (position, place) in bound.iter().enumerate() {
+        if let Place::Generic(index) = *place
+            && let GenericKind::Value(ty) = &generics[index].kind
+        {
+            infer(ty, &given[position].value.ty, generics, &mut found);
+        }
+    }
     // GEN-6: "An option that selects among candidates is a generic
     // value parameter". One that neither the call nor an argument's
     // type says anything of takes its default (GEN-2). GEN-6: "a
     // candidate whose option has none is admitted only when the call
     // gives it."
+    let mut defaulted = Vec::new();
     for (index, generic) in generics.iter().enumerate() {
         if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
             continue;
         }
         if let Some(default) = generic_default(&candidate.syntax, generic) {
             found[index] = Some(Argument::Constant(constant_at(&default)));
+            defaulted.push(index);
         }
     }
     let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;
@@ -3984,7 +4199,7 @@ fn instance<'s>(
         .result
         .as_ref()
         .map(|result| placed(substitute_within(result, &map), &own));
-    Some((std::borrow::Cow::Owned(taken), resolved))
+    Some((std::borrow::Cow::Owned(taken), resolved, defaulted))
 }
 
 /// How specific one type of a candidate's signature is beside another's
