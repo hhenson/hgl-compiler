@@ -162,7 +162,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-6 | analyser | partial | The Boolean connectives and `!` take bools, in value functions. Left: a guard precedes the payload read it protects |
 | EXPR-6 | transpiler | planned | Short-circuit evaluation; composition reads no payload |
 | EXPR-7 | analyser | partial | A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length, where the constant is integer literals under a minus or joined by `+`, `-` and `*`. A set indexed is rejected, to read or to assign. Left: an index on any other value that has none; a tuple's index that is any other constant; temporal projection; `ref` access; the payload of a nullable or a result |
-| EXPR-8 | analyser | planned | `_` and timed cells only in test traces |
+| EXPR-8 | analyser | done | A `_` stands in a trace of a test: in a sequence that is none it is `trace.placeholder` |
 | EXPR-9 | parser | done | Brackets delimit a sequence whose entries are all values or all pairs |
 | EXPR-9 | analyser | partial | A sequence of values is a list or a set by the type expected, and with none a list of its values' one type, nullable when a `null` is among them; entries of two types, and entries that give no type, rejected. Pairs are a dictionary where one is expected, each key and value read as its type; with nothing expected they are `sequence.context_type`. Left: `_`; pairs as a timed trace; ordering and uniqueness |
 | EXPR-10 | parser | done | A named-entry brace directly after an operator is its configuration; an empty one rejected |
@@ -348,13 +348,14 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-1 | analyser | done | One test scope across parts; exports and operator implementations rejected there |
 | TST-2 | analyser | done | Production names no test-only declaration; a test-only declaration takes no name of its module; duplicate test names rejected |
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
-| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. Left: eval traces stay test-local |
-| TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). Left: a comparison with an `eval`, which is the harness's and is not read |
+| TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace stored in a field or given to a temporal function is `trace.escape`, and one given to a `const fn` is the value TST-16 has it be. Left: an `eval` outside a named test, which is not read; a trace returned |
+| TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
-| TST-5 | analyser | planned | Eval target selection and argument binding |
+| TST-5 | analyser | partial | An eval's first argument names a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). Its other arguments are bound as a call's are: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. Left: a generic target given structural cells |
 | TST-6 | runner | planned | Dense traces: positions, `_` placeholders, a result ending at its last publication |
-| TST-7 | analyser | planned | Timed traces: increasing keys, no `_`, one style in an eval |
+| TST-7 | analyser | partial | A timed trace's keys are all durations or all datetimes; constant duration keys strictly increase (`trace.key_order`); it has no `_` (`trace.placeholder`); an eval's traces and its expectation are of one style (`trace.style`). Left: the order of datetime keys, which are not evaluated |
 | TST-7 | runner | planned | Sparse expectations match the actual ticks and times |
+| TST-8 | analyser | done | An eval of a target with no result stands as a statement; bound or compared it is `eval.no_result` |
 | TST-8 | runner | planned | Eval builds core replay, the target and core record; fresh state for each invocation |
 | TST-9 | runner | planned | Arguments and profile admission validated before the graph starts |
 | TST-10 | analyser | done | `assert raises` takes one string literal whose value is an execution code of the catalogue (`test.raises_code`) |
@@ -366,6 +367,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-13 | runner | done | Rejection owners excluded; diagnostics and annotations matched one to one |
 | TST-14 | runner | partial | Invalid metadata and surviving-source errors stop the run; selectors; rejection counts. Left: counts of executed cases, with the first target |
 | TST-15 | runner | partial | When a run succeeds; identity, kind and outcome of each case. Left: executable cases, which are listed and not run |
+| TST-16 | analyser | partial | Proposed. A trace given to a `const fn` is a `list<delta<T>?>` when dense and a `dict<duration, delta<T>>` or `dict<datetime, delta<T>>` when timed; a dense trace whose cells may be null is `trace.escape`. Left: a generic `const fn` |
+| TST-16 | runner | planned | Proposed. The recorded trace as that value |
 
 ## Program execution
 

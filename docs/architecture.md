@@ -237,7 +237,7 @@ It is built in passes:
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | in part: each temporal body is classified a graph or a node. What each admits is planned: see "Temporal bodies" below |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
-| Tests and eval | Test blocks, `assert`, eval targets and traces | | planned |
+| Tests and eval | Test blocks, `assert`, eval targets and traces | TST-3, TST-4, TST-5, TST-7, TST-8 | done: see "Eval" below. Running a test is the runner's |
 
 `hgl check` says which passes ran: names are resolved and written types
 are read, and what an expression is is not checked yet.
@@ -489,9 +489,33 @@ A test's block is then read as a graph's body is (`Typer::test`, into
 result. `assert` is a statement there (TST-4): its condition is a `bool`
 (`type.mismatch`) known when the test is built, and no connection
 (`connection.as_constant`). The block of an `assert raises` is read with
-the test's scope. An `eval` is not read yet, and nothing is said of a
-comparison with one: a sequence written out beside an operand whose type
-is not known has nothing to be read as (ERR-9).
+the test's scope.
+
+### Eval
+
+`eval(target, ...)` is read in a named test (`Typer::eval`, TST-5). Its
+first argument names a function of a module, the temporal definition
+where the name has both (FN-4); anything else, an operator among them,
+is `eval.target`. The eval is then read as the call of that function it
+stands for, from the same argument list less the target, so positional
+and named arguments, defaults, and a generic target's parameters are
+handled as any call's are. The one difference is what a parameter
+takes: a `const` parameter takes configuration, an ordinary value, and
+every other parameter a trace.
+
+| Form | Rule | Read as |
+| --- | --- | --- |
+| A trace's type | TST-3, TST-5 | `Type::Trace`, with the type of a cell and the style. It is a type of this compiler's: source writes none. A cell is one cycle's publication, the `delta<T>` of the parameter's type for an input and of the target's result for what the eval gives |
+| `[7, _, 9]`, `[0s: 7, 2s: 9]` where a trace is expected | TST-5, TST-7 | `ExprKind::Trace`: dense, or timed. Each cell is read as the cell's type. A timed trace's keys are all durations or all datetimes, constant keys strictly increase (`trace.key_order`), and it has no `_` (`trace.placeholder`) |
+| A `_` anywhere else | EXPR-8 | `trace.placeholder` |
+| An eval's traces | TST-7 | Of one style, the expectation included (`trace.style`, at the later trace) |
+| An eval of a target with no result | TST-8 | A statement. Bound or compared, it is `eval.no_result` |
+| `eval(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
+| A trace given to a field, or to a temporal function | TST-3 | `trace.escape` |
+| A trace given to a `const fn` | TST-16, proposed | `ExprKind::TraceValue`: a `list<delta<T>?>` for a dense trace, a `dict<duration, delta<T>>` or `dict<datetime, delta<T>>` for a timed one. A dense trace whose cells may be null is `trace.escape` |
+
+Not read: an `eval` outside a named test; a trace given to a generic
+`const fn`; a generic target whose parameter is given structural cells.
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:

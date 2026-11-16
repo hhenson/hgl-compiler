@@ -91,7 +91,7 @@ pub use program::{
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
     GenericKind, GenericParameter, Member, NamedKind, Pack, Parameter, Scalar, Signature,
-    StructType, Type, WrittenType,
+    StructType, TraceStyle, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.
@@ -203,6 +203,23 @@ pub mod codes {
     /// `assert raises(...)` given what is no literal catalogued
     /// execution code (TST-10).
     pub const TEST_RAISES_CODE: &str = "test.raises_code";
+    /// Eval's first argument names no function of a module (TST-5).
+    pub const EVAL_TARGET: &str = "eval.target";
+    /// The value of an eval of an outputless target is bound or
+    /// compared (TST-8).
+    pub const EVAL_NO_RESULT: &str = "eval.no_result";
+    /// `_` in a timed trace, or outside a trace of a test (EXPR-8,
+    /// TST-7).
+    pub const TRACE_PLACEHOLDER: &str = "trace.placeholder";
+    /// Dense and timed traces in one eval, its expectation included
+    /// (TST-7).
+    pub const TRACE_STYLE: &str = "trace.style";
+    /// Constant keys of a timed trace that do not strictly increase
+    /// (TST-7).
+    pub const TRACE_KEY_ORDER: &str = "trace.key_order";
+    /// A trace stored in a field, or given as a temporal argument
+    /// outside an eval (TST-3).
+    pub const TRACE_ESCAPE: &str = "trace.escape";
     /// A statement a source's shape has no place for (SOURCE-1).
     pub const SOURCE_STATEMENT: &str = "source.statement";
     /// `when` in a source (SOURCE-1).

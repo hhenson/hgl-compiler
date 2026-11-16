@@ -46,7 +46,7 @@ use crate::program::{
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
-    NamedKind, Pack, Scalar, Signature, Type,
+    NamedKind, Pack, Scalar, Signature, TraceStyle, Type,
 };
 use crate::{RESULT_FORMS, codes, error, warning};
 
@@ -278,6 +278,15 @@ struct Typer<'a> {
     /// callable: `required` in `capture(required, value)`. The call it
     /// names is read from the same list, less this argument.
     callable: Option<SyntaxNode>,
+    /// True for the one call an `eval` stands for, while its arguments
+    /// are given to its parameters (TST-5): a temporal parameter there
+    /// takes a trace. The call takes it when it starts, so that what
+    /// its arguments call is read as any call.
+    evaluating: bool,
+    /// True while the arguments of a call of a value function are
+    /// given to its parameters: a trace given there is the ordinary
+    /// value TST-16 has it be.
+    takes_traces: bool,
     /// True once `start` has used the node's scheduler or alarm, which
     /// may then wake it (TIME-3).
     driven: bool,
@@ -352,6 +361,8 @@ impl<'a> Typer<'a> {
             generating: false,
             captures: HashMap::new(),
             callable: None,
+            evaluating: false,
+            takes_traces: false,
             driven: false,
             undriven: Vec::new(),
             initializing: false,
@@ -2058,6 +2069,9 @@ impl<'a> Typer<'a> {
             }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
             SyntaxKind::IndexExpr => self.index(node),
+            // TST-3: "Eval traces are test-local values." An `eval`
+            // anywhere but in a named test is not read.
+            SyntaxKind::EvalExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
                 let (value, outcome) = self.flow(node, expected, true);
@@ -2889,10 +2903,36 @@ impl<'a> Typer<'a> {
         // the same as what is expected not being known.
         let unexpected = expected.is_none();
         let items: Vec<SyntaxNode> = node.children().collect();
+        // TST-5: where a trace is expected, the sequence is one
+        // written out.
+        if let Some(Type::Trace { cell, .. }) = not_null(expected) {
+            return self.trace(&items, cell);
+        }
         // EXPR-8: "Harness `_` and timed cells exist only in test
-        // traces". A sequence with a `_` is for the part that reads
-        // those.
-        if items.iter().any(|item| item.kind() == SyntaxKind::Hole) {
+        // traces; outside them a sequence is ordinary data and a
+        // placeholder is not a value." Where what is expected is not
+        // known, it may be a trace, and nothing is reported (ERR-9).
+        let holes: Vec<SyntaxNode> = items
+            .iter()
+            .flat_map(|item| match item.kind() {
+                SyntaxKind::Hole => vec![item.clone()],
+                SyntaxKind::SequencePair => item
+                    .children()
+                    .filter(|part| part.kind() == SyntaxKind::Hole)
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        if !holes.is_empty() {
+            if !expected.is_some_and(open) {
+                for hole in &holes {
+                    self.placeholder(
+                        hole,
+                        "`_` is no value: it stands for no publication, in a trace of a test",
+                        "EXPR-8",
+                    );
+                }
+            }
             return (ExprKind::Unread, Type::Unknown);
         }
         // A sequence is no `null`: of a `set<i64>?` expected, the set.
@@ -3279,6 +3319,17 @@ impl<'a> Typer<'a> {
             };
             return (kind, BOOL);
         }
+        // TST-4: "Harness comparison is intrinsic: compare presence,
+        // exact present data, and shape/length; overload candidates
+        // cannot change it."
+        if self.testing
+            && read.is_none()
+            && config.is_none()
+            && matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual)
+            && (self.gives_trace(&left) || self.gives_trace(&right))
+        {
+            return self.trace_comparison(operator, &left, &right);
+        }
         let identity = self.symbol_operator(operator.identity());
         // The generics chapter: a symbol's "operands are read as that
         // call's arguments are". Each is read with nothing expected of
@@ -3306,6 +3357,81 @@ impl<'a> Typer<'a> {
             (entries, faulty, config.is_some()),
             place,
         )
+    }
+
+    /// True when the expression at `node` is one that gives a trace:
+    /// an `eval`, or a local one is bound to, in parentheses or not.
+    fn gives_trace(&self, node: &SyntaxNode) -> bool {
+        match node.kind() {
+            SyntaxKind::ParenExpr => node
+                .children()
+                .next()
+                .is_some_and(|inner| self.gives_trace(&inner)),
+            SyntaxKind::EvalExpr => true,
+            SyntaxKind::NameExpr => self
+                .local_of(node)
+                .is_some_and(|local| matches!(self.locals[local].ty, Type::Trace { .. })),
+            _ => false,
+        }
+    }
+
+    /// `left == right` or `left != right` where one side gives a trace
+    /// (TST-4). TST-3: a trace is "compared with `==` or `!=` against a
+    /// trace written out or another eval". The side that gives a trace
+    /// says what the other is: a sequence written out is read as a
+    /// trace of the same cells. TST-7: the two are of one style.
+    fn trace_comparison(
+        &mut self,
+        operator: BinaryOperator,
+        left: &SyntaxNode,
+        right: &SyntaxNode,
+    ) -> (ExprKind, Type) {
+        // The side read first is one that gives a trace: the left,
+        // where both do.
+        let left_leads = self.gives_trace(left);
+        let (lead, other) = if left_leads {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        let lead_read = self.expression(lead, None);
+        // An eval of a target with no result has been reported, and
+        // what it is compared with is not judged (ERR-9).
+        let other_expected = match &lead_read.ty {
+            ty @ Type::Trace { .. } => ty.clone(),
+            _ => Type::Unknown,
+        };
+        let other_read = self.expression(other, Some(&other_expected));
+        let other_read = self.fit(other_read, &other_expected, "the trace it is compared with");
+        if let (
+            Type::Trace {
+                style: Some(first), ..
+            },
+            Type::Trace {
+                style: Some(later), ..
+            },
+        ) = (&lead_read.ty, &other_read.ty)
+            && first != later
+        {
+            // "the later trace": the right one.
+            let (at, first, later) = if left_leads {
+                (other_read.at, *first, *later)
+            } else {
+                (lead_read.at, *later, *first)
+            };
+            self.trace_style(at, first, later);
+        }
+        let (left, right) = if left_leads {
+            (lead_read, other_read)
+        } else {
+            (other_read, lead_read)
+        };
+        let kind = ExprKind::TraceCompare {
+            left: Box::new(left),
+            right: Box::new(right),
+            negated: operator == BinaryOperator::NotEqual,
+        };
+        (kind, BOOL)
     }
 
     /// A symbol between two operands, as the call of the operator it
@@ -4625,6 +4751,343 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
+    /// `eval(target, ...)` in a named test.
+    ///
+    /// TST-5: "Eval selects a module function, binding arguments by its
+    /// public positional/named rules. Its first argument names a
+    /// function of a module. Temporal/value role selection follows
+    /// FN-4 ... An operator is no target: a function wraps it ... Const
+    /// parameters receive configuration; temporal parameters receive
+    /// contextually typed publication traces."
+    ///
+    /// TST-3: "An eval of a target that has a result is a trace of that
+    /// result's type". TST-8: "an outputless target has no recorder or
+    /// comparable result. Its eval stands as a statement and has no
+    /// value: binding or comparing it rejects."
+    ///
+    /// The eval is read as the call of its target it stands for, from
+    /// the same list less the target, with a trace expected of each
+    /// temporal parameter.
+    fn eval(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let at = self.at(node);
+        let Some(list) = child(node, SyntaxKind::ArgList) else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        // The parser has reported an eval given nothing.
+        let Some((label, target)) = arguments_of(&list).into_iter().next() else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        let named = (label.is_none() && target.kind() == SyntaxKind::NameExpr)
+            .then(|| name_token(&target))
+            .flatten();
+        // The function the name stands for. FN-4: "Composition and
+        // eval choose the temporal definition if one exists".
+        let function = named.as_ref().and_then(|name| {
+            let (module, declarations) = self.declarations(name)?;
+            let kind_of =
+                |declaration: usize| self.program.modules[module].declarations[declaration].kind;
+            let of_role = |role: Role| {
+                declarations.iter().copied().find(|&declaration| {
+                    matches!(
+                        kind_of(declaration),
+                        DeclarationKind::Function(found) | DeclarationKind::NativeFunction(found)
+                            if found == role
+                    )
+                })
+            };
+            of_role(Role::Temporal)
+                .or_else(|| of_role(Role::Value))
+                .map(|declaration| (module, declaration))
+        });
+        let (Some(name), Some((module, declaration))) = (named, function) else {
+            // A name nothing binds is left for the prelude, and is not
+            // judged (ERR-9).
+            let unbound = target.kind() == SyntaxKind::NameExpr
+                && name_token(&target).is_some_and(|name| {
+                    !self.bindings.contains_key(&(self.file, name.span().start))
+                });
+            if !unbound {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::EVAL_TARGET,
+                        self.at(&target),
+                        "an eval's first argument names a function of a module, and this is \
+                         none"
+                            .to_string(),
+                        "TST-5",
+                    )
+                    .with_note("an operator is evaluated through a function that calls it"),
+                );
+            }
+            self.callable = Some(target);
+            let unread = self.unread_call(&list);
+            self.callable = None;
+            return unread;
+        };
+        let outer = self.callable.replace(target);
+        self.evaluating = true;
+        let (kind, ty) = self.call_function(&name, &list, (module, declaration), None, None);
+        self.evaluating = false;
+        self.callable = outer;
+        // TST-7: "Within one eval all inputs and expectation use the
+        // same dense/timed style." The first trace that has cells says
+        // which, and a later one of the other is reported.
+        let mut style: Option<TraceStyle> = None;
+        if let ExprKind::Call { arguments, .. } = &kind {
+            for argument in arguments {
+                let Type::Trace {
+                    style: Some(given), ..
+                } = &argument.value.ty
+                else {
+                    continue;
+                };
+                match style {
+                    None => style = Some(*given),
+                    Some(first) if first != *given => {
+                        self.trace_style(argument.value.at, first, *given);
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        let has_result = matches!(
+            self.program.modules[module].details.get(declaration),
+            Some(Detail::Callable(signature)) if signature.result.is_some()
+        );
+        let call = Expr { kind, ty, at };
+        if !has_result {
+            // "Its eval stands as a statement and has no value". One in
+            // parentheses is the same statement (EXPR-1).
+            let mut holder = node.parent();
+            while let Some(parent) = holder
+                .as_ref()
+                .filter(|parent| parent.kind() == SyntaxKind::ParenExpr)
+            {
+                holder = parent.parent();
+            }
+            let statement = holder.is_some_and(|parent| parent.kind() == SyntaxKind::ExprStmt);
+            if !statement {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::EVAL_NO_RESULT,
+                        at,
+                        format!(
+                            "`{}` has no result, so this eval has no value to bind or compare",
+                            name.text()
+                        ),
+                        "TST-8",
+                    )
+                    .with_note("an eval of a target with no result stands as a statement"),
+                );
+            }
+            return (ExprKind::Eval(Box::new(call)), Type::Unknown);
+        }
+        // "Each cell is one cycle's publication": the `delta<T>` of the
+        // result's type. One not known stays so.
+        let cell = if open(&call.ty) {
+            call.ty.clone()
+        } else {
+            Type::delta(call.ty.clone())
+        };
+        let ty = Type::Trace {
+            cell: Box::new(cell),
+            style,
+        };
+        (ExprKind::Eval(Box::new(call)), ty)
+    }
+
+    /// Reports a trace of one style where the eval it belongs to has
+    /// one of the other (TST-7).
+    fn trace_style(&mut self, at: Location, first: TraceStyle, later: TraceStyle) {
+        let name = |style: TraceStyle| match style {
+            TraceStyle::Dense => "dense",
+            TraceStyle::Timed(_) => "timed",
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::TRACE_STYLE,
+                at,
+                format!(
+                    "this trace is {}, and the eval's other traces are {}: one eval uses one \
+                     style, its expectation included",
+                    name(later),
+                    name(first)
+                ),
+                "TST-7",
+            )
+            .with_note("dense is `[7, _, 9]`, and timed `[0s: 7, 2s: 9]`"),
+        );
+    }
+
+    /// A trace written out where one is expected: `[7, _, 9]`, dense,
+    /// or `[0s: 7, 2s: 9]`, timed. `cell` is what a cell is to be.
+    ///
+    /// TST-5: "Each cell is one cycle's publication". TST-7: "Timed
+    /// entries use duration offsets from run start or absolute datetime
+    /// keys. Keys strictly increase; no `_` occurs in timed traces."
+    fn trace(&mut self, items: &[SyntaxNode], cell: &Type) -> (ExprKind, Type) {
+        let timed = items
+            .iter()
+            .any(|item| item.kind() == SyntaxKind::SequencePair);
+        let mut cells = Vec::new();
+        // The kind of key a timed trace has, and its last constant key.
+        let mut key: Option<Scalar> = None;
+        let mut last: Option<i64> = None;
+        for item in items {
+            let (time, value) = if timed {
+                // A value among pairs has been reported by the parser.
+                let mut parts = item.children();
+                let (Some(time), Some(value)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
+                if item.kind() != SyntaxKind::SequencePair {
+                    continue;
+                }
+                (Some(time), value)
+            } else {
+                (None, item.clone())
+            };
+            let time = time.and_then(|time| self.trace_time(&time, &mut key, &mut last));
+            let value = if value.kind() == SyntaxKind::Hole {
+                if timed {
+                    self.placeholder(
+                        &value,
+                        "a timed trace has no `_`: it lists each publication with its time",
+                        "TST-7",
+                    );
+                }
+                None
+            } else {
+                let read = self.expression(&value, Some(cell));
+                Some(self.fit(read, cell, "a cell of the trace"))
+            };
+            cells.push(hir::Cell { time, value });
+        }
+        // Where the place does not say what a cell is, the cells do:
+        // the one type they have, `f64` when some are `i64` and some
+        // `f64` (NUM-1).
+        let cell = if open(cell) {
+            let known: Vec<&Type> = cells
+                .iter()
+                .filter_map(|cell| cell.value.as_ref())
+                .map(|value| &value.ty)
+                .filter(|ty| !open(ty))
+                .collect();
+            let numbers = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
+            match known.first() {
+                Some(_)
+                    if known.iter().all(|ty| numbers(ty))
+                        && known.iter().any(|ty| **ty == Type::Scalar(Scalar::F64)) =>
+                {
+                    Type::Scalar(Scalar::F64)
+                }
+                Some(&first) => first.clone(),
+                None => cell.clone(),
+            }
+        } else {
+            cell.clone()
+        };
+        let style = if timed {
+            Some(TraceStyle::Timed(key.unwrap_or(Scalar::Duration)))
+        } else if items.is_empty() {
+            None
+        } else {
+            Some(TraceStyle::Dense)
+        };
+        let ty = Type::Trace {
+            cell: Box::new(cell),
+            style,
+        };
+        (ExprKind::Trace(cells), ty)
+    }
+
+    /// The key of a timed trace's entry: "duration offsets from run
+    /// start or absolute datetime keys. Keys strictly increase" (TST-7).
+    /// `key` is the kind the trace's keys have so far, and `last` its
+    /// last constant key.
+    fn trace_time(
+        &mut self,
+        node: &SyntaxNode,
+        key: &mut Option<Scalar>,
+        last: &mut Option<i64>,
+    ) -> Option<Expr> {
+        if node.kind() == SyntaxKind::Hole {
+            self.placeholder(
+                node,
+                "a timed trace has no `_`: each entry has the time it is published at",
+                "TST-7",
+            );
+            return None;
+        }
+        let time = self.expression(node, None);
+        match &time.ty {
+            Type::Scalar(scalar @ (Scalar::Duration | Scalar::Datetime)) => match key {
+                Some(first) if first != scalar => {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        time.at,
+                        format!(
+                            "this key is a `{}`, and the trace's keys before it are `{}`: a \
+                             timed trace's keys are all durations or all datetimes",
+                            time.ty,
+                            Type::Scalar(*first)
+                        ),
+                        "TST-7",
+                    ));
+                }
+                Some(_) => {}
+                None => *key = Some(*scalar),
+            },
+            ty if !open(ty) => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    time.at,
+                    format!(
+                        "this is `{ty}`, and a timed trace's key is a `duration` from the \
+                         run's start or a `datetime`"
+                    ),
+                    "TST-7",
+                ));
+            }
+            _ => {}
+        }
+        // "Keys strictly increase": of the keys that are constants read
+        // here, durations.
+        if let ConstantValue::Duration(now) =
+            crate::constant::fold(node, &|_| ConstantValue::Unevaluated)
+        {
+            if last.is_some_and(|before| now <= before) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TRACE_KEY_ORDER,
+                    time.at,
+                    "this key is not after the one before it: a timed trace's keys \
+                         strictly increase"
+                        .to_string(),
+                    "TST-7",
+                ));
+            }
+            *last = Some(now);
+        }
+        Some(time)
+    }
+
+    /// Reports a `_` where none stands (EXPR-8, TST-7).
+    fn placeholder(&mut self, hole: &SyntaxNode, message: &str, rule: &'static str) {
+        self.diagnostics.emit(error(
+            Category::Type,
+            codes::TRACE_PLACEHOLDER,
+            self.at(hole),
+            message.to_string(),
+            rule,
+        ));
+    }
+
     /// `capture(callable, args...)` (ERR-7): "In composition,
     /// `capture(callable, args...)` creates a temporal error boundary.
     /// It names a callable and gives it the arguments its own call
@@ -4985,10 +5448,63 @@ impl<'a> Typer<'a> {
         expected: Option<&Type>,
         given: Option<&CallArguments>,
     ) -> (ExprKind, Type) {
+        // The call an `eval` stands for is this one, and not one among
+        // its arguments.
+        let evaluating = std::mem::take(&mut self.evaluating);
+        // TST-3: a trace is "given to a `const fn` as an argument".
+        let value = matches!(
+            self.program.modules[module].declarations[declaration].kind,
+            DeclarationKind::Function(Role::Value) | DeclarationKind::NativeFunction(Role::Value)
+        );
+        let outer = std::mem::replace(&mut self.takes_traces, value && !evaluating);
+        let read = self.call_function_with(
+            name,
+            list,
+            (module, declaration),
+            expected,
+            given,
+            evaluating,
+        );
+        self.takes_traces = outer;
+        read
+    }
+
+    /// [`Typer::call_function`], with `evaluating` true where the call
+    /// is the one an `eval` stands for (TST-5): "Const parameters
+    /// receive configuration; temporal parameters receive contextually
+    /// typed publication traces."
+    fn call_function_with(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        (module, declaration): (usize, usize),
+        expected: Option<&Type>,
+        given: Option<&CallArguments>,
+        evaluating: bool,
+    ) -> (ExprKind, Type) {
         let program = self.program;
         let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
         else {
             return self.unread_call(list);
+        };
+        // What a parameter takes: its type, or in an eval a trace for
+        // one that is not `const`. TST-5: "Each cell is one cycle's
+        // publication: it is read as the `delta<T>` (TYPE-16) of its
+        // parameter's type T". A type that names a generic parameter
+        // stands for its cells until they say what it is.
+        let taken = |parameter: &crate::types::Parameter, ty: Type| {
+            if !evaluating || parameter.constant || parameter.pack.is_some() {
+                return ty;
+            }
+            let cell = if names_parameter(&ty) || matches!(ty, Type::Unknown) {
+                ty
+            } else {
+                Type::delta(ty)
+            };
+            Type::Trace {
+                cell: Box::new(cell),
+                style: None,
+            }
         };
         let generics = &signature.generics;
         let packed = generics
@@ -5026,7 +5542,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .map(|parameter| Slot {
                     name: &parameter.name,
-                    ty: known(&parameter.ty),
+                    ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
                 })
@@ -5082,13 +5598,14 @@ impl<'a> Typer<'a> {
                 pack: parameter.pack,
             })
             .collect();
+        let patterns: Vec<Type> = signature
+            .parameters
+            .iter()
+            .map(|parameter| taken(parameter, parameter.ty.clone()))
+            .collect();
         let places = Places {
             slots: &slots,
-            patterns: signature
-                .parameters
-                .iter()
-                .map(|parameter| &parameter.ty)
-                .collect(),
+            patterns: patterns.iter().collect(),
             generics,
             settled: !expected.is_some_and(open),
             aside: &value_names,
@@ -5510,9 +6027,16 @@ impl<'a> Typer<'a> {
             // known, but that the place is an endpoint: the argument of
             // `valid<T>(input: endpoint<T>)` is an endpoint of whatever
             // the input holds, and says what `T` is (TIME-9).
+            // In an eval the place is a trace (TST-5): a sequence there
+            // is one written out, and its cells say what it is of.
             let unknown = Type::Unknown;
+            let trace = Type::Trace {
+                cell: Box::new(Type::Unknown),
+                style: None,
+            };
             let read_as = match pattern {
                 Type::Endpoint(_) => pattern,
+                Type::Trace { .. } => &trace,
                 _ => &unknown,
             };
             if ordered {
@@ -5624,7 +6148,7 @@ impl<'a> Typer<'a> {
                 // have no reading of their own.
                 let placeless =
                     *settled && !takes_its_type(node) && mentions(patterns[index], &unfound);
-                match values[position].take() {
+                let argument = match values[position].take() {
                     None if placeless => hir::Argument {
                         parameter: Some(index),
                         value: self.expression(node, None),
@@ -5635,13 +6159,28 @@ impl<'a> Typer<'a> {
                     },
                     Some(value) => {
                         let place = format!("the {} `{}`", takes.noun(), slot.name);
+                        let value = match self.trace_given(value, &slot.ty, takes) {
+                            (value, true) => self.fit(value, &slot.ty, &place),
+                            (value, false) => value,
+                        };
                         hir::Argument {
                             parameter: Some(index),
-                            value: self.fit(value, &slot.ty, &place),
+                            value,
                         }
                     }
                     None => self.argument(Some(index), node, Some(&slot), takes),
+                };
+                // TST-3: a trace "is not a temporal argument outside an
+                // eval, is stored in no field". A generic place is of
+                // whatever it is given, so a trace given to one has made
+                // the place a trace, and is reported here.
+                let made_it_one = !matches!(patterns[index], Type::Trace { .. })
+                    && matches!(argument.value.ty, Type::Trace { .. })
+                    && (matches!(slot.ty, Type::Trace { .. }) || open(&slot.ty));
+                if made_it_one && (takes == Takes::Fields || !self.takes_traces) {
+                    self.trace_escape(argument.value.at, takes);
                 }
+                argument
             })
             .collect();
         let unknown = assigned
@@ -8069,11 +8608,93 @@ impl<'a> Typer<'a> {
             Some(slot) => {
                 let value = self.expression(node, Some(&slot.ty));
                 let place = format!("the {} `{}`", takes.noun(), slot.name);
-                self.fit(value, &slot.ty, &place)
+                match self.trace_given(value, &slot.ty, takes) {
+                    (value, true) => self.fit(value, &slot.ty, &place),
+                    // Reported: the trace goes where none does.
+                    (value, false) => value,
+                }
             }
             None => self.expression(node, Some(&Type::Unknown)),
         };
         hir::Argument { parameter, value }
+    }
+
+    /// A trace given to a parameter or a field that takes none.
+    ///
+    /// TST-3: a trace is "given to a `const fn` as an argument. It is
+    /// not a temporal argument outside an eval, is stored in no field".
+    /// TST-16, proposed: "A trace given to a `const fn` is an ordinary
+    /// value there ... A dense trace is a `list<delta<T>?>`, with null
+    /// where it has `_` ... Where `delta<T>` is itself nullable ... the
+    /// dense trace is not given, and rejects there. A timed trace is a
+    /// `dict<duration, delta<T>>` or a `dict<datetime, delta<T>>`".
+    ///
+    /// Reports a trace given to a field, or to a parameter of a
+    /// function that is no `const fn` (TST-3).
+    fn trace_escape(&mut self, at: Location, takes: Takes) {
+        let how = match takes {
+            Takes::Fields => "it is stored in no field",
+            Takes::Parameters => "it is a temporal argument only of an eval",
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::TRACE_ESCAPE,
+                at,
+                format!("this is a trace, a value of the test: {how}"),
+                "TST-3",
+            )
+            .with_note("a trace is bound with `let`, compared, and given to a `const fn`"),
+        );
+    }
+
+    /// Gives the value with true where it is to be held to the slot's
+    /// type: `value` itself where it is no trace or the slot takes one,
+    /// or the ordinary value a `const fn` is given. With false it is a
+    /// trace that has been reported.
+    fn trace_given(&mut self, value: Expr, slot: &Type, takes: Takes) -> (Expr, bool) {
+        let Type::Trace { cell, style } = &value.ty else {
+            return (value, true);
+        };
+        if matches!(slot, Type::Trace { .. }) || open(slot) {
+            return (value, true);
+        }
+        if takes == Takes::Fields || !self.takes_traces {
+            self.trace_escape(value.at, takes);
+            return (value, false);
+        }
+        let ty = match style {
+            Some(TraceStyle::Timed(key)) => Type::Dict {
+                key: Box::new(Type::Scalar(*key)),
+                value: cell.clone(),
+            },
+            _ if matches!(**cell, Type::Nullable(_)) => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::TRACE_ESCAPE,
+                        value.at,
+                        "this dense trace has cells that may be null, so as a list it could \
+                         not tell a published null from no publication"
+                            .to_string(),
+                        "TST-16",
+                    )
+                    .with_note("a timed trace has an entry for each publication, and is given"),
+                );
+                return (value, false);
+            }
+            _ => Type::List {
+                element: Box::new(Type::Nullable(cell.clone())),
+                size: None,
+            },
+        };
+        let at = value.at;
+        let given = Expr {
+            kind: ExprKind::TraceValue(Box::new(value)),
+            ty,
+            at,
+        };
+        (given, true)
     }
 
     // ---- Members and elements ----
@@ -10709,6 +11330,7 @@ fn whole(ty: &Type) -> bool {
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => whole(inner),
         Type::Dict { key, value } => whole(key) && whole(value),
         Type::Rolling { value, .. } => whole(value),
@@ -10997,7 +11619,10 @@ fn infer(
         | (Type::Ref(pattern), Type::Ref(actual))
         | (Type::Endpoint(pattern), Type::Endpoint(actual))
         | (Type::Atomic(pattern), Type::Atomic(actual))
-        | (Type::Delta(pattern), Type::Delta(actual)) => infer(pattern, actual, generics, found),
+        | (Type::Delta(pattern), Type::Delta(actual))
+        | (Type::Trace { cell: pattern, .. }, Type::Trace { cell: actual, .. }) => {
+            infer(pattern, actual, generics, found)
+        }
         (
             Type::Dict { key, value },
             Type::Dict {
@@ -11162,6 +11787,7 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
         | Type::Endpoint(ty)
         | Type::Atomic(ty)
         | Type::Delta(ty)
+        | Type::Trace { cell: ty, .. }
         | Type::Nullable(ty) => inner(ty),
         Type::Dict { key, value } => inner(key) || inner(value),
         Type::Rolling {

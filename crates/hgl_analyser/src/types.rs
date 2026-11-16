@@ -99,6 +99,17 @@ impl Scalar {
     }
 }
 
+/// How a trace is written (TST-7): "Within one eval all inputs and
+/// expectation use the same dense/timed style."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceStyle {
+    /// `[7, _, 9]`: one cell for each engine step from the run's start.
+    Dense,
+    /// `[0s: 7, 2s: 9]`: each cell at a `duration` from the run's start
+    /// or at a `datetime`, which the scalar says.
+    Timed(Scalar),
+}
+
 /// What a named type is declared as. A type carries it so that what its
 /// delta is (TYPE-16) can be said from the type alone, wherever a
 /// generic parameter is replaced by it.
@@ -196,6 +207,16 @@ pub enum Type {
     Error,
     /// `delta<list<f64>>`
     Delta(Box<Type>),
+    /// What an `eval` gives, and a trace written out for one: "a trace
+    /// of that result's type, and source writes no type for it"
+    /// (TST-3). It is a type of this compiler's, for a value of a test.
+    Trace {
+        /// What each cell is: one cycle's publication, the `delta<T>`
+        /// of the type the trace is of (TST-5).
+        cell: Box<Type>,
+        /// Dense or timed, where a trace that has cells says which.
+        style: Option<TraceStyle>,
+    },
     /// `f64?`: an `f64` or null (TYPE-14). The `?` covers the whole type
     /// before it (TYPE-15).
     Nullable(Box<Type>),
@@ -273,6 +294,7 @@ impl Type {
             | Type::Ref(_)
             | Type::Signal
             | Type::Endpoint(_)
+            | Type::Trace { .. }
             | Type::Unknown => Type::Delta(Box::new(of)),
         }
     }
@@ -455,6 +477,8 @@ impl fmt::Display for Type {
             Type::Result { value, error } => write!(f, "result<{value}, {error}>"),
             Type::Error => f.write_str("error"),
             Type::Delta(shape) => write!(f, "delta<{shape}>"),
+            // No type that source writes: named in words.
+            Type::Trace { cell, .. } => write!(f, "trace of {cell}"),
             Type::Nullable(inner) => write!(f, "{inner}?"),
             Type::Unknown => f.write_str("_"),
         }

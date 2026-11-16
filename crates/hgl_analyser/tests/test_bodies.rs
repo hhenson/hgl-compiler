@@ -39,8 +39,8 @@ fn outline(checked: &Checked, name: &str) -> Vec<&'static str> {
 
 /// TST-3: "A test is a composition-phase block with assertions." TST-4:
 /// "Assert requires a wiring-time bool." TST-11: the block of a
-/// `raises` "has ordinary lexical test scope". An `eval` is not read
-/// yet, so nothing is said of a comparison with one (ERR-9).
+/// `raises` "has ordinary lexical test scope". An `eval` and a
+/// comparison with one are in `evals.rs`.
 #[test]
 fn an_assert_takes_a_wiring_time_bool() {
     let checked = module(concat!(
@@ -53,7 +53,7 @@ fn an_assert_takes_a_wiring_time_bool() {
         "    assert true\n",
         "    assert bound == 3\n",
         "    assert limit() > 2 && bound < 10\n",
-        // A trace is compared by the harness, and `eval` is not read.
+        // A trace is compared by the harness (TST-4).
         "    assert eval(forward, value: [7, _, 9]) == [7, _, 9]\n",
         "    assert eval(forward, value: [_, _]) == []\n",
         "    let outcome = eval(forward, value: [1])\n",

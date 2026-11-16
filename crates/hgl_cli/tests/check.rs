@@ -111,7 +111,7 @@ fn a_program_is_found_under_its_roots_and_listed() {
             "  export temporal function shared()\n",
             "  operator add(left: i64, right: i64) -> i64\n",
             "checked 3 files in 2 modules: no errors\n",
-            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; eval is not yet\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         ),
         app = app,
         part = part,
@@ -126,7 +126,7 @@ fn a_program_is_found_under_its_roots_and_listed() {
         text(&quiet.stdout),
         concat!(
             "checked 3 files in 2 modules: no errors\n",
-            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; eval is not yet\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         )
     );
 }
@@ -148,7 +148,7 @@ fn a_rejected_program_reports_each_error_and_exits_one() {
         text(&output.stdout),
         concat!(
             "checked 2 files in 1 module: 2 errors\n",
-            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; eval is not yet\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         )
     );
     let stderr = text(&output.stderr);
@@ -190,7 +190,7 @@ fn a_warning_is_reported_and_does_not_reject() {
         text(&output.stdout),
         concat!(
             "checked 1 file in 1 module: no errors, 1 warning\n",
-            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; eval is not yet\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         )
     );
     let stderr = text(&output.stderr);
@@ -222,7 +222,7 @@ fn a_name_left_for_the_prelude_is_listed() {
         format!(
             concat!(
                 "checked 1 file in 1 module: no errors\n",
-                "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; eval is not yet\n",
+                "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
                 "left for the prelude (UNIT-11), which does not bind them yet:\n",
                 "  {file}:2:9 add\n",
             ),
