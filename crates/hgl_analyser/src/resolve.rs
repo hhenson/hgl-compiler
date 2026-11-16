@@ -26,6 +26,7 @@ use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
+use crate::hir::EndpointOperation;
 use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program,
@@ -853,6 +854,14 @@ impl Resolver<'_> {
                     },
                 );
             }
+        }
+
+        // TIME-9: "The operations on an endpoint are intrinsics of the
+        // language ... These reserved intrinsics cannot be shadowed."
+        // No declaration binds one, the prelude's included, so its name
+        // is not one the prelude is waited on for.
+        if EndpointOperation::named(name).is_some() {
+            return None;
         }
 
         // The prelude does not bind it, or the program has no module

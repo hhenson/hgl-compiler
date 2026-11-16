@@ -179,9 +179,11 @@ fn a_hook_rejects_what_its_phase_has_not() {
     );
 }
 
-/// TIME-3: "`valid()` requires all temporal inputs to be valid. Omitting
-/// either selector uses the same default as its zero-argument form.
-/// `valid([])` requires no inputs to be valid. A selector sets
+/// TIME-3: "`valid()` requires all temporal inputs to be valid;
+/// `valid(a, b)` requires both named inputs, and similarly for more
+/// inputs. Omitting either selector uses the same default as its
+/// zero-argument form. `valid([])` requires no inputs to be valid. A
+/// selector sets
 /// subscription or admission when it stands alone in the header or
 /// appears as a top-level conjunct. Selectors under negation or
 /// disjunction leave the default in place." TIME-4: "A payload read
@@ -211,7 +213,7 @@ fn a_payload_is_read_where_its_input_is_admitted_or_guarded() {
         "}\n",
         // A selector that names its inputs admits those.
         "fn named(a: i64, b: i64, c: i64) -> i64 {\n",
-        "    when valid([a, b]) && a > 0 { return a + b }\n",
+        "    when valid(a, b) && a > 0 { return a + b }\n",
         "}\n",
         // Under a negation the default stays in place.
         "fn negated(value: i64, flag: bool) -> i64 {\n",
@@ -291,6 +293,44 @@ fn an_unguarded_payload_read_is_rejected() {
             "m.hgl:11:24 phase/payload.unguarded TIME-4",
             "m.hgl:16:23 phase/payload.unguarded TIME-4",
             "m.hgl:20:23 phase/state.input_read TIME-5",
+        ]
+    );
+}
+
+/// TIME-3: "`valid(a, b)` requires both named inputs, and similarly for
+/// more inputs ... `valid([])` requires no inputs to be valid." TIME-9:
+/// an endpoint operation takes a temporal input "by its name". So a
+/// sequence that names inputs is no form of a selector, and `modified`
+/// takes one input. TIME-4: an input the selector does not name needs
+/// its guard, and a guard names several as a header does.
+#[test]
+fn a_selector_names_its_inputs_each_by_its_name() {
+    let checked = module(concat!(
+        "fn three(a: i64, b: i64, c: i64) -> i64 {\n",
+        "    when valid(a, b, c) { return a + b + c }\n",
+        "    when valid(a, b) {\n",
+        // `c` is not among those named.
+        "        return a + c\n",
+        "    }\n",
+        "    when valid([]) {\n",
+        "        if valid(a, b) { return a + b }\n",
+        "    }\n",
+        // Forms the chapter does not have.
+        "    when valid([a, b]) { return a }\n",
+        "    when modified(a, b) { return a }\n",
+        "    when modified([]) { return a }\n",
+        // A constant, and a name given twice, among those named.
+        "    when valid(a, 1) { return a }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:20 phase/payload.unguarded TIME-4",
+            "m.hgl:10:16 phase/endpoint.argument TIME-9",
+            "m.hgl:11:22 type/argument.unexpected TIME-9",
+            "m.hgl:12:19 phase/endpoint.argument TIME-9",
+            "m.hgl:13:19 phase/endpoint.argument TIME-9",
         ]
     );
 }

@@ -140,23 +140,24 @@ fn members_and_labels_are_not_looked_up() {
 }
 
 /// UNIT-11: "Every module binds [the prelude's declarations] without a
-/// `use`." Core declares none yet, so a name nothing binds is listed
-/// once for its module, at its first use, and not reported.
+/// `use`." A name nothing binds, core's declarations included, is
+/// listed once for its module, at its first use, and not reported.
+/// TIME-9: "The operations on an endpoint are intrinsics of the
+/// language ... These reserved intrinsics cannot be shadowed." No
+/// declaration binds one, so it is not a name the prelude is waited on
+/// for.
 #[test]
 fn a_name_nothing_binds_is_left_for_the_prelude() {
     let checked = module(concat!(
         "fn pass(value: i64) -> i64 {\n",
-        "    when modified(value) && valid(value) { return delta_value(value) }\n",
+        "    when modified(value) && valid(value) { return smooth(delta_value(value)) }\n",
         "}\n",
         "fn again(value: i64) -> i64 {\n",
-        "    when { return delta_value(value) }\n",
+        "    when { return clamp(smooth(value)) }\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
-    assert_eq!(
-        checked.prelude_names("m"),
-        ["modified", "valid", "delta_value"]
-    );
+    assert_eq!(checked.prelude_names("m"), ["smooth", "clamp"]);
 }
 
 // ---- UNIT-12 and UNIT-5: one binding for a name ----

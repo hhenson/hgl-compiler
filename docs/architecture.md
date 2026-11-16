@@ -483,7 +483,7 @@ hook is a `Stmt::Hook` with its condition and its statements.
 | A temporal parameter | A value of its declared type, as in a value function | FN-3 |
 | `valid(value)`, `modified(value)`, `scheduled()` | A bool: an operation on the endpoint, which is the language's own and no call of a function | TIME-9 |
 | `delta_value(value)`, `last_modified(value)` | The input's type; a `datetime?` | TIME-9 and core's endpoint contract |
-| `valid()`, `valid([a, b])`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
+| `valid()`, `valid(a, b)`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
 | `out` | The node's result: read, or assigned | TIME-7 |
 | `return`, `return value` | Ends the evaluation; the value is of the result's type and is published | FN-7 |
 | A call | Of a value function or an operator's value candidate | FN-3 |
@@ -493,6 +493,8 @@ What is rejected there:
 | Written | Rejected as | Rule |
 | --- | --- | --- |
 | An endpoint operation given a state, a `const` parameter or an expression | `endpoint.argument` | TIME-9 |
+| A sequence that names inputs, `valid([a, b])`, or any sequence given to another operation | `endpoint.argument` | TIME-3, TIME-9 |
+| A second input given to `modified`, or to any operation but `valid` | `argument.unexpected` | TIME-9 |
 | `out` read or written in `start`; written, or `invalidate(out)`, in `stop`; `return value` in either | `out.lifecycle` | TIME-7 |
 | A temporal function called in a hook | `call.role` | FN-3 |
 
@@ -502,7 +504,7 @@ A `when` reads an input's payload only where the input is valid
 | Header | Admits | A read of an input in the body |
 | --- | --- | --- |
 | No `valid` selector alone or as a top-level conjunct: `when { }`, `when modified() { }`, `when !valid(a) { }` | Every temporal input: the default | Free |
-| `valid(a)`, `valid([a, b])` | Those named | `a` free; any other needs a guard |
+| `valid(a)`, `valid(a, b)` | Those named | `a` free; any other needs a guard |
 | `valid([])` | None: manual admission | Every one needs a guard |
 
 A guard is `valid(input)`, on the input by its name, proved where the
@@ -894,8 +896,10 @@ Core declares part of its module so far: the comparison outcome and the
 symbol operators. A name that nothing binds is therefore not reported:
 the analysed program lists it as left for the prelude, once for each
 module, and `hgl check` prints the list. Over core's conformance cases
-and the specification's complete examples the list is `delta_value`,
-`get`, `info`, `invalidate`, `modified` and `valid`.
+and the complete examples of the specification and core the list is
+`get`, `info` and `schedule`. The operations on an endpoint, `valid`
+and the rest, are the language's own (TIME-9): no declaration binds
+one, the prelude's included, and none is listed.
 
 ### Leaving declarations out
 

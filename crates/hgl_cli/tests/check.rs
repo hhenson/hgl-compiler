@@ -8,15 +8,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// UNIT-11, OPS-9: the pinned core's temporal identity candidates use
-/// intrinsics the prelude does not bind yet. Keep these gaps visible in
-/// the CLI output, including when the compiler supplies core implicitly.
-const CORE_PRELUDE_STATUS: &str = concat!(
-    "left for the prelude (UNIT-11), which does not bind them yet:\n",
-    "  <core>/core/core.hgl:90:10 valid\n",
-    "  <core>/core/core.hgl:93:22 invalidate\n",
-);
-
 /// Runs `hgl` with `arguments` and waits for it to finish.
 fn hgl(arguments: &[&str]) -> Output {
     // Cargo builds the binary before the test and puts its path in this
@@ -120,13 +111,11 @@ fn a_program_is_found_under_its_roots_and_listed() {
             "  export temporal function shared()\n",
             "  operator add(left: i64, right: i64) -> i64\n",
             "checked 3 files in 2 modules: no errors\n",
-            "modules, declarations, imports, names, written types and the bodies of value functions are checked; temporal bodies are not yet\n",
-            "{prelude}",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; conditionals and loops in a graph, sources, tests and eval are not yet\n",
         ),
         app = app,
         part = part,
         lib = lib,
-        prelude = CORE_PRELUDE_STATUS,
     );
     assert_eq!(text(&output.stdout), expected);
 
@@ -135,13 +124,9 @@ fn a_program_is_found_under_its_roots_and_listed() {
     assert_eq!(quiet.status.code(), Some(0));
     assert_eq!(
         text(&quiet.stdout),
-        format!(
-            concat!(
-                "checked 3 files in 2 modules: no errors\n",
-                "modules, declarations, imports, names, written types and the bodies of value functions are checked; temporal bodies are not yet\n",
-                "{prelude}",
-            ),
-            prelude = CORE_PRELUDE_STATUS,
+        concat!(
+            "checked 3 files in 2 modules: no errors\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; conditionals and loops in a graph, sources, tests and eval are not yet\n",
         )
     );
 }
@@ -161,13 +146,9 @@ fn a_rejected_program_reports_each_error_and_exits_one() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         text(&output.stdout),
-        format!(
-            concat!(
-                "checked 2 files in 1 module: 2 errors\n",
-                "modules, declarations, imports, names, written types and the bodies of value functions are checked; temporal bodies are not yet\n",
-                "{prelude}",
-            ),
-            prelude = CORE_PRELUDE_STATUS,
+        concat!(
+            "checked 2 files in 1 module: 2 errors\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; conditionals and loops in a graph, sources, tests and eval are not yet\n",
         )
     );
     let stderr = text(&output.stderr);
@@ -210,12 +191,11 @@ fn a_name_left_for_the_prelude_is_listed() {
         format!(
             concat!(
                 "checked 1 file in 1 module: no errors\n",
-                "modules, declarations, imports, names, written types and the bodies of value functions are checked; temporal bodies are not yet\n",
-                "{prelude}",
+                "modules, declarations, imports, names, written types and the bodies of value functions, nodes and graphs are checked; conditionals and loops in a graph, sources, tests and eval are not yet\n",
+                "left for the prelude (UNIT-11), which does not bind them yet:\n",
                 "  {file}:2:9 add\n",
             ),
-            file = file,
-            prelude = CORE_PRELUDE_STATUS,
+            file = file
         )
     );
 }
@@ -354,7 +334,7 @@ fn core_is_supplied_when_the_roots_hold_none() {
     );
     assert!(stdout.contains("module examples.core_use\n"), "{stdout}");
     assert!(!stdout.contains("module core\n"), "{stdout}");
-    assert!(stdout.ends_with(CORE_PRELUDE_STATUS), "{stdout}");
+    assert!(!stdout.contains("left for the prelude"), "{stdout}");
 
     // A program that brings its own `module core` is checked with that
     // one, which is then counted and listed with the rest.

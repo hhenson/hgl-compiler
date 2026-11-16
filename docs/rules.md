@@ -237,7 +237,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-1 | transpiler | planned | Endpoint observations: validity, modification, retained data, delta |
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
-| TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name. Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
+| TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none. A sequence that names inputs is no selector's form (`endpoint.argument`). Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
 | TIME-3 | transpiler | planned | Conditions checked in source order; a satisfied body runs, then checking continues unless it returns |
 | TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
 | TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
@@ -246,7 +246,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). Left: piecewise mutation of `out` |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
 | TIME-8 | analyser | partial | `inject` names one of the listed capabilities. Left: capabilities used receiver-first and never passed as data; clock properties read-only |
-| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument or a sequence. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in; helpers inheriting capabilities |
+| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument, `valid` with several inputs or with `[]`. Their names are the language's, and are not listed as left for the prelude. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in; helpers inheriting capabilities |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 
 ## Control flow and sources
@@ -418,7 +418,7 @@ the same numeric rules the transpiler rows give.
 | OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
 | OPS-8 | analyser | partial | The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T and is given a compile-time constant, `rounding` and `nan` are parameters, and an option is admitted only for the conversions that declare it. Left: temporal bodies |
 | OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
-| OPS-9 | analyser | planned | Explicit `invalid: .identity` selects same-type temporal addition or subtraction; verify the required closed value operations; unconfigured calls use ordinary lifting |
+| OPS-9 | analyser | done | In a graph `invalid: .identity`, by symbol or by name, selects core's temporal candidate of `add_` or `sub_` for two operands of one type, where the value operations it requires exist for that type (GEN-16); without the option the value candidate is selected and lifted. Core's two candidates are nodes, and are read as any node is |
 | OPS-9 | transpiler | planned | One valid operand is forwarded (right-only subtraction negates it); both invalid invalidate the output; ordered handlers return after the first publication |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |

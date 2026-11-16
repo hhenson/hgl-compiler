@@ -14,6 +14,8 @@ use std::fs;
 use std::path::Path;
 
 use common::{Checked, check};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt};
+use hgl_analyser::{DeclarationKind, Role};
 
 /// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
 /// so the text given starts on line 2. The program has core's module,
@@ -299,6 +301,118 @@ fn a_comparison_is_of_two_values_of_one_type() {
             "l2: bool",
             "l3: bool",
             "c1: CmpResult",
+        ]
+    );
+}
+
+/// OPS-9: "Same-type temporal addition and subtraction may select an
+/// `invalid: .identity`, a const generic `InvalidInputPolicy` whose
+/// member is `identity`. Addition requires a value `add_(T, T) -> T`;
+/// subtraction requires value `sub_(T, T) -> T` and `neg_(T) -> T`. The
+/// option admits no mixed operand or result types ... Omission keeps
+/// ordinary candidate selection and lifting and validity admission.
+/// These temporal candidates require the explicit `.identity` option."
+///
+/// Core's two candidates are nodes, generic in the operand type, that
+/// state those operations in `requires` (GEN-16); a call in composition
+/// selects among temporal and value candidates (GEN-5).
+#[test]
+fn identity_arithmetic_is_selected_by_its_option() {
+    let checked = with_core(concat!(
+        "fn uses(a: f64, b: f64, n: i64, text: str, flag: bool) -> f64 {\n",
+        // Omitted: the value candidate, lifted.
+        "    let plain = a + b\n",
+        "    let kept = a +{invalid: .identity} b\n",
+        "    let named = add_(a, b, invalid: .identity)\n",
+        "    let less = a -{invalid: .identity} b\n",
+        "    let whole = n -{invalid: .identity} n\n",
+        "    let words = text +{invalid: .identity} text\n",
+        // No mixed operands; a `bool` is not added; a `str` is not
+        // subtracted.
+        "    let mixed = a +{invalid: .identity} n\n",
+        "    let bad = flag +{invalid: .identity} flag\n",
+        "    let gone = text -{invalid: .identity} text\n",
+        "    return kept\n",
+        "}\n",
+        // A generic graph states what its parameter needs (GEN-7).
+        "fn stated<T>(lhs: T, rhs: T) -> T\n",
+        "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
+        "fn unstated<T>(lhs: T, rhs: T) -> T => lhs +{invalid: .identity} rhs\n",
+        // A value function selects among value candidates, and none
+        // declares the option (EXPR-10: a configuration entry names an
+        // option of the candidates).
+        "const fn value(a: f64, b: f64) -> f64 => a +{invalid: .identity} b\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:19 operator/operator.no_candidate OPS-1",
+            "m.hgl:10:20 operator/operator.no_candidate OPS-1",
+            "m.hgl:11:21 operator/operator.no_candidate OPS-1",
+            "m.hgl:16:44 operator/operator.no_candidate OPS-1",
+            "m.hgl:17:46 name/argument.unknown EXPR-10",
+        ]
+    );
+    // The role of the candidate each of the first four locals calls.
+    let module = checked.program.module("m").expect("module m exists");
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == "uses")
+        .expect("the declaration exists");
+    let body = module.bodies[index].as_ref().expect("it has a body");
+    let roles: Vec<Role> = body.statements[..4]
+        .iter()
+        .map(|statement| {
+            let Stmt::Declare {
+                value: Some(value), ..
+            } = statement
+            else {
+                panic!("a local with a value: {statement:?}");
+            };
+            let ExprKind::Call {
+                callee:
+                    Callee::Candidate {
+                        module,
+                        declaration,
+                        ..
+                    },
+                ..
+            } = &value.kind
+            else {
+                panic!("a candidate's call: {:?}", value.kind);
+            };
+            match checked.program.modules[*module].declarations[*declaration].kind {
+                DeclarationKind::Implementation(role, _)
+                | DeclarationKind::NativeCandidate(role, _) => role,
+                other => panic!("a candidate: {other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        [Role::Value, Role::Temporal, Role::Temporal, Role::Temporal]
+    );
+    let locals: Vec<String> = body.locals[5..11]
+        .iter()
+        .map(|local| {
+            let connection = if local.connection {
+                " (connection)"
+            } else {
+                ""
+            };
+            format!("{}: {}{connection}", local.name, local.ty)
+        })
+        .collect();
+    assert_eq!(
+        locals,
+        [
+            "plain: f64 (connection)",
+            "kept: f64 (connection)",
+            "named: f64 (connection)",
+            "less: f64 (connection)",
+            "whole: i64 (connection)",
+            "words: str (connection)",
         ]
     );
 }

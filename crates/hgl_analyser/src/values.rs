@@ -498,19 +498,19 @@ impl<'a> Typer<'a> {
                 }
                 let list = child(header, SyntaxKind::ArgList)?;
                 let arguments = arguments_of(&list);
-                let Some((_, first)) = arguments.first() else {
+                if arguments.is_empty() {
                     // `valid()`: every temporal input.
                     return Some(self.temporal_inputs());
-                };
-                let entries: Vec<SyntaxNode> = match first.kind() {
-                    SyntaxKind::SequenceExpr => first.children().collect(),
-                    _ => vec![first.clone()],
-                };
-                // What names no input is reported where the header is
-                // read, and admits nothing here.
+                }
+                // TIME-3: "`valid(a, b)` requires both named inputs,
+                // and similarly for more inputs ... `valid([])` requires
+                // no inputs to be valid." What names no input, the `[]`
+                // among them, admits nothing here, and any other is
+                // reported where the header is read.
                 Some(
-                    entries
+                    arguments
                         .iter()
+                        .map(|(_, entry)| entry)
                         .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
                         .filter_map(|entry| self.local_of(entry))
                         .filter(|local| self.is_temporal_input(*local))
@@ -578,8 +578,10 @@ impl<'a> Typer<'a> {
 
     /// An operation on an endpoint (TIME-9): "Elsewhere each takes a
     /// temporal input of the enclosing function by its name, or `out`".
-    /// With no argument, or a sequence of them, it is a selector of a
-    /// `when` header (TIME-3).
+    /// `valid` and `modified` are also the selectors of a `when` header
+    /// (TIME-3): "`valid()` requires all temporal inputs to be valid;
+    /// `valid(a, b)` requires both named inputs, and similarly for more
+    /// inputs ... `valid([])` requires no inputs to be valid."
     fn endpoint(
         &mut self,
         operation: EndpointOperation,
@@ -591,10 +593,12 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|(_, value)| value)
             .collect();
-        // How many it takes: a selector may stand with none.
+        // How many it takes: a selector may stand with none, and
+        // `valid` with as many inputs as it names.
         let (fewest, most) = match operation {
             EndpointOperation::Scheduled => (0, 0),
-            EndpointOperation::Valid | EndpointOperation::Modified => (0, 1),
+            EndpointOperation::Valid => (0, usize::MAX),
+            EndpointOperation::Modified => (0, 1),
             _ => (1, 1),
         };
         if arguments.len() < fewest {
@@ -623,23 +627,25 @@ impl<'a> Typer<'a> {
                 "TIME-9",
             ));
         }
-        // The endpoints named: one, or for a selector the entries of a
-        // sequence (TIME-3: `valid([])`). Any other operation takes one
-        // endpoint by its name, and a sequence is none.
-        let selector = matches!(
-            operation,
-            EndpointOperation::Valid | EndpointOperation::Modified
-        );
-        let inputs: Option<Vec<LocalId>> = arguments.first().filter(|_| most == 1).map(|first| {
-            let entries: Vec<SyntaxNode> = match first.kind() {
-                SyntaxKind::SequenceExpr if selector => first.children().collect(),
-                _ => vec![first.clone()],
-            };
-            entries
-                .iter()
-                .filter_map(|entry| self.endpoint_named(operation, entry))
-                .collect()
-        });
+        // The endpoints named, each by its name. `valid([])` names
+        // none (TIME-3); any other sequence is no endpoint, and is
+        // reported as one.
+        let none = operation == EndpointOperation::Valid
+            && matches!(arguments.as_slice(), [only]
+                if only.kind() == SyntaxKind::SequenceExpr && only.children().next().is_none());
+        let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
+            None
+        } else if none {
+            Some(Vec::new())
+        } else {
+            Some(
+                arguments
+                    .iter()
+                    .take(most)
+                    .filter_map(|entry| self.endpoint_named(operation, entry))
+                    .collect(),
+            )
+        };
         let writes = operation == EndpointOperation::Invalidate;
         if let (Some(inputs), Some(out)) = (&inputs, self.out)
             && inputs.contains(&out)
@@ -706,8 +712,14 @@ impl<'a> Typer<'a> {
                     ),
                     "TIME-9",
                 ));
-                // Read for what it reports itself.
+                // Read for what it reports itself. The argument is
+                // rejected already, so what it reads of an input is not
+                // judged as well (ERR-9).
+                let frame = self.present.len();
+                let inputs = self.temporal_inputs();
+                self.present.extend(inputs.into_iter().map(Fact::Valid));
                 self.expression(node, Some(&Type::Unknown));
+                self.present.truncate(frame);
                 None
             }
         }
