@@ -1164,6 +1164,35 @@ fn a_question_mark_after_an_expression_propagates_a_result() {
     );
 }
 
+#[test]
+fn the_result_forms_are_calls_and_a_postfix() {
+    // ERR-13: "`ok`, `err`, `is_ok`, `is_err`, and `capture` are
+    // contextual names (LEX-10): as the callee of a call each is the
+    // form this chapter defines". The chapter's grammar: each "is a
+    // `postfix_expr` ... the first four are calls whose callee is the
+    // name written, and `?` is the postfix suffix."
+    assert_eq!(
+        statements("return ok(v)"),
+        "ReturnStmt[\"return\" CallExpr[NameExpr[\"ok\"] ArgList[\"(\" Arg[NameExpr[\"v\"]] \")\"]]]"
+    );
+    for text in [
+        "return err(error(message: \"negative\", code: \"price.negative\"))",
+        "if is_err(outcome) { return 0 }",
+        "if is_ok(outcome) { return outcome.value }",
+        "let seen = capture(required, value)",
+        "let named = capture(required, value: price)",
+    ] {
+        let outline = statements(text);
+        assert!(outline.contains("CallExpr[NameExpr["), "{text}: {outline}");
+    }
+    // ERR-5: "`a()? + b` propagates before the addition."
+    assert_eq!(
+        statements("let c = a()? + b"),
+        "LocalDecl[\"let\" \"c\" \"=\" BinaryExpr[TryExpr[CallExpr[NameExpr[\"a\"] \
+         ArgList[\"(\" \")\"]] \"?\"] \"+\" NameExpr[\"b\"]]]"
+    );
+}
+
 // ---- EXPR-1, EXPR-11 ----
 
 #[test]
