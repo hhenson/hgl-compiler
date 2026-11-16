@@ -1802,6 +1802,7 @@ impl<'a> Typer<'a> {
             generics,
             settled: !expected.is_some_and(open),
             aside: &value_names,
+            values: &named,
         };
         let Inferred {
             arguments,
@@ -2144,6 +2145,7 @@ impl<'a> Typer<'a> {
             generics,
             settled,
             aside,
+            values: named,
         } = places;
         // The parameters being resolved. A place's type that still
         // names one once what was found is in place is not known.
@@ -2213,6 +2215,33 @@ impl<'a> Typer<'a> {
                 // the place's type, which that reading did not know.
                 unfitted[position] = by_place;
             }
+        }
+        // GEN-13: a generic value parameter's type may name a type
+        // parameter, the `T` of `<T, const fallback: T>`. What the call
+        // gives it says what that is where the places have not, in the
+        // order declared (GEN-12), and before any argument is held to
+        // its place: the `null` of `pick(null, fallback: 1)` is then
+        // given to an `i64`. The value is read again, and held to its
+        // own type, once every parameter is found.
+        let mut ordered: Vec<&(usize, SyntaxNode)> = named.iter().collect();
+        ordered.sort_by_key(|(index, _)| *index);
+        for (index, node) in ordered {
+            let GenericKind::Value(pattern) = &generics[*index].kind else {
+                continue;
+            };
+            let unfound: Vec<Location> = generics
+                .iter()
+                .zip(&found)
+                .filter(|(_, found)| found.is_none())
+                .map(|(generic, _)| generic.at)
+                .collect();
+            if takes_its_type(node) || !mentions(pattern, &unfound) || !self.may_reread() {
+                continue;
+            }
+            let mark = self.mark();
+            let value = self.expression(node, Some(&Type::Unknown));
+            infer(pattern, &value.ty, generics, &mut found);
+            self.take_back(mark, false);
         }
         // Every argument is of its place's type with what was found in
         // place: `Pair(first: 1, second: "x")` gives `second: T` a `str`
@@ -3406,6 +3435,7 @@ impl<'a> Typer<'a> {
                     generics: &read.generics,
                     settled,
                     aside: &[],
+                    values: &[],
                 };
                 let found = vec![None; read.generics.len()];
                 let Inferred {
@@ -5769,6 +5799,9 @@ struct Places<'s> {
     /// a generic value parameter of the callee (GEN-8), and is read
     /// with the call's generic arguments.
     aside: &'s [&'s str],
+    /// What the call gives those: each with the position of its
+    /// parameter among `generics`.
+    values: &'s [(usize, SyntaxNode)],
 }
 
 /// What [`Typer::infer_arguments`] read.

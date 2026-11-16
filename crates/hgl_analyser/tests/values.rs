@@ -2976,6 +2976,9 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
         // The default, `2`, is an `f64` beside one and no `str`.
         "    let real = hold(1.5)\n",
         "    let text = hold(\"a\")\n",
+        // What `fallback` is given says `T` is an `i64`, before the
+        // argument is held to it: a `null` is no `i64`.
+        "    let absent = hold(null, fallback: 1)\n",
         "}\n",
     ));
     assert_eq!(
@@ -2987,6 +2990,7 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
             "m.hgl:8:37 name/argument.duplicate EXPR-2",
             "m.hgl:9:28 name/argument.unknown EXPR-2",
             "m.hgl:11:16 type/type.mismatch GEN-13",
+            "m.hgl:12:23 type/type.mismatch TYPE-14",
         ]
     );
     assert_eq!(
