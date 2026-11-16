@@ -6,8 +6,11 @@ Written by the hgl compiler beside the modules it generates.
 from hgraph.test import eval_node
 
 
-def evaluate(target, **arguments):
+def evaluate(target, /, **arguments):
     """Runs `target` with a dense trace for each temporal input.
+
+    `target` is given by position alone, so that an input of the target
+    may itself be named `target`.
 
     A trace is a list with one cell for each engine step from the run's
     start, and `None` where nothing is published. The result is the dense

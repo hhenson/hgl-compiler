@@ -1250,9 +1250,9 @@ files a generated module imports.
 | HGL | Python |
 | --- | --- |
 | `const fn` | A plain function |
-| A node, a `fn` with a `when` | `@compute_node`, or `@sink_node` where it has no result |
-| A graph | `@graph` |
-| A temporal parameter | `name: TS[type]`; in a hook its payload is `name.value` |
+| A node, a `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` where it has no result. hgraph is imported as `_hg` |
+| A graph | `@_hg.graph` |
+| A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
 | A function of another module | `alias.name`, the module imported as `_hgl_` and its path: two modules may each have a `pick` |
@@ -1261,7 +1261,9 @@ files a generated module imports.
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `hgl_core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | A named test | A function `test_name` |
-| `eval(target, input: [7, _, 9])` | `evaluate(target, input=[7, None, 9])` of `hgl_harness` |
+| `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `hgl_harness` |
+| A name | Itself, but where Python or the target would take it. A Python word, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
+| A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
 
 Core's native functions are the target's to provide (NATIVE-7):
 `hgl_core_native.py` is that provider, written by hand in the crate and

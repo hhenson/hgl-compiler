@@ -13,14 +13,14 @@
 //! | HGL | Python |
 //! | --- | --- |
 //! | `const fn` | A plain function |
-//! | A node, `fn` with a `when` | `@compute_node`, or `@sink_node` with no result |
-//! | A temporal parameter | `name: TS[type]`; its payload is `name.value` |
+//! | A node, `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` with no result |
+//! | A temporal parameter | `name: _hg.TS[type]`; its payload is `name.value` |
 //! | A `const` parameter of a node | A scalar parameter |
 //! | `state name: T = value` | A field of the node's `STATE`, set in its `start` |
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 //! | A native candidate of core | A function of `hgl_core_native` |
 //! | A named test | A function `test_name` |
-//! | `eval(target, input: [7, _, 9])` | `evaluate(target, input=[7, None, 9])` of `hgl_harness` |
+//! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.
 
