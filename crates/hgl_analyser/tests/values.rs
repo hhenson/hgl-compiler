@@ -650,8 +650,6 @@ fn a_form_not_read_yet_is_not_reported() {
         "    let after: str = total + prelude\n",
         "    return prelude\n",
         "}\n",
-        // A temporal function is for the pass that reads phases.
-        "fn temporal(a: i64) -> str => a\n",
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(

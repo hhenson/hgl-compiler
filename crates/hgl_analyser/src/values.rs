@@ -122,6 +122,24 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     )
                     .node()
                 }
+                // FN-2: a graph, whose body describes composition.
+                (
+                    DeclarationKind::Function(Role::Temporal)
+                    | DeclarationKind::Implementation(Role::Temporal, _),
+                    Some(Detail::Callable(signature)),
+                ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => Typer::new(
+                    program,
+                    module,
+                    declaration,
+                    signature,
+                    Tables {
+                        bindings: &bindings,
+                        written: &written,
+                        calls: &calls,
+                    },
+                    diagnostics,
+                )
+                .graph(),
                 _ => None,
             };
             bodies.push(body);
@@ -171,6 +189,10 @@ struct Typer<'a> {
     /// True once a statement this pass does not read has been met: it
     /// may return, so the function is not said to end with no value.
     unsure: bool,
+    /// True while a graph's body is read: composition, where a
+    /// temporal parameter is a connection and no payload is read
+    /// (FN-3).
+    graph: bool,
     /// The hook of a node being read; `None` in a value function, and
     /// between a node's hooks.
     hook: Option<Hook>,
@@ -228,6 +250,7 @@ impl<'a> Typer<'a> {
             rereads: REREADS,
             returned: false,
             unsure: false,
+            graph: false,
             hook: None,
             out: None,
             present: Vec::new(),
@@ -273,6 +296,7 @@ impl<'a> Typer<'a> {
             at,
             kind,
             ty,
+            connection: false,
         });
         self.assigned.push(assigned);
         self.declared.insert(at, local);
@@ -287,6 +311,25 @@ impl<'a> Typer<'a> {
     /// statement and its value is dropped ... A `const fn` that declares
     /// a result ends every path in `return value` or in its body's
     /// value: one that can reach its end with no value rejects."
+    /// The body of a graph: composition (FN-2, FN-3).
+    ///
+    /// "There a temporal parameter, and the result of a temporal or
+    /// lifted call, is a connection: the argument of a call, the
+    /// operand of a symbol, a condition, a bound local, or what is
+    /// returned." A `const` parameter is an ordinary value, known while
+    /// the graph is built.
+    ///
+    /// Read so far: locals, calls and symbols, and what is returned. A
+    /// conditional and a loop in composition are for a later part
+    /// (CTRL-1 to CTRL-8), and are not read.
+    fn graph(mut self) -> Option<Body> {
+        self.graph = true;
+        for (local, parameter) in self.signature.parameters.iter().enumerate() {
+            self.locals[local].connection = !parameter.constant;
+        }
+        self.body()
+    }
+
     /// The body of a node: its declarations and then its hooks (FN-2).
     /// A statement that is neither has been reported by `phases`, and
     /// is not read.
@@ -675,10 +718,14 @@ impl<'a> Typer<'a> {
                 None => Vec::new(),
             }
         };
+        // FN-7: "A `const fn` that declares a result ends every path in
+        // `return value` or in its body's value". What a graph's body
+        // comes to is for the part that reads composition whole.
         if let Some(result) = &result
             && !open(result)
             && !self.returned
             && !self.unsure
+            && !self.graph
         {
             self.diagnostics.emit(error(
                 Category::Type,
@@ -794,6 +841,11 @@ impl<'a> Typer<'a> {
                 Some(value) => Stmt::Expr(self.flow(&value, None, false).0),
                 None => Stmt::Unread { at: self.at(node) },
             },
+            // CTRL-7: a loop in composition, and a `switch` there, are
+            // for a later part.
+            SyntaxKind::WhileStmt | SyntaxKind::ForStmt | SyntaxKind::SwitchStmt if self.graph => {
+                self.unread(node)
+            }
             SyntaxKind::WhileStmt => self.while_loop(node),
             SyntaxKind::ForStmt => self.for_loop(node),
             SyntaxKind::SwitchStmt => self.switch(node),
@@ -862,6 +914,12 @@ impl<'a> Typer<'a> {
         // is declared with no value ... it is assigned from there".
         let assigned = value.is_some() || matches!(ty, Type::Nullable(_));
         let local = self.declare(name.text(), at, kind, ty, assigned);
+        // EXPR-3: "Initialization fixes a binding's value/connection
+        // category".
+        self.locals[local].connection = self.graph
+            && value
+                .as_ref()
+                .is_some_and(|value| self.is_connection(value));
         Stmt::Declare { local, value }
     }
 
@@ -1054,7 +1112,121 @@ impl<'a> Typer<'a> {
         if matches!(kind, ExprKind::Unread) {
             self.forget();
         }
+        if self.graph {
+            self.constants_of(&kind);
+        }
         Expr { kind, ty, at }
+    }
+
+    /// True when a value read in a graph is a connection (FN-3): a
+    /// temporal parameter, a local given one, the result of a temporal
+    /// function or candidate, or of a call given one, which is lifted
+    /// (FN-6). Any other is an ordinary value, known while the graph is
+    /// built.
+    fn is_connection(&self, value: &Expr) -> bool {
+        let program = self.program;
+        let any = |values: &[Expr]| values.iter().any(|value| self.is_connection(value));
+        match &value.kind {
+            ExprKind::Local(local) => self.locals[*local].connection,
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let temporal = match callee {
+                    Callee::Function {
+                        module,
+                        declaration,
+                        ..
+                    } => matches!(
+                        program.modules[*module].declarations[*declaration].kind,
+                        DeclarationKind::Function(Role::Temporal)
+                            | DeclarationKind::NativeFunction(Role::Temporal)
+                    ),
+                    Callee::Candidate {
+                        module,
+                        declaration,
+                        ..
+                    } => matches!(
+                        program.modules[*module].declarations[*declaration]
+                            .kind
+                            .candidate(),
+                        Some((Role::Temporal, _))
+                    ),
+                    Callee::Unread => false,
+                };
+                temporal
+                    || arguments
+                        .iter()
+                        .any(|argument| self.is_connection(&argument.value))
+            }
+            ExprKind::Construct { arguments, .. } => arguments
+                .iter()
+                .any(|argument| self.is_connection(&argument.value)),
+            ExprKind::Unary { operand, .. } => self.is_connection(operand),
+            ExprKind::Binary { left, right, .. } => {
+                self.is_connection(left) || self.is_connection(right)
+            }
+            ExprKind::Widen(inner) => self.is_connection(inner),
+            ExprKind::Field { base, .. } => self.is_connection(base),
+            ExprKind::Index { base, index } => {
+                self.is_connection(base) || self.is_connection(index)
+            }
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => any(entries),
+            ExprKind::Block {
+                value: Some(value), ..
+            } => self.is_connection(value),
+            _ => false,
+        }
+    }
+
+    /// FN-3: "Where a constant is required ... a `const` parameter's
+    /// argument ... a connection rejects." A connection has no value
+    /// while the graph is built.
+    fn constants_of(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            Callee::Unread => return,
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        for argument in arguments {
+            let parameter = argument
+                .parameter
+                .and_then(|index| signature.parameters.get(index));
+            let Some(parameter) = parameter else {
+                continue;
+            };
+            if parameter.constant && self.is_connection(&argument.value) {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::CONNECTION_AS_CONSTANT,
+                    argument.value.at,
+                    format!(
+                        "`{}` is a `const` parameter, and this is a connection: it has no \
+                         value while the graph is built",
+                        parameter.name
+                    ),
+                    "FN-3",
+                ));
+            }
+        }
     }
 
     /// What a form this pass does not read assigns is not followed, so
@@ -2219,6 +2391,19 @@ impl<'a> Typer<'a> {
     ) -> (ExprKind, Type) {
         let program = self.program;
         let kind_of = |declaration: usize| program.modules[module].declarations[declaration].kind;
+        // FN-4: "Composition and eval choose the temporal definition if
+        // one exists; runtime/value evaluation chooses the value
+        // definition." FN-3: "A composition body calls any function".
+        let temporal_function = declarations.iter().copied().find(|&declaration| {
+            matches!(
+                kind_of(declaration),
+                DeclarationKind::Function(Role::Temporal)
+                    | DeclarationKind::NativeFunction(Role::Temporal)
+            )
+        });
+        if let (true, Some(declaration)) = (self.graph, temporal_function) {
+            return self.call_function(name, list, (module, declaration), expected, generics);
+        }
         let value_function = declarations.iter().copied().find(|&declaration| {
             matches!(
                 kind_of(declaration),
@@ -3434,7 +3619,15 @@ impl<'a> Typer<'a> {
         let mut candidates = Vec::new();
         for (module, declared) in program.modules.iter().enumerate() {
             for (declaration, candidate) in declared.declarations.iter().enumerate() {
-                if candidate.kind.candidate() != Some((Role::Value, Some(operator))) {
+                // GEN-5: "A call in a value function or a runtime body
+                // selects among the value candidates. A call in
+                // composition selects among all of them".
+                let admitted = match candidate.kind.candidate() {
+                    Some((Role::Value, Some(of))) => of == operator,
+                    Some((Role::Temporal, Some(of))) => self.graph && of == operator,
+                    _ => false,
+                };
+                if !admitted {
                     continue;
                 }
                 if let Some(Detail::Callable(signature)) = declared.details.get(declaration) {
@@ -3600,6 +3793,41 @@ impl<'a> Typer<'a> {
         most_specific(&mut selected, public.parameters.len());
         if widened && selected.len() > 1 {
             Self::prefer_widened(&mut selected, public, given);
+        }
+        // GEN-5: in composition "a temporal candidate outranks a value
+        // candidate of the same parameter types, as composition chooses
+        // the temporal definition of a pair (FN-4)."
+        if self.graph && selected.len() > 1 {
+            let temporal = |chosen: &Chosen| {
+                matches!(
+                    program.modules[chosen.module].declarations[chosen.declaration]
+                        .kind
+                        .candidate(),
+                    Some((Role::Temporal, _))
+                )
+            };
+            let types = |chosen: &Chosen| -> Vec<Type> {
+                chosen
+                    .taken
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.ty.clone())
+                    .collect()
+            };
+            let outranked: Vec<bool> = selected
+                .iter()
+                .map(|chosen| {
+                    !temporal(chosen)
+                        && selected
+                            .iter()
+                            .any(|other| temporal(other) && types(other) == types(chosen))
+                })
+                .collect();
+            let mut position = 0;
+            selected.retain(|_| {
+                position += 1;
+                !outranked[position - 1]
+            });
         }
         (selected, untold)
     }
@@ -6113,6 +6341,19 @@ impl<'a> Typer<'a> {
     fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
         match node.kind() {
             SyntaxKind::Block => self.block(node, expected, used),
+            // CTRL-1: in composition a condition chooses which branch
+            // to compose, or selects a child graph when it is temporal.
+            // That is for a later part, and is not read.
+            SyntaxKind::IfExpr if self.graph => {
+                self.forget();
+                self.unsure = true;
+                let unread = Expr {
+                    kind: ExprKind::Unread,
+                    ty: Type::Unknown,
+                    at: self.at(node),
+                };
+                (unread, Outcome::Value(Type::Unknown))
+            }
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
             SyntaxKind::ParenExpr if node.children().next().is_some() => {
                 // "Parentheses select grouping" (EXPR-1).

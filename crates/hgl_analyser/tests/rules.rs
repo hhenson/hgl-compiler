@@ -1018,12 +1018,12 @@ fn an_omitted_item_is_not_declared() {
         "module m\n",
         "use lib::{missing}\n",
         "fn f() {}\n",
-        "fn f() { return 1 }\n",
+        "fn f() { return }\n",
         "test t { assert true }\n",
         "test t { assert false }\n",
         "test {\n",
         "    fn helper() {}\n",
-        "    fn helper() { return 1 }\n",
+        "    fn helper() { return }\n",
         "}\n",
     );
     let whole = check(&[lib, ("m.hgl", text)]);
@@ -1043,9 +1043,9 @@ fn an_omitted_item_is_not_declared() {
         }
         vec![
             span_of(text, "use lib::{missing}", "}"),
-            span_of(text, "fn f() { return 1 }", "}"),
+            span_of(text, "fn f() { return }", "}"),
             span_of(text, "test t { assert false }", "}"),
-            span_of(text, "fn helper() { return 1 }", "}"),
+            span_of(text, "fn helper() { return }", "}"),
         ]
     });
     assert_eq!(without.front_end_errors, 0);

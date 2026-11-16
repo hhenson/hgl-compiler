@@ -516,10 +516,36 @@ reads are not judged.
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
 
-Not read yet: a capability used as data (`capability.as_value`); what
-`modified` subscribes to. A graph's body is not read: connections,
-lifting and an operator's temporal candidates come next, then
-conditionals and loops in composition.
+Not read yet in a node: a capability used as data
+(`capability.as_value`); what `modified` subscribes to.
+
+A graph's body describes composition, and is read into the same typed
+form. Every value in it is one of two things (FN-3, EXPR-3, EXPR-4):
+
+| Value | Is |
+| --- | --- |
+| A temporal parameter | A connection |
+| A `const` parameter, a literal | An ordinary value, known while the graph is built |
+| A call of a temporal function, or of an operator's temporal candidate | A connection |
+| A call of a value function or a value candidate with a connection among its arguments | A connection: the call is lifted (FN-6) |
+| The same with ordinary values alone | An ordinary value: the call is made while the graph is built |
+| A local | What its first value is; `hir::Local::connection` says which |
+
+The types are the ones a value function has, so a symbol and a call
+select as they do there, with two differences (FN-4, GEN-5): a call
+takes the temporal definition of a name where there is one, and an
+operator's call selects among its temporal candidates too, one of which
+outranks a value candidate of the same parameter types. An ordinary
+value given where a connection is expected is wired as a constant, and
+nothing is reported of it. A connection given to a `const` parameter is
+`connection.as_constant`; one given to a generic value parameter is
+`generic.argument_constant`, and one that is a tuple's index
+`tuple.index`.
+
+Not read yet in a graph: `if`, `switch`, `for` and `while`, whose
+meaning in composition is its own (CTRL-1 to CTRL-8); whether a graph
+that declares a result gives one on every path; a `var` reassigned from
+a connection to an ordinary value.
 
 ### Value expressions
 
