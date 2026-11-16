@@ -5822,7 +5822,15 @@ impl<'a> Typer<'a> {
                 None
             }
         };
+        // ERR-12: the body is reached only where the condition holds,
+        // so what it proves is not null is not null there.
+        let frame = self.present.len();
+        if let Some(condition) = &condition {
+            let (when_true, _) = self.null_tests(condition);
+            self.present.extend(when_true);
+        }
         let body = self.loop_body(child(node, SyntaxKind::Block).as_ref());
+        self.present.truncate(frame);
         Stmt::While {
             condition,
             body,

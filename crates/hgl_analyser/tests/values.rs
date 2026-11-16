@@ -2921,6 +2921,11 @@ fn a_null_test_refines_an_immutable_nullable_binding() {
         "    if !(first == null) { return first }\n",
         "    return total\n",
         "}\n",
+        // A `while`'s body is reached only where its condition holds.
+        "const fn looped(value: i64?) -> i64 {\n",
+        "    while value != null { return value + 1 }\n",
+        "    return 0\n",
+        "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
     // A refined read is of the payload's type: `value + other` is the
