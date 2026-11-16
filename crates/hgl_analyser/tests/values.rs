@@ -3788,3 +3788,54 @@ fn a_symbols_configuration_is_checked_as_named_arguments_are() {
     );
     assert_eq!(messages(&checked)[0], "`/` has no option `zeo`");
 }
+/// FN-1: "a `const` parameter takes what is fixed when the graph is
+/// built. In composition that is any ordinary value. In a hook and in a
+/// value function it is a constant expression: of literals, enum
+/// members, generic value parameters, and the enclosing function's own
+/// `const` parameters."
+#[test]
+fn a_const_parameter_takes_what_is_fixed() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "native type Store\n",
+        "native const fn held(store: Store, const key: str) -> bool\n",
+        "native const fn tuned(store: Store, const way: Mode, const limit: i64 = 1) -> bool\n",
+        // A literal, the function's own `const` parameter, a generic
+        // value parameter in a constant expression, and enum members.
+        "const fn counted(store: Store) -> bool => held(store, \"count\")\n",
+        "const fn named(store: Store, const key: str) -> bool => held(store, key)\n",
+        "const fn sized<const N: i64>(store: Store) -> bool => tuned(store, .fast, N + 1)\n",
+        "const fn slowed(store: Store) -> bool => tuned(store, Mode.slow, limit: -2)\n",
+        // A value of one call: a parameter, a local, and each of two.
+        "const fn found(store: Store, key: str) -> bool => held(store, key)\n",
+        "const fn bound(store: Store) -> bool {\n",
+        "    let key = \"count\"\n",
+        "    return held(store, key)\n",
+        "}\n",
+        "const fn both(store: Store, way: Mode, size: i64) -> bool => tuned(store, way, size)\n",
+        // In a hook a node's `const` parameter is fixed, and its input
+        // is not.
+        "native const fn scaled(value: i64, const factor: i64) -> i64\n",
+        "fn node(value: i64, const factor: i64) -> i64 {\n",
+        "    when {\n",
+        "        let fine = scaled(value, factor)\n",
+        "        return scaled(value, value)\n",
+        "    }\n",
+        "}\n",
+        // In composition any ordinary value is fixed.
+        "fn graph(value: i64, const factor: i64) -> i64 {\n",
+        "    let doubled = factor * 2\n",
+        "    return scaled(value, doubled)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:63 type/argument.constant FN-1",
+            "m.hgl:13:24 type/argument.constant FN-1",
+            "m.hgl:15:75 type/argument.constant FN-1",
+            "m.hgl:15:80 type/argument.constant FN-1",
+            "m.hgl:20:30 type/argument.constant FN-1",
+        ]
+    );
+}

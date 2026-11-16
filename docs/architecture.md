@@ -723,6 +723,7 @@ The pass is built form by form. So far it reads:
 | `Side.buy`, `.buy` | TYPE-7 | A member of the enum named, or of the enum the place expects: an annotation, a parameter, a field, a result, the other operand of a comparison |
 | `value.field` | EXPR-7 | A field the struct has, a parent's included, with the value's generic arguments in place |
 | `base[index]` | EXPR-7, ERR-6 | An element of a list by an `i64`, of a tuple by a constant within its length, or the value a dictionary has for a key |
+| An argument of a `const` parameter | FN-1 | What is fixed when the graph is built. In a graph any ordinary value is, and a connection is `connection.as_constant`. In a hook, a source and a value function it is a constant expression, of literals, enum members, generic value parameters and the enclosing function's own `const` parameters; anything else is `argument.constant` |
 | `ok(value)`, `err(value)` | ERR-2, ERR-13 | A result of the complete `result<T, E>` the place expects, with the value read as its side's type. With no such place it is `result.context_type` |
 | `is_ok(value)`, `is_err(value)` | ERR-3 | A `bool`, of one result. A direct guard on an immutable result binding proves its tag as a test against null proves presence, over the same paths |
 | `binding.value`, `binding.error` | ERR-3 | The T, or the E, of a binding proved a success, or a failure. With no such proof, or on what is no binding, it is `result.required_variant` |
