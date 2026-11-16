@@ -340,31 +340,41 @@ fn a_requirement_is_tested_as_its_call_would_select() {
     assert_eq!(locals(&checked, "uses")[1..3], ["three: f64", "five: f64"]);
 }
 
-/// GEN-5: "A call in a value function or a runtime body selects among
-/// the value candidates. A call in composition selects among all of
-/// them". So what a graph requires may be met by a temporal candidate,
-/// and does not say that a value candidate, which a value candidate's
-/// own body would call (FN-3), exists.
+/// GEN-16: "a named operator requirement tests callability with the
+/// supplied types." Core's OPS-9 has its requirements name value
+/// operations, "Addition requires a value `add_(T, T) -> T`", which a
+/// node's hook calls (FN-3). So a requirement is tested against the
+/// value candidates whatever declares it, and what a graph states meets
+/// what a node's candidate asks (GEN-7).
 #[test]
-fn a_graphs_requirement_is_no_value_candidates() {
+fn a_requirement_names_a_value_operation() {
     let checked = module(concat!(
-        "operator source<O>() -> O\n",
-        "operator relay<O>() -> O\n",
-        // A value candidate, which needs a value `source`, and a graph
-        // candidate, for which any will do.
-        "impl const fn relay<T>() -> T requires source() -> T => source()\n",
-        "operator wired<O>() -> O\n",
-        "impl fn wired<T>() -> T requires source() -> T => source()\n",
-        "fn graph<T>() -> T requires source() -> T {\n",
-        "    let direct = wired<T>()\n",
-        "    return relay<T>()\n",
+        "operator tick<V>(value: V) -> V\n",
+        // A temporal candidate alone for an `i64`; a value one for an
+        // `f64`.
+        "impl fn tick(value: i64) -> i64 {\n",
+        "    when { return value }\n",
         "}\n",
-        // In a value function the same requirement is a value one.
-        "const fn value<T>() -> T requires source() -> T => relay<T>()\n",
+        "impl const fn tick(value: f64) -> f64 => value\n",
+        "operator pass<T>(a: T) -> T\n",
+        "impl fn pass<T>(a: T) -> T requires tick(T) -> T => tick(a)\n",
+        "fn uses(n: i64, x: f64) -> f64 {\n",
+        "    let whole = pass(n)\n",
+        "    return pass(x)\n",
+        "}\n",
+        "operator held<T>(a: T) -> T\n",
+        "impl fn held<T>(a: T) -> T requires tick(T) -> T {\n",
+        "    when { return tick(a) }\n",
+        "}\n",
+        "fn stated<T>(a: T) -> T requires tick(T) -> T => held(a)\n",
+        "fn unstated<T>(a: T) -> T => held(a)\n",
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:9:12 operator/operator.no_candidate GEN-5"]
+        [
+            "m.hgl:10:17 operator/operator.no_candidate GEN-5",
+            "m.hgl:18:30 operator/operator.no_candidate GEN-5",
+        ]
     );
 }
 

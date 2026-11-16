@@ -225,7 +225,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | GEN-14 | analyser | partial | Decides an undecided constructor from what its name resolves to, a generic type, function or operator; a generic type before a comparison's `<` rejected; each argument against its parameter's kind. Left: a generic function or operator before a comparison's `<` |
 | GEN-15 | parser | done | Constraint precedence: negation, then conjunction, then disjunction |
 | GEN-16 | parser | done | One form for constraint calls, with an optional result arrow |
-| GEN-16 | analyser | partial | A constraint call that names an operator is a requirement. Where a call selects a candidate it is tested with the candidate's generic parameters in place: one most-specific value candidate admits the types supplied, any candidate for a requirement of a graph, and gives the arrow's type where one is stated. Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared |
+| GEN-16 | analyser | partial | A constraint call that names an operator is a requirement, and names a value operation. Where a call selects a candidate it is tested with the candidate's generic parameters in place, as the call it names would select: one most-specific value candidate admits the types supplied and gives the arrow's type where one is stated, the operator's defaults taking part (GEN-8). Left: a predicate, and the arrow rejected on one; a requirement supplied with a value or a set; a requirement checked where it is declared |
 
 ## Temporal model
 

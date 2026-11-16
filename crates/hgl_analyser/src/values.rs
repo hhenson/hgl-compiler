@@ -4312,16 +4312,6 @@ impl<'a> Typer<'a> {
             let ty = placed(substitute_within(&read.ty, &map), &own);
             whole(&ty).then_some(ty)
         };
-        // A temporal candidate whose body is composition calls any
-        // candidate (FN-3); a value candidate, and a node in its hooks,
-        // the value ones.
-        let composes = matches!(candidate.kind.candidate(), Some((Role::Temporal, _)))
-            && declared_in
-                .declarations
-                .iter()
-                .position(|declaration| declaration.at == candidate.at)
-                .and_then(|position| declared_in.phases.get(position))
-                == Some(&Some(Phase::Graph));
         let mut verdicts = Vec::new();
         for call in calls {
             let verdict = (|| {
@@ -4367,7 +4357,7 @@ impl<'a> Typer<'a> {
             })();
             let verdict = match verdict {
                 Some((operator, operands, result)) => {
-                    self.callable(operator, (file, operands), result.as_ref(), composes)
+                    self.callable(operator, (file, operands), result.as_ref())
                 }
                 None => None,
             };
@@ -4380,19 +4370,23 @@ impl<'a> Typer<'a> {
     /// `operands`, to give `result` where one is stated (GEN-16).
     /// `None` when it cannot be told.
     ///
+    /// A requirement names a value operation, whatever declares it:
+    /// core's OPS-9 has "Addition requires a value `add_(T, T) -> T`",
+    /// which a node's hook calls (FN-3), and a graph that states the
+    /// same requirement may call that node's candidate. So it is tested
+    /// against the operator's value candidates.
+    ///
     /// Types that name a generic parameter of the declaration being
     /// read are callable where its own requirements state it (GEN-7).
     /// Otherwise, and for any other types, the operator is callable
-    /// when one most-specific candidate admits them (GEN-5): a value
-    /// candidate, or with `composes` any, as a call in composition
-    /// selects. So a candidate that takes any one type, core's
-    /// `eq_<T>`, answers for a generic parameter with nothing stated.
+    /// when one most-specific value candidate admits them (GEN-5). So a
+    /// candidate that takes any one type, core's `eq_<T>`, answers for
+    /// a generic parameter with nothing stated.
     fn callable(
         &mut self,
         operator: OperatorRef,
         (file, operands): (FileId, Vec<(SyntaxNode, Type)>),
         result: Option<&Type>,
-        composes: bool,
     ) -> Option<bool> {
         let own: Vec<Location> = self
             .signature
@@ -4413,12 +4407,7 @@ impl<'a> Typer<'a> {
                         .all(|(stated, (_, ty))| stated == ty)
                     && (result.is_none() || requirement.result.as_ref() == result)
             });
-            // What the declaration being read states holds for the
-            // candidates its own body selects among: any, in a graph,
-            // and the value ones otherwise (GEN-5). So a graph's
-            // requirement does not say a value candidate exists, which
-            // is what a value candidate or a node asks here (FN-3).
-            if stated && (composes || !self.graph) {
+            if stated {
                 return Some(true);
             }
         }
@@ -4432,17 +4421,17 @@ impl<'a> Typer<'a> {
         else {
             return None;
         };
+        // In a graph the candidates of a call are the temporal ones
+        // too (GEN-5): a requirement is for the value ones.
         let mut candidates = self.value_candidates(operator);
-        if !composes {
-            candidates.retain(|&(module, declaration, _)| {
-                matches!(
-                    program.modules[module].declarations[declaration]
-                        .kind
-                        .candidate(),
-                    Some((Role::Value, _))
-                )
-            });
-        }
+        candidates.retain(|&(module, declaration, _)| {
+            matches!(
+                program.modules[module].declarations[declaration]
+                    .kind
+                    .candidate(),
+                Some((Role::Value, _))
+            )
+        });
         if unreadable(public, &candidates) {
             return None;
         }
