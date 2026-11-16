@@ -59,6 +59,10 @@ enum Mode {
     /// A node's hook: a temporal parameter is an hgraph input, read
     /// through `.value`, and a `state` is a field of the node's state.
     Node,
+    /// A node's `start` or `stop`: a function of its own to hgraph,
+    /// which is given the node's configuration and state, and neither
+    /// its inputs nor its output.
+    Lifecycle,
     /// A graph: a temporal parameter is a port, passed on as it is.
     Graph,
     /// A named test: ordinary values, and evals.
@@ -174,6 +178,78 @@ fn mangled(ty: &Type) -> String {
             }
         })
         .collect()
+}
+
+/// One `when` of a node: what its header asks, and its body.
+struct Handler<'a> {
+    /// The inputs whose tick wakes it (TIME-3), as local positions.
+    subscribed: Vec<usize>,
+    /// The inputs it requires to be valid.
+    required: Vec<usize>,
+    /// The rest of its condition: the conjuncts that are no selector.
+    conditions: Vec<&'a Expr>,
+    /// Its statements.
+    body: &'a [Stmt],
+}
+
+impl<'a> Handler<'a> {
+    /// Reads a handler's header. `inputs` is the node's temporal
+    /// inputs, which a selector with no argument, and one left out,
+    /// stand for.
+    fn of(condition: Option<&'a Expr>, body: &'a [Stmt], inputs: &[usize]) -> Handler<'a> {
+        // "when it stands alone in the header or appears as a
+        // top-level conjunct": the conjuncts, through each `&&`.
+        let mut conjuncts = Vec::new();
+        let mut to_do: Vec<&'a Expr> = condition.into_iter().collect();
+        while let Some(part) = to_do.pop() {
+            match &part.kind {
+                ExprKind::Binary {
+                    operator: BinaryOperator::And,
+                    left,
+                    right,
+                } => {
+                    // Popped last first: the left is read first.
+                    to_do.push(right);
+                    to_do.push(left);
+                }
+                _ => conjuncts.push(part),
+            }
+        }
+        // Every selector among the conjuncts adds what it names, as
+        // the analyser has it: `valid(a) && valid(b)` requires both.
+        // One with no argument names every input, and `valid([])`
+        // names none. With no selector of a kind, its default stands.
+        let mut subscribed: Option<Vec<usize>> = None;
+        let mut required: Option<Vec<usize>> = None;
+        let mut conditions = Vec::new();
+        let add = |set: &mut Option<Vec<usize>>, named: &Option<Vec<usize>>| {
+            let set = set.get_or_insert_with(Vec::new);
+            for &local in named.as_deref().unwrap_or(inputs) {
+                if !set.contains(&local) {
+                    set.push(local);
+                }
+            }
+        };
+        for conjunct in conjuncts {
+            match &conjunct.kind {
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Modified,
+                    inputs: named,
+                } => add(&mut subscribed, named),
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Valid,
+                    inputs: named,
+                } => add(&mut required, named),
+                _ => conditions.push(conjunct),
+            }
+        }
+        Handler {
+            subscribed: subscribed.unwrap_or_else(|| inputs.to_vec()),
+            required: required.unwrap_or_else(|| inputs.to_vec()),
+            conditions,
+            body,
+        }
+    }
 }
 
 /// The writer of one module.
@@ -370,14 +446,28 @@ impl Emitter<'_> {
 
     /// A node: `@compute_node`, or `@sink_node` where it has no result.
     ///
-    /// TIME-3: "Omitting either selector uses the same default as its
-    /// zero-argument form", so a `when` with no condition is woken by
-    /// every input and needs every input valid, which is what hgraph
-    /// gives a node that says nothing else.
+    /// TIME-3: "In a `when` header, `modified()` subscribes to all
+    /// temporal inputs; `modified(a, b)` subscribes to both named inputs
+    /// ... `valid()` requires all temporal inputs to be valid ...
+    /// Omitting either selector uses the same default as its
+    /// zero-argument form ... A selector sets subscription or admission
+    /// when it stands alone in the header or appears as a top-level
+    /// conjunct." TIME-4: "Aggregate subscriptions cover every handler.
+    /// Node-wide validity includes only requirements common to
+    /// executable handlers; other guards stay per-handler."
     ///
-    /// TIME-6: "State is persistent, recordable node history." Its
-    /// `state` declarations are fields of the node's `STATE`, given
-    /// their values in its `start`.
+    /// So the node's `active=` is every input a handler subscribes to,
+    /// its `valid=` the inputs every handler requires, and each handler
+    /// is guarded by what it asks beyond those: that one of its own
+    /// inputs ticked, that the inputs only it requires are valid, and
+    /// the rest of its condition. "Conditions are checked in source
+    /// order ... If that body completes without returning, checking
+    /// continues with the next condition."
+    ///
+    /// TIME-6: "State is persistent, recordable node history." A
+    /// `state` is a field of the node's `STATE`, given its value in the
+    /// node's `start`. TIME-7: `inject out` is the node's own output,
+    /// hgraph's `_output`.
     fn node(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
         let function = Function {
             locals: &body.locals,
@@ -395,11 +485,16 @@ impl Emitter<'_> {
             .filter(|(parameter, _)| parameter.constant)
             .map(|(_, written)| written.clone())
             .collect();
+        // The temporal inputs, as positions among the locals.
+        let inputs: Vec<usize> = (0..body.locals.len())
+            .filter(|&local| Self::is_input(&function, local))
+            .collect();
         // What the body is made of: the declarations, and each hook.
         let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
         let mut start: Option<&[Stmt]> = None;
         let mut stop: Option<&[Stmt]> = None;
-        let mut when: Option<&[Stmt]> = None;
+        let mut handlers: Vec<Handler> = Vec::new();
+        let mut has_out = false;
         for statement in &body.statements {
             match statement {
                 Stmt::Declare { local, value } if body.locals[*local].kind == LocalKind::State => {
@@ -419,22 +514,28 @@ impl Emitter<'_> {
                     hook: Hook::When,
                     condition,
                     body,
-                    at,
-                } => {
-                    if condition.is_some() {
-                        self.unsupported(*at, "a `when` with a condition");
-                    }
-                    if when.is_some() {
-                        self.unsupported(*at, "a second `when`");
-                    }
-                    when = Some(body);
-                }
+                    ..
+                } => handlers.push(Handler::of(condition.as_ref(), body, &inputs)),
                 Stmt::Declare { local, .. } => {
                     self.unsupported(body.locals[*local].at, "a `cache`");
                 }
-                Stmt::Inject { at, .. } => self.unsupported(*at, "an `inject`"),
+                Stmt::Inject { local, at } => {
+                    if body.locals[*local].name == "out" {
+                        has_out = true;
+                    } else {
+                        self.unsupported(*at, "an `inject` of a capability");
+                    }
+                }
                 other => self.unsupported(at_of(other, &body.locals), "this statement of a node"),
             }
+        }
+        if has_out {
+            let annotation = match &result {
+                Some(result) => result.replacen("TS[", "TS_OUT[", 1),
+                None => "object".to_string(),
+            };
+            self.hgraph = true;
+            parameters.push(format!("_output: {annotation} = None"));
         }
         let has_state = !states.is_empty();
         if has_state {
@@ -442,6 +543,49 @@ impl Emitter<'_> {
             lifecycle.push("_state: _hg.STATE = None".to_string());
         }
         let lifecycle = lifecycle.join(", ");
+        // TIME-4: what the handlers ask together.
+        let active: Vec<usize> = inputs
+            .iter()
+            .copied()
+            .filter(|input| {
+                handlers
+                    .iter()
+                    .any(|handler| handler.subscribed.contains(input))
+            })
+            .collect();
+        let valid: Vec<usize> = inputs
+            .iter()
+            .copied()
+            .filter(|input| {
+                handlers
+                    .iter()
+                    .all(|handler| handler.required.contains(input))
+            })
+            .collect();
+        if !handlers.is_empty() && active.is_empty() {
+            // TIME-3: "`modified([])` subscribes to no input: the node's
+            // scheduler or alarm is then what wakes the handler."
+            self.unsupported(declaration.at, "a node that no input wakes");
+        }
+        let names = |locals: &[usize]| -> String {
+            let quoted: Vec<String> = locals
+                .iter()
+                .map(|&local| format!("\"{}\"", name(&body.locals[local].name)))
+                .collect();
+            // A tuple of one needs its comma.
+            format!(
+                "({}{})",
+                quoted.join(", "),
+                if quoted.len() == 1 { "," } else { "" }
+            )
+        };
+        let mut options = Vec::new();
+        if active.len() != inputs.len() && !handlers.is_empty() {
+            options.push(format!("active={}", names(&active)));
+        }
+        if valid.len() != inputs.len() && !handlers.is_empty() {
+            options.push(format!("valid={}", names(&valid)));
+        }
         let python = name(&declaration.name);
         let decorator = if result.is_some() {
             "compute_node"
@@ -451,13 +595,74 @@ impl Emitter<'_> {
         self.hgraph = true;
         self.line(0, "");
         self.line(0, "");
-        self.line(0, &format!("@_hg.{decorator}"));
+        if options.is_empty() {
+            self.line(0, &format!("@_hg.{decorator}"));
+        } else {
+            self.line(0, &format!("@_hg.{decorator}({})", options.join(", ")));
+        }
         let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
         self.line(
             0,
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
-        self.block(&function, when.unwrap_or(&[]), 1);
+        let before = self.text.len();
+        // An endpoint as the node's code names it: an input by its
+        // name, and the node's own output as hgraph's `_output`.
+        let endpoint = |local: usize| {
+            let declared = &body.locals[local];
+            if declared.kind == LocalKind::Inject {
+                "_output".to_string()
+            } else {
+                name(&declared.name)
+            }
+        };
+        for handler in &handlers {
+            // What this handler asks beyond what the node does. It is
+            // woken by fewer inputs than the node where one the node is
+            // woken by is none of its own.
+            let mut guards: Vec<String> = Vec::new();
+            if handler.subscribed.is_empty() && !active.is_empty() {
+                self.unsupported(declaration.at, "a handler that no input wakes");
+                continue;
+            }
+            let narrower = active
+                .iter()
+                .any(|input| !handler.subscribed.contains(input));
+            if narrower {
+                let ticked: Vec<String> = handler
+                    .subscribed
+                    .iter()
+                    .map(|&local| format!("{}.modified", endpoint(local)))
+                    .collect();
+                guards.push(match ticked.as_slice() {
+                    [one] => one.clone(),
+                    several => format!("({})", several.join(" or ")),
+                });
+            }
+            for &local in &handler.required {
+                if !valid.contains(&local) {
+                    guards.push(format!("{}.valid", endpoint(local)));
+                }
+            }
+            for condition in &handler.conditions {
+                guards.push(self.expression(&function, condition));
+            }
+            if guards.is_empty() {
+                self.statements(&function, handler.body, 1);
+            } else {
+                self.line(1, &format!("if {}:", guards.join(" and ")));
+                self.block(&function, handler.body, 2);
+            }
+        }
+        if self.text.len() == before {
+            self.line(1, "pass");
+        }
+        // `start` and `stop` are read as what they are to hgraph.
+        let lifecycle_hook = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Lifecycle,
+        };
         // `start`: the state's first values, then the hook's own
         // statements.
         if has_state || start.is_some() {
@@ -469,13 +674,13 @@ impl Emitter<'_> {
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
-                    Some(value) => self.expression(&function, value),
+                    Some(value) => self.expression(&lifecycle_hook, value),
                     None => "None".to_string(),
                 };
                 self.line(1, &format!("_state.{field} = {value}"));
             }
             if let Some(start) = start {
-                self.statements(&function, start, 1);
+                self.statements(&lifecycle_hook, start, 1);
             }
             // A `start` with nothing in it is still a function.
             if self.text.len() == before {
@@ -487,7 +692,7 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, &format!("@{python}.stop"));
             self.line(0, &format!("def _stop_{python}({lifecycle}):"));
-            self.block(&function, stop, 1);
+            self.block(&lifecycle_hook, stop, 1);
         }
     }
 
@@ -561,6 +766,16 @@ impl Emitter<'_> {
         let declared = &function.locals[local];
         match declared.kind {
             LocalKind::State => format!("_state.{}", name(&declared.name)),
+            // TIME-7: "`inject out` exposes that same result for reads,
+            // assignment".
+            LocalKind::Inject if declared.name == "out" => {
+                // hgraph gives a lifecycle hook no output: TIME-7's read
+                // of `out` in `stop` has nothing to be written as.
+                if function.mode == Mode::Lifecycle {
+                    self.unsupported(declared.at, "`out` in `stop`");
+                }
+                "_output.value".to_string()
+            }
             LocalKind::Cache | LocalKind::Inject => {
                 self.unsupported(declared.at, "a `cache` or an injected capability");
                 "None".to_string()
@@ -689,6 +904,9 @@ impl Emitter<'_> {
                 // payload.
                 if function.mode == Mode::Node && Self::is_input(function, *local) {
                     format!("{read}.value")
+                } else if function.mode == Mode::Lifecycle && Self::is_input(function, *local) {
+                    self.unsupported(value.at, "a temporal input read in `start` or `stop`");
+                    read
                 } else {
                     read
                 }
@@ -697,10 +915,22 @@ impl Emitter<'_> {
                 operation,
                 inputs: Some(inputs),
             } if inputs.len() == 1 => {
-                let input = name(&function.locals[inputs[0]].name);
+                if function.mode == Mode::Lifecycle {
+                    self.unsupported(value.at, "an endpoint read in `start` or `stop`");
+                }
+                let endpoint = &function.locals[inputs[0]];
+                // The node's own output is hgraph's `_output`.
+                let input = if endpoint.kind == LocalKind::Inject {
+                    "_output".to_string()
+                } else {
+                    name(&endpoint.name)
+                };
                 match operation {
                     EndpointOperation::Valid => format!("{input}.valid"),
                     EndpointOperation::Modified => format!("{input}.modified"),
+                    // END-4: "Invalidation clears validity,
+                    // modification, payload, and delta."
+                    EndpointOperation::Invalidate => format!("{input}.invalidate()"),
                     // END-3: what the input published this cycle.
                     EndpointOperation::DeltaValue => format!("{input}.delta_value"),
                     other => {
