@@ -145,6 +145,17 @@ fn a_capability_type_is_a_value_functions_parameter() {
         "    let kept = [clock]\n",
         "    return 0\n",
         "}\n",
+        // The value of a block, and of an `if`, goes where the block
+        // or the `if` does: returned, and into a list.
+        "const fn leaked(clock: Clock) -> any {\n",
+        "    clock\n",
+        "}\n",
+        "const fn chosen(clock: Clock, flag: bool) -> i64 {\n",
+        "    let kept = [if flag { clock } else { (clock) }]\n",
+        "    let bound = if flag { clock } else { clock }\n",
+        "    if flag { clock }\n",
+        "    return 0\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -158,6 +169,9 @@ fn a_capability_type_is_a_value_functions_parameter() {
             "m.hgl:12:20 injectable/capability.as_value TIME-8",
             "m.hgl:13:24 type/type.mismatch EXPR-5",
             "m.hgl:17:17 injectable/capability.as_value TIME-8",
+            "m.hgl:21:5 injectable/capability.as_value TIME-8",
+            "m.hgl:24:27 injectable/capability.as_value TIME-8",
+            "m.hgl:24:43 injectable/capability.as_value TIME-8",
         ]
     );
 }

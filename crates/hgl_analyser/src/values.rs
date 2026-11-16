@@ -1656,15 +1656,43 @@ impl<'a> Typer<'a> {
     /// parameter of its type are uses." A capture is the resolver's to
     /// report (`name.captured`).
     fn retained(&self, node: &SyntaxNode) -> Option<&'static str> {
-        // "Parentheses select grouping" (EXPR-1).
+        // Where the capability goes: out through what only passes its
+        // value on, to the place that takes it.
         let mut used = node.clone();
-        while let Some(parent) = used.parent()
-            && parent.kind() == SyntaxKind::ParenExpr
-        {
-            used = parent;
+        loop {
+            let parent = used.parent()?;
+            match parent.kind() {
+                // "Parentheses select grouping" (EXPR-1).
+                SyntaxKind::ParenExpr => used = parent,
+                // CTRL-10: "A block whose last statement is an
+                // expression has that expression's value". Any other
+                // statement's value is dropped, and is no use at all.
+                SyntaxKind::ExprStmt => {
+                    let block = parent
+                        .parent()
+                        .filter(|block| block.kind() == SyntaxKind::Block)?;
+                    if block.children().last().as_ref() != Some(&parent) {
+                        return None;
+                    }
+                    used = block;
+                }
+                // A branch of an `if` gives the `if` its value; its
+                // condition does not.
+                SyntaxKind::IfExpr
+                    if matches!(used.kind(), SyntaxKind::Block | SyntaxKind::IfExpr) =>
+                {
+                    used = parent;
+                }
+                _ => break,
+            }
         }
         let parent = used.parent()?;
         match parent.kind() {
+            // FN-7: the last expression of a function's body is what it
+            // returns, as the expression of an arrow body is.
+            SyntaxKind::FnDecl | SyntaxKind::FnExpr if used.kind() == SyntaxKind::Block => {
+                Some("what is returned")
+            }
             SyntaxKind::StateDecl => Some("the value of a `state`"),
             SyntaxKind::CacheDecl => Some("the value of a `cache`"),
             SyntaxKind::TupleExpr => Some("an entry of a tuple"),
