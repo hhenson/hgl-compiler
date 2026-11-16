@@ -1883,6 +1883,8 @@ impl<'a> Typer<'a> {
             ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
             ExprKind::Widen(inner) => self.category(inner),
             ExprKind::Field { base, .. } => self.category(base),
+            // An enum constructed from a connection is lifted (FN-6).
+            ExprKind::EnumFrom { value, .. } => self.category(value),
             // A result form over a connection is lifted, as a value
             // function's call is (FN-6, ERR-3): what it gives is what it
             // is given.
@@ -3701,6 +3703,14 @@ impl<'a> Typer<'a> {
             let settled = !expected.is_some_and(open);
             return self.construct(name, list, module, declaration, given, settled);
         }
+        // TYPE-7: "A call of the enum's name constructs a member."
+        let enumeration = declarations
+            .iter()
+            .copied()
+            .find(|&declaration| kind_of(declaration) == DeclarationKind::Enum);
+        if let Some(declaration) = enumeration {
+            return self.enum_from(name, list, module, declaration);
+        }
         let operator = declarations
             .iter()
             .copied()
@@ -3762,6 +3772,89 @@ impl<'a> Typer<'a> {
             ));
         }
         self.unread_call(list)
+    }
+
+    /// `Side(1)` or `Side("buy")` (TYPE-7): "A call of the enum's name
+    /// constructs a member. It takes one argument, by position, that is
+    /// an `i64` or a `str`, and any other type rejects: `Side(1)` is the
+    /// member whose number is 1, and `Side("buy")` the member of that
+    /// exact name. Construction is checked: a constant that is no
+    /// member's number or name rejects, and a value that is none fails
+    /// where it is evaluated."
+    fn enum_from(
+        &mut self,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+        module: usize,
+        declaration: usize,
+    ) -> (ExprKind, Type) {
+        let ty = Type::Named {
+            name: name.text().to_string(),
+            module,
+            declaration,
+            arguments: Vec::new(),
+        };
+        let Some(argument) = self.one_argument(name, list, "TYPE-7") else {
+            return (ExprKind::Unread, ty);
+        };
+        let value = self.expression(&argument, None);
+        let number = value.ty == Type::Scalar(Scalar::I64);
+        let text = value.ty == Type::Scalar(Scalar::Str);
+        if !number && !text {
+            // What is not known has been reported (ERR-9).
+            if !open(&value.ty) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    value.at,
+                    format!(
+                        "`{}` is constructed from a member's number, an `i64`, or its name, \
+                         a `str`, and this is `{}`",
+                        name.text(),
+                        value.ty
+                    ),
+                    "TYPE-7",
+                ));
+            }
+            return (ExprKind::Unread, ty);
+        }
+        // A constant is checked here. A member whose number is not
+        // known says nothing sure of which numbers the enum has.
+        let members = match self.program.modules[module].details.get(declaration) {
+            Some(Detail::Enum(read)) => Some(&read.members),
+            _ => None,
+        };
+        let missing = match (constant_of(&argument), members) {
+            (Some(OptionValue::Literal(Value::Int(given))), Some(members))
+                if members.iter().all(|member| member.value.is_some()) =>
+            {
+                (!members.iter().any(|member| member.value == Some(given)))
+                    .then(|| format!("no member numbered {given}"))
+            }
+            (Some(OptionValue::Literal(Value::Str(given))), Some(members)) => {
+                (!members.iter().any(|member| member.name == given))
+                    .then(|| format!("no member named `{given}`"))
+            }
+            _ => None,
+        };
+        if let Some(missing) = missing {
+            self.diagnostics.emit(
+                error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    value.at,
+                    format!("`{}` has {missing}", name.text()),
+                    "TYPE-7",
+                )
+                .with_note("a member's name is matched exactly"),
+            );
+        }
+        let kind = ExprKind::EnumFrom {
+            module,
+            declaration,
+            value: Box::new(value),
+        };
+        (kind, ty)
     }
 
     // ---- Result forms (ERR-2 to ERR-5) ----

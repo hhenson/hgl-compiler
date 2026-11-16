@@ -3839,3 +3839,56 @@ fn a_const_parameter_takes_what_is_fixed() {
         ]
     );
 }
+
+/// TYPE-7: "A call of the enum's name constructs a member. It takes one
+/// argument, by position, that is an `i64` or a `str`, and any other
+/// type rejects: `Side(1)` is the member whose number is 1, and
+/// `Side(\"buy\")` the member of that exact name. Construction is
+/// checked: a constant that is no member's number or name rejects, and
+/// a value that is none fails where it is evaluated."
+#[test]
+fn an_enum_is_constructed_from_a_number_or_a_name() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "enum Level { low = 10, high = 20 }\n",
+        "const fn made(code: i64, name: str) -> Side {\n",
+        "    let one = Side(1)\n",
+        "    let named = Side(\"buy\")\n",
+        "    let level = Level(20)\n",
+        // A value of the run is checked where it is evaluated.
+        "    let late = Side(code)\n",
+        "    let spoken = Side(name)\n",
+        // A constant that is no member's: the number, and the name,
+        // which is matched exactly.
+        "    let two = Side(2)\n",
+        "    let upper = Side(\"BUY\")\n",
+        "    let between = Level(15)\n",
+        // Neither an `i64` nor a `str`; no value; two.
+        "    let real = Side(1.5)\n",
+        "    let none = Side()\n",
+        "    let pair = Side(1, 2)\n",
+        "    return one\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:10:20 name/member.unknown TYPE-7",
+            "m.hgl:11:22 name/member.unknown TYPE-7",
+            "m.hgl:12:25 name/member.unknown TYPE-7",
+            "m.hgl:13:21 type/type.mismatch TYPE-7",
+            "m.hgl:14:16 type/argument.missing TYPE-7",
+            "m.hgl:15:24 type/argument.unexpected TYPE-7",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "made")[2..7],
+        [
+            "one: Side",
+            "named: Side",
+            "level: Level",
+            "late: Side",
+            "spoken: Side",
+        ]
+    );
+}
