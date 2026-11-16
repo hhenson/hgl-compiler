@@ -321,7 +321,7 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
         // The node's own output.
         concat!(
             "def produce(command: _hg.TS[int], _output: _hg.TS_OUT[int] = None) -> _hg.TS[int]:\n",
-            "    if _core.ne__i64_i64_f64_f64(lhs=command.value, rhs=0):\n",
+            "    if _core.ne__i64_i64_f64_f64(lhs=command.value, rhs=0, abs=0.0, rel=0.0):\n",
             "        return command.value\n",
             "    _output.invalidate()\n",
         ),
@@ -481,6 +481,56 @@ fn a_headers_selectors_add_up() {
     }
 }
 
+/// Defaults: of a value function's parameter, where it calls another
+/// function, and of a node's `const` parameter.
+const DEFAULTS: &str = concat!(
+    "module demo.defaults\n",
+    "\n",
+    "const fn base() -> i64 => 2\n",
+    "\n",
+    "const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor\n",
+    "\n",
+    "fn offset(value: i64, const by: i64 = 10) -> i64 {\n",
+    "    when { return value + by }\n",
+    "}\n",
+    "\n",
+    "fn wired(value: i64) -> i64 => offset(value)\n",
+    "\n",
+    "test defaults {\n",
+    "    assert scale(3) == 6\n",
+    "    assert scale(3, 5) == 15\n",
+    "    assert eval(offset, value: [1]) == [11]\n",
+    "    assert eval(offset, value: [1], by: 1) == [2]\n",
+    "    assert eval(wired, value: [5]) == [15]\n",
+    "}\n",
+);
+
+/// UNIT-8: a parameter with a default may be left out. The call is
+/// written with the default in its place, which the analysed program
+/// holds as a typed value.
+#[test]
+fn a_default_is_written_where_a_call_leaves_it_out() {
+    let emitted = emit(&[("defaults.hgl", DEFAULTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("demo/defaults.py");
+    for expected in [
+        // The function is always given the parameter.
+        "def scale(value, factor):\n",
+        "lhs=scale(value=3, factor=base()), rhs=6",
+        "lhs=scale(value=3, factor=5), rhs=15",
+        // A node's configuration, in a graph and in an eval.
+        "def offset(value: _hg.TS[int], by: int) -> _hg.TS[int]:\n",
+        "    return offset(value=value, by=10)\n",
+        "    assert _harness.evaluate(offset, value=[1], by=10) == [11]\n",
+        "    assert _harness.evaluate(offset, value=[1], by=1) == [2]\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// Names that Python, hgraph or the target would take: each is given a
 /// Python name of its own. FN-4: "Composition and eval choose the
 /// temporal definition if one exists; runtime/value evaluation chooses
@@ -571,7 +621,7 @@ fn a_form_not_written_yet_is_reported() {
             "    when { return value }\n",
             "}\n",
             "fn summed(left: i64, right: i64) -> i64 => left + right\n",
-            "const fn scaled(value: i64, factor: i64 = 2) -> i64 => value * factor\n",
+            "fn defaulted(value: i64 = 2) -> i64 {\n    when { return value }\n}\n",
             "test timed {\n",
             "    assert eval(pass, value: [0s: 7]) == [0s: 7]\n",
             "}\n",
@@ -584,9 +634,9 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:6:12 target.unsupported",
             "m.hgl:9:10 target.unsupported",
             "m.hgl:15:44 target.unsupported",
-            "m.hgl:16:29 target.unsupported",
-            "m.hgl:18:30 target.unsupported",
-            "m.hgl:18:42 target.unsupported",
+            "m.hgl:16:14 target.unsupported",
+            "m.hgl:20:30 target.unsupported",
+            "m.hgl:20:42 target.unsupported",
         ]
     );
 }
@@ -609,6 +659,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("endpoints.hgl", ENDPOINTS),
         ("selectors.hgl", SELECTORS),
         ("names.hgl", NAMES),
+        ("defaults.hgl", DEFAULTS),
     ];
     files.extend(MODULES);
     let emitted = emit(&files);
@@ -635,6 +686,7 @@ fn the_generated_tests_pass_on_hgraph() {
             "demo.selectors",
             "demo.configured",
             "demo.names",
+            "demo.defaults",
         ])
         .output()
         .expect("the interpreter runs");
@@ -646,7 +698,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        18,
+        19,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }

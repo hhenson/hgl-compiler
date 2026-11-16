@@ -1257,6 +1257,7 @@ files a generated module imports.
 | A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | `name=None`: left out, it is null (UNIT-8) |
+| A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`) |
 | A function of another module | `alias.name`, the module imported as `_hgl_` and its path: two modules may each have a `pick` |
 | `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
@@ -1280,8 +1281,7 @@ its last publication (TST-6).
 Reported as not written yet (`target.unsupported`): a type other than
 the four scalars above, a nullable among them; structs, enums, operators
 and their candidates declared in a program; generic temporal functions;
-a default of a value function's parameter, whose value the analysed
-program does not hold yet; a node that no input wakes, `modified([])`;
+a default of a temporal input; a node that no input wakes, `modified([])`;
 `cache`, the `inject` of a capability, and sources; a call lifted over
 connections in a graph; loops and `switch`;
 durations, dates and times; timed traces and a published null in a
