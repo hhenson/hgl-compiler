@@ -186,7 +186,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-6 | analyser | partial | In a graph a value function or a value candidate called with a connection among its arguments gives a connection, and one called with ordinary values alone an ordinary value. Left: which arguments are inputs and which configuration, recorded for the lifted node; an outputless helper as a sink |
 | FN-6 | transpiler | planned | Activation and publication of a lifted node |
 | FN-7 | analyser | partial | A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`). In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type. Left: a composition return; an anonymous function's context |
-| FN-7 | transpiler | planned | A runtime return publishes; no write, no tick |
+| FN-7 | transpiler | planned | A runtime return publishes and exits the current function evaluation, skipping later handlers; no write, no tick |
 | FN-8 | parser | done | Pack parameter forms |
 | FN-8 | analyser | done | Packs follow fixed parameters, have no defaults and are not const; a named pack names a type pack of its declaration |
 | FN-9 | analyser | planned | Capabilities propagate through value helpers |
@@ -238,7 +238,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
 | TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name. Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
-| TIME-3 | transpiler | planned | Handlers evaluated in source order |
+| TIME-3 | transpiler | planned | Conditions checked in source order; a satisfied body runs, then checking continues unless it returns |
 | TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
 | TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
@@ -418,6 +418,8 @@ the same numeric rules the transpiler rows give.
 | OPS-7 | transpiler | planned | Rounding, what a NaN becomes, and a failure that is checked or escapes |
 | OPS-8 | analyser | partial | The options of `convert` through core's candidates in a value function: `invalid` selects `result<T, error>` or T and is given a compile-time constant, `rounding` and `nan` are parameters, and an option is admitted only for the conversions that declare it. Left: temporal bodies |
 | OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
+| OPS-9 | analyser | planned | Explicit `invalid: .identity` selects same-type temporal addition or subtraction; verify the required closed value operations; unconfigured calls use ordinary lifting |
+| OPS-9 | transpiler | planned | One valid operand is forwarded (right-only subtraction negates it); both invalid invalidate the output; ordered handlers return after the first publication |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | planned | `delta_value(x)` needs proof that `x` is valid and modified |
