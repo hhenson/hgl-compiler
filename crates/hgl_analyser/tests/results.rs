@@ -461,6 +461,34 @@ fn a_capture_is_read_through_two_connections() {
     assert_eq!(arguments[0].value.ty.to_string(), "i64");
 }
 
+/// A capture noted while an argument is tried against a candidate goes
+/// when the trial is taken back: the local it was bound to is gone, and
+/// its number is the next local's. ERR-7: `.value` is the capture's;
+/// EXPR-7: `plain.count` is the struct's field.
+#[test]
+fn a_capture_in_a_trial_reading_marks_no_later_local() {
+    let checked = module(concat!(
+        "fn required(value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "struct Counted { count: i64 }\n",
+        "const fn choose<A, B>(a: A, b: B) -> A => a\n",
+        "fn composed(value: i64) -> i64 {\n",
+        "    choose(\n",
+        "        {\n",
+        "            let plain = Counted(count: 1)\n",
+        "            plain.count\n",
+        "        },\n",
+        "        {\n",
+        "            let seen = capture(required, value)\n",
+        "            seen.value\n",
+        "        },\n",
+        "    )\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}
+
 /// ERR-7: "In a value function or a hook it rejects (`capture.phase`)
 /// ... outputless calls expose only `.error`, a connection of `error`,
 /// and `.value` rejects there (`capture.output_field`). Capture of
