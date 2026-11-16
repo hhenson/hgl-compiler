@@ -842,6 +842,10 @@ read from both sides.
 | At a call that selects the candidate that states it | GEN-16, GEN-5 | Tested with the candidate's generic parameters in place: `add_(f64, f64) -> f64` holds when one most-specific value candidate of `add_` takes two `f64` and gives an `f64`. A requirement of a graph is tested against every candidate, as a call in composition selects |
 | At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement, and otherwise when a candidate takes them as they are, as core's `eq_<T>` takes any one type |
 
+Where two requirements name one operator with the same types and
+different results, the call is the one that gives what its place
+expects (GEN-5), and the first stated where nothing is asked.
+
 A requirement joined to others by `&&` holds wherever the condition
 does, and is one the body may use; one under `!` or `||` is tested at a
 call and admits nothing in the body. A candidate's requirement may be
