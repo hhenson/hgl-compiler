@@ -1883,10 +1883,19 @@ impl<'a> Typer<'a> {
         // out, is each candidate's to say (GEN-6: "A call is matched
         // against each candidate's own signature").
         let own = public.parameters.len();
+        // An option that selects is a generic value parameter of its
+        // candidates (GEN-6).
+        let selecting: std::collections::HashSet<&str> = candidates
+            .iter()
+            .flat_map(|(_, _, signature)| &signature.generics)
+            .filter(|generic| matches!(generic.kind, GenericKind::Value(_)))
+            .map(|generic| generic.name.as_str())
+            .collect();
         let options: std::collections::HashSet<&str> = candidates
             .iter()
             .flat_map(|(_, _, signature)| signature.parameters.iter().skip(own))
             .map(|parameter| parameter.name.as_str())
+            .chain(selecting.iter().copied())
             .collect();
         let reported = self.diagnostics.len();
         let written = self.operator_arguments(name, list, public, &options);
@@ -1896,6 +1905,25 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|(key, node)| self.give(key, node))
             .collect();
+        // GEN-8: "The value a call gives a generic value parameter is a
+        // compile-time constant ... Any other rejects."
+        for given in &given {
+            if let Key::Name(name) = &given.key
+                && selecting.contains(name.as_str())
+                && !self.is_compile_time(&given.node)
+            {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    self.at(&given.node),
+                    format!(
+                        "`{name}` is a generic value parameter, and this is no compile-time \
+                         constant: it is known only when the program runs"
+                    ),
+                    "GEN-8",
+                ));
+            }
+        }
         // An argument given to no parameter, or rejected itself, has
         // been reported, and one whose type is not known says nothing
         // of the candidates: the call is then not judged (ERR-9).
@@ -2020,6 +2048,66 @@ impl<'a> Typer<'a> {
         self.called(operator, chosen, given, Form::Named)
     }
 
+    /// The declarations the name of `node` is bound to, when it is a
+    /// lone name that names an enum.
+    fn names_enum(&self, node: &SyntaxNode) -> bool {
+        let Some((module, declarations)) = name_token(node)
+            .filter(|_| node.kind() == SyntaxKind::NameExpr)
+            .and_then(|name| self.declarations(&name))
+        else {
+            return false;
+        };
+        declarations.iter().any(|&declaration| {
+            self.program.modules[module].declarations[declaration].kind == DeclarationKind::Enum
+        })
+    }
+
+    /// The constant an option is given, for a candidate's condition to
+    /// compare (GEN-6). An enum member is one however it is written
+    /// (TYPE-7): `.nan`, `Zero.nan`, `alias::Zero.nan`.
+    fn option_value(&self, node: &SyntaxNode) -> Option<OptionValue> {
+        if node.kind() == SyntaxKind::MemberExpr
+            && node
+                .children()
+                .next()
+                .is_some_and(|base| self.names_enum(&base))
+        {
+            // The member's name is the last token: any word (LEX-9).
+            return tokens(node)
+                .last()
+                .map(|name| OptionValue::Member(name.text().to_string()));
+        }
+        constant_of(node)
+    }
+
+    /// True when an expression is a compile-time constant (GEN-8): "a
+    /// literal, an enum member however it is written (TYPE-7), `Zero.nan`
+    /// or `.nan`, a generic value parameter in scope, or a constant
+    /// expression of those."
+    fn is_compile_time(&self, node: &SyntaxNode) -> bool {
+        match node.kind() {
+            SyntaxKind::Literal | SyntaxKind::ImpliedMember => true,
+            SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr | SyntaxKind::BinaryExpr => node
+                .children()
+                .filter(|child| child.kind() != SyntaxKind::OperatorConfig)
+                .all(|operand| self.is_compile_time(&operand)),
+            SyntaxKind::MemberExpr => node
+                .children()
+                .next()
+                .is_some_and(|base| self.names_enum(&base)),
+            SyntaxKind::NameExpr => name_token(node).is_some_and(|name| {
+                matches!(
+                    self.bindings.get(&(self.file, name.span().start)),
+                    Some(Binding::Local {
+                        kind: LocalKind::GenericParameter,
+                        ..
+                    })
+                )
+            }),
+            _ => false,
+        }
+    }
+
     /// The value candidates of `operator`, wherever they are declared.
     /// GEN-5: "Library membership and registration order grant no
     /// priority."
@@ -2092,7 +2180,9 @@ impl<'a> Typer<'a> {
                 let candidate = &program.modules[module].declarations[declaration];
                 // The candidate as this call takes it: its generic
                 // parameters resolved (GEN-2).
-                let Some((taken, generics)) = instance(signature, public, given, wanted) else {
+                let Some((taken, generics)) =
+                    instance((candidate, signature), public, given, wanted)
+                else {
                     continue;
                 };
                 let admits = self.admits_call(
@@ -2155,12 +2245,19 @@ impl<'a> Typer<'a> {
         let arguments = given
             .into_iter()
             .enumerate()
-            .map(|(position, given)| {
-                let Some(&index) = bound.get(position) else {
-                    return hir::Argument {
-                        parameter: None,
-                        value: given.value,
-                    };
+            .filter_map(|(position, given)| {
+                let index = match bound.get(position) {
+                    Some(Place::Parameter(index)) => *index,
+                    // What a generic value parameter is given is a
+                    // compile-time constant, kept among the call's
+                    // generic arguments and not among its arguments.
+                    Some(Place::Generic(_)) => return None,
+                    None => {
+                        return Some(hir::Argument {
+                            parameter: None,
+                            value: given.value,
+                        });
+                    }
                 };
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
@@ -2171,10 +2268,10 @@ impl<'a> Typer<'a> {
                 } else {
                     self.fit(given.value, &parameter.ty, &place)
                 };
-                hir::Argument {
+                Some(hir::Argument {
                     parameter: Some(index),
                     value,
-                }
+                })
             })
             .collect();
         let kind = ExprKind::Call {
@@ -2388,10 +2485,30 @@ impl<'a> Typer<'a> {
             return Admits::No;
         };
         let own = public.parameters.len();
+        // GEN-13: a generic value parameter has an ordinary type, and
+        // what the call gives it is of that type.
+        for (position, place) in bound.iter().enumerate() {
+            let Place::Generic(index) = *place else {
+                continue;
+            };
+            let GenericKind::Value(ty) = &signature.generics[index].kind else {
+                continue;
+            };
+            let given = &given[position];
+            let admitted = if given.by_place {
+                self.fits_place(&given.node, ty, widening)
+            } else {
+                self.admits(ty, &given.value.ty)
+                    || widening && is_integer_literal(&given.value) && accepts_float(ty)
+            };
+            if !admitted {
+                return Admits::No;
+            }
+        }
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let argument = bound
                 .iter()
-                .position(|&place| place == index)
+                .position(|&place| place == Place::Parameter(index))
                 .map(|position| &given[position]);
             let admitted = match argument {
                 // What the call leaves out has a default, the
@@ -2432,13 +2549,29 @@ impl<'a> Typer<'a> {
         // it, or its default, the candidate's and then, for one of the
         // operator's own parameters, the operator's. `None` when it is
         // no constant this pass reads.
+        let this = &*self;
         let value_of = |name: &str| -> Option<OptionValue> {
+            // An option that selects: a generic value parameter.
+            let generic = signature.generics.iter().position(|generic| {
+                matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
+            });
+            if let Some(generic) = generic {
+                let written = bound
+                    .iter()
+                    .position(|&place| place == Place::Generic(generic))
+                    .map(|position| given[position].node.clone())
+                    .or_else(|| generic_default(&candidate.syntax, &signature.generics[generic]))?;
+                return this.option_value(&written);
+            }
             let index = signature
                 .parameters
                 .iter()
                 .position(|parameter| parameter.name == name)?;
-            if let Some(position) = bound.iter().position(|&place| place == index) {
-                return constant_of(&given[position].node);
+            let argument = bound
+                .iter()
+                .position(|&place| place == Place::Parameter(index));
+            if let Some(position) = argument {
+                return this.option_value(&given[position].node);
             }
             let default =
                 default_at(&candidate.syntax, &signature.parameters[index]).or_else(|| {
@@ -3424,7 +3557,7 @@ struct Wanted<'w> {
 
 /// True when a call of an operator is not read: the operator or a
 /// candidate has a pack, or a candidate has a generic parameter that is
-/// a value or a type pack. Such a call has no type.
+/// a type pack. Such a call has no type.
 fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signature)]) -> bool {
     let packed = |signature: &Signature| {
         signature
@@ -3435,55 +3568,103 @@ fn unreadable(public: &Signature, candidates: &[(usize, usize, &Signature)]) -> 
     packed(public)
         || candidates.iter().any(|(_, _, signature)| {
             packed(signature)
-                || signature.generics.iter().any(|generic| {
-                    matches!(
-                        generic.kind,
-                        GenericKind::Value(_) | GenericKind::Pack { .. }
-                    )
-                })
+                || signature
+                    .generics
+                    .iter()
+                    .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
         })
 }
 
-/// The parameter of a candidate each argument of a call is given to,
-/// in the order the arguments are written; `None` when the candidate
-/// does not take them.
+/// What an argument of a call is given to in a candidate.
+#[derive(Clone, Copy, PartialEq)]
+enum Place {
+    /// The parameter at this position of the candidate's.
+    Parameter(usize),
+    /// The generic value parameter at this position of the candidate's
+    /// generic parameters: an option that selects (GEN-6).
+    Generic(usize),
+}
+
+/// What each argument of a call is given to in a candidate, in the
+/// order the arguments are written; `None` when the candidate does not
+/// take them.
 ///
 /// GEN-6: "An operator declares the parameters every candidate takes. A
-/// candidate's shape honors them ... and it may declare further const
-/// options of its own". So a candidate's first parameters are the
-/// operator's, place for place, and are named as the operator names
-/// them (EXPR-2); those after are its options, by its own names. An
-/// argument with no name is given to the parameter in its position.
-fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<Vec<usize>> {
+/// candidate's shape honors them ... and it may declare further options
+/// of its own". So a candidate's first parameters are the operator's,
+/// place for place, and are named as the operator names them (EXPR-2);
+/// those after are its options, by its own names. An argument with no
+/// name is given to the parameter in its position. GEN-8: "A name binds
+/// the callee's generic value parameter of that name, or else its
+/// parameter of that name."
+fn bound(signature: &Signature, public: &Signature, given: &[Given]) -> Option<Vec<Place>> {
     let own = public.parameters.len();
     if signature.parameters.len() < own {
         return None;
     }
     let mut taken = vec![false; signature.parameters.len()];
+    let mut named = vec![false; signature.generics.len()];
     let mut places = Vec::with_capacity(given.len());
     for given in given {
-        let index = match &given.key {
-            Key::Position(position) => *position,
-            Key::Name(name) => public
-                .parameters
-                .iter()
-                .position(|parameter| parameter.name == *name)
-                .or_else(|| {
-                    signature
-                        .parameters
-                        .iter()
-                        .skip(own)
-                        .position(|parameter| parameter.name == *name)
-                        .map(|option| option + own)
-                })?,
+        let place = match &given.key {
+            Key::Position(position) => Place::Parameter(*position),
+            Key::Name(name) => {
+                let generic = signature.generics.iter().position(|generic| {
+                    matches!(generic.kind, GenericKind::Value(_)) && generic.name == *name
+                });
+                match generic {
+                    Some(generic) => Place::Generic(generic),
+                    None => Place::Parameter(
+                        public
+                            .parameters
+                            .iter()
+                            .position(|parameter| parameter.name == *name)
+                            .or_else(|| {
+                                signature
+                                    .parameters
+                                    .iter()
+                                    .skip(own)
+                                    .position(|parameter| parameter.name == *name)
+                                    .map(|option| option + own)
+                            })?,
+                    ),
+                }
+            }
         };
-        if index >= signature.parameters.len() || taken[index] {
+        // Each is given once.
+        let slot = match place {
+            Place::Parameter(index) => taken.get_mut(index)?,
+            Place::Generic(index) => named.get_mut(index)?,
+        };
+        if *slot {
             return None;
         }
-        taken[index] = true;
-        places.push(index);
+        *slot = true;
+        places.push(place);
     }
     Some(places)
+}
+
+/// The default a declaration writes for its generic value parameter
+/// `generic` (GEN-2).
+fn generic_default(declaration: &SyntaxNode, generic: &GenericParameter) -> Option<SyntaxNode> {
+    let written = child(declaration, SyntaxKind::GenericParams)?
+        .children()
+        .filter(|parameter| parameter.kind() == SyntaxKind::GenericParam)
+        .find(|parameter| {
+            tokens(parameter)
+                .take_while(|token| token.kind() != SyntaxKind::Colon)
+                .any(|token| token.span().start == generic.at.span.start)
+        })?;
+    default_of(&written)
+}
+
+/// The constant a generic value parameter is given, as it is written.
+fn constant_at(node: &SyntaxNode) -> Constant {
+    Constant {
+        text: node.text().to_string().trim().to_string(),
+        value: crate::constant::fold(node, &|_| ConstantValue::Unevaluated),
+    }
 }
 
 /// The set of each requirement `name in {...}` in `node`: the relation
@@ -3636,14 +3817,16 @@ struct Chosen<'s> {
 /// A candidate as a call takes it: itself where it has no generic
 /// parameter, and otherwise with each resolved (GEN-2) and put in
 /// place. `None` when the call does not say what one of them is, or
-/// does not fit the candidate's parameters at all.
+/// does not fit the candidate's parameters at all. `candidate` is its
+/// declaration, where the defaults of its generic value parameters are
+/// written.
 ///
 /// GEN-5: "Match candidates against the requested output before
 /// inputs". GEN-12: "A prior binding constrains every later occurrence
 /// in declared parameter order." An argument whose type is not known
 /// all the way down, `null`, `.member` or `[]`, says nothing.
 fn instance<'s>(
-    signature: &'s Signature,
+    (candidate, signature): (&Declaration, &'s Signature),
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
@@ -3662,13 +3845,33 @@ fn instance<'s>(
         infer(result, place, generics, &mut found);
     }
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        if let Some(position) = bound.iter().position(|&place| place == index) {
+        let argument = bound
+            .iter()
+            .position(|&place| place == Place::Parameter(index));
+        if let Some(position) = argument {
             infer(
                 &parameter.ty,
                 &given[position].value.ty,
                 generics,
                 &mut found,
             );
+        }
+    }
+    // GEN-6: "An option that selects among candidates is a generic
+    // value parameter". No argument's type says what one is: it is what
+    // the call gives it by name, or its default. GEN-6: "a candidate
+    // whose option has none is admitted only when the call gives it."
+    for (index, generic) in generics.iter().enumerate() {
+        if found[index].is_some() || !matches!(generic.kind, GenericKind::Value(_)) {
+            continue;
+        }
+        let written = bound
+            .iter()
+            .position(|&place| place == Place::Generic(index))
+            .map(|position| given[position].node.clone())
+            .or_else(|| generic_default(&candidate.syntax, generic));
+        if let Some(written) = written {
+            found[index] = Some(Argument::Constant(constant_at(&written)));
         }
     }
     let resolved: Vec<Argument> = found.into_iter().collect::<Option<_>>()?;

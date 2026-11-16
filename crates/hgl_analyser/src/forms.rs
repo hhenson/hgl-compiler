@@ -10,12 +10,15 @@
 //! The lexer likewise admits one literal the domain does not: 2^63,
 //! which is an integer only under a minus (LEX-7).
 
+use std::collections::HashMap;
+
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_lexer::literal::{MAX_INTEGER_MAGNITUDE, decode_integer};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::program::{DeclarationKind, Program, Role};
+use crate::read::{generic_value_names, parameter_name, parameters};
 use crate::{codes, error};
 
 /// Checks every declaration of the program.
@@ -43,6 +46,79 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         }
         for (file, node) in &module.instantiations {
             integer_range(node, module.files[*file].file, diagnostics);
+        }
+    }
+    option_kinds(program, diagnostics);
+}
+
+/// GEN-6: "Across the candidates of one operator an option's name is
+/// one kind: a generic value parameter in every candidate that declares
+/// it, or a parameter in every one, so that what `{zero: .error}` names
+/// is known before a candidate is selected."
+///
+/// A candidate that declares as a parameter an option another candidate
+/// of its operator declares as a generic value parameter is reported,
+/// at the parameter. The generic value parameter is the stricter
+/// declaration, and no order among candidates says which came first.
+fn option_kinds(program: &Program, diagnostics: &mut Diagnostics) {
+    // For each operator, by its module and declaration: the options its
+    // candidates declare as generic value parameters, each with where
+    // one of them does.
+    let mut selecting: HashMap<(usize, usize), HashMap<String, Location>> = HashMap::new();
+    let candidates = || {
+        program.modules.iter().flat_map(|module| {
+            module.declarations.iter().filter_map(move |declaration| {
+                let (_, operator) = declaration.kind.candidate()?;
+                let operator = operator?;
+                let file = module.files[declaration.file].file;
+                Some(((operator.module, operator.declaration), file, declaration))
+            })
+        })
+    };
+    for (operator, file, declaration) in candidates() {
+        for name in generic_value_names(&declaration.syntax) {
+            selecting
+                .entry(operator)
+                .or_default()
+                .entry(name.text().to_string())
+                .or_insert(Location::new(file, name.span()));
+        }
+    }
+    if selecting.is_empty() {
+        return;
+    }
+    // A second pass, in the order the candidates are declared, so that
+    // what is reported comes in one order on every run.
+    for (operator, file, declaration) in candidates() {
+        let Some(names) = selecting.get(&operator) else {
+            continue;
+        };
+        let public = &program.modules[operator.0].declarations[operator.1];
+        // A candidate's first parameters are its operator's; those after
+        // are its own options.
+        let own = parameters(&public.syntax).len();
+        for parameter in parameters(&declaration.syntax).iter().skip(own) {
+            let Some(name) = parameter_name(parameter) else {
+                continue;
+            };
+            let Some(other) = names.get(name.text()) else {
+                continue;
+            };
+            diagnostics.emit(
+                error(
+                    Category::Operator,
+                    codes::IMPL_OPTION_KIND,
+                    Location::new(file, name.span()),
+                    format!(
+                        "`{}` is a parameter here and a generic value parameter in another \
+                         candidate of `{}`: an option is one kind in every candidate",
+                        name.text(),
+                        public.name
+                    ),
+                    "GEN-6",
+                )
+                .with_related(*other, "a generic value parameter here"),
+            );
         }
     }
 }

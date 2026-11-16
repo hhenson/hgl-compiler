@@ -570,26 +570,41 @@ own signature (GEN-6):
 | Part of a candidate | How a call gives it |
 | --- | --- |
 | Its first parameters, which are the operator's, place for place | In position, or by the name the operator gives the parameter |
-| The options it declares after them | By the option's name, or in position |
+| An option that selects among candidates: a generic value parameter, `<const zero: Zero = .ieee>` | By its name |
+| An option that does not select: a parameter after the operator's | By its name, or in position |
+
+A name is looked for among the candidate's generic value parameters and
+then among its parameters (GEN-8); a candidate has only one of the two
+under a name, and across an operator's candidates an option's name is
+one kind (GEN-6), or the candidate that declares the parameter is
+`impl.option_kind`.
 
 A candidate is admitted when its result fits the type the place expects,
-each argument fits the parameter it is given to, what the call leaves
-out has a default or a type written `T?`, and its `requires` holds. A
-call that names an option admits only the candidates that declare it; a
-name neither the operator nor any candidate declares is
-`argument.unknown`. Candidates may order their options differently, so
-which option an argument in position is given to is judged candidate by
-candidate; only what is wrong for every candidate is reported of the
-call itself. A candidate's `requires` compares an option with
-constants, `zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`,
-`||` and `!`: it is checked against what the call gives the option, or
-the option's default, the candidate's and then the operator's for a
-parameter the operator declares. Constants are compared as the values
-they denote: `1_000` is `1000`, and a string is its contents. So `ratio(a, b, zero: .error)` selects the
-candidate that is for `.error`, and has its result type (EXPR-12). Where
-the call gives such an option as no constant, a name say, which
-candidate is for it cannot be told and the call is not judged: the
-catalogue has no row for that rejection (hhenson/hgl_spec#48).
+each argument fits what it is given to, what the call leaves out has a
+default or a type written `T?`, and its `requires` holds. A call that
+names an option admits only the candidates that declare it; a name
+neither the operator nor any candidate declares is `argument.unknown`.
+Candidates may order their options differently, so which option an
+argument in position is given to is judged candidate by candidate; only
+what is wrong for every candidate is reported of the call itself.
+
+A candidate's `requires` compares an option with constants,
+`zero == .error` or `zero in {.ieee, .nan}`, joined by `&&`, `||` and
+`!`. It is checked against what the call gives the option, or the
+option's default: the candidate's, and for a parameter the operator
+declares then the operator's. Constants are compared as the values they
+denote: `1_000` is `1000`, a string is its contents, and an enum member
+is the same written `.error` or `Zero.error` (TYPE-7). So
+`ratio(a, b, zero: .error)` selects the candidate that is for `.error`,
+and has its result type (EXPR-12).
+
+What a call gives a generic value parameter is a compile-time constant
+(GEN-8): a literal, an enum member, a generic value parameter in scope,
+or an expression of those. Any other is `generic.argument_constant`. It
+is kept among the call's generic arguments in the typed body, and is not
+one of its arguments. Where it is a generic value parameter of the
+enclosing function, which candidate it selects is known only where that
+function is called, and the call is not judged here.
 
 An operator's own requirement may say what its result is: `operator
 convert<T, V, O>(value: V) -> O requires O in {T, result<T, error>}`.

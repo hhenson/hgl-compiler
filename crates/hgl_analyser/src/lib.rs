@@ -122,6 +122,10 @@ pub mod codes {
     /// A candidate, `impl fn` or `impl const fn`, native or not, names
     /// no operator (GEN-4).
     pub const IMPL_UNKNOWN_OPERATOR: &str = "impl.unknown_operator";
+    /// A candidate declares as a parameter an option that another
+    /// candidate of its operator declares as a generic value parameter
+    /// (GEN-6).
+    pub const IMPL_OPTION_KIND: &str = "impl.option_kind";
     /// A native implementation completes no declaration (NATIVE-2).
     pub const NATIVE_MISSING_DECLARATION: &str = "native.missing_declaration";
     /// A local is used before the statement that declares it (UNIT-6).
@@ -227,6 +231,9 @@ pub mod codes {
     /// A call leaves a generic parameter of its callee unresolved
     /// (GEN-2, GEN-8).
     pub const GENERIC_UNRESOLVED: &str = "generic.unresolved";
+    /// A call gives a generic value parameter of its callee no
+    /// compile-time constant (GEN-8).
+    pub const GENERIC_ARGUMENT_CONSTANT: &str = "generic.argument_constant";
 
     /// A value's type is not the type its place requires (EXPR-5),
     /// or `null` stands where the type is not nullable (TYPE-14).

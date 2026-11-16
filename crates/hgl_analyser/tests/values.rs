@@ -2522,3 +2522,103 @@ fn equally_specific_generic_candidates_are_ambiguous() {
     );
     assert_eq!(locals(&checked, "uses")[2..4], ["one: i64", "two: i64"]);
 }
+
+// ---- An option that selects ----
+
+/// GEN-6: "An option that selects among candidates is a generic value
+/// parameter, `<const zero: Zero = .ieee>` ... A call admits the
+/// candidate only where that holds for the parameter's value at the
+/// call, a default included." GEN-8: "A call may give a generic value
+/// parameter of its callee by name ... A name binds the callee's generic
+/// value parameter of that name, or else its parameter of that name."
+#[test]
+fn an_option_that_selects_is_a_generic_value_parameter() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio<const zero: Zero = .ieee>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio<const zero: Zero>(lhs: f64, rhs: f64) -> result<f64, error>\n",
+        "    requires zero == .error => ok(lhs)\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses(a: f64, b: f64, text: str) {\n",
+        // The default: the first candidate's condition holds for it.
+        "    let plain = ratio(a, b)\n",
+        "    let nan = ratio(a, b, zero: .nan)\n",
+        // The second has no default: it is admitted because the call
+        // gives the option.
+        "    let checked = ratio(a, b, zero: .error)\n",
+        // TYPE-7: an enum member written in full is the same constant.
+        "    let full = ratio(a, b, zero: Zero.error)\n",
+        "    let texts = ratio(text, 2)\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        locals(&checked, "uses")[3..],
+        [
+            "plain: f64",
+            "nan: f64",
+            "checked: result<f64, error>",
+            "full: result<f64, error>",
+            "texts: str",
+        ]
+    );
+    // What the option is given is a compile-time constant: it is among
+    // the call's generic arguments, and not among its arguments.
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body(&checked, "uses").statements[2]
+    else {
+        panic!("a declaration with a value");
+    };
+    let ExprKind::Call {
+        callee: Callee::Candidate { generics, .. },
+        arguments,
+        ..
+    } = &value.kind
+    else {
+        panic!("a call of a candidate: {:?}", value.kind);
+    };
+    assert_eq!(arguments.len(), 2);
+    let resolved: Vec<String> = generics.iter().map(|generic| generic.to_string()).collect();
+    assert_eq!(resolved, [".error"]);
+}
+
+/// GEN-8: "The value a call gives a generic value parameter is a
+/// compile-time constant: a literal, an enum member however it is
+/// written (TYPE-7), `Zero.nan` or `.nan`, a generic value parameter in
+/// scope, or a constant expression of those. Any other rejects." GEN-6:
+/// a call "that names an option admits only the candidates that declare
+/// it".
+#[test]
+fn a_selecting_option_is_given_a_compile_time_constant() {
+    let checked = module(concat!(
+        "enum Zero { ieee, nan, error }\n",
+        "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn ratio<const zero: Zero = .ieee>(lhs: f64, rhs: f64) -> f64\n",
+        "    requires zero in {.ieee, .nan} => lhs\n",
+        "impl const fn ratio(lhs: str, rhs: i64) -> str => lhs\n",
+        "const fn uses<const P: Zero>(a: f64, b: f64, text: str, policy: Zero) {\n",
+        // A parameter is known only when the program runs.
+        "    let runtime = ratio(a, b, zero: policy)\n",
+        // The candidate for a `str` and an `i64` declares no `zero`.
+        "    let absent = ratio(text, 2, zero: .nan)\n",
+        // An `i64` is no `Zero`.
+        "    let mistyped = ratio(a, b, zero: 3)\n",
+        // A generic value parameter in scope is a compile-time constant.
+        // What it is, is known where `uses` is called: which candidate
+        // it selects is not judged here.
+        "    let passed = ratio(a, b, zero: P)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:37 type/generic.argument_constant GEN-8",
+            "m.hgl:9:18 operator/operator.no_candidate GEN-5",
+            "m.hgl:10:20 operator/operator.no_candidate GEN-5",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[7], "passed: _");
+}

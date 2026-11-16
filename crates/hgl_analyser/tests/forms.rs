@@ -160,3 +160,41 @@ fn a_native_implementations_hooks_follow_native_3() {
         ]
     );
 }
+
+/// GEN-6: "Across the candidates of one operator an option's name is
+/// one kind: a generic value parameter in every candidate that declares
+/// it, or a parameter in every one, so that what `{zero: .error}` names
+/// is known before a candidate is selected." The candidate that
+/// declares the parameter is the one reported.
+#[test]
+fn an_options_name_is_one_kind_across_an_operators_candidates() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "operator scaled<L, R, O>(lhs: L, rhs: R) -> O\n",
+            // `exact` is a parameter here and a generic value parameter
+            // below.
+            "impl const fn scaled(lhs: f64, rhs: f64, exact: bool = false) -> f64 => lhs\n",
+            "impl const fn scaled<const exact: bool = false>(lhs: i64, rhs: i64) -> i64 => lhs\n",
+            // A parameter in every candidate that declares it.
+            "operator near<L, R>(lhs: L, rhs: R) -> bool\n",
+            "impl const fn near(lhs: f64, rhs: f64, within: f64 = 0.0) -> bool => true\n",
+            "impl const fn near(lhs: i64, rhs: i64, within: f64 = 0.0) -> bool => true\n",
+            // A generic value parameter in every one; the operator's
+            // own parameters are no options.
+            "operator ratio<L, R, O>(lhs: L, rhs: R) -> O\n",
+            "impl const fn ratio<const zero: bool = false>(lhs: f64, rhs: f64) -> f64 => lhs\n",
+            "impl const fn ratio<const zero: bool>(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:3:42 operator/impl.option_kind GEN-6"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`exact` is a parameter here and a generic value parameter in another candidate of \
+         `scaled`: an option is one kind in every candidate"
+    );
+}
