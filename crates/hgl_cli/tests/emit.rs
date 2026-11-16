@@ -62,7 +62,7 @@ fn an_accepted_program_is_written() {
         text(&output.stdout),
         format!("wrote 2 files for hgraph to {}\n", out.display())
     );
-    let module = fs::read_to_string(out.join("demo").join("pass.py")).unwrap();
+    let module = fs::read_to_string(out.join("demo").join("pass_").join("__init__.py")).unwrap();
     assert!(
         module.contains(
             "def pass_(value: _hg.TS[int]) -> _hg.TS[int]:\n    return value.delta_value\n"
@@ -72,7 +72,7 @@ fn an_accepted_program_is_written() {
         module
             .contains("    assert _harness.evaluate(pass_, value=[7, None, 9]) == [7, None, 9]\n")
     );
-    assert!(out.join("hgl_harness.py").is_file());
+    assert!(out.join("_hgl_harness.py").is_file());
 }
 
 /// A rejected program, and one the target does not write all of, write

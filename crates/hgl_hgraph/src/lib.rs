@@ -18,7 +18,7 @@
 //! | A `const` parameter of a node | A scalar parameter |
 //! | `state name: T = value` | A field of the node's `STATE`, set in its `start` |
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
-//! | A native candidate of core | A function of `hgl_core_native` |
+//! | A native candidate of core | A function of `_hgl_core_native` |
 //! | A named test | A function `test_name` |
 //! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
 //!
@@ -53,16 +53,33 @@ pub struct File {
 }
 
 /// Core's native value functions for this target, as Python.
-const CORE_NATIVE: &str = include_str!("../support/hgl_core_native.py");
+const CORE_NATIVE: &str = include_str!("../support/_hgl_core_native.py");
 
 /// The eval harness a generated test calls.
-const HARNESS: &str = include_str!("../support/hgl_harness.py");
+const HARNESS: &str = include_str!("../support/_hgl_harness.py");
+
+/// The Python name of a module: its path, each part as a Python name
+/// (see the crate's naming). `examples.tests` is itself, and
+/// `demo.pass` is `demo.pass_`.
+pub fn python_module(module: &str) -> String {
+    let parts: Vec<String> = module.split('.').map(emit::name).collect();
+    parts.join(".")
+}
 
 /// The file a module is written to: `examples.tests` to
-/// `examples/tests.py`. Python finds it by the same dotted name.
+/// `examples/tests/__init__.py`. Each module is a Python package, so
+/// that one module's path may begin another's: `demo` and `demo.util`
+/// are `demo/__init__.py` and `demo/util/__init__.py`.
 pub fn file_path(module: &str) -> String {
-    format!("{}.py", module.replace('.', "/"))
+    format!("{}/__init__.py", python_module(module).replace('.', "/"))
 }
+
+/// The support file that provides core's native functions. Its name
+/// starts with `_`, as no module's Python name does.
+pub const CORE_NATIVE_FILE: &str = "_hgl_core_native.py";
+
+/// The support file that holds the eval harness.
+pub const HARNESS_FILE: &str = "_hgl_harness.py";
 
 /// Writes `program` for hgraph: a file for each of its modules but
 /// core, whose native functions the target provides itself, and the
@@ -89,20 +106,20 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Vec<File> 
     }
     if natives {
         files.push(File {
-            path: "hgl_core_native.py".to_string(),
+            path: CORE_NATIVE_FILE.to_string(),
             text: CORE_NATIVE.to_string(),
         });
     }
     if harness {
         files.push(File {
-            path: "hgl_harness.py".to_string(),
+            path: HARNESS_FILE.to_string(),
             text: HARNESS.to_string(),
         });
     }
     files
 }
 
-/// The functions `hgl_core_native.py` provides, read from its text: the
+/// The functions `_hgl_core_native.py` provides, read from its text: the
 /// name after each `def` at the start of a line, but for the private
 /// ones.
 pub(crate) fn provided() -> impl Iterator<Item = &'static str> {
