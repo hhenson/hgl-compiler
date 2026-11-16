@@ -343,6 +343,9 @@ pub mod codes {
     /// A parameter or field with no default is given nothing
     /// (EXPR-2, TYPE-5).
     pub const ARGUMENT_MISSING: &str = "argument.missing";
+    /// In a hook or a value function, a `const` parameter given what is
+    /// no constant expression (FN-1).
+    pub const ARGUMENT_CONSTANT: &str = "argument.constant";
     /// A value function calls a temporal function (FN-4).
     pub const CALL_ROLE: &str = "call.role";
     /// An abstract struct is constructed (TYPE-3).

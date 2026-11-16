@@ -1561,9 +1561,6 @@ impl<'a> Typer<'a> {
                     Some(&target),
                 );
                 self.conforms(&result, &target, self.at(&value), "the type of the `var`");
-                // `held += clock` calls the operator as `held + clock`
-                // does.
-                self.capabilities_given(&kind);
                 Expr {
                     kind,
                     ty: result,
@@ -1811,9 +1808,6 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
-        // Every call is read to here, whatever wrote it: a name, a name
-        // with generic arguments, or a symbol.
-        self.capabilities_given(&kind);
         Expr { kind, ty, at }
     }
 
@@ -3408,6 +3402,118 @@ impl<'a> Typer<'a> {
         self.call_read(node, expected)
     }
 
+    /// What every call is held to once it is built, with each argument
+    /// given to its parameter. It is run where a call of a function and
+    /// a call of an operator's candidate are built, and so for a call
+    /// written by name, with generic arguments, by a symbol, as a link
+    /// of a chain `a + b + c`, or by a compound assignment.
+    fn finished_call(&mut self, kind: &ExprKind) {
+        self.capabilities_given(kind);
+        self.fixed_arguments(kind);
+    }
+
+    /// FN-1: "a `const` parameter takes what is fixed when the graph is
+    /// built. In composition that is any ordinary value. In a hook and
+    /// in a value function it is a constant expression: of literals,
+    /// enum members, generic value parameters, and the enclosing
+    /// function's own `const` parameters."
+    ///
+    /// A graph's own rule, that a `const` parameter is given no
+    /// connection, is `constants_of`'s. This is the other half: where
+    /// values are those of one evaluation, in a hook, a source or a
+    /// value function.
+    fn fixed_arguments(&mut self, kind: &ExprKind) {
+        if self.graph {
+            return;
+        }
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        let given: Vec<(Location, String)> = arguments
+            .iter()
+            .filter_map(|argument| {
+                let parameter = signature.parameters.get(argument.parameter?)?;
+                // What was not read has been reported, or is for a
+                // later part (ERR-9).
+                let judged = parameter.constant
+                    && !matches!(argument.value.kind, ExprKind::Unread)
+                    && !self.is_fixed(&argument.value);
+                judged.then(|| (argument.value.at, parameter.name.clone()))
+            })
+            .collect();
+        for (at, parameter) in given {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::ARGUMENT_CONSTANT,
+                    at,
+                    format!(
+                        "`{parameter}` is a `const` parameter, and takes what is fixed when the \
+                         graph is built: this is a value of one evaluation"
+                    ),
+                    "FN-1",
+                )
+                .with_note(
+                    "a literal, an enum member, a generic value parameter, or a `const` \
+                     parameter of the enclosing function is fixed",
+                ),
+            );
+        }
+    }
+
+    /// True when `value` is a constant expression (FN-1): "of literals,
+    /// enum members, generic value parameters, and the enclosing
+    /// function's own `const` parameters."
+    fn is_fixed(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Literal(_) | ExprKind::EnumMember { .. } | ExprKind::GenericValue { .. } => {
+                true
+            }
+            // A parameter's local has its position among the parameters.
+            ExprKind::Local(local) => self
+                .signature
+                .parameters
+                .get(*local)
+                .is_some_and(|parameter| parameter.constant),
+            ExprKind::Widen(inner) => self.is_fixed(inner),
+            ExprKind::Unary { operand, .. } => self.is_fixed(operand),
+            ExprKind::Binary { left, right, .. } => self.is_fixed(left) && self.is_fixed(right),
+            // A symbol over constants: `-1`, `1 + 2`.
+            ExprKind::Call {
+                arguments,
+                form: Form::Binary(_) | Form::Unary(_),
+                ..
+            } => arguments
+                .iter()
+                .all(|argument| self.is_fixed(&argument.value)),
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
+                entries.iter().all(|entry| self.is_fixed(entry))
+            }
+            _ => false,
+        }
+    }
+
     /// TIME-8: "giving one to a parameter of its type [is a use]". A
     /// parameter written as a generic parameter or `any` is of no one
     /// type: it takes any, and what the function does with its
@@ -4444,6 +4550,7 @@ impl<'a> Typer<'a> {
                 arguments,
                 form: Form::Named,
             };
+            self.finished_call(&kind);
             return (kind, ty);
         };
 
@@ -4577,6 +4684,7 @@ impl<'a> Typer<'a> {
             arguments,
             form: Form::Named,
         };
+        self.finished_call(&kind);
         (kind, ty)
     }
 
@@ -5910,6 +6018,7 @@ impl<'a> Typer<'a> {
             arguments,
             form,
         };
+        self.finished_call(&kind);
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
     }
 
