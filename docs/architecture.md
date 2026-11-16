@@ -849,6 +849,13 @@ says of a parameter or of its result with them in place is what the
 requirement says, part for part, and what the call does not write
 agrees with any.
 
+A requirement is of one call: an operator, the types supplied, and the
+output asked, which is its arrow or, where the arrow leaves a generic
+value parameter of the operator unsaid, the operator's default (GEN-8).
+So `requires window(T) -> list<T, 5>` neither is the body's bare
+`window(value)`, which asks for the default, nor meets a candidate's
+`requires window(T)`.
+
 A requirement and a call ask the candidates through one function,
 `Typer::output_requested`: what the place expects, the types supplied
 in the operator's parameter order with an abstract struct widening what
