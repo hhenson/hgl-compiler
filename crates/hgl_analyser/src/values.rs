@@ -5479,11 +5479,8 @@ fn label_of(label: &Expr) -> Option<Label> {
         ExprKind::Literal(Value::Str(value)) => Some(Label::Str(value.clone())),
         ExprKind::EnumMember { member, .. } => Some(Label::Member(*member)),
         // `-1`: a minus over an integer literal.
-        kind => match kind.unary() {
-            Some((UnaryOperator::Negate, operand)) => match &operand.kind {
-                ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
-                _ => None,
-            },
+        _ => match &negated(label)?.kind {
+            ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
             _ => None,
         },
     }
@@ -5533,15 +5530,15 @@ fn constant_index(index: &Expr) -> Index {
         ExprKind::GenericValue { .. } => return Index::Unevaluated,
         _ => {}
     }
-    // A symbol, as it is written or as the call it stands for.
-    if let Some((UnaryOperator::Negate, operand)) = index.kind.unary() {
+    // A symbol, as it is written or as core's own arithmetic.
+    if let Some(operand) = negated(index) {
         return match constant_index(operand) {
             // `checked_neg` gives `None` where the result does not fit.
             Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
             other => other,
         };
     }
-    let Some((operator, left, right)) = index.kind.binary() else {
+    let Some((operator, left, right)) = arithmetic(index) else {
         return Index::NotConstant;
     };
     match (constant_index(left), constant_index(right)) {
@@ -5928,12 +5925,64 @@ fn is_null(node: &SyntaxNode) -> bool {
 fn is_integer_literal(value: &Expr) -> bool {
     match &value.kind {
         ExprKind::Literal(Value::Int(_)) => true,
-        // `-1`, as it is written or as the call of `neg_` it stands
-        // for.
-        kind => match kind.unary() {
-            Some((UnaryOperator::Negate, operand)) => is_integer_literal(operand),
-            _ => false,
-        },
+        // `-1`, as it is written or as the call of core's `neg_` it
+        // stands for.
+        _ => negated(value).is_some_and(is_integer_literal),
+    }
+}
+
+/// True for the call a symbol stands for where it is core's own and
+/// nothing more: of a candidate the operator's own module declares,
+/// with no argument beside its `operands` operands. What a module's own
+/// candidate computes, or a call given an option as an argument, is not
+/// known to this pass. An option that is a generic value parameter is
+/// no argument: it selects the candidate, a division's `zero` say, and
+/// what that computes is core's.
+fn is_plain(callee: &Callee, arguments: &[hir::Argument], operands: usize) -> bool {
+    match callee {
+        Callee::Candidate {
+            operator, module, ..
+        } => operator.0 == *module && arguments.len() == operands,
+        _ => false,
+    }
+}
+
+/// The operand of a minus that is core's negation: `-value` as it is
+/// written, or the plain call of `neg_` it stands for (see
+/// [`is_plain`]).
+fn negated(value: &Expr) -> Option<&Expr> {
+    match &value.kind {
+        ExprKind::Unary {
+            operator: UnaryOperator::Negate,
+            operand,
+        } => Some(operand),
+        ExprKind::Call {
+            callee,
+            arguments,
+            form: Form::Unary(UnaryOperator::Negate),
+        } if is_plain(callee, arguments, 1) => Some(&arguments[0].value),
+        _ => None,
+    }
+}
+
+/// The operator and operands of a symbol between two that is core's
+/// arithmetic: as it is written, or the plain call it stands for (see
+/// [`is_plain`]).
+fn arithmetic(value: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
+    match &value.kind {
+        ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } => Some((*operator, left, right)),
+        ExprKind::Call {
+            callee,
+            arguments,
+            form: Form::Binary(operator),
+        } if is_plain(callee, arguments, 2) => {
+            Some((*operator, &arguments[0].value, &arguments[1].value))
+        }
+        _ => None,
     }
 }
 

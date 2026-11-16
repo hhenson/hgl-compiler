@@ -2992,6 +2992,34 @@ fn a_symbol_selects_a_candidate_a_module_declares() {
     );
 }
 
+/// EXPR-7: "A tuple's index is a constant within its length". EXPR-5: an
+/// integer literal, under a minus or not, is an `f64` where one is
+/// expected. Both read `1 - 1` and `-1` as core's own arithmetic. A
+/// symbol that is the call of a module's own candidate, or that has
+/// configuration, computes what this pass does not know: it is no
+/// constant index and no integer literal.
+#[test]
+fn only_cores_own_arithmetic_is_read_as_a_constant() {
+    let checked = module(concat!(
+        "impl const fn add_(lhs: i64, rhs: i64, offset: i64) -> i64 => lhs + rhs + offset\n",
+        "impl const fn neg_(value: i64, twice: bool) -> i64 => -value\n",
+        "const fn uses(pair: tuple<i64, str>, n: i64) {\n",
+        "    let head = pair[1 - 1]\n",
+        "    let shifted = pair[0 +{offset: n} 0]\n",
+        "    let real: f64 = -1\n",
+        "    let flipped: f64 = -{twice: true} 1\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:24 type/tuple.index EXPR-7",
+            "m.hgl:8:24 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(locals(&checked, "uses")[2], "head: i64");
+}
+
 /// EXPR-11: "`<=>` is full comparison ... It returns core's `CmpResult`,
 /// an ordinary enum, rather than a bool; `==`, `!=`, `<`, `<=`, `>`, and
 /// `>=` return a bool." NUM-6: "An outcome has no implicit bool or
