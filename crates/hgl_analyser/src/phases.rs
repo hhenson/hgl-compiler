@@ -122,8 +122,15 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         for (index, declaration) in module.declarations.iter().enumerate() {
             let file = module.files[declaration.file].file;
             match declaration.kind {
+                // A native one states its contract in its body
+                // (NATIVE-3): "A native const implementation stays
+                // value-level and admits neither `inject` nor temporal
+                // lifecycle hooks." NATIVE-5: "A native value function
+                // injects nothing".
                 DeclarationKind::Function(Role::Value)
-                | DeclarationKind::Implementation(Role::Value, _) => {
+                | DeclarationKind::Implementation(Role::Value, _)
+                | DeclarationKind::NativeImplementation(Role::Value)
+                | DeclarationKind::NativeCandidateImplementation(Role::Value) => {
                     in_value_function(declaration, file, diagnostics);
                 }
                 _ => {}
@@ -140,29 +147,49 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 }
 
 /// FN-1: "A `const fn` is a value function." It has no state and no
-/// hooks: each of those in one is rejected, at its keyword. It may
-/// inject a capability, which its caller then needs (FN-9: "Injection
-/// does not turn a value function into a node").
+/// hooks: each of those in one is rejected, at its keyword. FN-9:
+/// "Capabilities belong to nodes ... A value function has none. A
+/// value it needs from one, the evaluation time say, is its argument",
+/// so an `inject` in one is rejected as they are.
 fn in_value_function(declaration: &Declaration, file: FileId, diagnostics: &mut Diagnostics) {
     for node in declaration.syntax.descendants() {
-        if !is_node_construct(node.kind()) || node.kind() == SyntaxKind::InjectDecl {
+        if !is_node_construct(node.kind()) {
             continue;
         }
         let Some((word, at)) = keyword(&node, file) else {
             continue;
         };
-        diagnostics.emit(error(
-            Category::Phase,
-            codes::NODE_IN_VALUE_FUNCTION,
-            at,
-            format!(
-                "`{}` is a node's, and `{}` is a `const fn`: a value function has no state \
-                 and no hooks",
-                word.text(),
-                declaration.name
-            ),
-            "FN-1",
-        ));
+        let diagnostic = if node.kind() == SyntaxKind::InjectDecl {
+            error(
+                Category::Phase,
+                codes::NODE_IN_VALUE_FUNCTION,
+                at,
+                format!(
+                    "`inject` is a node's, and `{}` is a `const fn`: a value function has no \
+                     capability",
+                    declaration.name
+                ),
+                "FN-9",
+            )
+            .with_note(
+                "pass what it needs as an argument: the node reads `clock.evaluation_time` \
+                 and gives it to the function",
+            )
+        } else {
+            error(
+                Category::Phase,
+                codes::NODE_IN_VALUE_FUNCTION,
+                at,
+                format!(
+                    "`{}` is a node's, and `{}` is a `const fn`: a value function has no state \
+                     and no hooks",
+                    word.text(),
+                    declaration.name
+                ),
+                "FN-1",
+            )
+        };
+        diagnostics.emit(diagnostic);
     }
 }
 

@@ -179,11 +179,15 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
     );
 }
 
-/// FN-1: "A `const fn` is a value function." It has no state and no
-/// hooks. FN-9: "Injection does not turn a value function into a node":
-/// it may inject a capability.
+/// FN-1: "A `const fn` is a value function": it has no state and no
+/// hooks. FN-9: "Capabilities belong to nodes: a node declares each
+/// with `inject` and uses it in its hooks ... A value function has
+/// none. A value it needs from one, the evaluation time say, is its
+/// argument". NATIVE-3: "A native const implementation stays
+/// value-level and admits neither `inject` nor temporal lifecycle
+/// hooks." NATIVE-5: "A native value function injects nothing".
 #[test]
-fn a_value_function_has_no_state_and_no_hooks() {
+fn a_value_function_has_no_state_no_capability_and_no_hooks() {
     let checked = check(&[(
         "m.hgl",
         concat!(
@@ -199,6 +203,15 @@ fn a_value_function_has_no_state_and_no_hooks() {
             "    start { }\n",
             "    return value\n",
             "}\n",
+            // What it needs of a capability is its argument.
+            "const fn stamped(at: datetime, value: f64) -> tuple<datetime, f64> => (at, value)\n",
+            "fn stamp(value: f64) -> tuple<datetime, f64> {\n",
+            "    inject clock\n",
+            "    when { return stamped(clock.evaluation_time, value) }\n",
+            "}\n",
+            // A native value function's contract.
+            "native const fn now() -> datetime\n",
+            "native const fn now() -> datetime { inject clock }\n",
         ),
     )]);
     assert_eq!(
@@ -206,7 +219,9 @@ fn a_value_function_has_no_state_and_no_hooks() {
         [
             "m.hgl:3:5 phase/node.in_value_function FN-1",
             "m.hgl:4:5 phase/node.in_value_function FN-1",
+            "m.hgl:9:5 phase/node.in_value_function FN-9",
             "m.hgl:10:5 phase/node.in_value_function FN-1",
+            "m.hgl:19:37 phase/node.in_value_function FN-9",
         ]
     );
 }
