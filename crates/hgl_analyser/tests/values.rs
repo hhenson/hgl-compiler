@@ -2958,6 +2958,24 @@ fn a_nullable_is_no_payload_without_a_null_test() {
         "    if value == null { }\n",
         "    return value\n",
         "}\n",
+        // A loop's body may run no times, and one case of a `switch` is
+        // not the others: what is proved inside is proved of nothing
+        // after.
+        "const fn looped(xs: list<i64>, value: i64?) -> i64 {\n",
+        "    for x in xs {\n",
+        "        if value == null { return 0 }\n",
+        "    }\n",
+        "    return value\n",
+        "}\n",
+        "const fn switched(kind: i64, value: i64?) -> i64 {\n",
+        "    switch kind {\n",
+        "        case 1:\n",
+        "            if value == null { return 0 }\n",
+        "        case 2:\n",
+        "            return value\n",
+        "    }\n",
+        "    return value\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -2969,6 +2987,9 @@ fn a_nullable_is_no_payload_without_a_null_test() {
             "m.hgl:9:25 type/nullable.required_presence ERR-12",
             "m.hgl:10:48 type/nullable.required_presence ERR-12",
             "m.hgl:12:12 type/nullable.required_presence ERR-12",
+            "m.hgl:18:12 type/nullable.required_presence ERR-12",
+            "m.hgl:25:20 type/nullable.required_presence ERR-12",
+            "m.hgl:27:12 type/nullable.required_presence ERR-12",
         ]
     );
     assert_eq!(
@@ -3098,7 +3119,7 @@ fn a_functions_generic_value_parameter_is_given_a_constant_of_its_type() {
     );
     assert_eq!(
         messages(&checked)[5],
-        "this call leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
+        "this leaves `fallback` to its default, an `i64`, and `fallback` is `str` here"
     );
     assert_eq!(locals(&checked, "uses")[7], "real: f64");
 }
@@ -3124,12 +3145,17 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
         // A type parameter has no default: the struct is not named bare.
         "struct Run<T, const size: i64 = 3> { values: list<T, size> }\n",
         "struct Bad<const size: i64 = \"three\"> { values: list<f64, size> }\n",
+        // A default whose type names a type parameter is of it for one
+        // construction and not another.
+        "struct Hold<T, const fallback: T = 2> { value: T }\n",
         "const fn uses(w: Window, five: Window<5>, g: Grid, xs: list<f64, 3>) {\n",
         "    let values = w.values\n",
         "    let wide = five.values\n",
         "    let cells = g.cells\n",
         // A construction that nothing else says the size of.
         "    let made = Window(values: xs)\n",
+        "    let held = Hold(value: 1.5)\n",
+        "    let text = Hold(value: \"x\")\n",
         "}\n",
         "const fn rejected(b: Box, r: Run) {}\n",
     ));
@@ -3137,8 +3163,9 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
         checked.summary(),
         [
             "m.hgl:8:30 type/type.mismatch GEN-13",
-            "m.hgl:15:22 type/generic.argument_count GEN-2",
-            "m.hgl:15:30 type/generic.argument_count GEN-2",
+            "m.hgl:16:16 type/type.mismatch GEN-13",
+            "m.hgl:18:22 type/generic.argument_count GEN-2",
+            "m.hgl:18:30 type/generic.argument_count GEN-2",
         ]
     );
     assert_eq!(
@@ -3152,6 +3179,8 @@ fn a_struct_named_bare_takes_the_defaults_of_its_generic_values() {
             "wide: list<f64, 5>",
             "cells: list<list<f64, 2>, 2>",
             "made: Window<3>",
+            "held: Hold<f64, 2>",
+            "text: Hold<str, 2>",
         ]
     );
 }
@@ -3462,8 +3491,21 @@ fn a_symbol_is_its_call_in_its_place_and_in_its_operands() {
         "    var total = 1.5\n",
         "    total += 1\n",
         "}\n",
+        // An operand that leaves a generic parameter for its place to
+        // say has no place that says: it is reported, as it is where it
+        // is an argument (GEN-8).
+        "const fn repeat<T>(n: i64) -> list<T> => []\n",
+        "const fn unresolved() {\n",
+        "    let bad = repeat(1) == repeat(2)\n",
+        "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:15 type/generic.unresolved GEN-8",
+            "m.hgl:13:28 type/generic.unresolved GEN-8",
+        ]
+    );
     let statements = &body(&checked, "uses").statements;
     let value = |index: usize| match &statements[index] {
         Stmt::Declare {
