@@ -114,10 +114,15 @@ pub(crate) fn name(written: &str) -> String {
 }
 
 /// The name a generated module imports the module `path` under:
-/// `_hgl_demo_util` for `demo.util`. A `_` of the path is doubled, so
-/// that two paths never give one name.
+/// `_hgl_4demo_4util` for `demo.util`. Each part of the path has its
+/// length before it, so that two paths never give one name, whatever
+/// `_` they hold: `a_.b` is `_hgl_2a__1b`, and `a._b` is `_hgl_1a_2_b`.
 fn alias(path: &str) -> String {
-    format!("_hgl_{}", path.replace('_', "__").replace('.', "_"))
+    let parts: Vec<String> = path
+        .split('.')
+        .map(|part| format!("{}{part}", part.len()))
+        .collect();
+    format!("_hgl_{}", parts.join("_"))
 }
 
 /// A string as a Python literal.
@@ -1039,7 +1044,20 @@ impl Emitter<'_> {
                     .iter()
                     .map(|entry| self.expression(function, entry))
                     .collect();
-                format!("[{}]", entries.join(", "))
+                // EXPR-9: "The use site and expected type constrain
+                // element types, keys, ordering, uniqueness": a
+                // sequence that is a set is one in Python too.
+                let is_set = matches!(&value.ty, Type::Set(_))
+                    || matches!(&value.ty, Type::Nullable(inner) if matches!(**inner, Type::Set(_)));
+                if is_set {
+                    format!(
+                        "frozenset(({}{}))",
+                        entries.join(", "),
+                        if entries.len() == 1 { "," } else { "" }
+                    )
+                } else {
+                    format!("[{}]", entries.join(", "))
+                }
             }
             ExprKind::Eval(call) => self.eval(function, call),
             ExprKind::Trace(cells) => self.trace(function, cells, value.at),

@@ -181,12 +181,15 @@ fn a_module_is_written_as_python() {
         paths,
         [
             "_hgl/__init__.py",
-            "_hgl/demo/scaling/__init__.py",
+            "_hgl/_m_demo/_m_scaling/__init__.py",
             "_hgl/_core_native.py",
             "_hgl/_harness.py"
         ]
     );
-    assert_eq!(emitted.text("_hgl/demo/scaling/__init__.py"), DEMO_PYTHON);
+    assert_eq!(
+        emitted.text("_hgl/_m_demo/_m_scaling/__init__.py"),
+        DEMO_PYTHON
+    );
 }
 
 /// Core's dense scalar eval cases are written whole: every node and
@@ -198,7 +201,7 @@ fn cores_scalar_eval_cases_are_written_whole() {
     let text = core_file("tests/conformance/scalar_eval.hgl");
     let emitted = emit(&[("scalar_eval.hgl", &text)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/conformance/__init__.py");
+    let python = emitted.text("_hgl/_m_conformance/__init__.py");
     for expected in [
         "def pass_i64(value: _hg.TS[int]) -> _hg.TS[int]:\n    return value.delta_value\n",
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
@@ -316,7 +319,7 @@ const ENDPOINTS: &str = concat!(
 fn a_when_header_says_what_wakes_and_admits_a_node() {
     let emitted = emit(&[("endpoints.hgl", ENDPOINTS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/endpoints/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_endpoints/__init__.py");
     for expected in [
         // `valid([])`: no input need be valid.
         "@_hg.compute_node(valid=())\ndef watched_valid(watched: _hg.TS[int], probe: _hg.TS[bool]) -> _hg.TS[bool]:\n    return watched.valid\n",
@@ -404,14 +407,14 @@ const MODULES: [(&str, &str); 3] = [
 fn names_configuration_and_omitted_arguments_are_kept() {
     let emitted = emit(&MODULES);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/configured/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_configured/__init__.py");
     for expected in [
-        "import _hgl.demo.left as _hgl_demo_left\nimport _hgl.demo.right as _hgl_demo_right\n",
+        "import _hgl._m_demo._m_left as _hgl_4demo_4left\nimport _hgl._m_demo._m_right as _hgl_4demo_5right\n",
         concat!(
             "def chosen(fallback):\n",
             "    if (fallback is None):\n",
-            "        return _hgl_demo_left.pick()\n",
-            "    return _core.add__i64_i64(lhs=_hgl_demo_right.pick(), rhs=pick())\n",
+            "        return _hgl_4demo_4left.pick()\n",
+            "    return _core.add__i64_i64(lhs=_hgl_4demo_5right.pick(), rhs=pick())\n",
         ),
         concat!(
             "@kept.start\n",
@@ -462,7 +465,7 @@ const SELECTORS: &str = concat!(
 fn a_headers_selectors_add_up() {
     let emitted = emit(&[("selectors.hgl", SELECTORS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/selectors/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_selectors/__init__.py");
     for expected in [
         "@_hg.compute_node(valid=(\"a\", \"b\"))\ndef both_valid(",
         concat!(
@@ -517,7 +520,7 @@ const DEFAULTS: &str = concat!(
 fn a_default_is_written_where_a_call_leaves_it_out() {
     let emitted = emit(&[("defaults.hgl", DEFAULTS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/defaults/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_defaults/__init__.py");
     for expected in [
         // The function is always given the parameter.
         "def scale(value, factor):\n",
@@ -574,19 +577,19 @@ const DEFAULT_MODULES: [(&str, &str); 2] = [
 fn a_default_keeps_its_meaning_in_another_module() {
     let emitted = emit(&DEFAULT_MODULES);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/caller/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_caller/__init__.py");
     for expected in [
         "def caller(base):\n",
-        "_hgl_demo_lib.scale(value=3, factor=_hgl_demo_lib.base())",
-        "_hgl_demo_lib.pick(first=None, second=1)",
-        "_hgl_demo_lib.pick(first=7, second=5)",
+        "_hgl_4demo_3lib.scale(value=3, factor=_hgl_4demo_3lib.base())",
+        "_hgl_4demo_3lib.pick(first=None, second=1)",
+        "_hgl_4demo_3lib.pick(first=7, second=5)",
     ] {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
-    let library = emitted.text("_hgl/demo/lib/__init__.py");
+    let library = emitted.text("_hgl/_m_demo/_m_lib/__init__.py");
     assert!(library.contains("def pick(first, second):\n"));
 }
 
@@ -642,7 +645,7 @@ const NAMES: &str = concat!(
 fn no_two_names_are_one_python_name() {
     let emitted = emit(&[("names.hgl", NAMES)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/demo/names/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_names/__init__.py");
     for expected in [
         // Python's words, and one that is a word with a `_` after it.
         "def lambda_():\n    return 1\n",
@@ -717,10 +720,66 @@ const SHADOW: &str = concat!(
 fn a_module_takes_no_other_packages_name() {
     let emitted = emit(&[("shadow.hgl", SHADOW)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/hgraph/__init__.py");
+    let python = emitted.text("_hgl/_m_hgraph/__init__.py");
     assert!(python.contains("import hgraph as _hg\n"));
-    assert_eq!(hgl_hgraph::python_module("hgraph"), "_hgl.hgraph");
-    assert_eq!(hgl_hgraph::python_module("demo.pass"), "_hgl.demo.pass_");
+    assert_eq!(hgl_hgraph::python_module("hgraph"), "_hgl._m_hgraph");
+    assert_eq!(
+        hgl_hgraph::python_module("demo.pass"),
+        "_hgl._m_demo._m_pass"
+    );
+}
+
+/// Paths whose parts differ only in where a `_` falls, and a module
+/// that declares a name a module under it has: each stays its own. A
+/// sequence that is a set is one in Python too (EXPR-9).
+const PATHS: [(&str, &str); 4] = [
+    (
+        "one.hgl",
+        "module a_.b\nexport const fn pick() -> i64 => 1\n",
+    ),
+    (
+        "two.hgl",
+        "module a._b\nexport const fn pick() -> i64 => 2\n",
+    ),
+    (
+        "child.hgl",
+        "module paths.util\nexport const fn pick() -> i64 => 4\n",
+    ),
+    (
+        "parent.hgl",
+        concat!(
+            "module paths\n",
+            "use a_.b as one\n",
+            "use a._b as two\n",
+            "use paths.util as child\n",
+            "const fn util() -> i64 => 8\n",
+            "const fn members() -> set<i64> => [1, 2, 1]\n",
+            "const fn pair() -> set<i64> => [1, 2]\n",
+            "test paths {\n",
+            "    assert one::pick() + two::pick() + child::pick() + util() == 15\n",
+            "    assert members() == pair()\n",
+            "}\n",
+        ),
+    ),
+];
+
+#[test]
+fn paths_and_declarations_stay_apart() {
+    let emitted = emit(&PATHS);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_paths/__init__.py");
+    for expected in [
+        "import _hgl._m_a_._m_b as _hgl_2a__1b\n",
+        "import _hgl._m_a._m__b as _hgl_1a_2_b\n",
+        "import _hgl._m_paths._m_util as _hgl_5paths_4util\n",
+        "def util():\n    return 8\n",
+        "def members():\n    return frozenset((1, 2, 1))\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 /// Each module is a package, so one module's path may begin another's.
@@ -739,14 +798,14 @@ fn modules_nest_and_empty_forms_have_a_body() {
         paths,
         [
             "_hgl/__init__.py",
-            "_hgl/demo/__init__.py",
-            "_hgl/demo/util/__init__.py",
+            "_hgl/_m_demo/__init__.py",
+            "_hgl/_m_demo/_m_util/__init__.py",
             "_hgl/_harness.py"
         ]
     );
-    let python = emitted.text("_hgl/demo/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/__init__.py");
     for expected in [
-        "import _hgl.demo.util as _hgl_demo_util\n",
+        "import _hgl._m_demo._m_util as _hgl_4demo_4util\n",
         "def kept():\n    held = None\n    return held\n",
         "@idle.start\ndef _start_idle():\n    pass\n",
         "    assert (kept() is None)\n",
@@ -843,6 +902,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
     files.extend(DEFAULT_MODULES);
+    files.extend(PATHS);
     let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
     for file in &emitted.files {
@@ -861,16 +921,17 @@ fn the_generated_tests_pass_on_hgraph() {
         .arg(driver)
         .arg(&directory)
         .args([
-            "_hgl.conformance",
-            "_hgl.hgraph",
-            "_hgl.demo",
-            "_hgl.demo.scaling",
-            "_hgl.demo.endpoints",
-            "_hgl.demo.selectors",
-            "_hgl.demo.configured",
-            "_hgl.demo.names",
-            "_hgl.demo.defaults",
-            "_hgl.demo.caller",
+            "_hgl._m_conformance",
+            "_hgl._m_hgraph",
+            "_hgl._m_paths",
+            "_hgl._m_demo",
+            "_hgl._m_demo._m_scaling",
+            "_hgl._m_demo._m_endpoints",
+            "_hgl._m_demo._m_selectors",
+            "_hgl._m_demo._m_configured",
+            "_hgl._m_demo._m_names",
+            "_hgl._m_demo._m_defaults",
+            "_hgl._m_demo._m_caller",
         ])
         .output()
         .expect("the interpreter runs");
@@ -882,7 +943,7 @@ fn the_generated_tests_pass_on_hgraph() {
     );
     assert_eq!(
         printed.matches("ok ").count(),
-        22,
+        23,
         "eight of core's, six on endpoints, and one of each demo's"
     );
 }

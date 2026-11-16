@@ -1247,10 +1247,12 @@ its `0.9.x` branch, not approximated in generated code.
 that a program's modules are in a namespace of their own: a module named
 `hgraph`, or as a module of Python's library is, takes the place of
 nothing Python or hgraph imports. Each module but core is a package
-under it, `examples.tests` at `_hgl/examples/tests/__init__.py`, so that
-one module's path may begin another's. Beside them are the support files
-a generated module imports, whose names start with `_`, as no module's
-Python name does: `_hgl/_core_native.py` and `_hgl/_harness.py`.
+under it, each part of its path with `_m_` before it: `examples.tests`
+is `_hgl/_m_examples/_m_tests/__init__.py`. A package holds a module's
+declarations and the packages of the modules under it side by side, and
+the `_m_` keeps the two apart, so `module demo` may declare a `util`
+beside `module demo.util`. Beside the modules are the support files a
+generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 
 | HGL | Python |
 | --- | --- |
@@ -1263,7 +1265,8 @@ Python name does: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 | A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
 | A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
 | A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`). Python is given no default of its own, so it has none to put in order or to evaluate where the function is defined. A default that leaves itself out is reported |
-| A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl.demo.util as _hgl_demo_util`: two modules may each have a `pick` |
+| A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
+| A sequence that is a set | `frozenset((1, 2))` |
 | `bool`, `i64`, `f64`, `str` | `bool`, `int`, `float`, `str` |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
