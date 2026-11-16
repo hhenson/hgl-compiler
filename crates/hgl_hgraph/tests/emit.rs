@@ -790,6 +790,13 @@ fn a_form_not_written_yet_is_reported() {
             "const fn packed(rest: ...i64) -> i64 => 1\n",
             "test timed {\n",
             "    assert eval(pass, value: [0s: 7]) == [0s: 7]\n",
+            "    let wired = pass(7)\n",
+            "}\n",
+            "fn chosen(flag: bool, value: i64) -> i64 {\n",
+            "    if flag {\n",
+            "        return pass(value)\n",
+            "    }\n",
+            "    return value\n",
             "}\n",
         ),
     )]);
@@ -803,8 +810,11 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:17:12 target.unsupported",
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
+            // A graph's `if`, then what the test holds.
+            "m.hgl:30:5 target.unsupported",
             "m.hgl:26:30 target.unsupported",
             "m.hgl:26:42 target.unsupported",
+            "m.hgl:27:17 target.unsupported",
         ]
     );
 }

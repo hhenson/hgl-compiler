@@ -1289,8 +1289,10 @@ and their candidates declared in a program; generic temporal functions;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` or an input read in `start` or `stop`, which hgraph gives neither;
-`cache`, the `inject` of a capability, and sources; a call lifted over
-connections in a graph; loops and `switch`;
+`cache`, the `inject` of a capability, and sources; in a graph, a call
+lifted over connections, an `if`, and any expression but a name, a
+literal and a call; a temporal function called in a test outside an
+`eval`; loops and `switch`;
 durations, dates and times; timed traces and a published null in a
 trace; and a candidate of core the provider has no function for.
 
