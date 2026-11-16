@@ -212,8 +212,40 @@ fn a_payload_is_read_where_its_input_is_admitted_or_guarded() {
         "fn negated(value: i64, flag: bool) -> i64 {\n",
         "    when !valid(flag) || value > 0 { return value }\n",
         "}\n",
+        // A top-level selector admits its input for the whole header,
+        // whatever order the conjuncts are written in.
+        "fn ordered(value: i64) -> i64 {\n",
+        "    when value > 0 && valid(value) { return value }\n",
+        "}\n",
+        // A name a declaration binds is a call of it, and no selector:
+        // the default stays in place.
+        "const fn ready() -> bool => true\n",
+        "fn helped(value: i64) -> i64 {\n",
+        "    when ready() { return value }\n",
+        "}\n",
     ));
     assert_eq!(checked.summary(), NONE);
+}
+
+/// TIME-9: a selector is the language's `valid`, the name nothing
+/// binds. Where a module declares the name, a call of it is a call of
+/// that declaration: it sets no admission, and the default stands.
+/// (TIME-9 also has the name not taken by a declaration, which is not
+/// reported yet: only the reads are looked at here.)
+#[test]
+fn a_declared_name_is_a_call_and_sets_no_admission() {
+    let checked = module(concat!(
+        "const fn valid() -> bool => true\n",
+        "fn helped(value: i64) -> i64 {\n",
+        "    when valid() { return value }\n",
+        "}\n",
+    ));
+    let unguarded: Vec<String> = checked
+        .summary()
+        .into_iter()
+        .filter(|line| line.contains("payload.unguarded"))
+        .collect();
+    assert_eq!(unguarded, NONE);
 }
 
 /// TIME-4: an unguarded payload read under manual admission rejects. "A

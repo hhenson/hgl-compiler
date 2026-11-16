@@ -368,12 +368,15 @@ impl<'a> Typer<'a> {
         // Omitting either selector uses the same default as its
         // zero-argument form." So a `when` whose header sets no
         // admission of its own runs with every temporal input valid,
-        // and its condition and body read them freely. One that sets it
-        // admits only what its `valid` selectors name, which the
-        // condition proves below.
-        if hook == Hook::When && !header.as_ref().is_some_and(sets_admission) {
-            let inputs = self.temporal_inputs();
-            self.present.extend(inputs.into_iter().map(Fact::Valid));
+        // and one that sets it admits what its `valid` selectors name.
+        // Either holds for the whole header, whatever order its
+        // conjuncts are written in, and for the body.
+        if hook == Hook::When {
+            let admitted = header
+                .as_ref()
+                .and_then(|header| self.admission(header))
+                .unwrap_or_else(|| self.temporal_inputs());
+            self.present.extend(admitted.into_iter().map(Fact::Valid));
         }
         let reported = self.diagnostics.len();
         let condition = header.map(|condition| self.condition(&condition));
@@ -406,6 +409,64 @@ impl<'a> Typer<'a> {
             condition,
             body,
             at,
+        }
+    }
+
+    /// The inputs a `when` header admits by its own `valid` selectors;
+    /// `None` when it has none, and the default stands.
+    ///
+    /// TIME-3: "A selector sets subscription or admission when it
+    /// stands alone in the header or appears as a top-level conjunct.
+    /// Selectors under negation or disjunction leave the default in
+    /// place." A selector is the language's `valid`: a name a
+    /// declaration binds is a call of that declaration, and no selector
+    /// (TIME-9).
+    fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
+        match header.kind() {
+            SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
+            SyntaxKind::BinaryExpr
+                if tokens(header).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
+            {
+                // Every selector among the conjuncts adds what it names.
+                let sets: Vec<Vec<LocalId>> = header
+                    .children()
+                    .filter_map(|operand| self.admission(&operand))
+                    .collect();
+                (!sets.is_empty()).then(|| sets.concat())
+            }
+            SyntaxKind::CallExpr => {
+                let callee = header.children().next()?;
+                let name = match callee.kind() {
+                    SyntaxKind::NameExpr => name_token(&callee)?,
+                    _ => return None,
+                };
+                if name.text() != "valid"
+                    || self.bindings.contains_key(&(self.file, name.span().start))
+                {
+                    return None;
+                }
+                let list = child(header, SyntaxKind::ArgList)?;
+                let arguments = arguments_of(&list);
+                let Some((_, first)) = arguments.first() else {
+                    // `valid()`: every temporal input.
+                    return Some(self.temporal_inputs());
+                };
+                let entries: Vec<SyntaxNode> = match first.kind() {
+                    SyntaxKind::SequenceExpr => first.children().collect(),
+                    _ => vec![first.clone()],
+                };
+                // What names no input is reported where the header is
+                // read, and admits nothing here.
+                Some(
+                    entries
+                        .iter()
+                        .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
+                        .filter_map(|entry| self.local_of(entry))
+                        .filter(|local| self.is_temporal_input(*local))
+                        .collect(),
+                )
+            }
+            _ => None,
         }
     }
 
@@ -5046,31 +5107,6 @@ fn null_tests(
             _ => (Vec::new(), Vec::new()),
         },
         _ => (Vec::new(), Vec::new()),
-    }
-}
-
-/// True when a `when` header has a `valid` selector that sets its
-/// admission (TIME-3): "A selector sets subscription or admission when
-/// it stands alone in the header or appears as a top-level conjunct.
-/// Selectors under negation or disjunction leave the default in place."
-fn sets_admission(header: &SyntaxNode) -> bool {
-    match header.kind() {
-        SyntaxKind::ParenExpr => header
-            .children()
-            .next()
-            .is_some_and(|inner| sets_admission(&inner)),
-        SyntaxKind::BinaryExpr
-            if tokens(header).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
-        {
-            header.children().any(|operand| sets_admission(&operand))
-        }
-        SyntaxKind::CallExpr => header
-            .children()
-            .next()
-            .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-            .and_then(|callee| name_token(&callee))
-            .is_some_and(|name| name.text() == "valid"),
-        _ => false,
     }
 }
 
