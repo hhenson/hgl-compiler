@@ -593,9 +593,11 @@ impl<'a> Typer<'a> {
     /// An operation on an endpoint (TIME-9): "Elsewhere each takes a
     /// temporal input of the enclosing function by its name, or `out`".
     /// `valid` and `modified` are also the selectors of a `when` header
-    /// (TIME-3): "`valid()` requires all temporal inputs to be valid;
-    /// `valid(a, b)` requires both named inputs, and similarly for more
-    /// inputs ... `valid([])` requires no inputs to be valid."
+    /// (TIME-3): "`modified()` subscribes to all temporal inputs;
+    /// `modified(a, b)` subscribes to both named inputs, and similarly
+    /// for more inputs ... `valid()` requires all temporal inputs to be
+    /// valid; `valid(a, b)` requires both named inputs, and similarly
+    /// for more inputs ... `valid([])` requires no inputs to be valid."
     fn endpoint(
         &mut self,
         operation: EndpointOperation,
@@ -607,12 +609,13 @@ impl<'a> Typer<'a> {
             .into_iter()
             .map(|(_, value)| value)
             .collect();
-        // How many it takes: a selector may stand with none, and
-        // `valid` with as many inputs as it names.
+        // How many it takes: a selector may stand with none, and with
+        // as many inputs as it names (TIME-3: "`modified(a, b)`
+        // subscribes to both named inputs, and similarly for more
+        // inputs").
         let (fewest, most) = match operation {
             EndpointOperation::Scheduled => (0, 0),
-            EndpointOperation::Valid => (0, usize::MAX),
-            EndpointOperation::Modified => (0, 1),
+            EndpointOperation::Valid | EndpointOperation::Modified => (0, usize::MAX),
             _ => (1, 1),
         };
         if arguments.len() < fewest {

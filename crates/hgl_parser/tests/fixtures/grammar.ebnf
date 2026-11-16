@@ -11,6 +11,12 @@ switch_statement = "switch", expression, "{", [ NL ], { switch_case, [ NL ] }, [
 switch_case = "case", const_expression, ":", [ NL ], [ statement, { NL, statement } ] ;
 switch_default = "default", ":", [ NL ], [ statement, { NL, statement } ] ;
 # errors-and-diagnostics.md
+result_constructor = ( "ok" | "err" ), "(", expression, ")" ;
+tag_test = ( "is_ok" | "is_err" ), "(", expression, ")" ;
+error_constructor = "error", "(", error_argument, [ ",", error_argument ], [ "," ], ")" ;
+error_argument = ( "message" | "code" ), ":", expression ;
+capture_call = "capture", "(", ( IDENTIFIER | qualified_name ), { ",", argument }, [ "," ], ")" ;
+propagation = postfix_expr, "?" ;
 warning_annotation = "@", "suppress_warning", "(", STRING_LITERAL, ")" ;
 # expressions-and-bindings.md
 expression = or_expr ;

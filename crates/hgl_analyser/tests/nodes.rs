@@ -297,12 +297,13 @@ fn an_unguarded_payload_read_is_rejected() {
     );
 }
 
-/// TIME-3: "`valid(a, b)` requires both named inputs, and similarly for
-/// more inputs ... `valid([])` requires no inputs to be valid." TIME-9:
-/// an endpoint operation takes a temporal input "by its name". So a
-/// sequence that names inputs is no form of a selector, and `modified`
-/// takes one input. TIME-4: an input the selector does not name needs
-/// its guard, and a guard names several as a header does.
+/// TIME-3: "`modified(a, b)` subscribes to both named inputs, and
+/// similarly for more inputs ... `valid(a, b)` requires both named
+/// inputs, and similarly for more inputs ... `valid([])` requires no
+/// inputs to be valid." TIME-9: an endpoint operation takes a temporal
+/// input "by its name". So a sequence that names inputs is no form of a
+/// selector. TIME-4: an input the selector does not name needs its
+/// guard, and a guard names several as a header does.
 #[test]
 fn a_selector_names_its_inputs_each_by_its_name() {
     let checked = module(concat!(
@@ -315,9 +316,12 @@ fn a_selector_names_its_inputs_each_by_its_name() {
         "    when valid([]) {\n",
         "        if valid(a, b) { return a + b }\n",
         "    }\n",
-        // Forms the chapter does not have.
+        // A subscription to the inputs named: validity is the default,
+        // every input.
+        "    when modified(a, b) { return a + c }\n",
+        // Forms the chapter does not have: an empty subscription is
+        // proposed, and not agreed.
         "    when valid([a, b]) { return a }\n",
-        "    when modified(a, b) { return a }\n",
         "    when modified([]) { return a }\n",
         // A constant, and a name given twice, among those named.
         "    when valid(a, 1) { return a }\n",
@@ -327,8 +331,7 @@ fn a_selector_names_its_inputs_each_by_its_name() {
         checked.summary(),
         [
             "m.hgl:5:20 phase/payload.unguarded TIME-4",
-            "m.hgl:10:16 phase/endpoint.argument TIME-9",
-            "m.hgl:11:22 type/argument.unexpected TIME-9",
+            "m.hgl:11:16 phase/endpoint.argument TIME-9",
             "m.hgl:12:19 phase/endpoint.argument TIME-9",
             "m.hgl:13:19 phase/endpoint.argument TIME-9",
         ]

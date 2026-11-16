@@ -237,7 +237,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-1 | transpiler | planned | Endpoint observations: validity, modification, retained data, delta |
 | TIME-2 | analyser | planned | Composition reads no live payload |
 | TIME-2 | transpiler | planned | Evaluation in dependency order, once per node per cycle |
-| TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none. A sequence that names inputs is no selector's form (`endpoint.argument`). Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
+| TIME-3 | analyser | partial | A `when` inside another block is rejected. A `when` whose header has no `valid` selector alone or as a top-level conjunct runs with every temporal input valid; one that has admits those its selectors name: `valid(a, b)` each input it names, `valid([])` none. `modified(a, b)` names the inputs it subscribes to, each by its name. A sequence that names inputs is no selector's form (`endpoint.argument`). Left: subscription, which `modified` sets; a selector that takes no part in its header's condition |
 | TIME-3 | transpiler | planned | Conditions checked in source order; a satisfied body runs, then checking continues unless it returns |
 | TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
 | TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
@@ -246,7 +246,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). Left: piecewise mutation of `out` |
 | TIME-7 | transpiler | planned | Return and `out` share one result; no write, no tick |
 | TIME-8 | analyser | partial | `inject` names one of the listed capabilities. In a node a capability kept in a local, returned, held in a tuple or passed to a function the program declares is rejected (`capability.as_value`); before the `.` of a property it is used as one. Left: which calls are a capability's operations, which core does not declare yet (hhenson/hgl_core#30), so one given to a call of a name nothing declares is not judged; clock properties read-only and typed |
-| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument, `valid` with several inputs or with `[]`. Their names are the language's, and are not listed as left for the prelude. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in |
+| TIME-9 | analyser | partial | In a node's hooks the endpoint operations are read as the language's own: `valid`, `modified` and `scheduled` are bools, `delta_value` the input's type, `last_modified` a `datetime?`; each takes a temporal input of the node by its name, or `out` (`endpoint.argument`); a selector may stand with no argument or with several inputs, and `valid` with `[]`. Their names are the language's, and are not listed as left for the prelude. Left: their names not taken by a declaration; `activate` and `passivate` on direct inputs; which place a selector stands in |
 | TIME-10 | transpiler | planned | A reference ticks on a changed designation |
 
 ## Control flow and sources
@@ -327,6 +327,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-10 | analyser | planned | The string is checked against the warning catalogue; the warning `statement.no_effect` |
 | ERR-11 | transpiler | planned | NaN, infinity and an unordered outcome are data, not errors |
 | ERR-12 | analyser | partial | In a value function a direct test against null refines an immutable nullable parameter, `let` or loop binding to its payload's type: in the branch the test holds for, across `!` and the Boolean connectives, and after a branch that returns. A nullable where its payload is required, or as an operand no candidate takes, is `nullable.required_presence`. Left: temporal bodies |
+| ERR-13 | parser | done | The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?` |
+| ERR-13 | analyser | planned | `ok`, `err`, `is_ok`, `is_err` and `capture` as the forms the chapter defines, taken by no declaration, alias, parameter or local |
 
 ## Tests and eval
 
