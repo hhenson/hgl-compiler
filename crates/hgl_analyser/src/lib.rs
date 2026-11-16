@@ -195,6 +195,12 @@ pub mod codes {
     /// A statement of a node's body that is no declaration and no hook
     /// (FN-2).
     pub const NODE_STATEMENT: &str = "node.statement";
+    /// A statement a source's shape has no place for (SOURCE-1).
+    pub const SOURCE_STATEMENT: &str = "source.statement";
+    /// `when` in a source (SOURCE-1).
+    pub const SOURCE_WHEN: &str = "source.when";
+    /// A temporal parameter of a source (SOURCE-1).
+    pub const SOURCE_INPUT: &str = "source.input";
     /// `out` used in `start` or written in `stop`, or a `return` with a
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";

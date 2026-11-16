@@ -520,7 +520,7 @@ fn text_of(node: &SyntaxNode) -> String {
 /// True when a parameter is marked `const`. In `const: i64` the word is
 /// the parameter's name (FN-5), so the mark is a `const` with a name
 /// after it.
-fn is_const(parameter: &SyntaxNode) -> bool {
+pub(crate) fn is_const(parameter: &SyntaxNode) -> bool {
     let names = names_before_colon(parameter);
     names.len() > 1 && names[0].text() == "const"
 }

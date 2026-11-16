@@ -474,9 +474,23 @@ else".
 A value function injects no capability (owner's decision of 2026-11-16
 on hhenson/hgl_spec#57): what it needs of one is its argument, a value
 the node reads or the capability itself, given to a parameter of the
-capability's type (TIME-8). A source, a body with `yield`, is a node of
-another form whose contract is proposed (SOURCE-1), and its body is not
-checked.
+capability's type (TIME-8).
+
+A source, a temporal function whose body has a `yield`, is a node of
+another shape (SOURCE-1), and is held to it:
+
+| Written in a source | Rejected as |
+| --- | --- |
+| A parameter that is not `const` | `source.input` |
+| `when`, anywhere | `source.when` |
+| `var`, anywhere; `inject` of `out`, `scheduler` or `alarm` | `source.statement` |
+| With a declaration or a hook: a statement that is no declaration, `start`, block or `stop`; a second block; `start` after the block or `stop` before it; a `yield` in a hook | `source.statement` |
+| A declaration after a hook or the block; a declaration or hook inside a block; a second `start` or `stop` | As in any node: `node.declaration_order`, `node.nested`, `node.duplicate_hook` (TIME-5) |
+
+A source with no declaration and no hook has a body of statements, and
+only the first three rows apply. The block is `{ ... }`, a `while` or a
+`for`. A source's body is not read yet: what its statements and each
+`yield` are is for a later part.
 
 A node's body is then read into the same typed form as a value
 function's (`hir::Body`): a `state` or a `cache` is a local that is

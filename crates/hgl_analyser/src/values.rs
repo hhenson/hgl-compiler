@@ -99,8 +99,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 // FN-2: a node, whose hooks are read as value code
                 // (FN-3: "In a hook a temporal parameter is a value of
                 // its declared type, read as in a value function"). A
-                // source's contract is proposed, and its body is not
-                // read.
+                // source has a shape of its own (SOURCE-1), which the
+                // phase pass holds it to; its body is not read yet.
                 (
                     DeclarationKind::Function(Role::Temporal)
                     | DeclarationKind::Implementation(Role::Temporal, _),
