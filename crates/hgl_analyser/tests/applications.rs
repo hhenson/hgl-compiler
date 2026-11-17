@@ -296,6 +296,11 @@ fn a_run_statement_that_calls_no_entry_is_reported() {
             "run(beats(pace: 1s))",
             "live.hgl:5:11 name/argument.unknown EXPR-2",
         ),
+        // LEX-7: an integer literal out of range, as anywhere.
+        (
+            "run(paced(every: 9223372036854775808))",
+            "live.hgl:5:18 parse/number.integer_range LEX-7",
+        ),
         // FN-3: an entry's `const` parameter is given no connection.
         (
             "run(paced(every: beats()))",
