@@ -514,6 +514,51 @@ def ge__T_T(lhs, rhs):
     return lhs >= rhs
 
 
+def _compare(lhs, rhs):
+    """`lhs <=> rhs`: the name of the member of core's `CmpResult` the
+    comparison comes to (OPS-3). NUM-6: "A NaN operand yields
+    `unordered`; equivalent numeric values, including opposite signed
+    zeros, yield `equivalent`." Only a number is a NaN, so "only a
+    numeric comparison yields `unordered`". Python compares an `i64`
+    with an `f64` exactly.
+
+    A native candidate that gives an enum gives its member's name, as
+    one that takes an enum is given it: the generated module reads the
+    member from the enum it declares.
+    """
+    if lhs != lhs or rhs != rhs:
+        return "unordered"
+    if lhs < rhs:
+        return "less"
+    if lhs > rhs:
+        return "greater"
+    return "equivalent"
+
+
+def compare__T_T(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def compare__i64_f64(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def compare__f64_i64(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def and__bool_bool(lhs, rhs):
+    return lhs and rhs
+
+
+def or__bool_bool(lhs, rhs):
+    return lhs or rhs
+
+
+def not__bool(value):
+    return not value
+
+
 def _close(lhs, rhs, abs, rel):
     """`lhs == rhs` under the tolerances `abs` and `rel` (NUM-4, NUM-5).
 

@@ -421,7 +421,7 @@ the same numeric rules the transpiler rows give.
 | NUM-4 | transpiler | done | hgraph: `==` with no tolerance is exact, and with one the symmetric condition, made in exact arithmetic; `!=` is its complement; a tolerance that is not finite and nonnegative is an error |
 | NUM-5 | transpiler | done | hgraph: NaN is equal and close to nothing, an infinity to itself alone, and the two zeros to each other; the finite test is exact, so a difference or a scaled tolerance that is no `f64` admits nothing wrongly |
 | NUM-6 | analyser | partial | In a value function a comparison outcome is a `CmpResult`, and is rejected where a bool or a number is expected. Left: temporal bodies |
-| NUM-6 | transpiler | planned | `compare_` outcomes; Boolean comparisons |
+| NUM-6 | transpiler | done | hgraph: `<=>` and `compare_` give the member of core's `CmpResult`: `unordered` for a NaN operand, and `equivalent` for equal numbers, the two zeros among them; an `i64` and an `f64` are compared exactly. The Boolean comparisons are the provider's, false for a NaN operand but `!=` |
 | NUM-7 | analyser | planned | Tolerance does not configure `<=>`; ordering an unordered domain needs a stated policy |
 | NUM-7 | optimiser | planned | A tolerance grants no ordering law or rewrite |
 | NUM-8 | analyser | partial | In a value function, configuration selects among the candidates of the operator its symbol stands for, and an option left out takes the default its candidate declares. Left: temporal bodies |
