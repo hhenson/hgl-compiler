@@ -27,6 +27,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         runs: Vec::new(),
         diagnostics,
     };
+    let mut run_omitted = false;
     for (index, file) in module.files.iter_mut().enumerate() {
         let omit = omits[index];
         // UNIT-2: imports precede declarations. Once a declaration has
@@ -34,6 +35,11 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         let mut declaration_seen = false;
         for item in file.syntax.items() {
             if omit.contains(&item.syntax().span()) {
+                // TST-13: what is left out is no part of the program. A
+                // run statement left out is still the one its
+                // application has: the application is not then one
+                // with none.
+                run_omitted |= matches!(item, Item::Run(_));
                 continue;
             }
             match item {
@@ -61,7 +67,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
             }
         }
     }
-    check_runs(module, &walk.runs, walk.diagnostics);
+    check_runs(module, &walk.runs, run_omitted, walk.diagnostics);
     module.declarations = walk.declarations;
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
@@ -75,7 +81,14 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
 /// follows its declarations. A module holds none." `runs` is where the
 /// word of each run statement of the unit is written, in file order and
 /// then source order, and whether a declaration follows it.
-fn check_runs(module: &Module, runs: &[(Location, bool)], diagnostics: &mut Diagnostics) {
+/// `run_omitted` is true when a run statement of the unit is left out
+/// of the program (TST-13).
+fn check_runs(
+    module: &Module,
+    runs: &[(Location, bool)],
+    run_omitted: bool,
+    diagnostics: &mut Diagnostics,
+) {
     if !module.application {
         for &(at, _) in runs {
             diagnostics.emit(
@@ -104,6 +117,8 @@ fn check_runs(module: &Module, runs: &[(Location, bool)], diagnostics: &mut Diag
     }
     let runs: Vec<Location> = runs.iter().map(|&(at, _)| at).collect();
     match runs.as_slice() {
+        // The one it has is left out (TST-13).
+        [] if run_omitted => {}
         [] => {
             // "the application's path": where its file writes it.
             if let Some(at) = module.application_at() {

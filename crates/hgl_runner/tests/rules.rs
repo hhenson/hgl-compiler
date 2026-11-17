@@ -886,6 +886,64 @@ fn an_integration_test_is_left_out_unless_it_is_asked_for() {
     assert_eq!(select(&["first"], true), ["not-run executable one::first"]);
 }
 
+/// UNIT-14: an application "holds what a module holds", tests among
+/// them. A test of one is named by the application's path, a rejection
+/// test as any other, and the `application` line owns no case.
+#[test]
+fn a_test_of_an_application_is_named_by_its_path() {
+    const PROGRAM: [(&str, &str); 1] = [(
+        "live.hgl",
+        concat!(
+            "application app.live\n",
+            "test first { assert true }\n",
+            "test rejected {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    assert \"a\\q\" == \"a\"\n",
+            "}\n",
+            "run(entry())\n",
+        ),
+    )];
+    let ran = run_all(&PROGRAM);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(
+        ran.cases,
+        [
+            "passed rejection app.live::rejected",
+            "not-run executable app.live::first",
+        ]
+    );
+    // The path selects it.
+    let selection = Selection {
+        tests: vec!["app.live::rejected".to_string()],
+        rejections_only: false,
+        integration: false,
+    };
+    let ran = run_selected(&PROGRAM, &selection);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(ran.cases, ["passed rejection app.live::rejected"]);
+
+    // TST-13: a run statement owns a case as any item does. With it
+    // left out, the application is not one that has no run statement.
+    let ran = run_all(&[(
+        "live.hgl",
+        concat!(
+            "application app.live\n",
+            "# expect-error(parse, \"syntax.expected_token\")\n",
+            "run(beat() beat())\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(ran.cases, ["passed rejection live.hgl:3 run statement"]);
+
+    // An annotation over the `application` line has nothing to own, as
+    // one over a `module` line has not.
+    let ran = run_all(&[(
+        "live.hgl",
+        "# expect-error(parse, \"string.unknown_escape\")\napplication app.live\nrun(entry())\n",
+    )]);
+    assert_eq!(ran.stopped.len(), 1, "{:?}", ran.stopped);
+}
+
 /// TST-14: "Unknown selectors reject."
 #[test]
 fn an_unknown_selector_stops_the_run() {
