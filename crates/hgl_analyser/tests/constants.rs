@@ -117,6 +117,10 @@ fn a_constant_is_read_wherever_a_value_or_a_constant_is() {
                 "const fn sized(values: list<i64, size>) -> i64 => 1\n",
                 "const fn count<const N: i64>(value: i64) -> i64 => value + N\n",
                 "const fn uses() -> i64 => sized([1, 2, 3]) + count<size>(1)\n",
+                // A generic value argument by name, and a tuple's index.
+                "const fn kept<const N: i64>(values: list<i64, N>) -> i64 => 1\n",
+                "const fn named() -> i64 => kept([1, 2, 3], N: size)\n",
+                "const fn second(pair: tuple<str, i64>) -> i64 => pair[size - scale]\n",
                 // What a `const` parameter takes, in a graph.
                 "fn node(value: i64, const factor: i64) -> i64 {\n",
                 "    when { return value * factor }\n",
@@ -152,6 +156,11 @@ fn a_constant_is_read_wherever_a_value_or_a_constant_is() {
                 "const fn short() -> i64 => sized([1, 2])\n",
                 // A constant is a value, and no type.
                 "const fn typed(value: size) -> i64 => 1\n",
+                // By name the size is 3 too, and a tuple's index is the
+                // constant's value: 3 is past a pair's end.
+                "const fn kept<const N: i64>(values: list<i64, N>) -> i64 => 1\n",
+                "const fn named() -> i64 => kept([1, 2], N: size)\n",
+                "const fn past(pair: tuple<str, i64>) -> i64 => pair[size]\n",
             ),
         ),
     ]);
@@ -161,6 +170,8 @@ fn a_constant_is_read_wherever_a_value_or_a_constant_is() {
             "n.hgl:3:9 module/import.private UNIT-2",
             "n.hgl:5:34 type/type.mismatch TYPE-10",
             "n.hgl:6:23 type/type.not_a_type UNIT-10",
+            "n.hgl:8:33 type/type.mismatch TYPE-10",
+            "n.hgl:9:53 type/tuple.index EXPR-7",
         ],
         "{}",
         wrong.report

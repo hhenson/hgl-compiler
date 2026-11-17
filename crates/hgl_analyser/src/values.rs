@@ -432,6 +432,9 @@ struct Typer<'a> {
     /// operator's module and declaration. A chain of symbols asks for
     /// the same operator's at every link.
     candidates: HashMap<(usize, usize), Vec<Candidate<'a>>>,
+    /// The values of the module constants this function's constants
+    /// have named (UNIT-13).
+    constant_values: crate::read::ConstantValues,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -494,6 +497,7 @@ impl<'a> Typer<'a> {
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
+            constant_values: Default::default(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -7891,6 +7895,17 @@ impl<'a> Typer<'a> {
                     name: name.text().to_string(),
                     at: *at,
                 },
+                // UNIT-13: a constant of a module, followed to its
+                // value as a type that names it follows it.
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) if declarations.len() == 1 => crate::read::constant_value(
+                    self.program,
+                    *module,
+                    declarations[0],
+                    &self.constant_values,
+                ),
                 _ => ConstantValue::Unevaluated,
             }
         };
@@ -9896,7 +9911,22 @@ impl<'a> Typer<'a> {
                 // and is not evaluated.
                 let is_integer = self.admits(&integer, &index.ty);
                 let index = self.fit(index, &integer, "the index of a tuple");
-                let element = match constant_index(&index) {
+                // UNIT-13: an index that names a constant of a module
+                // is that constant's value, where it is followed to one.
+                let found = {
+                    let constant =
+                        |module: usize, declaration: usize| match crate::read::constant_value(
+                            self.program,
+                            module,
+                            declaration,
+                            &self.constant_values,
+                        ) {
+                            ConstantValue::Int(value) => Index::Known(value),
+                            _ => Index::Unevaluated,
+                        };
+                    constant_index(&index, &constant)
+                };
+                let element = match found {
                     _ if !is_integer => Some(&Type::Unknown),
                     Index::Known(value) => usize::try_from(value)
                         .ok()
@@ -12377,11 +12407,16 @@ enum Index {
 
 /// The value of a tuple's index (EXPR-7: "A tuple's index is a constant
 /// within its length"): an integer literal, or literals under a minus
-/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`.
-fn constant_index(index: &Expr) -> Index {
+/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`. `constant` says
+/// what a constant of a module comes to (UNIT-13).
+fn constant_index(index: &Expr, constant: &dyn Fn(usize, usize) -> Index) -> Index {
     match &index.kind {
         ExprKind::Literal(Value::Int(value)) => return Index::Known(*value),
         ExprKind::GenericValue { .. } => return Index::Unevaluated,
+        ExprKind::Constant {
+            module,
+            declaration,
+        } => return constant(*module, *declaration),
         // A call of an operator of which no candidate is selected: it
         // has been reported, or is not judged, and nothing more is said
         // of it (ERR-9).
@@ -12394,7 +12429,7 @@ fn constant_index(index: &Expr) -> Index {
     }
     // A symbol, as it is written or as core's own arithmetic.
     if let Some(operand) = negated(index) {
-        return match constant_index(operand) {
+        return match constant_index(operand, constant) {
             // `checked_neg` gives `None` where the result does not fit.
             Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
             other => other,
@@ -12403,7 +12438,10 @@ fn constant_index(index: &Expr) -> Index {
     let Some((operator, left, right)) = arithmetic(index) else {
         return Index::NotConstant;
     };
-    match (constant_index(left), constant_index(right)) {
+    match (
+        constant_index(left, constant),
+        constant_index(right, constant),
+    ) {
         (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
         (Index::Known(left), Index::Known(right)) => {
             let value = match operator {

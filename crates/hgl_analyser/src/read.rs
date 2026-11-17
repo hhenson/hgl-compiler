@@ -463,7 +463,7 @@ const CONSTANT_DEPTH: usize = 32;
 /// What following constants to their values keeps, for one module's
 /// types (UNIT-13).
 #[derive(Default)]
-struct ConstantValues {
+pub(crate) struct ConstantValues {
     /// The constants being followed, so that one whose value depends on
     /// itself, which is reported as that, ends here.
     following: std::cell::RefCell<Vec<(usize, usize)>>,
@@ -486,7 +486,7 @@ struct ConstantValues {
 ///
 /// A constant of a type other than `i64` and `duration` is left
 /// unevaluated: only those are folded with no types.
-fn constant_value(
+pub(crate) fn constant_value(
     program: &Program,
     module: usize,
     declaration: usize,
