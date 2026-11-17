@@ -24,6 +24,7 @@
 //! | `delta<set<i64>>(added: [1], removed: [2])` | `_hg.set_delta(added=..., removed=..., tp=_py.int)` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
+//! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |
 //! | `enum Side { buy, sell }` | `Side = _enum.Enum("demo.orders::Side", [...])`, a scalar to hgraph |
 //! | `struct Point { x: f64, y: f64 }` | `Point = _core.struct("Point", ("x", "y"))`, a class whose values are never changed |
 //! | `Point(x: 1.0)`, `point.x = 2.0` | `Point(x=1.0, y=...)`, `point = _core.with_field(point, x=2.0)` |

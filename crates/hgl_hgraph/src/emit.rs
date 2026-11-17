@@ -618,10 +618,22 @@ impl Emitter<'_> {
                 }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
-                match module.phases.get(index).copied().flatten() {
-                    Some(Phase::Node) => self.node(declaration, signature, body),
-                    Some(Phase::Graph) => self.graph(declaration, signature, body),
-                    None => self.unsupported(declaration.at, "this function"),
+                self.node_or_graph(index, signature, body);
+            }
+            // GEN-4: "An `impl fn` is a temporal candidate of the
+            // operator it names". It is a node or a graph as a temporal
+            // function is, under a name of the target's.
+            (DeclarationKind::Implementation(Role::Temporal, _), Some(signature), Some(body)) => {
+                if self
+                    .candidates
+                    .insert(self.definition_name(self.module, index))
+                {
+                    self.node_or_graph(index, signature, body);
+                } else {
+                    self.unsupported(
+                        declaration.at,
+                        "a candidate with the parameter types of another of its module",
+                    );
                 }
             }
             // An operator is a name for its candidates, which are the
@@ -638,6 +650,19 @@ impl Emitter<'_> {
                 };
                 self.unsupported(declaration.at, what);
             }
+        }
+    }
+
+    /// A temporal function or a temporal candidate, the declaration
+    /// `index` of the module: a node where its body is a runtime one,
+    /// and a graph where it is composition (FN-3).
+    fn node_or_graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        match module.phases.get(index).copied().flatten() {
+            Some(Phase::Node) => self.node(index, signature, body),
+            Some(Phase::Graph) => self.graph(index, signature, body),
+            None => self.unsupported(module.declarations[index].at, "this function"),
         }
     }
 
@@ -930,7 +955,9 @@ impl Emitter<'_> {
     /// `state` is a field of the node's `STATE`, given its value in the
     /// node's `start`. TIME-7: `inject out` is the node's own output,
     /// hgraph's `_output`.
-    fn node(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+    fn node(&mut self, index: usize, signature: &Signature, body: &Body) {
+        let program = self.program;
+        let declaration = &program.modules[self.module].declarations[index];
         let function = Function {
             locals: &body.locals,
             signature: Some(signature),
@@ -1071,7 +1098,7 @@ impl Emitter<'_> {
         if valid.len() != inputs.len() && !handlers.is_empty() {
             options.push(format!("valid={}", names(&valid)));
         }
-        let python = name(&declaration.name);
+        let python = self.definition_name(self.module, index);
         let decorator = if result.is_some() {
             "compute_node"
         } else {
@@ -1187,7 +1214,10 @@ impl Emitter<'_> {
     }
 
     /// A graph: `@graph`, whose body wires the nodes it calls.
-    fn graph(&mut self, declaration: &Declaration, signature: &Signature, body: &Body) {
+    fn graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+        let program = self.program;
+        let declaration = &program.modules[self.module].declarations[index];
+        let python = self.definition_name(self.module, index);
         let function = Function {
             locals: &body.locals,
             signature: Some(signature),
@@ -1201,11 +1231,7 @@ impl Emitter<'_> {
         let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
         self.line(
             0,
-            &format!(
-                "def {}({}){returns}:",
-                name(&declaration.name),
-                parameters.join(", ")
-            ),
+            &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
         self.block(&function, &body.statements, 1);
     }
@@ -2520,19 +2546,44 @@ impl Emitter<'_> {
     /// and the types of the candidate's parameters:
     /// `_impl_add__f64_i64`. The `_` first makes the name the target's
     /// own, as no name of a program is.
+    ///
+    /// GEN-5 lets an operator have a temporal and a value candidate "of
+    /// the same parameter types", as FN-4 lets a name have both. The
+    /// value one of such a pair is `_value_impl_add__f64_i64`.
     fn definition_name(&self, module: usize, index: usize) -> String {
         let declared = &self.program.modules[module];
         let declaration = &declared.declarations[index];
-        if let DeclarationKind::Implementation(..) = declaration.kind {
-            let types: Vec<String> = match declared.details.get(index) {
-                Some(Detail::Callable(signature)) => signature
-                    .parameters
-                    .iter()
-                    .map(|parameter| mangled(&parameter.ty))
-                    .collect(),
-                _ => Vec::new(),
+        if let DeclarationKind::Implementation(role, _) = declaration.kind {
+            // The candidate `index` of the module as it is named.
+            let named = |index: usize| -> String {
+                let types: Vec<String> = match declared.details.get(index) {
+                    Some(Detail::Callable(signature)) => signature
+                        .parameters
+                        .iter()
+                        .map(|parameter| mangled(&parameter.ty))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let operator = &declared.declarations[index].name;
+                format!("_impl_{operator}_{}", types.join("_"))
             };
-            return format!("_impl_{}_{}", declaration.name, types.join("_"));
+            let python = named(index);
+            let paired = role == Role::Value
+                && declared
+                    .declarations
+                    .iter()
+                    .enumerate()
+                    .any(|(other, candidate)| {
+                        matches!(
+                            candidate.kind,
+                            DeclarationKind::Implementation(Role::Temporal, _)
+                        ) && named(other) == python
+                    });
+            return if paired {
+                format!("_value{python}")
+            } else {
+                python
+            };
         }
         let python = name(&declaration.name);
         let paired = declaration.kind == DeclarationKind::Function(Role::Value)
@@ -2607,12 +2658,10 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         // A candidate with a body of its own is a function of its
-        // module. One with none is native, and a native candidate of
-        // core is a function of the target's provider.
-        let bodied = matches!(
-            declared.kind,
-            DeclarationKind::Implementation(Role::Value, _)
-        );
+        // module, a value one, or a node or a graph, a temporal one.
+        // One with none is native, and a native candidate of core is a
+        // function of the target's provider.
+        let bodied = matches!(declared.kind, DeclarationKind::Implementation(..));
         let native = if candidate && !bodied {
             let types: Vec<String> = signature
                 .parameters
@@ -2642,7 +2691,11 @@ impl Emitter<'_> {
         // connection is lifted over it. "All-scalar calls execute
         // directly and invent no source timing": one given none is
         // called as it is, where the graph is built.
+        // GEN-5: "a value candidate it selects for temporal arguments
+        // is lifted (FN-6)". A temporal candidate is the node or the
+        // graph itself.
         let lifted = function.mode == Mode::Graph
+            && declared.kind.role() != Some(Role::Temporal)
             && (candidate || declared.kind.role() == Some(Role::Value))
             && arguments
                 .iter()
