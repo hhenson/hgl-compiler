@@ -757,6 +757,7 @@ const RAISES_FAILS: &str = concat!(
     "module demo.raises.fails\n",
     "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
     "const fn next(value: i64) -> i64 => value + 1\n",
+    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
     "test nothing_raised {\n",
     "    assert raises(\"numeric.division_by_zero\") { strict(6.0, 2.0) }\n",
     "}\n",
@@ -766,6 +767,21 @@ const RAISES_FAILS: &str = concat!(
     "test nested_assertion {\n",
     "    assert raises(\"numeric.division_by_zero\") {\n",
     "        assert strict(6.0, 2.0) == 4.0\n",
+    "    }\n",
+    "}\n",
+    // The inner assertion fails: it expects another code. What it lets
+    // out has the code the outer one expects, and does not satisfy it.
+    "test nested_raises {\n",
+    "    assert raises(\"numeric.division_by_zero\") {\n",
+    "        assert raises(\"value.missing_key\") { strict(1.0, 0.0) }\n",
+    "    }\n",
+    "}\n",
+    // And one whose inner assertion holds goes on, and then fails as the
+    // outer one expects.
+    "test nested_then_raised {\n",
+    "    assert raises(\"numeric.division_by_zero\") {\n",
+    "        assert raises(\"value.missing_key\") { size([\"a\": 1], \"z\") }\n",
+    "        strict(1.0, 0.0)\n",
     "    }\n",
     "}\n",
 );
@@ -3261,6 +3277,8 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("nothing_raised").0,
         emitted.test("another_code").0,
         emitted.test("nested_assertion").0,
+        emitted.test("nested_raises").0,
+        emitted.test("nested_then_raised").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -3315,9 +3333,13 @@ fn a_failure_names_the_statement_that_failed() {
             // one that lets out another code fails where that was
             // raised, with what it says. TST-11: a failed assertion in
             // the block is the test's failure.
-            "failed raises.hgl:5:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
-            "failed raises.hgl:8:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed raises.hgl:12:9 the assertion does not hold",
+            "failed raises.hgl:6:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
+            "failed raises.hgl:9:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "failed raises.hgl:13:9 the assertion does not hold",
+            // A refused error fails the inner assertion, and is no
+            // match for the outer one though it has its code.
+            "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
+            "passed",
         ]
     );
 

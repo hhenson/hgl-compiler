@@ -92,6 +92,14 @@ def _is_set_delta(value):
     return hasattr(value, "added") and hasattr(value, "removed")
 
 
+# The name an error is marked with once an `assert raises` has refused it.
+# The assertion failed, and the error is let out as it is, so that the test
+# reports it where it was raised. An enclosing `assert raises` must not then
+# take it for the failure it expects, whatever its code: the language's
+# TST-11, "A failed nested assertion cannot satisfy an enclosing raises".
+_REFUSED = "_hgl_refused_by_assert_raises"
+
+
 def _escaping_code(error):
     """The execution code of what escaped, or `None` where it has none.
 
@@ -106,7 +114,7 @@ def _escaping_code(error):
     seen = set()
     while error is not None and id(error) not in seen:
         seen.add(id(error))
-        if isinstance(error, AssertionError):
+        if isinstance(error, AssertionError) or getattr(error, _REFUSED, False):
             return None
         if isinstance(error, _core.HglError):
             return error.code
@@ -123,6 +131,14 @@ def raised(error, code):
     that the test fails where it was raised and with what it says.
     """
     if _escaping_code(error) != code:
+        try:
+            setattr(error, _REFUSED, True)
+        except AttributeError:
+            # An error that takes no attribute is carried by one that
+            # does, and that is an assertion's failure.
+            raise AssertionError(
+                f"the block raised {type(error).__name__}: {error}, and `{code}` was expected"
+            ) from error
         raise error
 
 
