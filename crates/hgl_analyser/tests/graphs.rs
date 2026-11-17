@@ -347,6 +347,89 @@ fn a_var_of_a_graph_keeps_its_category() {
     assert_eq!(locals(&checked, "late")[2..], ["chosen: f64 (connection)"]);
 }
 
+/// EXPR-15: "In a graph, an assignment into a place of a `var` is copy
+/// on write. A graph's `var` denotes a connection (EXPR-4), and a field
+/// of a connection is no storage: `point.x = price` rebinds `point` to
+/// a new connection, which is `point` with its `x` from `price` ... The
+/// place, the type of its value, and a compound assignment are as
+/// EXPR-3 has them."
+///
+/// It is an assignment to the `var`, and is held as one: to the `var`'s
+/// category (CTRL-14), and to what a loop that makes one child for each
+/// member admits (CTRL-15).
+#[test]
+fn a_place_assigned_in_a_graph_rebinds_its_var() {
+    let checked = module(concat!(
+        "struct Point {\n    x: f64\n    y: f64\n}\n",
+        "fn log_tick(value: f64) {\n    when { }\n}\n",
+        // A connection stays one, whatever its place is given: another
+        // connection, a compound assignment, an ordinary value.
+        "fn shifted(first: Point, price: f64, rising: bool) -> Point {\n",
+        "    var point = first\n",
+        "    point.x = price\n",
+        "    point.y += price\n",
+        "    point.y = 2.0\n",
+        // In a branch selected at runtime, as the whole `var` is.
+        "    if rising { point.x = price }\n",
+        "    return point\n",
+        "}\n",
+        // An ordinary value: its place takes an ordinary value, and a
+        // connection would make it one; so would a branch selected at
+        // runtime.
+        "fn fixed(price: f64, rising: bool) -> f64 {\n",
+        "    var point = Point(x: 1.0, y: 2.0)\n",
+        "    point.y = 3.0\n",
+        "    point.x = price\n",
+        "    if rising { point.y = 4.0 }\n",
+        "    return price\n",
+        "}\n",
+        // A `let` and a parameter are read-only all the way down, and
+        // the value is of the place's type.
+        "fn held(first: Point, price: f64, flag: bool) -> Point {\n",
+        "    let kept = first\n",
+        "    kept.x = price\n",
+        "    first.y = price\n",
+        "    var point = first\n",
+        "    point.x = flag\n",
+        "    return point\n",
+        "}\n",
+        // One child for each member: nothing is carried out of it.
+        "fn each(first: Point, growing: list<f64>) -> Point {\n",
+        "    var point = first\n",
+        "    for item in growing {\n",
+        "        point.x = item\n",
+        "        var inner = first\n",
+        "        inner.x = item\n",
+        "        log_tick(inner.x)\n",
+        "    }\n",
+        "    return point\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:20:15 type/binding.category CTRL-14",
+            "m.hgl:21:27 type/binding.category CTRL-14",
+            "m.hgl:26:5 name/binding.immutable EXPR-3",
+            "m.hgl:27:5 name/binding.immutable EXPR-3",
+            "m.hgl:29:15 type/type.mismatch EXPR-5",
+            "m.hgl:35:9 phase/loop.carried CTRL-15",
+        ]
+    );
+    // The `var` is a connection before and after, and the assignment is
+    // kept as one into its place.
+    assert_eq!(
+        locals(&checked, "shifted")[3..],
+        ["point: Point (connection)"]
+    );
+    let places = body(&checked, "shifted")
+        .statements
+        .iter()
+        .filter(|statement| matches!(statement, Stmt::AssignPlace { .. }))
+        .count();
+    assert_eq!(places, 3);
+}
+
 /// CTRL-14: "A `return value` in a branch of a temporal `if` makes the
 /// graph's result that value while the branch is selected and the
 /// continuation's otherwise (CTRL-5): the continuation returns a value
