@@ -260,12 +260,20 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         "    let keyed: delta<list<i64>?> = [\"wrong\": \"wrong\"]\n",
         "    return 1\n",
         "}\n",
+        // A branch gives the whole optional, or what it holds.
+        "const fn chosen(flag: bool) -> delta<i64?> => if flag { delta<i64?>() } else { 7 }\n",
         // A struct's delta: a property for each field.
         "const fn bids(change: delta<Quote>) -> f64? => change.bid\n",
         "const fn notes(change: delta<Quote>) -> delta<str?>? => change.note\n",
         "const fn cleared_note() -> delta<Quote> => delta<Quote>(bid: 1.0, note: delta<str?>())\n",
         "const fn noted() -> delta<Quote> => delta<Quote>(note: \"n\")\n",
         "const fn no_field() -> delta<Quote> => delta<Quote>(ask: 1.0)\n",
+        // A field that is nullable: its property is a `delta<F>?`.
+        // Null leaves it as it was, and a literal is the list's delta.
+        "struct Held {\n    items: list<i64>? = null\n}\n",
+        "const fn held() -> delta<Held> => delta<Held>(items: [0: 7])\n",
+        "const fn kept() -> delta<Held> => delta<Held>(items: null)\n",
+        "const fn held_wrong() -> delta<Held> => delta<Held>(items: [\"wrong\": \"wrong\"])\n",
         // TIME-7: `return null` publishes a null, as the delta does.
         "fn cleared(command: i64) -> i64? {\n",
         "    when {\n",
@@ -293,7 +301,10 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
             // dictionary a list's delta is.
             "m.hgl:23:37 type/type.mismatch EXPR-5",
             "m.hgl:23:46 type/type.mismatch EXPR-5",
-            "m.hgl:30:53 name/delta.argument_name TYPE-16",
+            "m.hgl:31:53 name/delta.argument_name TYPE-16",
+            // Through the `?` of a struct delta's property.
+            "m.hgl:37:61 type/type.mismatch EXPR-5",
+            "m.hgl:37:70 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(

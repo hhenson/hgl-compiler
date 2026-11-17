@@ -2433,10 +2433,15 @@ impl<'a> Typer<'a> {
         }
         // TYPE-16: "A `delta<V>` is a value where a `delta<V?>` is
         // expected". A form that takes its type from its place is read
-        // as the `delta<V>`: its entries, its elements and its branches
-        // are held to that type, a list's delta being a dictionary.
-        // `null` is no `delta<V>`, and is left to say so.
-        if let Some(Type::Delta(of)) = expected
+        // as the `delta<V>`: its entries and its elements are held to
+        // that type, a list's delta being a dictionary. The place may
+        // be one that can be left out, a `delta<V?>?`, as a struct's
+        // delta has for a field. A block and an `if` keep the place's
+        // own type, so that a branch may give the whole `delta<V?>`,
+        // and each value in them is read here in its turn. `null` is
+        // no `delta<V>`: it is left to say so, or to leave the place
+        // out.
+        if let Some(Type::Delta(of)) = not_null(expected)
             && let Type::Nullable(payload) = &**of
             && matches!(
                 node.kind(),
@@ -2445,8 +2450,6 @@ impl<'a> Typer<'a> {
                     | SyntaxKind::SequenceExpr
                     | SyntaxKind::UnaryExpr
                     | SyntaxKind::ImpliedMember
-                    | SyntaxKind::Block
-                    | SyntaxKind::IfExpr
             )
             && !is_null(node)
         {
