@@ -791,6 +791,7 @@ fn a_rejection_only_run_selects_no_test_to_run() {
     let selection = Selection {
         tests: Vec::new(),
         rejections_only: true,
+        integration: false,
     };
     let ran = run_selected(&SELECTABLE, &selection);
     assert_eq!(
@@ -811,6 +812,7 @@ fn a_selector_names_tests_and_declaration_owned_cases_always_run() {
         let selection = Selection {
             tests: tests.iter().map(|name| name.to_string()).collect(),
             rejections_only: false,
+            integration: false,
         };
         run_selected(&SELECTABLE, &selection).cases
     };
@@ -834,6 +836,56 @@ fn a_selector_names_tests_and_declaration_owned_cases_always_run() {
     );
 }
 
+/// TST-17: "An integration test is run only when it is asked for; a run
+/// of a module's tests leaves it out. In every other respect it is a
+/// test".
+#[test]
+fn an_integration_test_is_left_out_unless_it_is_asked_for() {
+    const PROGRAM: [(&str, &str); 1] = [(
+        "a.hgl",
+        concat!(
+            "module one\n",
+            "test first { assert true }\n",
+            "integration_test live { assert true }\n",
+            "integration_test wrong {\n",
+            "    # expect-error(parse, \"string.unknown_escape\")\n",
+            "    assert \"a\\q\" == \"a\"\n",
+            "}\n",
+        ),
+    )];
+    let select = |tests: &[&str], integration: bool| {
+        let selection = Selection {
+            tests: tests.iter().map(|name| name.to_string()).collect(),
+            rejections_only: false,
+            integration,
+        };
+        let ran = run_selected(&PROGRAM, &selection);
+        assert_eq!(ran.stopped, NONE);
+        ran.cases
+    };
+    // A run of the module's tests leaves `live` out. A rejection case
+    // runs nothing, and is checked whoever owns it.
+    assert_eq!(
+        select(&[], false),
+        [
+            "passed rejection one::wrong",
+            "not-run executable one::first",
+        ]
+    );
+    // Asked for, it is a test as any other.
+    assert_eq!(
+        select(&[], true),
+        [
+            "passed rejection one::wrong",
+            "not-run executable one::first",
+            "not-run executable one::live",
+        ]
+    );
+    // Its name asks for it.
+    assert_eq!(select(&["live"], false), ["not-run executable one::live"]);
+    assert_eq!(select(&["first"], true), ["not-run executable one::first"]);
+}
+
 /// TST-14: "Unknown selectors reject."
 #[test]
 fn an_unknown_selector_stops_the_run() {
@@ -844,6 +896,7 @@ fn an_unknown_selector_stops_the_run() {
             "one::second".to_string(),
         ],
         rejections_only: false,
+        integration: false,
     };
     let ran = run_selected(&SELECTABLE, &selection);
     assert_eq!(
@@ -1004,6 +1057,7 @@ fn executable_cases_are_run_by_the_executor() {
     let selection = Selection {
         tests: vec!["second".to_string()],
         rejections_only: false,
+        integration: false,
     };
     let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
     assert_eq!(executor.asked, [["examples.run::second"]]);
@@ -1036,6 +1090,7 @@ fn a_stopped_run_executes_nothing() {
     let selection = Selection {
         tests: Vec::new(),
         rejections_only: true,
+        integration: false,
     };
     let ran = run_on(&[("run.hgl", TO_RUN)], &selection, Some(&mut executor));
     assert_eq!(executor.asked, Vec::<Vec<String>>::new());

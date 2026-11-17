@@ -73,6 +73,10 @@ pub struct Selection {
     pub tests: Vec<String>,
     /// Select no executable case: a rejection-only run (TST-15).
     pub rejections_only: bool,
+    /// Select the integration tests too (TST-17): "An integration test
+    /// is run only when it is asked for; a run of a module's tests
+    /// leaves it out." One that `tests` names is asked for as well.
+    pub integration: bool,
 }
 
 /// Something that stops a run before any case is checked (TST-14):
@@ -277,15 +281,20 @@ pub fn run(
 
     // The tests there are to select: those of the surviving source, to
     // run, and those that own a rejection case.
-    let executable: Vec<String> = program
-        .modules
-        .iter()
-        .flat_map(|module| {
+    let tests = || {
+        program.modules.iter().flat_map(|module| {
             module
                 .tests
                 .iter()
-                .map(|test| format!("{}::{}", module.path, test.name))
+                .map(|test| (format!("{}::{}", module.path, test.name), test.integration))
         })
+    };
+    let executable: Vec<String> = tests().map(|(test, _)| test).collect();
+    // TST-17: the integration tests, which a run leaves out unless it
+    // is asked for them.
+    let integration: Vec<String> = tests()
+        .filter(|(_, integration)| *integration)
+        .map(|(test, _)| test)
         .collect();
     let identity = |owner: &Owner| match &owner.test {
         Some((module, name)) => format!("{module}::{name}"),
@@ -321,11 +330,16 @@ pub fn run(
         }
     }
     let selected = |test: &str| {
-        selection.tests.is_empty()
-            || selection
-                .tests
-                .iter()
-                .any(|selector| selects(selector, test))
+        let named = selection
+            .tests
+            .iter()
+            .any(|selector| selects(selector, test));
+        // An integration test is asked for by `integration`, or by its
+        // name.
+        if integration.iter().any(|found| found == test) && !selection.integration {
+            return named;
+        }
+        selection.tests.is_empty() || named
     };
 
     // TST-14: "Invalid metadata, ambiguous boundaries, or surviving-source

@@ -33,7 +33,7 @@ postfix_expr = primary_expr, { call_suffix | index_suffix | member_suffix | "?" 
 call_suffix = "(", [ arguments ], ")" ;
 index_suffix = "[", expression, "]" ;
 member_suffix = ".", member_name ;
-primary_expr = literal | IDENTIFIER | qualified_name | implied_member | "(", expression, ")" | tuple_literal | sequence_literal | typed_constructor | delta_constructor | type_call | function_expr | if_expression | eval_expression | block ;
+primary_expr = literal | IDENTIFIER | qualified_name | implied_member | "(", expression, ")" | tuple_literal | sequence_literal | typed_constructor | delta_constructor | type_call | function_expr | if_expression | eval_expression | run_expression | block ;
 arguments = argument, { ",", argument }, [ "," ] ;
 argument = [ member_name, ":" ], expression ;
 tuple_literal = "(", expression, ",", [ expression, { ",", expression }, [ "," ] ], ")" ;
@@ -106,7 +106,7 @@ inject_decl = "inject", IDENTIFIER, { ",", IDENTIFIER }, [ "," ] ;
 lifecycle_block = ( "start" | "stop" ), block ;
 when_statement = "when", [ expression ], block ;
 # tests-and-eval.md
-test_decl = "test", IDENTIFIER, block ;
+test_decl = ( "test" | "integration_test" ), IDENTIFIER, block ;
 test_context = "test", "{", [ NL ], [ test_item, { NL, test_item }, [ NL ] ], "}" ;
 test_item = function_decl | struct_decl | enum_decl | test_decl ;
 assert_statement = "assert", ( expression | raises_assertion ) ;

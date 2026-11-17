@@ -148,20 +148,37 @@ fn an_application_has_one_run_statement() {
     );
 }
 
-/// UNIT-14: "A module holds none." RUN-3: "`eval` is written in a test
-/// and in an application; `run` in an application." `run.position`:
-/// "Run statement in a module ...; the word".
+/// UNIT-14: an application holds "one run statement (RUN-1), which
+/// follows its declarations. A module holds none." `run.position`: "Run
+/// statement in a module or before a declaration of its application
+/// ...; the word".
 #[test]
-fn a_run_statement_stands_in_no_module() {
-    let checked = check(&[(
-        "feed.hgl",
-        &format!("{MODULE}\nrun(beats())\neval(beats())\n"),
-    )]);
+fn a_run_statement_stands_in_no_module_and_after_its_declarations() {
+    let checked = check(&[
+        (
+            "feed.hgl",
+            &format!("{MODULE}\nrun(beats())\neval(beats())\n"),
+        ),
+        (
+            "early.hgl",
+            concat!(
+                "application app.feed.early\n",
+                "\n",
+                "use app.feed::{beats}\n",
+                "\n",
+                "run(beats())\n",
+                "\n",
+                "const pace: duration = 2s\n",
+                "test late { assert true }\n",
+            ),
+        ),
+    ]);
     assert_eq!(
         checked.summary(),
         [
-            "feed.hgl:11:1 phase/run.position RUN-3",
-            "feed.hgl:12:1 phase/run.position RUN-3",
+            "early.hgl:5:1 phase/run.position UNIT-14",
+            "feed.hgl:11:1 phase/run.position UNIT-14",
+            "feed.hgl:12:1 phase/run.position UNIT-14",
         ],
         "{}",
         checked.report
@@ -169,8 +186,8 @@ fn a_run_statement_stands_in_no_module() {
 }
 
 /// UNIT-14: "An application's path is no module's and no other
-/// application's." The catalogue has no code for it yet, so the code is
-/// this compiler's own.
+/// application's." `application.duplicate_path`: "the path in every
+/// such file but one".
 #[test]
 fn an_applications_path_is_no_other_files() {
     let checked = check(&[
@@ -187,8 +204,8 @@ fn an_applications_path_is_no_other_files() {
     assert_eq!(
         checked.summary(),
         [
-            "a.hgl:1:13 local:module/application.duplicate_path UNIT-14",
-            "c.hgl:1:13 local:module/application.duplicate_path UNIT-14",
+            "a.hgl:1:13 module/application.duplicate_path UNIT-14",
+            "c.hgl:1:13 module/application.duplicate_path UNIT-14",
         ],
         "{}",
         checked.report

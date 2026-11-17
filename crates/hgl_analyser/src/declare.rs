@@ -71,28 +71,39 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     check_tests(module, diagnostics);
 }
 
-/// UNIT-14: an application holds "one run statement", and "a module
-/// holds none". `runs` is where the word of each run statement of the
-/// unit is written, in file order and then source order.
-fn check_runs(module: &Module, runs: &[Location], diagnostics: &mut Diagnostics) {
+/// UNIT-14: an application holds "one run statement (RUN-1), which
+/// follows its declarations. A module holds none." `runs` is where the
+/// word of each run statement of the unit is written, in file order and
+/// then source order, and whether a declaration follows it.
+fn check_runs(module: &Module, runs: &[(Location, bool)], diagnostics: &mut Diagnostics) {
     if !module.application {
-        // RUN-3: "`eval` is written in a test and in an application;
-        // `run` in an application."
-        for &at in runs {
+        for &(at, _) in runs {
             diagnostics.emit(
                 error(
                     Category::Phase,
                     codes::RUN_POSITION,
                     at,
                     "a run statement stands in a module".to_string(),
-                    "RUN-3",
+                    "UNIT-14",
                 )
                 .with_note("an application runs an entry: a file headed `application name`"),
             );
         }
         return;
     }
-    match runs {
+    for &(at, followed) in runs {
+        if followed {
+            diagnostics.emit(error(
+                Category::Phase,
+                codes::RUN_POSITION,
+                at,
+                "a declaration follows this run statement".to_string(),
+                "UNIT-14",
+            ));
+        }
+    }
+    let runs: Vec<Location> = runs.iter().map(|&(at, _)| at).collect();
+    match runs.as_slice() {
         [] => {
             // "the application's path": where its file writes it.
             if let Some(at) = module.application_at() {
@@ -168,8 +179,9 @@ struct Walk<'a> {
     instantiations: Vec<(usize, SyntaxNode)>,
     /// True when the unit walked is an application (UNIT-14).
     application: bool,
-    /// Where the word of each run statement is written.
-    runs: Vec<Location>,
+    /// Where the word of each run statement is written, and whether a
+    /// declaration follows it.
+    runs: Vec<(Location, bool)>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -178,6 +190,13 @@ impl Walk<'_> {
     /// item of an unnamed test context.
     fn item(&mut self, index: usize, file: FileId, item: Item, in_test: bool, omit: &[Span]) {
         let syntax = item.syntax().clone();
+        // UNIT-14: the run statement "follows its declarations". A
+        // declaration of the file after one is marked against it.
+        if !in_test && !matches!(item, Item::Run(_)) {
+            for run in &mut self.runs {
+                run.1 = true;
+            }
+        }
         // Each arm gives the item's name, what it is, and its `export`
         // token when it has one. An item without a name is one the
         // parser could not read and has reported; it declares nothing.
@@ -193,7 +212,7 @@ impl Walk<'_> {
                         Some(word) => word.span(),
                         None => first_token_span(&syntax),
                     };
-                    self.runs.push(Location::new(file, span));
+                    self.runs.push((Location::new(file, span), false));
                 }
                 return;
             }
@@ -221,6 +240,7 @@ impl Walk<'_> {
                 if let Some(name) = test.name() {
                     self.tests.push(Test {
                         name: name.text().to_string(),
+                        integration: test.is_integration(),
                         at: Location::new(file, name.span()),
                         file: index,
                         syntax,

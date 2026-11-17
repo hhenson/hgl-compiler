@@ -183,7 +183,14 @@ fn label(item: &Item) -> String {
         Item::Operator(decl) => named("operator", decl.name()),
         Item::NativeType(decl) => named("native type", decl.name()),
         Item::Constant(decl) => named("const", decl.name()),
-        Item::Test(decl) => named("test", decl.name()),
+        Item::Test(decl) => {
+            let keyword = if decl.is_integration() {
+                "integration_test"
+            } else {
+                "test"
+            };
+            named(keyword, decl.name())
+        }
         Item::Instantiate(_) => "instantiate".to_string(),
         Item::TestContext(_) => "test context".to_string(),
         Item::Run(run) => match run.word() {

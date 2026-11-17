@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
+use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_source::Span;
@@ -89,13 +89,13 @@ pub(crate) fn assemble<'a>(
             // file, and what the others hold is no part of it.
             for later in &entries[1..] {
                 diagnostics.emit(
-                    Diagnostic::error(
+                    error(
                         Category::Module,
-                        Code::Local(codes::local::APPLICATION_DUPLICATE_PATH),
+                        codes::APPLICATION_DUPLICATE_PATH,
                         later.path_at,
                         format!("`{path}` is the path of an application, and of this file too"),
+                        "UNIT-14",
                     )
-                    .with_rule("UNIT-14")
                     .with_related(entries[0].path_at, "the other is here"),
                 );
             }

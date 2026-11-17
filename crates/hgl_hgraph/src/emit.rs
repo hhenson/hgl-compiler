@@ -1651,7 +1651,16 @@ impl Emitter<'_> {
                 self.unsupported(config.at, "an eval with a run configuration");
                 "None".to_string()
             }
-            ExprKind::Eval { call, config: None } => self.eval(function, call),
+            // TST-17, RUN-3: a run in real time is not written yet.
+            ExprKind::Eval {
+                real_time: true, ..
+            } => {
+                self.unsupported(value.at, "a run in real time");
+                "None".to_string()
+            }
+            ExprKind::Eval {
+                call, config: None, ..
+            } => self.eval(function, call),
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the
