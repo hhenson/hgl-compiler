@@ -1894,8 +1894,8 @@ impl<'a> Typer<'a> {
     /// it is assigned, and a set, which has no element to read, has
     /// none to assign.
     ///
-    /// In a graph the assignment is not read: what it is there is
-    /// proposed (EXPR-15).
+    /// In a graph the assignment is copy on write (EXPR-15), and is
+    /// not read yet.
     fn place_assignment(
         &mut self,
         node: &SyntaxNode,
