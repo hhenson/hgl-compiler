@@ -4403,11 +4403,13 @@ impl<'a> Typer<'a> {
     /// where it keeps its output: a program that names it rejects
     /// (`store.reserved_key`)."
     ///
-    /// A key is the argument of a `const` `str` parameter of a function
-    /// that takes the store: the `key` of core's `get`, `has` and `put`
-    /// (CAP-6). One written out is judged here. One that is a `const`
-    /// parameter of the function it is in is known where the graph is
-    /// built, which no pass reads yet.
+    /// A key is the `key` of one of the store's operations: core's own
+    /// `get`, `has` and `put` (CAP-6), which are the candidates of core
+    /// that take the store. A function of a program that is given the
+    /// store reads and writes it through those, so its own parameters
+    /// are no keys. A key written out is judged here. One that is a
+    /// `const` parameter of the function it is in is known where the
+    /// graph is built, which no pass reads yet.
     fn store_keys(&mut self, kind: &ExprKind) {
         let ExprKind::Call {
             callee, arguments, ..
@@ -4436,10 +4438,12 @@ impl<'a> Typer<'a> {
         let Some(store) = self.program.capability_type("global_state") else {
             return;
         };
-        if !signature
-            .parameters
-            .iter()
-            .any(|parameter| parameter.ty == store)
+        // An operation of the store is core's, and takes the store.
+        if Some(module) != self.program.core()
+            || !signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.ty == store)
         {
             return;
         }
@@ -4449,9 +4453,7 @@ impl<'a> Typer<'a> {
                 argument
                     .parameter
                     .and_then(|index| signature.parameters.get(index))
-                    .is_some_and(|parameter| {
-                        parameter.constant && parameter.ty == Type::Scalar(Scalar::Str)
-                    })
+                    .is_some_and(|parameter| parameter.constant && parameter.name == "key")
             })
             .filter(|argument| {
                 matches!(
