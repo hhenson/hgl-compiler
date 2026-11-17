@@ -238,6 +238,9 @@ pub enum Stmt {
     /// `assert raises("code") { ... }`, in a test: the block is expected
     /// to fail with that execution code (TST-10).
     AssertRaises {
+        /// The execution code the block is to fail with. `None` where
+        /// what is written is no string literal, which is reported.
+        code: Option<String>,
         /// The block that is run.
         body: Vec<Stmt>,
         /// Where the statement is written.

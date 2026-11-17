@@ -1388,6 +1388,7 @@ only where the program reaches it, at core's source.
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
+| `assert raises("code") { ... }` (TST-10, TST-11) | A `try` around the block. Its handler calls `_harness.raised(error, "code")`, which lets the error out again unless it is an HGL error with that code, or has one as its cause, as a node's failure in an `eval` has; its `else` calls `_harness.not_raised("code")`, which fails the test |
 | A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
 | `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. The properties are given by name in the order they are written, so that they are evaluated in it (EXPR-13), and one left out is an empty `_py.frozenset()` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
@@ -1398,6 +1399,9 @@ Core's native functions are the target's to provide (NATIVE-7):
 copied out beside the modules. It holds the `i64` operations to core's
 numeric contract, which neither wraps nor promotes. The transpiler reads
 the names it defines, and a candidate it has no function for is reported.
+It is written when a module calls a function of it, and whenever the
+harness is written: the harness imports it, to know an HGL error by its
+class.
 
 `_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
 for each input through hgraph's own `eval_node` and ends the result at
@@ -1468,7 +1472,7 @@ blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
 hgraph 0.9.0. With it,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 17 of
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 18 of
 the 24 tests of the pinned core's conformance cases and fails none:
 
 | File | Tests | Pass | Not run, and why |
@@ -1479,7 +1483,7 @@ the 24 tests of the pinned core's conformance cases and fails none:
 | `mixed_eval.hgl` | 1 | 1 | |
 | `set_endpoints.hgl` | 1 | 1 | |
 | `identity_arithmetic.hgl` | 5 | 0 | 4: a published null in a trace. 1: a generic temporal function |
-| `failure_eval.hgl` | 1 | 0 | 1: `assert raises` |
+| `failure_eval.hgl` | 1 | 1 | |
 
 That is a run by hand, and no conformance claim.
 

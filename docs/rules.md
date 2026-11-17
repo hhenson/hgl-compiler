@@ -376,7 +376,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-8 | runner | planned | Eval builds core replay, the target and core record; fresh state for each invocation |
 | TST-9 | runner | planned | Arguments and profile admission validated before the graph starts |
 | TST-10 | analyser | done | `assert raises` takes one string literal whose value is an execution code of the catalogue (`test.raises_code`) |
+| TST-10 | transpiler | partial | hgraph: the block is run once, in a `try`; an error that escapes with the code passes, an HGL error or the one behind a node's failure in an `eval`, and the test goes on; a block that completes fails the test at the assertion, and one that lets out another code fails where that was raised. Left: cleanup that fails |
 | TST-10 | runner | planned | The block runs once; a matching escaping error passes after cleanup |
+| TST-11 | transpiler | partial | hgraph: a failed assertion in the block, and an error that is no HGL error with a code, do not satisfy it. Left: a crash and a timeout, which end the interpreter |
 | TST-11 | runner | planned | What cannot satisfy `raises` |
 | TST-12 | runner | done | `# expect-error` annotations read from line comments; the owner of each case |
 | TST-12 | diagnostics | done | The catalogue's source categories and codes, which an annotation may name |

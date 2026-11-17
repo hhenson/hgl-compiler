@@ -789,9 +789,16 @@ impl<'a> Typer<'a> {
         };
         if asserted.kind() == SyntaxKind::RaisesAssertion {
             // TST-11: "The block has ordinary lexical test scope". Its
-            // code is the phase pass's to check.
+            // code is the phase pass's to check: it is read here as it
+            // is written, a string literal between the parentheses.
+            let code = asserted
+                .children()
+                .find(|part| part.kind() == SyntaxKind::Literal)
+                .and_then(|literal| tokens(&literal).next())
+                .filter(|token| token.kind() == SyntaxKind::Str)
+                .and_then(|token| decode_string(token.text()).ok());
             let body = self.loop_body(child(&asserted, SyntaxKind::Block).as_ref());
-            return Stmt::AssertRaises { body, at };
+            return Stmt::AssertRaises { code, body, at };
         }
         let condition = self.expression(&asserted, Some(&BOOL));
         // What is not known at all has been reported, or is for a later

@@ -5,6 +5,7 @@ Written by the hgl compiler beside the modules it generates.
 
 import datetime as _datetime
 
+import _hgl._core_native as _core
 from hgraph.test import eval_node
 
 # Where an eval's run starts, and how far apart two of its cycles are
@@ -89,3 +90,61 @@ def _same_cell(left, right):
 
 def _is_set_delta(value):
     return hasattr(value, "added") and hasattr(value, "removed")
+
+
+# The name an error is marked with once an `assert raises` has refused it.
+# The assertion failed, and the error is let out as it is, so that the test
+# reports it where it was raised. An enclosing `assert raises` must not then
+# take it for the failure it expects, whatever its code: the language's
+# TST-11, "A failed nested assertion cannot satisfy an enclosing raises".
+_REFUSED = "_hgl_refused_by_assert_raises"
+
+
+def _escaping_code(error):
+    """The execution code of what escaped, or `None` where it has none.
+
+    A failure of a node comes out of hgraph as an error of hgraph's own,
+    with the HGL error it met as its cause. The cause is followed to the
+    HGL error, whose code is the one asked about.
+
+    The language's TST-11: "A failed nested assertion cannot satisfy an
+    enclosing raises", and no more can any other failure that is no HGL
+    error with a code.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, AssertionError) or getattr(error, _REFUSED, False):
+            return None
+        if isinstance(error, _core.HglError):
+            return error.code
+        error = error.__cause__ or error.__context__
+    return None
+
+
+def raised(error, code):
+    """What `assert raises("code")` does with an error its block let out.
+
+    The language's TST-10: "A matching escaping error passes ...; then
+    continue after the assertion. ... a different code ... fails the
+    test." An error that does not match is let out again as it is, so
+    that the test fails where it was raised and with what it says.
+    """
+    if _escaping_code(error) != code:
+        try:
+            setattr(error, _REFUSED, True)
+        except AttributeError:
+            # An error that takes no attribute is carried by one that
+            # does, and that is an assertion's failure.
+            raise AssertionError(
+                f"the block raised {type(error).__name__}: {error}, and `{code}` was expected"
+            ) from error
+        raise error
+
+
+def not_raised(code):
+    """What `assert raises("code")` does when its block completes.
+
+    The language's TST-10: "Normal completion ... fails the test."
+    """
+    raise AssertionError(f"the block raised nothing, and `{code}` was expected")
