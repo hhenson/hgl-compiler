@@ -1816,6 +1816,107 @@ fn a_generic_temporal_function_is_written_for_each_call() {
     );
 }
 
+/// GEN-16: a value function with generic parameters that calls an
+/// operation it requires, or hands a requirement on to what it calls.
+const VALUE_GENERICS: &str = concat!(
+    "module demo.vals\n",
+    "\n",
+    "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs * 10 + rhs\n",
+    "impl const fn join(lhs: str, rhs: str) -> str => lhs + rhs\n",
+    // A candidate that states a requirement of its own.
+    "impl const fn join<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
+    "    requires join(T, T) -> T => [join(lhs[0], rhs[0])]\n",
+    "\n",
+    // A required operation, by name and by symbol.
+    "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+    "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
+    // One that hands its requirement on.
+    "const fn outer<U>(value: U) -> U requires join(U, U) -> U => twice(twice(value))\n",
+    // One with no requirement.
+    "const fn same<T>(value: T) -> T => value\n",
+    "\n",
+    "const hundred: i64 = sum(40, 60)\n",
+    "\n",
+    // In a node's hook, and lifted in a graph.
+    "fn joined(value: i64) -> i64 {\n",
+    "    when valid(value) { return twice(value) }\n",
+    "}\n",
+    "fn graphed(value: f64) -> f64 => sum(value, value)\n",
+    "\n",
+    "test values_are_instances {\n",
+    "    assert twice(1) == 11\n",
+    "    assert twice(\"a\") == \"aa\"\n",
+    "    assert sum(1.5, 2.0) == 3.5\n",
+    "    assert outer(1) == 121\n",
+    "    assert same(\"x\") == \"x\"\n",
+    "    assert hundred == 100\n",
+    "    assert twice([2]) == [22]\n",
+    "    assert eval(joined(value: [1, 2])) == [11, 22]\n",
+    "    assert eval(graphed(value: [1.5])) == [3.0]\n",
+    // TST-8: a value function an eval names is lifted.
+    "    assert eval(twice(value: [3])) == [33]\n",
+    "}\n",
+);
+
+/// GEN-16: which candidate a required operation calls depends on the
+/// types, so a value function that calls one, or hands a requirement
+/// on, is written once for each set of generic arguments it is called
+/// with, as a temporal one is (GEN-2). One with no requirement is
+/// written once: Python takes a value of any type. An instance is
+/// called wherever the function is: by a value function, a node's
+/// hook, a constant, and the node that lifts it in a graph or an eval.
+#[test]
+fn a_value_function_that_requires_is_written_for_each_call() {
+    let emitted = emit(&[("vals.hgl", VALUE_GENERICS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("values_are_instances"), None);
+    let python = emitted.text("_hgl/_m_demo/_m_vals/__init__.py");
+    for expected in [
+        concat!(
+            "def _inst_twice__i64(value):\n",
+            "    return _impl_join_i64_i64(lhs=value, rhs=value)\n",
+        ),
+        concat!(
+            "def _inst_twice__str(value):\n",
+            "    return _impl_join_str_str(lhs=value, rhs=value)\n",
+        ),
+        // The candidate for lists is an instance too, for its own
+        // requirement.
+        concat!(
+            "def _inst_twice__list_i64_(value):\n",
+            "    return _inst__impl_join_list_T__list_T___i64(lhs=value, rhs=value)\n",
+        ),
+        concat!(
+            "def _inst__impl_join_list_T__list_T___i64(lhs, rhs):\n",
+            "    return [_impl_join_i64_i64(lhs=_core.item(lhs, 0), rhs=_core.item(rhs, 0))]\n",
+        ),
+        // A symbol the function requires.
+        concat!(
+            "def _inst_sum__f64(a, b):\n",
+            "    return _core.add__f64_f64(lhs=a, rhs=b)\n",
+        ),
+        // A requirement handed on.
+        concat!(
+            "def _inst_outer__i64(value):\n",
+            "    return _inst_twice__i64(value=_inst_twice__i64(value=value))\n",
+        ),
+        // No requirement: one function.
+        "def same(value):\n",
+        // Where an instance is called.
+        "    return _inst_sum__i64(a=40, b=60)\n",
+        "    return _inst_twice__i64(value=value.value)\n",
+        "    return _inst_sum__f64(a=a.value, b=b.value)\n",
+        "lhs=_inst_twice__i64(value=1), rhs=11,",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    assert!(!python.contains("def twice("), "{python}");
+}
+
 /// Each instance is a piece of its module. Where one has a form the
 /// target does not write, a type here, that is reported where the
 /// declaration is written, and a test that reaches that instance is
@@ -3740,6 +3841,7 @@ fn the_generated_tests_pass_on_hgraph() {
         TEMPORAL_CANDIDATES[0],
         TEMPORAL_CANDIDATES[1],
         ("generics.hgl", GENERICS),
+        ("vals.hgl", VALUE_GENERICS),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3769,11 +3871,12 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        55,
+        56,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
-         candidates, one on generic temporal functions, and one of each demo's"
+         candidates, one on generic temporal functions, one on value functions that \
+         require, and one of each demo's"
     );
 }
 

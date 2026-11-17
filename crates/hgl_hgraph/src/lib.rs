@@ -26,6 +26,7 @@
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |
 //! | A temporal function or candidate with generic parameters | A node or a graph for each set of generic arguments it is called with, `_inst_identity_sum__f64` |
+//! | A value function with generic parameters that calls what it requires | A function for each set of generic arguments, `_inst_twice__i64` |
 //! | `enum Side { buy, sell }` | `Side = _enum.Enum("demo.orders::Side", [...])`, a scalar to hgraph |
 //! | `struct Point { x: f64, y: f64 }` | `Point = _core.struct("Point", ("x", "y"))`, a class whose values are never changed |
 //! | `Point(x: 1.0)`, `point.x = 2.0` | `Point(x=1.0, y=...)`, `point = _core.with_field(point, x=2.0)` |

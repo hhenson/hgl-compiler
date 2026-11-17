@@ -1370,7 +1370,10 @@ written in the declaration's module. It starts from the bodies with no
 generic parameter and from the tests, asks the analyser for each
 instance (`Program::instance`), and goes on through the calls of each
 instance it is given. A value function with generic parameters is
-written once, as Python takes a value of any type.
+written once where it can be, as Python takes a value of any type. It
+is written by instance too where its body calls an operation the
+declaration requires, or hands a requirement on to what it calls: which
+candidate that is depends on the types (GEN-16).
 
 Core is a module as any other, `_hgl/_m_core/__init__.py`, written when
 a module of the program imports it. It holds the functions and the
@@ -1407,6 +1410,7 @@ only where the program reaches it, at core's source.
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `impl fn` with a body (GEN-4) | A node or a graph of its module, as a temporal function is, under the same kind of name: `_impl_join__i64_i64`. A call in a graph that selects it calls it, and is not lifted. Where a value candidate has the same parameter types (GEN-5), the value one is `_value_impl_join__i64_i64` |
 | A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64__identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13) |
+| A value function or candidate with generic parameters (GEN-2, GEN-16) | One Python function, where its body needs nothing of its requirements. Where it calls an operation it requires, or hands a requirement on, one for each set of generic arguments it is called with, as a temporal one: `_inst_twice__i64` calls `_impl_join_i64_i64`. A value function, a node's hook, a constant and a lifted node call the instance for their arguments |
 | `operator` | Nothing: its candidates are the functions |
 | `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("demo.orders::Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. The class is named with its module's path: hgraph knows a Python enum by its class's name, so two modules' `Side`s would be one type to it, and core's `CmpResult` hgraph's own. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
 | `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
@@ -1464,8 +1468,9 @@ a generic struct made in a function generic in its arguments;
 a native declaration of a program,
 and a candidate with the parameter types of another of its module and
 its role;
-a call of a generic temporal function whose generic arguments are not
-known; an operation a generic value function requires;
+a call of a function written by instance whose generic arguments are
+not known; an operation a generic declaration requires that no
+candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` read in `stop`, which hgraph gives no lifecycle hook;

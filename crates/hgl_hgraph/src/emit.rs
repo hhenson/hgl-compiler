@@ -25,7 +25,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
-use crate::instances::{Instances, instanced};
+use crate::instances::Instances;
 use crate::{codes, provided, python_module, test_function};
 
 /// What writing a module gave.
@@ -147,8 +147,10 @@ enum Bound {
 /// What a lifted node calls.
 #[derive(Clone, Copy)]
 enum Lifts<'a> {
-    /// A function of the program, or a candidate with a body.
-    Function,
+    /// A function of the program, or a candidate with a body, with
+    /// what the call gives its generic parameters: one written by
+    /// instance is called by its instance for those.
+    Function(&'a [GenericArgument]),
     /// A native candidate of core: the provider's function for it, and
     /// what the call configures it with, each as `name=value`.
     Native(&'a str, &'a [String]),
@@ -625,8 +627,9 @@ impl Emitter<'_> {
         // GEN-2: a temporal function or candidate with generic
         // parameters is written once for each set of generic arguments
         // the program calls it with, and not at all where it calls it
-        // with none.
-        if instanced(program, self.module, index) {
+        // with none. So is a value one whose body needs to know what
+        // answers its requirements (GEN-16).
+        if self.instances.instanced(program, self.module, index) {
             let candidate = declaration.kind.candidate().is_some();
             if candidate
                 && !self
@@ -644,7 +647,11 @@ impl Emitter<'_> {
             let instances = self.instances;
             for instance in instances.declared(self.module, index) {
                 let python = self.instance_name(self.module, index, &instance.suffix);
-                self.node_or_graph(index, &python, &instance.signature, &instance.body);
+                if declaration.kind.role() == Some(Role::Value) {
+                    self.value_function(&python, &instance.signature, &instance.body);
+                } else {
+                    self.node_or_graph(index, &python, &instance.signature, &instance.body);
+                }
                 let piece = self.close();
                 self.instanced.push((index, instance.suffix.clone(), piece));
             }
@@ -652,7 +659,8 @@ impl Emitter<'_> {
         }
         match (declaration.kind, signature, body) {
             (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
-                self.value_function(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                self.value_function(&python, signature, body);
             }
             // GEN-4: a value candidate of an operator with a body of
             // its own is a function as any other, under a name of the
@@ -660,11 +668,9 @@ impl Emitter<'_> {
             (DeclarationKind::Implementation(Role::Value, _), Some(signature), Some(body)) => {
                 // Two candidates that differ only in what they require
                 // would be one Python function.
-                if self
-                    .candidates
-                    .insert(self.definition_name(self.module, index))
-                {
-                    self.value_function(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                if self.candidates.insert(python.clone()) {
+                    self.value_function(&python, signature, body);
                 } else {
                     self.unsupported(
                         declaration.at,
@@ -743,7 +749,7 @@ impl Emitter<'_> {
         at: Location,
     ) -> String {
         let program = self.program;
-        if !instanced(program, module, declaration) {
+        if !self.instances.instanced(program, module, declaration) {
             return self.function_name(module, declaration);
         }
         let instances = self.instances;
@@ -902,9 +908,10 @@ impl Emitter<'_> {
         format!("{}.{python}", alias(&declared.path))
     }
 
-    /// `const fn name(a, b) -> T`, the declaration `index` of the
-    /// module: a plain Python function.
-    fn value_function(&mut self, index: usize, signature: &Signature, body: &Body) {
+    /// `const fn name(a, b) -> T`: a plain Python function, `python`.
+    /// `signature` and `body` are a declaration's own, or an
+    /// instance's.
+    fn value_function(&mut self, python: &str, signature: &Signature, body: &Body) {
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
             let python = name(&parameter.name);
@@ -923,14 +930,7 @@ impl Emitter<'_> {
         }
         self.line(0, "");
         self.line(0, "");
-        self.line(
-            0,
-            &format!(
-                "def {}({}):",
-                self.definition_name(self.module, index),
-                parameters.join(", ")
-            ),
-        );
+        self.line(0, &format!("def {python}({}):", parameters.join(", ")));
         let function = Function {
             locals: &body.locals,
             signature: Some(signature),
@@ -2561,9 +2561,9 @@ impl Emitter<'_> {
                 passed.extend(configured.iter().cloned());
                 (format!("_core.{native}"), native.to_string())
             }
-            Lifts::Function => {
+            Lifts::Function(generics) => {
                 let declared = &self.program.modules[target.0].declarations[target.1];
-                (self.function_name(target.0, target.1), name(&declared.name))
+                (self.called_name(target, generics, at), name(&declared.name))
             }
         };
         let returns = result.and_then(|result| self.annotation(result, true, at));
@@ -2577,7 +2577,7 @@ impl Emitter<'_> {
         let call = format!("{called}({})", passed.join(", "));
         let call = match lifts {
             Lifts::Native(..) => self.native_result(signature.result.as_ref(), call),
-            Lifts::Function => call,
+            Lifts::Function(_) => call,
         };
         let (decorator, after) = match (result, returns) {
             (Some(_), returns) => (
@@ -2815,7 +2815,7 @@ impl Emitter<'_> {
             let result = signature.result.as_ref().map(|_| &whole.ty);
             let lifts = match &native {
                 Some(native) => Lifts::Native(native, &options),
-                None => Lifts::Function,
+                None => Lifts::Function(generics),
             };
             let node = self.lifted((module, declaration), lifts, signature, &bound, result, at);
             return format!("{node}({})", written.join(", "));
@@ -2879,6 +2879,13 @@ impl Emitter<'_> {
         // other argument its configuration.
         let declared = &self.program.modules[*module].declarations[*declaration];
         if declared.kind.role() == Some(Role::Value) {
+            // GEN-2: a function written by instance is lifted as its
+            // instance for the eval's generic arguments, whose result
+            // names no generic parameter.
+            let instances = self.instances;
+            let signature = instances
+                .find(self.program, (*module, *declaration), generics)
+                .map_or(signature, |instance| &instance.signature);
             let (written, bound) =
                 self.bound(function, signature, arguments, |_, value| match &value.ty {
                     Type::Trace { cell, .. } => Some((**cell).clone()),
@@ -2886,7 +2893,7 @@ impl Emitter<'_> {
                 });
             let node = self.lifted(
                 (*module, *declaration),
-                Lifts::Function,
+                Lifts::Function(generics),
                 signature,
                 &bound,
                 signature.result.as_ref(),
