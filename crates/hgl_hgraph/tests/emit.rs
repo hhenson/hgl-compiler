@@ -197,9 +197,9 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "def test_scales():\n",
     "    seen = _harness.evaluate(wired, value=[1, None, 2])\n",
-    "    if not (seen == [1, None, 12]):\n",
+    "    if not (_harness.same(seen, [1, None, 12])):\n",
     "        raise _py.AssertionError()\n",
-    "    if not (_harness.evaluate(scaled, value=[5], factor=2) != []):\n",
+    "    if not (not _harness.same(_harness.evaluate(scaled, value=[5], factor=2), [])):\n",
     "        raise _py.AssertionError()\n",
     "    _harness.evaluate(sink, value=[True])\n",
 );
@@ -244,9 +244,9 @@ fn cores_scalar_eval_cases_are_written_whole() {
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
-        "    if not (_harness.evaluate(pass_i64, value=[None, 7, None, None]) == [None, 7]):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_i64, value=[None, 7, None, None]), [None, 7])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]) == [\"\", None, \"\", \"a\"]):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(python.contains(expected), "the module has:\n{expected}");
@@ -568,9 +568,9 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         // A node's configuration, in a graph and in an eval.
         "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
         "    return offset(value=value, by=10)\n",
-        "    if not (_harness.evaluate(offset, value=[1], by=10) == [11]):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, value=[1], by=10), [11])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.evaluate(offset, value=[1], by=1) == [2]):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, value=[1], by=1), [2])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -711,10 +711,10 @@ fn no_two_names_are_one_python_name() {
             "    return _core.add__i64_i64(lhs=_value_doubled(value=value.value), rhs=1)\n",
         ),
         "def eight():\n    return _value_doubled(value=4)\n",
-        "    if not (_harness.evaluate(doubled, value=[4]) == [9]):\n",
+        "    if not (_harness.same(_harness.evaluate(doubled, value=[4]), [9])):\n",
         "        raise _py.AssertionError()\n",
         // An input named as the harness's own parameter is.
-        "    if not (_harness.evaluate(pass_, target=[1]) == [1]):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_, target=[1]), [1])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -1063,7 +1063,7 @@ fn a_value_function_given_a_connection_is_lifted() {
         ),
         // An eval of a value function runs it lifted.
         concat!(
-            "    if not (_harness.evaluate(_lift_12_doubled, value=[1, None, 3]) == [2, None, 6]):\n",
+            "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, value=[1, None, 3]), [2, None, 6])):\n",
             "        raise _py.AssertionError()\n",
         ),
     ] {
@@ -1660,8 +1660,8 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
         "    return _lift_1_eq__T_T(lhs=side, rhs=Side[\"hold\"])\n",
         // A trace of members.
         concat!(
-            "_harness.evaluate(flipped, side=[Side[\"buy\"], None, Side[\"sell\"], Side[\"hold\"]]) == ",
-            "[Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]]",
+            "_harness.same(_harness.evaluate(flipped, side=[Side[\"buy\"], None, Side[\"sell\"], ",
+            "Side[\"hold\"]]), [Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]])",
         ),
     ] {
         assert!(
@@ -2524,6 +2524,125 @@ fn a_stop_is_given_the_nodes_inputs() {
     }
 }
 
+/// Sets: a temporal `set<i64>` and its deltas.
+const SETS: &str = concat!(
+    "module demo.sets\n",
+    "\n",
+    "fn members(command: i64) -> set<i64> {\n",
+    "    when {\n",
+    "        if command == 1 { return delta<set<i64>>(added: [1, 2]) }\n",
+    "        if command == 2 { return delta<set<i64>>(added: [3], removed: [1]) }\n",
+    "        if command == 3 { return delta<set<i64>>(removed: [2]) }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn twice(command: i64) -> set<i64> {\n",
+    "    inject out\n",
+    "    when {\n",
+    "        if command == 1 { return delta<set<i64>>(added: [1]) }\n",
+    "        out = delta<set<i64>>(added: [2, 3])\n",
+    "        out = delta<set<i64>>(removed: [1, 2])\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn changes(input: set<i64>) -> set<i64> {\n",
+    "    when { return delta_value(input) }\n",
+    "}\n",
+    "\n",
+    "fn seen(command: i64) -> set<i64> => changes(twice(command))\n",
+    "\n",
+    "fn relayed(enabled: bool, input: set<i64>) -> set<i64> {\n",
+    "    when {\n",
+    "        if enabled && modified(input) { return delta_value(input) }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test sets {\n",
+    "    assert eval(members, command: [1, _, 2, 3]) == [\n",
+    "        delta<set<i64>>(added: [1, 2]),\n",
+    "        _,\n",
+    "        delta<set<i64>>(added: [3], removed: [1]),\n",
+    "        delta<set<i64>>(removed: [2])\n",
+    "    ]\n",
+    "    assert eval(members, command: [0]) == []\n",
+    // What a delta adds is a set: its order is not part of it.
+    "    assert eval(members, command: [1]) == [delta<set<i64>>(added: [2, 1])]\n",
+    // A delta that removes an element is not one that adds it.
+    "    assert eval(members, command: [1, 3]) != [\n",
+    "        delta<set<i64>>(added: [1, 2]),\n",
+    "        delta<set<i64>>(added: [2])\n",
+    "    ]\n",
+    // Two writes in one cycle are one delta.
+    "    assert eval(seen, command: [1, 2]) == [\n",
+    "        delta<set<i64>>(added: [1]),\n",
+    "        delta<set<i64>>(added: [3], removed: [1])\n",
+    "    ]\n",
+    "    assert eval(relayed, enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])])\n",
+    "        == [_, delta<set<i64>>(added: [1])]\n",
+    "}\n",
+);
+
+/// Set deltas that are not what the target published.
+const SET_FAILS: &str = concat!(
+    "module demo.sets.fails\n",
+    "fn members(command: i64) -> set<i64> {\n",
+    "    when {\n",
+    "        if command == 1 { return delta<set<i64>>(added: [1]) }\n",
+    "        if command == 2 { return delta<set<i64>>(removed: [1]) }\n",
+    "    }\n",
+    "}\n",
+    "test removed_is_not_added {\n",
+    "    assert eval(members, command: [1, 2]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]\n",
+    "}\n",
+    "test one_more {\n",
+    "    assert eval(members, command: [1]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]\n",
+    "}\n",
+);
+
+/// TYPE-9, TYPE-16: a temporal `set<T>` is hgraph's `TSS[T]`, whose
+/// tick is the set's delta: what it added and what it removed. END-5:
+/// a node's writes to its set in one cycle are one delta.
+///
+/// TST-4: "Harness comparison is intrinsic: compare presence, exact
+/// present data, and shape/length". The harness compares, where
+/// Python's `==` would have hgraph's set delta take a removed element
+/// for an added one.
+#[test]
+fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
+    let emitted = emit(&[("sets.hgl", SETS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_sets/__init__.py");
+    for expected in [
+        "def members(command: _hg.TS[_py.int]) -> _hg.TSS[_py.int]:\n",
+        concat!(
+            "        return _hg.set_delta(added=_py.frozenset((3,)), ",
+            "removed=_py.frozenset((1,)), tp=_py.int)\n",
+        ),
+        // A property left out is empty.
+        concat!(
+            "        return _hg.set_delta(added=_py.frozenset(), ",
+            "removed=_py.frozenset((2,)), tp=_py.int)\n",
+        ),
+        // END-5: the node's own output, as hgraph names a set's.
+        concat!(
+            "def twice(command: _hg.TS[_py.int], _output: _hg.TSS_OUT[_py.int] = None) ",
+            "-> _hg.TSS[_py.int]:\n",
+        ),
+        concat!(
+            "    _output.value = _hg.set_delta(added=_py.frozenset((2, 3)), ",
+            "removed=_py.frozenset(), tp=_py.int)\n",
+        ),
+        "    return input.delta_value\n",
+        "    if not (_harness.same(_harness.evaluate(members, command=[0]), [])):\n",
+        "    if not (not _harness.same(_harness.evaluate(members, command=[1, 3]), [",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2720,6 +2839,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("elements.hgl", ELEMENTS));
     files.push(("compare.hgl", COMPARE));
     files.push(("stops.hgl", STOPS));
+    files.push(("sets.hgl", SETS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2740,7 +2860,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        44,
+        45,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, and one of each demo's"
     );
@@ -2772,6 +2892,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("loops.hgl", LOOP_FAILS));
     files.push(("elements.hgl", ELEMENT_FAILS));
     files.push(("stops.hgl", STOP_FAILS));
+    files.push(("sets.hgl", SET_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -2791,6 +2912,8 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("before").0,
         emitted.test("absent").0,
         emitted.test("outside").0,
+        emitted.test("removed_is_not_added").0,
+        emitted.test("one_more").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -2831,6 +2954,10 @@ fn a_failure_names_the_statement_that_failed() {
             "failed elements.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
             "failed elements.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
             "failed elements.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
+            // TST-4: a delta that removed an element is not one that
+            // added it, and a trace of one cell is not one of two.
+            "failed sets.hgl:9:5 the assertion does not hold",
+            "failed sets.hgl:12:5 the assertion does not hold",
         ]
     );
 

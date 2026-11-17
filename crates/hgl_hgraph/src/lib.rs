@@ -20,6 +20,8 @@
 //! | A `const` parameter of a node | A scalar parameter |
 //! | `state name: T = value` | A field of the node's `STATE`, set in its `start` |
 //! | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
+//! | A temporal `set<i64>` | `_hg.TSS[_py.int]`, whose tick is the set's delta |
+//! | `delta<set<i64>>(added: [1], removed: [2])` | `_hg.set_delta(added=..., removed=..., tp=_py.int)` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `enum Side { buy, sell }` | `Side = _enum.Enum("demo.orders::Side", [...])`, a scalar to hgraph |
@@ -32,6 +34,7 @@
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
 //! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
+//! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.
 

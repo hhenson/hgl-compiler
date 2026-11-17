@@ -43,7 +43,7 @@ Rules for every stage:
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | first slice: scalar nodes, value functions, graphs that call nodes, tests with dense evals |
+| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | first slice: scalar and set nodes, value functions, graphs that call nodes, tests with dense evals |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -1322,6 +1322,9 @@ only where the program reaches it, at core's source.
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
+| `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
+| A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
+| `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. A property left out is an empty `_py.frozenset()` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
 | A value and a temporal definition of one name (FN-4) | The temporal one keeps the name; the value one is `_value_name` |
 
@@ -1333,11 +1336,16 @@ the names it defines, and a candidate it has no function for is reported.
 
 `_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
 for each input through hgraph's own `eval_node` and ends the result at
-its last publication (TST-6).
+its last publication (TST-6). It also holds `same`, the comparison of two
+traces (TST-4): cell by cell, with a `None` at the end of either adding
+nothing. Python's `==` is not used: hgraph's set delta has `Removed(1)`
+equal to `1`, so a delta that removed an element would equal one that
+added it. `same` compares what each delta added and what each removed.
 
 Reported as not written yet (`target.unsupported`): as the type of an
-input, an output or configuration, any but the four scalars above and
-an enum, a nullable and a struct among them; a struct made in a graph;
+input, an output or configuration, any but the four scalars above, an
+enum and a set of one of those, a nullable and a struct among them; a
+delta that is not a set's; a struct made in a graph;
 a generic struct made in a function generic in its arguments;
 a
 temporal candidate of an operator, a native declaration of a program,
