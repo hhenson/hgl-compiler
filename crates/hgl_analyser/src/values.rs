@@ -12338,6 +12338,14 @@ fn infer(
         | (Type::Trace { cell: pattern, .. }, Type::Trace { cell: actual, .. }) => {
             infer(pattern, actual, generics, found)
         }
+        // TYPE-9: "For non-composite S, `atomic<S>` normalizes to S
+        // before matching". An `atomic<T>` given a value of a type that
+        // is its own atomic says that `T` is that type.
+        (Type::Atomic(pattern), actual)
+            if !matches!(Type::atomic(actual.clone()), Type::Atomic(_)) =>
+        {
+            infer(pattern, actual, generics, found)
+        }
         (
             Type::Dict { key, value },
             Type::Dict {

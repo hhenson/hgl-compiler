@@ -46,6 +46,59 @@ fn signature(checked: &Checked, name: &str) -> String {
     }
 }
 
+/// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V. For
+/// non-composite S, `atomic<S>` normalizes to S before matching,
+/// recursively."
+///
+/// A composite is what temporalization expands: a tuple, a struct, a
+/// list, a dictionary and a set. Any other type is its own atomic.
+#[test]
+fn an_atomic_of_what_is_no_composite_is_that_type() {
+    let checked = module(concat!(
+        "struct Quote { bid: f64 }\n",
+        "enum Side { buy, sell }\n",
+        // Each is the type inside.
+        "fn whole(a: atomic<i64>, b: atomic<str>, c: atomic<Side>, d: atomic<result<i64, str>>,\n",
+        "    e: atomic<delta<set<i64>>>, f: atomic<i64?>) -> atomic<bool> {\n",
+        "    when { return true }\n",
+        "}\n",
+        // Each stays an atomic: its payload is a composite, or a
+        // nullable of one.
+        "fn held(a: atomic<Quote>, b: atomic<list<i64>>, c: atomic<tuple<i64, str>>,\n",
+        "    d: atomic<set<i64>>, e: atomic<dict<str, i64>>, f: atomic<Quote?>)\n",
+        "    -> atomic<Quote> {\n",
+        "    when { return a }\n",
+        "}\n",
+        // A generic parameter's stays as written, and is formed again
+        // with what the parameter is: `T` is an `i64` here, and a
+        // `Quote` there.
+        "fn kept<T>(value: atomic<T>) -> atomic<T> {\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn number(value: i64) -> i64 => kept(value)\n",
+        "fn quote(value: atomic<Quote>) -> atomic<Quote> => kept(value)\n",
+        // An `i64` is no `atomic<Quote>`.
+        "fn wrong(value: i64) -> atomic<Quote> => kept(value)\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:18:47 type/type.mismatch EXPR-5"]);
+    assert_eq!(
+        signature(&checked, "whole"),
+        "(a: i64, b: str, c: Side, d: result<i64, str>, e: delta<set<i64>>, f: i64?) -> bool"
+    );
+    assert_eq!(
+        signature(&checked, "held"),
+        concat!(
+            "(a: atomic<Quote>, b: atomic<list<i64>>, c: atomic<tuple<i64, str>>, ",
+            "d: atomic<set<i64>>, e: atomic<dict<str, i64>>, f: atomic<Quote?>) ",
+            "-> atomic<Quote>"
+        )
+    );
+    assert_eq!(
+        signature(&checked, "kept"),
+        "<T>(value: atomic<T>) -> atomic<T>"
+    );
+}
+
 // ---- What a written type means ----
 
 /// The grammar's `type`, TYPE-1 and TYPE-2: every form of type is read,
@@ -754,7 +807,8 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     );
     assert_eq!(
         signature(&checked, "inputs"),
-        "(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?)"
+        // TYPE-9: `atomic<i64>` is `i64`.
+        "(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: i64?, e: list<ref<f64>>?)"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
