@@ -267,6 +267,32 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             };
             defaults.push(read);
         }
+        // UNIT-13: the value each constant is written with, read as a
+        // value of the constant's type with no parameter in scope.
+        let constants: Vec<Option<Expr>> = module
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(position, declaration)| {
+                let Some(Detail::Constant(ty)) = module.details.get(position) else {
+                    return None;
+                };
+                Typer::new(
+                    program,
+                    module,
+                    declaration,
+                    &empty,
+                    Tables {
+                        bindings: &bindings,
+                        written: &written,
+                        calls: &calls,
+                    },
+                    diagnostics,
+                )
+                .constant(ty)
+            })
+            .collect();
+        program.modules[index].constants = constants;
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
         program.modules[index].run_body = run_body;
@@ -406,6 +432,9 @@ struct Typer<'a> {
     /// operator's module and declaration. A chain of symbols asks for
     /// the same operator's at every link.
     candidates: HashMap<(usize, usize), Vec<Candidate<'a>>>,
+    /// The values of the module constants this function's constants
+    /// have named (UNIT-13).
+    constant_values: crate::read::ConstantValues,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -468,6 +497,7 @@ impl<'a> Typer<'a> {
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
+            constant_values: Default::default(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -602,6 +632,29 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The value a constant is written with, read as a value of
+    /// `expected`, the type it is written with (UNIT-13): "Its
+    /// expression is a const expression (EXPR-5) checked against T ...
+    /// It reads no parameter, local, temporal value, or capability."
+    /// The typer is made with no parameter, so none is in scope.
+    fn constant(mut self, expected: &Type) -> Option<Expr> {
+        let syntax = self.declaration.syntax.clone();
+        // The expression is what follows the type: the one child that
+        // is no type.
+        let ty = crate::read::type_child(&syntax);
+        let written = syntax.children().find(|child| Some(child) != ty.as_ref())?;
+        // A type that is no ordinary value type has been reported
+        // (TYPE-12), and the expression is then held to none.
+        let expected = if shaped(expected) {
+            &Type::Unknown
+        } else {
+            expected
+        };
+        let value = self.expression(&written, Some(expected));
+        let place = format!("the constant `{}`", self.declaration.name);
+        Some(self.fit(value, expected, &place))
     }
 
     /// The default of each parameter of the declaration (UNIT-8), read
@@ -2874,9 +2927,10 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// A name: a parameter, a local, or a generic value parameter. Any
-    /// other, a function or a type or a name left for the prelude, is
-    /// for the pass that reads calls and members.
+    /// A name: a parameter, a local, a constant of a module, or a
+    /// generic value parameter. Any other, a function or a type or a
+    /// name left for the prelude, is for the pass that reads calls and
+    /// members.
     fn name(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
         let unread = Expr {
@@ -2890,6 +2944,21 @@ impl<'a> Typer<'a> {
         let Some(name) = name_token(node) else {
             return unread;
         };
+        // UNIT-13: "A constant is read by its name wherever an ordinary
+        // value is." Its type is the one it is written with.
+        if let Some((module, &[declaration])) = self.declarations(&name)
+            && let Some(Detail::Constant(ty)) =
+                self.program.modules[module].details.get(declaration)
+        {
+            return Expr {
+                kind: ExprKind::Constant {
+                    module,
+                    declaration,
+                },
+                ty: ty.clone(),
+                at,
+            };
+        }
         let Some(Binding::Local {
             at: declared,
             kind: LocalKind::GenericParameter,
@@ -4664,13 +4733,14 @@ impl<'a> Typer<'a> {
     }
 
     /// True when `value` is a constant expression (FN-1): "of literals,
-    /// enum members, generic value parameters, and the enclosing
-    /// function's own `const` parameters."
+    /// enum members, constants (UNIT-13), generic value parameters, and
+    /// the enclosing function's own `const` parameters."
     fn is_fixed(&self, value: &Expr) -> bool {
         match &value.kind {
-            ExprKind::Literal(_) | ExprKind::EnumMember { .. } | ExprKind::GenericValue { .. } => {
-                true
-            }
+            ExprKind::Literal(_)
+            | ExprKind::EnumMember { .. }
+            | ExprKind::GenericValue { .. }
+            | ExprKind::Constant { .. } => true,
             // A parameter's local has its position among the parameters.
             ExprKind::Local(local) => self
                 .signature
@@ -7627,7 +7697,47 @@ impl<'a> Typer<'a> {
                 .member_name(module, declaration, &argument)
                 .map(OptionValue::Member);
         }
+        if node.kind() == SyntaxKind::NameExpr
+            && let Some(value) = self.constant_option(node)
+        {
+            return Some(value);
+        }
         constant_of(node)
+    }
+
+    /// The value of the constant of a module that `node` names, for a
+    /// candidate's condition to compare (UNIT-13: "a compile-time
+    /// constant where a generic value argument ... requires one"; an
+    /// option is one, GEN-6). `None` for a name that is no constant, and
+    /// for a constant whose value is not known here.
+    ///
+    /// An `i64` or a `duration` is followed to its value, as a size is.
+    /// Any other is what its expression is written as, where that is a
+    /// literal or a `.member`: the expression is in its declaration's
+    /// file, so no name in it is looked up here.
+    fn constant_option(&self, node: &SyntaxNode) -> Option<OptionValue> {
+        let name = name_token(node)?;
+        let (module, &[declaration]) = self.declarations(&name)? else {
+            return None;
+        };
+        let declared = &self.program.modules[module].declarations[declaration];
+        if declared.kind != DeclarationKind::Constant {
+            return None;
+        }
+        match crate::read::constant_value(self.program, module, declaration, &self.constant_values)
+        {
+            ConstantValue::Int(value) => return Some(OptionValue::Literal(Value::Int(value))),
+            ConstantValue::Duration(value) => {
+                return Some(OptionValue::Literal(Value::Duration(value)));
+            }
+            _ => {}
+        }
+        let ty = crate::read::type_child(&declared.syntax);
+        let written = declared
+            .syntax
+            .children()
+            .find(|child| Some(child) != ty.as_ref())?;
+        constant_of(&written)
     }
 
     /// The constant a declaration's default is, for a candidate's
@@ -7699,8 +7809,8 @@ impl<'a> Typer<'a> {
 
     /// True when an expression is a compile-time constant (GEN-8): "a
     /// literal, an enum member however it is written (TYPE-7), `Zero.nan`
-    /// or `.nan`, a generic value parameter in scope, or a constant
-    /// expression of those."
+    /// or `.nan`, a constant (UNIT-13), a generic value parameter in
+    /// scope, or a constant expression of those."
     fn is_compile_time(&self, node: &SyntaxNode) -> bool {
         match node.kind() {
             SyntaxKind::Literal | SyntaxKind::ImpliedMember => true,
@@ -7724,10 +7834,20 @@ impl<'a> Typer<'a> {
                         kind: LocalKind::GenericParameter,
                         ..
                     })
-                )
+                ) || self.names_constant(&name)
             }),
             _ => false,
         }
+    }
+
+    /// True when `name` is bound to a constant of a module (UNIT-13).
+    fn names_constant(&self, name: &SyntaxToken) -> bool {
+        matches!(
+            self.declarations(name),
+            Some((module, &[declaration]))
+                if self.program.modules[module].declarations[declaration].kind
+                    == DeclarationKind::Constant
+        )
     }
 
     /// The value candidates of `operator`, wherever they are declared.
@@ -7815,6 +7935,17 @@ impl<'a> Typer<'a> {
                     name: name.text().to_string(),
                     at: *at,
                 },
+                // UNIT-13: a constant of a module, followed to its
+                // value as a type that names it follows it.
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) if declarations.len() == 1 => crate::read::constant_value(
+                    self.program,
+                    *module,
+                    declarations[0],
+                    &self.constant_values,
+                ),
                 _ => ConstantValue::Unevaluated,
             }
         };
@@ -9820,7 +9951,22 @@ impl<'a> Typer<'a> {
                 // and is not evaluated.
                 let is_integer = self.admits(&integer, &index.ty);
                 let index = self.fit(index, &integer, "the index of a tuple");
-                let element = match constant_index(&index) {
+                // UNIT-13: an index that names a constant of a module
+                // is that constant's value, where it is followed to one.
+                let found = {
+                    let constant =
+                        |module: usize, declaration: usize| match crate::read::constant_value(
+                            self.program,
+                            module,
+                            declaration,
+                            &self.constant_values,
+                        ) {
+                            ConstantValue::Int(value) => Index::Known(value),
+                            _ => Index::Unevaluated,
+                        };
+                    constant_index(&index, &constant)
+                };
+                let element = match found {
                     _ if !is_integer => Some(&Type::Unknown),
                     Index::Known(value) => usize::try_from(value)
                         .ok()
@@ -12301,11 +12447,16 @@ enum Index {
 
 /// The value of a tuple's index (EXPR-7: "A tuple's index is a constant
 /// within its length"): an integer literal, or literals under a minus
-/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`.
-fn constant_index(index: &Expr) -> Index {
+/// and joined by `+`, `-` and `*`, as in `pair[1 - 1]`. `constant` says
+/// what a constant of a module comes to (UNIT-13).
+fn constant_index(index: &Expr, constant: &dyn Fn(usize, usize) -> Index) -> Index {
     match &index.kind {
         ExprKind::Literal(Value::Int(value)) => return Index::Known(*value),
         ExprKind::GenericValue { .. } => return Index::Unevaluated,
+        ExprKind::Constant {
+            module,
+            declaration,
+        } => return constant(*module, *declaration),
         // A call of an operator of which no candidate is selected: it
         // has been reported, or is not judged, and nothing more is said
         // of it (ERR-9).
@@ -12318,7 +12469,7 @@ fn constant_index(index: &Expr) -> Index {
     }
     // A symbol, as it is written or as core's own arithmetic.
     if let Some(operand) = negated(index) {
-        return match constant_index(operand) {
+        return match constant_index(operand, constant) {
             // `checked_neg` gives `None` where the result does not fit.
             Index::Known(value) => value.checked_neg().map_or(Index::Unevaluated, Index::Known),
             other => other,
@@ -12327,7 +12478,10 @@ fn constant_index(index: &Expr) -> Index {
     let Some((operator, left, right)) = arithmetic(index) else {
         return Index::NotConstant;
     };
-    match (constant_index(left), constant_index(right)) {
+    match (
+        constant_index(left, constant),
+        constant_index(right, constant),
+    ) {
         (Index::NotConstant, _) | (_, Index::NotConstant) => Index::NotConstant,
         (Index::Known(left), Index::Known(right)) => {
             let value = match operator {

@@ -976,7 +976,9 @@ impl Resolver<'_> {
                     format!("`{}` is private to module `{}`", name.text(), module.path),
                     "UNIT-2",
                 )
-                .with_note("a function or type is private unless marked `export` (UNIT-3)"),
+                .with_note(
+                    "a function, a type or a constant is private unless marked `export` (UNIT-3)",
+                ),
             );
             return None;
         }

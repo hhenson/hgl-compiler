@@ -634,6 +634,88 @@ fn a_default_keeps_its_meaning_in_another_module() {
     assert!(library.contains("def pick(first, second):\n"));
 }
 
+/// Two modules: constants, and their reads in another module.
+const CONSTANTS: [(&str, &str); 2] = [
+    (
+        "constants.hgl",
+        concat!(
+            "module demo.constants\n",
+            "export enum Side { buy, sell }\n",
+            "export const scale: i64 = 2\n",
+            // A constant written after the one that reads it.
+            "const first: i64 = 3 * late + 1\n",
+            "const late: i64 = scale\n",
+            "export const side: Side = .sell\n",
+            "const fn seed() -> i64 => first\n",
+            "export const fn choose(base: i64, value: i64 = seed()) -> i64 => base + value\n",
+            "test constants_are_read {\n",
+            "    assert first == 7\n",
+            "    assert choose(1) == 8\n",
+            "    assert side == Side.sell\n",
+            "}\n",
+        ),
+    ),
+    (
+        "reads.hgl",
+        concat!(
+            "module demo.reads\n",
+            "use demo.constants::{scale, choose}\n",
+            "const twice: i64 = scale * 2\n",
+            "fn scaled(value: i64, const factor: i64) -> i64 {\n",
+            "    when { return value * factor }\n",
+            "}\n",
+            "fn wired(value: i64) -> i64 => scaled(value, scale)\n",
+            "test constants_are_imported {\n",
+            "    assert twice == 4\n",
+            "    assert choose(twice) == 11\n",
+            "    assert eval(wired(value: [1, 2])) == [2, 4]\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// UNIT-13: "The constant has that one value wherever it is read ... It
+/// is referenced forward as any module declaration is (UNIT-6)". A
+/// constant is a function of no parameter that the provider runs once,
+/// and a read is a call of it: in value code, in a graph, and from
+/// another module.
+#[test]
+fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
+    let emitted = emit(&CONSTANTS);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_constants/__init__.py");
+    for expected in [
+        "@_core.constant\ndef scale():\n    return 2\n",
+        "@_core.constant\ndef first():\n    return _core.add__i64_i64(lhs=_core.mul__i64_i64(lhs=3, rhs=late()), rhs=1)\n",
+        "@_core.constant\ndef late():\n    return scale()\n",
+        "@_core.constant\ndef side():\n    return Side[\"sell\"]\n",
+        "def seed():\n    return first()\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    let reads = emitted.text("_hgl/_m_demo/_m_reads/__init__.py");
+    for expected in [
+        "@_core.constant\ndef twice():\n    return _core.mul__i64_i64(lhs=_hgl_4demo_9constants.scale(), rhs=2)\n",
+        // In a graph a constant is a value known where it is built.
+        "return scaled(value=value, factor=_hgl_4demo_9constants.scale())",
+    ] {
+        assert!(
+            reads.contains(expected),
+            "the module has:\n{expected}\nin:\n{reads}"
+        );
+    }
+    // The provider has the function that runs one once. Its text is a
+    // file of this repository, whose line ends are the checkout's.
+    assert!(
+        emitted
+            .text("_hgl/_core_native.py")
+            .contains("def constant(function):")
+    );
+}
+
 /// A default that calls its own function with that argument left out
 /// would be written inside itself without end: it is reported.
 #[test]
@@ -2955,6 +3037,8 @@ fn the_generated_tests_pass_on_hgraph() {
         ("selectors.hgl", SELECTORS),
         ("names.hgl", NAMES),
         ("defaults.hgl", DEFAULTS),
+        CONSTANTS[0],
+        CONSTANTS[1],
         ("lift.hgl", LIFTS),
         ("mixed.hgl", CANDIDATES),
         ("div.hgl", DIVISION),
@@ -2990,9 +3074,9 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        46,
+        48,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
-         on enums of one name, and one of each demo's"
+         on enums of one name, two on constants, and one of each demo's"
     );
 }
 

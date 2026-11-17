@@ -597,6 +597,7 @@ impl Emitter<'_> {
             (DeclarationKind::Operator, _, _) => {}
             (DeclarationKind::Enum, _, _) => self.enumeration(index),
             (DeclarationKind::Struct, _, _) => self.structure(index),
+            (DeclarationKind::Constant, _, _) => self.constant(index),
             _ => {
                 let what = match declaration.kind {
                     DeclarationKind::NativeType => "a native type",
@@ -606,6 +607,45 @@ impl Emitter<'_> {
                 self.unsupported(declaration.at, what);
             }
         }
+    }
+
+    /// `const name: T = expression`, the declaration `index` of the
+    /// module (UNIT-13): a function of no parameter that returns the
+    /// expression, which the provider runs once. "The constant has that
+    /// one value wherever it is read", and a read is a call of it.
+    ///
+    /// A function, and not a name bound where the module is loaded, so
+    /// that the expression may name what is written after it (UNIT-6):
+    /// it is run when the constant is first read, by when all of the
+    /// module is defined.
+    fn constant(&mut self, index: usize) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        let declaration = &module.declarations[index];
+        let Some(value) = module.constants.get(index).and_then(Option::as_ref) else {
+            self.unsupported(declaration.at, "this constant");
+            return;
+        };
+        self.natives = true;
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, "@_core.constant");
+        self.line(
+            0,
+            &format!("def {}():", self.definition_name(self.module, index)),
+        );
+        // It reads no parameter and no local (UNIT-13).
+        let function = Function {
+            locals: &[],
+            signature: None,
+            mode: Mode::Value,
+        };
+        self.propagates = false;
+        let written = self.expression(&function, value);
+        if std::mem::take(&mut self.propagates) {
+            self.unsupported(value.at, "a `?` in a constant");
+        }
+        self.line(1, &format!("return {written}"));
     }
 
     /// `enum Side { buy, sell = 5 }`, the declaration `index` of the
@@ -1460,7 +1500,8 @@ impl Emitter<'_> {
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
         // In a graph a value may be a connection, and Python's `and`,
         // `not` and `if` would act on the port: only a name, a literal,
-        // a member of an enum, a call and a widening are written there.
+        // a member of an enum, a constant, a call and a widening are
+        // written there.
         if function.mode == Mode::Graph
             && !matches!(
                 value.kind,
@@ -1469,6 +1510,7 @@ impl Emitter<'_> {
                     | ExprKind::Call { .. }
                     | ExprKind::Widen(_)
                     | ExprKind::EnumMember { .. }
+                    | ExprKind::Constant { .. }
             )
         {
             self.unsupported(value.at, "this expression in a graph");
@@ -1476,6 +1518,12 @@ impl Emitter<'_> {
         }
         match &value.kind {
             ExprKind::Literal(literal) => self.literal(literal, value.at),
+            // UNIT-13: a constant is read by a call of the function
+            // that gives its value, of its own module or another's.
+            ExprKind::Constant {
+                module,
+                declaration,
+            } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
                 let read = self.place(function, *local);
                 // In a hook a temporal input is read through its

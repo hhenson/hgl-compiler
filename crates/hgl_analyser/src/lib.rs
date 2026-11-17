@@ -67,6 +67,7 @@
 
 mod assemble;
 mod constant;
+mod cycles;
 mod declare;
 mod declared;
 mod forms;
@@ -249,6 +250,8 @@ pub mod codes {
     pub const APPLICATION_DUPLICATE_PATH: &str = "application.duplicate_path";
     /// A run statement's first argument is no call of an entry (RUN-1).
     pub const RUN_ENTRY: &str = "run.entry";
+    /// A constant's value depends on itself (UNIT-13).
+    pub const CONSTANT_CYCLE: &str = "constant.cycle";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";
@@ -503,6 +506,9 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
+    // UNIT-13: asked of the typed program, where each call has the
+    // definition it selected.
+    cycles::check(&program, diagnostics);
     program
 }
 

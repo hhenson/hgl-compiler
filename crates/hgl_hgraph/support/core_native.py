@@ -23,6 +23,7 @@ that one held in two places is as good as a copy in each (TYPE-5).
 """
 
 import dataclasses as _dataclasses
+import functools as _functools
 import math as _math
 from fractions import Fraction as _Fraction
 
@@ -34,6 +35,17 @@ _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
 _NAN = float("nan")
 _INFINITY = float("inf")
+
+
+def constant(function):
+    """A constant of a module (UNIT-13), whose value `function` gives.
+
+    The constant "has that one value wherever it is read": `function` is
+    run when the constant is first read, and what it gave is what every
+    later read gives. Reading it then, and not where the module is
+    loaded, lets a constant name one written after it (UNIT-6).
+    """
+    return _functools.cache(function)
 
 
 class HglError(Exception):

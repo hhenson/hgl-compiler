@@ -338,6 +338,9 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    /// The values of the constants the module's types have named
+    /// (UNIT-13).
+    constant_values: ConstantValues,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -378,6 +381,7 @@ impl<'a> Reader<'a> {
             read: HashMap::new(),
             written: Vec::new(),
             calls: Vec::new(),
+            constant_values: ConstantValues::default(),
             diagnostics,
         })
     }
@@ -413,7 +417,7 @@ pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
 }
 
 /// The first child node of `node` that is a type.
-fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
+pub(crate) fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.children().find(|child| is_type(child.kind()))
 }
 
@@ -450,6 +454,108 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
         Some(qualified) => identifiers(&qualified).into_iter().nth(1),
         None => identifiers(node).into_iter().next(),
     }
+}
+
+/// How many constants a constant's value is followed through. One that
+/// names more, each through the last, is left unevaluated.
+const CONSTANT_DEPTH: usize = 32;
+
+/// What following constants to their values keeps, for one module's
+/// types (UNIT-13).
+#[derive(Default)]
+pub(crate) struct ConstantValues {
+    /// The constants being followed, so that one whose value depends on
+    /// itself, which is reported as that, ends here.
+    following: std::cell::RefCell<Vec<(usize, usize)>>,
+    /// The values worked out, by module and declaration. A constant many
+    /// others name is folded once: `c1 = c0 + c0`, `c2 = c1 + c1` and so
+    /// on would otherwise be folded twice as often at each step.
+    known: std::cell::RefCell<HashMap<(usize, usize), ConstantValue>>,
+    /// Set when a constant was left unevaluated because of where it was
+    /// reached from: inside its own value, or too many constants deep.
+    /// What was worked out through it is then not kept as its value:
+    /// reached another way it may come to one.
+    cut: std::cell::Cell<bool>,
+}
+
+/// What the constant `declaration` of module `module` comes to, as far
+/// as it needs no types (UNIT-13): "a compile-time constant where a
+/// generic value argument (GEN-8) or a `switch` label (CTRL-12) requires
+/// one". Its expression is folded as a size is, and a constant it names
+/// is followed in turn.
+///
+/// A constant of a type other than `i64` and `duration` is left
+/// unevaluated: only those are folded with no types.
+pub(crate) fn constant_value(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    values: &ConstantValues,
+) -> ConstantValue {
+    let key = (module, declaration);
+    if let Some(known) = values.known.borrow().get(&key) {
+        return known.clone();
+    }
+    let unit = &program.modules[module];
+    let declared = &unit.declarations[declaration];
+    if declared.kind != DeclarationKind::Constant {
+        return ConstantValue::Unevaluated;
+    }
+    if values.following.borrow().contains(&key) || values.following.borrow().len() >= CONSTANT_DEPTH
+    {
+        values.cut.set(true);
+        return ConstantValue::Unevaluated;
+    }
+    let ty = type_child(&declared.syntax);
+    let folded = ty
+        .as_ref()
+        .is_some_and(|ty| matches!(text_of(ty).as_str(), "i64" | "duration"));
+    let written = declared
+        .syntax
+        .children()
+        .find(|child| Some(child) != ty.as_ref())
+        .filter(|_| folded);
+    let Some(written) = written else {
+        values
+            .known
+            .borrow_mut()
+            .insert(key, ConstantValue::Unevaluated);
+        return ConstantValue::Unevaluated;
+    };
+    let file = unit.files[declared.file].file;
+    // What a name of the expression stands for: another constant, of
+    // this module or one it imports from.
+    let name = |used: &SyntaxNode| {
+        let Some(name) = used_name(used) else {
+            return ConstantValue::Unevaluated;
+        };
+        let binding = unit
+            .uses
+            .iter()
+            .find(|found| found.at.file == file && found.at.span.start == name.span().start)
+            .map(|found| &found.binding);
+        match binding {
+            Some(Binding::Declarations {
+                module,
+                declarations,
+            }) if declarations.len() == 1 => {
+                constant_value(program, *module, declarations[0], values)
+            }
+            _ => ConstantValue::Unevaluated,
+        }
+    };
+    // Whether anything under this constant was cut is asked of this
+    // constant alone, and then added to what its caller is asking.
+    let cut_before = values.cut.replace(false);
+    values.following.borrow_mut().push(key);
+    let value = fold(&written, &name);
+    values.following.borrow_mut().pop();
+    let cut = values.cut.get();
+    if !cut {
+        values.known.borrow_mut().insert(key, value.clone());
+    }
+    values.cut.set(cut_before || cut);
+    value
 }
 
 /// The default of a parameter or struct member: its first child node
@@ -677,6 +783,11 @@ impl Reader<'_> {
             }
             SyntaxKind::StructDecl => Detail::Struct(self.structure(node)),
             SyntaxKind::NativeTypeDecl => Detail::Native(self.native_type(node, &declaration.name)),
+            // UNIT-13: "A constant, `const name: T = expression`, names
+            // one ordinary value of the type T."
+            SyntaxKind::ConstantDecl => Detail::Constant(
+                type_child(node).map_or(Type::Unknown, |written| self.outermost(&written)),
+            ),
             _ => Detail::Plain,
         };
         self.in_signature = false;
@@ -1055,6 +1166,9 @@ impl Reader<'_> {
                 }
             }
             SyntaxKind::StructMember => Position::FIELD,
+            // UNIT-13: a constant "names one ordinary value of the type
+            // T".
+            SyntaxKind::ConstantDecl => Position::value("the type of a constant", "UNIT-13"),
             // NATIVE-6: a property is "a name and an ordinary value
             // type".
             SyntaxKind::NativeProperty => {
@@ -2179,7 +2293,21 @@ impl Reader<'_> {
                 }
             }
             Binding::Local { .. } => ConstantValue::Unevaluated,
-            Binding::Declarations { .. } => return None,
+            // UNIT-13: a constant of a module is "a compile-time
+            // constant where a generic value argument (GEN-8) ...
+            // requires one".
+            Binding::Declarations {
+                module,
+                declarations,
+            } => match declarations.as_slice() {
+                &[declaration]
+                    if self.program.modules[*module].declarations[declaration].kind
+                        == DeclarationKind::Constant =>
+                {
+                    constant_value(self.program, *module, declaration, &self.constant_values)
+                }
+                _ => return None,
+            },
         };
         Some(Constant {
             text: name.text().to_string(),
@@ -2218,6 +2346,17 @@ impl Reader<'_> {
                     name: name.text().to_string(),
                     at: *at,
                 },
+                // UNIT-13: a constant of a module, followed to its
+                // value.
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) if declarations.len() == 1 => constant_value(
+                    self.program,
+                    *module,
+                    declarations[0],
+                    &self.constant_values,
+                ),
                 _ => ConstantValue::Unevaluated,
             }
         };

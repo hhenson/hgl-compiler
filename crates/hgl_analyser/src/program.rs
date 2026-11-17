@@ -163,6 +163,10 @@ pub struct Module {
     /// The typed block of each named test: one entry for each of
     /// `tests`, in the same order, `None` for a test with no block.
     pub test_bodies: Vec<Option<Body>>,
+    /// The value each constant is written with, read as a value of the
+    /// constant's type (UNIT-13): one entry for each of `declarations`,
+    /// in the same order, `None` for a declaration that is no constant.
+    pub constants: Vec<Option<Expr>>,
     /// An application's run statement, as it is written (RUN-1): its
     /// first, where it writes more than one. `None` for a module, and
     /// for an application that writes none.

@@ -122,7 +122,7 @@ fn check_imported_names(program: &Program, index: usize, diagnostics: &mut Diagn
                 let note = if private.test_only {
                     "it is declared for the module's tests (TST-2)"
                 } else {
-                    "a function or type is private unless marked `export` (UNIT-3)"
+                    "a function, a type or a constant is private unless marked `export` (UNIT-3)"
                 };
                 diagnostics.emit(
                     error(
