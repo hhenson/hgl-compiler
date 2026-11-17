@@ -27,7 +27,10 @@
 //! can be: Python takes a value of any type. It is written by instance
 //! too where its body calls an operation the declaration requires, or
 //! hands one of its requirements on to what it calls (GEN-16): which
-//! candidate that is depends on the types.
+//! candidate that is depends on the types. So is one that reads a
+//! generic value parameter as a value (GEN-13), and one that calls a
+//! function written by instance with its own generic parameters, which
+//! are known only in an instance of it.
 //!
 //! An application's run statement is not written yet, and is not read
 //! here.
@@ -65,7 +68,8 @@ pub(crate) struct Instances {
     /// and its position among that module's declarations.
     declared: BTreeMap<(usize, usize), Vec<Instance>>,
     /// The value functions and value candidates that are written by
-    /// instance: see [`requires`].
+    /// instance: those whose body [`requires`], and those that call
+    /// one written by instance with arguments that are not whole.
     requiring: BTreeSet<(usize, usize)>,
 }
 
@@ -106,10 +110,12 @@ fn generic(program: &Program, module: usize, declaration: usize) -> bool {
     generic && matches!(declared.bodies.get(declaration), Some(Some(_)))
 }
 
-/// True for a body that needs to know what answers its declaration's
-/// requirements (GEN-16): it calls an operation the declaration
-/// requires, or one of its calls is answered by a requirement the
-/// declaration states, which it so hands on.
+/// True for a body that one call of its declaration says something
+/// of. It needs to know what answers its declaration's requirements
+/// (GEN-16): it calls an operation the declaration requires, or one of
+/// its calls is answered by a requirement the declaration states,
+/// which it so hands on. Or it reads a generic value parameter as a
+/// value, which is the constant the call gives (GEN-13).
 fn requires(body: &Body) -> bool {
     fn stated(answers: &[Answer]) -> bool {
         answers.iter().any(|answer| match answer {
@@ -120,15 +126,17 @@ fn requires(body: &Body) -> bool {
     }
     let mut found = false;
     walk_statements(&body.statements, &mut |value| {
-        if let ExprKind::Call { callee, .. } = &value.kind {
-            found |= match callee {
+        found |= match &value.kind {
+            ExprKind::GenericValue { .. } => true,
+            ExprKind::Call { callee, .. } => match callee {
                 Callee::Required { .. } => true,
                 Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
                     stated(requirements)
                 }
                 Callee::Unread => false,
-            };
-        }
+            },
+            _ => false,
+        };
     });
     found
 }
@@ -177,6 +185,40 @@ impl Instances {
                     instances.requiring.insert((index, declaration));
                 }
             }
+        }
+        // A value function that calls one written by instance with its
+        // own generic parameters is written by instance too: only an
+        // instance of it says which instance it calls. That makes more
+        // of them so, until it makes no more.
+        loop {
+            let mut more = Vec::new();
+            for (index, module) in program.modules.iter().enumerate() {
+                for (declaration, body) in module.bodies.iter().enumerate() {
+                    let value = module.declarations[declaration].kind.role() == Some(Role::Value);
+                    let (Some(body), true) = (body, value) else {
+                        continue;
+                    };
+                    if !generic(program, index, declaration)
+                        || instances.requiring.contains(&(index, declaration))
+                    {
+                        continue;
+                    }
+                    let open = instances
+                        .asked(program, &body.statements)
+                        .iter()
+                        .any(|asked| {
+                            key(program, (asked.module, asked.declaration), &asked.generics)
+                                .is_none()
+                        });
+                    if open {
+                        more.push((index, declaration));
+                    }
+                }
+            }
+            if more.is_empty() {
+                break;
+            }
+            instances.requiring.extend(more);
         }
         let mut waiting: VecDeque<Asked> = VecDeque::new();
         for (index, module) in program.modules.iter().enumerate() {
@@ -304,7 +346,8 @@ impl Instances {
     /// True for a declaration that is written by instance: a temporal
     /// function or candidate with generic parameters and a body, and a
     /// value one whose body needs to know what answers its
-    /// requirements.
+    /// requirements, or calls one written by instance with its own
+    /// generic parameters.
     pub(crate) fn instanced(&self, program: &Program, module: usize, declaration: usize) -> bool {
         generic_temporal(program, module, declaration)
             || self.requiring.contains(&(module, declaration))

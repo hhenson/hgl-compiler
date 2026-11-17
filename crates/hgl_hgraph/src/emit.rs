@@ -508,7 +508,12 @@ impl Emitter<'_> {
         if self.piece.broken.is_none() {
             self.piece.broken = Some(diagnostic.clone());
         }
-        self.diagnostics.emit(diagnostic);
+        // A declaration written by instance is written more than once,
+        // and what one instance lacks another may lack too: it is
+        // reported once.
+        if !self.diagnostics.as_slice().contains(&diagnostic) {
+            self.diagnostics.emit(diagnostic);
+        }
     }
 
     /// Ends the piece being written, and gives it.
