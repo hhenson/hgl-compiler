@@ -736,6 +736,159 @@ pub enum BinaryOperator {
     Or,
 }
 
+impl Expr {
+    /// Calls `visit` with this expression and then with every expression
+    /// inside it, a statement's among them: each once, an outer one
+    /// before those it holds.
+    ///
+    /// `&mut dyn FnMut` is a reference to any closure that may change
+    /// what it has captured, a list it adds to say.
+    pub fn walk(&self, visit: &mut dyn FnMut(&Expr)) {
+        visit(self);
+        match &self.kind {
+            ExprKind::Literal(_)
+            | ExprKind::Constant { .. }
+            | ExprKind::Endpoint { .. }
+            | ExprKind::Local(_)
+            | ExprKind::EndpointOf(_)
+            | ExprKind::GenericValue { .. }
+            | ExprKind::EnumMember { .. }
+            | ExprKind::Unread => {}
+            ExprKind::Block { statements, value } => {
+                walk_statements(statements, visit);
+                if let Some(value) = value {
+                    value.walk(visit);
+                }
+            }
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                condition.walk(visit);
+                then.walk(visit);
+                if let Some(otherwise) = otherwise {
+                    otherwise.walk(visit);
+                }
+            }
+            ExprKind::Unary { operand: inner, .. }
+            | ExprKind::Widen(inner)
+            | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::Field { base: inner, .. }
+            | ExprKind::Tagged { payload: inner, .. }
+            | ExprKind::TagTest { value: inner, .. }
+            | ExprKind::Payload { result: inner, .. }
+            | ExprKind::ErrorPart { base: inner, .. }
+            | ExprKind::Propagate(inner)
+            | ExprKind::Capture(inner)
+            | ExprKind::Captured { capture: inner, .. }
+            | ExprKind::Publications(inner) => inner.walk(visit),
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Index {
+                base: left,
+                index: right,
+            }
+            | ExprKind::TraceCompare { left, right, .. } => {
+                left.walk(visit);
+                right.walk(visit);
+            }
+            ExprKind::Call { arguments, .. }
+            | ExprKind::Construct { arguments, .. }
+            | ExprKind::Delta { arguments } => {
+                for argument in arguments {
+                    argument.value.walk(visit);
+                }
+            }
+            ExprKind::Error { message, code } => {
+                message.walk(visit);
+                if let Some(code) = code {
+                    code.walk(visit);
+                }
+            }
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
+                for entry in entries {
+                    entry.walk(visit);
+                }
+            }
+            ExprKind::Pairs(entries) => {
+                for (key, value) in entries {
+                    key.walk(visit);
+                    value.walk(visit);
+                }
+            }
+            ExprKind::Eval { call, config, .. } => {
+                call.walk(visit);
+                if let Some(config) = config {
+                    config.walk(visit);
+                }
+            }
+            ExprKind::Trace(cells) => {
+                for cell in cells {
+                    for part in [&cell.time, &cell.value].into_iter().flatten() {
+                        part.walk(visit);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Calls `visit` with every expression of `statements`, as
+/// [`Expr::walk`] does for one expression.
+pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
+    for statement in statements {
+        match statement {
+            Stmt::Inject { .. } | Stmt::Unread { .. } => {}
+            Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    value.walk(visit);
+                }
+            }
+            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk(visit),
+            Stmt::Assert { condition, .. } => condition.walk(visit),
+            Stmt::AssignPlace { place, value, .. } => {
+                place.walk(visit);
+                value.walk(visit);
+            }
+            Stmt::Hook {
+                condition, body, ..
+            }
+            | Stmt::While {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    condition.walk(visit);
+                }
+                walk_statements(body, visit);
+            }
+            Stmt::AssertRaises { body, .. } => walk_statements(body, visit),
+            Stmt::Yield { time, value, .. } => {
+                time.walk(visit);
+                value.walk(visit);
+            }
+            Stmt::For { sequence, body, .. } => {
+                sequence.walk(visit);
+                walk_statements(body, visit);
+            }
+            Stmt::Switch {
+                selector,
+                cases,
+                default,
+                ..
+            } => {
+                selector.walk(visit);
+                for case in cases {
+                    case.label.walk(visit);
+                    walk_statements(&case.body, visit);
+                }
+                if let Some(default) = default {
+                    walk_statements(default, visit);
+                }
+            }
+        }
+    }
+}
+
 impl ExprKind {
     /// The operator and operands of a symbol between two operands,
     /// however it is recorded: an [`ExprKind::Binary`], or the call the

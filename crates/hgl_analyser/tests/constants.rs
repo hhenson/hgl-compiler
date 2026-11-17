@@ -337,6 +337,38 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
         defaults.report
     );
 
+    // OPS-2: a call of an operator, by its name or as a symbol, is of
+    // the candidate its operands select. That candidate is what the
+    // value is worked out through, and no other.
+    let candidates = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "operator choose<T>(value: T) -> T\n",
+            "impl const fn choose(value: i64) -> i64 => answer\n",
+            "impl const fn choose(value: str) -> str => value\n",
+            // The `i64` candidate reads `answer`: a cycle. The `str`
+            // one does not, though it is of the same operator.
+            "const answer: i64 = choose(1)\n",
+            "const label: str = choose(\"a\")\n",
+            // A symbol selects a candidate too.
+            "struct Money { cents: i64 }\n",
+            "impl const fn add_(lhs: Money, rhs: Money) -> Money => Money(cents: lhs.cents + total.cents)\n",
+            "const total: Money = Money(cents: 1) + Money(cents: 2)\n",
+            // `1 + 2` selects core's candidate, and not the one above.
+            "const three: i64 = 1 + 2\n",
+        ),
+    )]);
+    assert_eq!(
+        candidates.summary(),
+        [
+            "m.hgl:5:7 name/constant.cycle UNIT-13",
+            "m.hgl:9:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        candidates.report
+    );
+
     // A size that names such a constant is not followed round it.
     let sized = check(&[(
         "m.hgl",

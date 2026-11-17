@@ -499,7 +499,6 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     }
     imports::resolve(&mut program, diagnostics);
     resolve::resolve(&mut program, diagnostics);
-    cycles::check(&program, diagnostics);
     forms::check(&program, diagnostics);
     phases::classify(&mut program);
     read::read(&mut program, diagnostics);
@@ -507,6 +506,9 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
+    // UNIT-13: asked of the typed program, where each call has the
+    // definition it selected.
+    cycles::check(&program, diagnostics);
     program
 }
 

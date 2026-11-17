@@ -229,7 +229,6 @@ It is built in passes:
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
-| Constant cycles | A constant whose value depends on itself, directly or through the declarations its expression names | UNIT-13 | done: see "Constants" below |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
@@ -238,6 +237,7 @@ It is built in passes:
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | in part: each temporal body is classified a graph or a node. What each admits is planned: see "Temporal bodies" below |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
+| Constant cycles | A constant whose value depends on itself, directly or through what working it out reads. It reads the typed program, so it runs last | UNIT-13 | done: see "Constants" below |
 | Tests and eval | Test blocks, `assert`, eval targets and traces | TST-3, TST-4, TST-5, TST-7, TST-8 | done: see "Eval" below. Running a test is the runner's |
 
 `hgl check` says which passes ran: names are resolved and written types
@@ -770,12 +770,13 @@ its module. What is read of it:
 | Its expression | `Module::constants` | Read as a value of that type by a typer with no parameter, so it names no parameter and no local. A call of a temporal function is `call.role` |
 | A read of it | `ExprKind::Constant` | By its name, of its own module or one imported. It is a constant expression (FN-1), so a `const` parameter takes it, and a compile-time constant (GEN-8) |
 | Its value, where a type needs one | `read::constant_value` | A list's size and a generic value argument that name a constant follow it to its value, through the constants it names in turn. Only an `i64` or a `duration` written with literals, constants and `+`, `-`, `*` is followed: it is all that folds with no types |
-| A cycle | `cycles::check` | Each declaration of a module is a node of a graph, with an edge to every declaration of the module it names. A constant in a cycle of that graph depends on itself (`constant.cycle`), whether through another constant, a function its expression calls, or a struct's default. Two refinements keep what is no dependence out: of a temporal and a value definition of one name, a value context names the value one (FN-4); and a function's parameter defaults are nodes of their own, which a call leads to only for the parameters it leaves out (UNIT-8). Modules do not import one another, so a cycle is within one module |
+| A cycle | `cycles::check` | Asked of the typed program, after the values pass. Each constant, function body, parameter default and struct's field defaults is a node of a graph, with an edge to each it reads: a constant named, the definition a call selected (the value one of a pair, FN-4; the candidate of an operator, by name or as a symbol, OPS-2), and the defaults of the parameters a call leaves out (UNIT-8). A constant in a cycle of that graph depends on itself (`constant.cycle`). `Expr::walk` visits every expression of a typed body. Modules do not import one another, so a cycle is within one module |
 
 Not done: the value of a constant of any other type where a type needs
 one; the value of a `switch` label that is a constant, so two labels of
-one value are not seen as that; a dependence through an operator's
-candidate that a symbol selects, which no name leads to.
+one value are not seen as that. The cycle check counts every field
+default of a struct a constant constructs, given or not, and does not
+follow the body of an anonymous function, which is not typed.
 
 ### Value expressions
 
