@@ -1615,6 +1615,12 @@ impl Emitter<'_> {
                 format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Eval(call) => self.eval(function, call),
+            // TST-16: the list a `const fn` is given needs each
+            // publication's instant, which the harness does not record.
+            ExprKind::Publications(_) => {
+                self.unsupported(value.at, "a trace given to a `const fn`");
+                "None".to_string()
+            }
             ExprKind::Trace(cells) => self.trace(function, cells, value.at),
             ExprKind::TraceCompare {
                 left,

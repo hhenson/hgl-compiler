@@ -509,6 +509,11 @@ pub enum ExprKind {
     /// configuration to each `const` one. Its type is a trace of the
     /// target's result, or none for a target with no result (TST-8).
     Eval(Box<Expr>),
+    /// A trace as the value a `const fn` is given (TST-16): "for a
+    /// result type T a `list<tuple<datetime, delta<T>>>`, one tuple for
+    /// each publication, in time order". The expression inside is the
+    /// trace.
+    Publications(Box<Expr>),
     /// A trace written out (TST-5, TST-7): `[7, _, 9]`, dense, or
     /// `[0s: 7, 2s: 9]`, timed.
     Trace(Vec<Cell>),
