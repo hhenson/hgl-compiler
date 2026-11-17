@@ -707,11 +707,12 @@ fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
             "the module has:\n{expected}\nin:\n{reads}"
         );
     }
-    // The provider has the function that runs one once.
+    // The provider has the function that runs one once. Its text is a
+    // file of this repository, whose line ends are the checkout's.
     assert!(
         emitted
             .text("_hgl/_core_native.py")
-            .contains("def constant(function):\n")
+            .contains("def constant(function):")
     );
 }
 

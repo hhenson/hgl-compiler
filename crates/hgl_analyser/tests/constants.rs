@@ -199,6 +199,47 @@ fn a_constant_written_wrong_is_reported() {
     );
 }
 
+/// UNIT-13: a constant is "a compile-time constant where a generic
+/// value argument (GEN-8) ... requires one". Each constant is folded
+/// once, however many name it: thirty that each name the last twice are
+/// thirty folds, and not two to the thirtieth.
+#[test]
+fn a_constant_many_others_name_is_folded_once() {
+    let mut source = String::from("module m\nconst c0: i64 = 1\n");
+    for index in 1..=30 {
+        let last = index - 1;
+        source.push_str(&format!("const c{index}: i64 = c{last} - c{last} + 1\n"));
+    }
+    // Each comes to 1, so the size is 1.
+    source.push_str("const fn sized(values: list<i64, c30>) -> i64 => 1\n");
+    source.push_str("const fn right() -> i64 => sized([1])\n");
+    source.push_str("const fn wrong() -> i64 => sized([1, 2])\n");
+    let checked = check(&[("m.hgl", &source)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:35:34 type/type.mismatch TYPE-10"],
+        "{}",
+        checked.report
+    );
+
+    // A chain longer than is followed is left unevaluated from its far
+    // end, and a constant near its start still has its value.
+    let mut chain = String::from("module m\nconst d0: i64 = 2\n");
+    for index in 1..=40 {
+        chain.push_str(&format!("const d{index}: i64 = d{}\n", index - 1));
+    }
+    chain.push_str("const fn far(values: list<i64, d40>) -> i64 => 1\n");
+    chain.push_str("const fn near(values: list<i64, d3>) -> i64 => 1\n");
+    chain.push_str("const fn uses() -> i64 => far([1]) + near([1])\n");
+    let checked = check(&[("m.hgl", &chain)]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:45:43 type/type.mismatch TYPE-10"],
+        "{}",
+        checked.report
+    );
+}
+
 /// UNIT-13: "its value depends on no constant that depends on it."
 /// `constant.cycle`: "Constant whose value depends on itself; name".
 #[test]
@@ -237,6 +278,20 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
         "{}",
         checked.report
     );
+    // FN-4: of a temporal and a value definition of one name, a
+    // constant's expression calls the value one. The temporal one may
+    // read the constant.
+    let paired = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const answer: i64 = choose()\n",
+            "const fn choose() -> i64 => 1\n",
+            "fn choose() -> i64 => answer\n",
+        ),
+    )]);
+    assert_eq!(paired.summary(), NONE, "{}", paired.report);
+
     // A size that names such a constant is not followed round it.
     let sized = check(&[(
         "m.hgl",

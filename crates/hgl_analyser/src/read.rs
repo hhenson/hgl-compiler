@@ -338,6 +338,9 @@ struct Reader<'a> {
     /// The generic arguments of every call read in the module so far
     /// (GEN-8).
     calls: Vec<CallArguments>,
+    /// The values of the constants the module's types have named
+    /// (UNIT-13).
+    constant_values: ConstantValues,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -378,6 +381,7 @@ impl<'a> Reader<'a> {
             read: HashMap::new(),
             written: Vec::new(),
             calls: Vec::new(),
+            constant_values: ConstantValues::default(),
             diagnostics,
         })
     }
@@ -456,44 +460,69 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
 /// names more, each through the last, is left unevaluated.
 const CONSTANT_DEPTH: usize = 32;
 
+/// What following constants to their values keeps, for one module's
+/// types (UNIT-13).
+#[derive(Default)]
+struct ConstantValues {
+    /// The constants being followed, so that one whose value depends on
+    /// itself, which is reported as that, ends here.
+    following: std::cell::RefCell<Vec<(usize, usize)>>,
+    /// The values worked out, by module and declaration. A constant many
+    /// others name is folded once: `c1 = c0 + c0`, `c2 = c1 + c1` and so
+    /// on would otherwise be folded twice as often at each step.
+    known: std::cell::RefCell<HashMap<(usize, usize), ConstantValue>>,
+    /// Set when a constant was left unevaluated because of where it was
+    /// reached from: inside its own value, or too many constants deep.
+    /// What was worked out through it is then not kept as its value:
+    /// reached another way it may come to one.
+    cut: std::cell::Cell<bool>,
+}
+
 /// What the constant `declaration` of module `module` comes to, as far
 /// as it needs no types (UNIT-13): "a compile-time constant where a
 /// generic value argument (GEN-8) or a `switch` label (CTRL-12) requires
 /// one". Its expression is folded as a size is, and a constant it names
 /// is followed in turn.
 ///
-/// `following` is the constants being followed, so that one whose value
-/// depends on itself, which is reported as that, ends here. A constant
-/// of a type other than `i64` and `duration` is left unevaluated: only
-/// those are folded with no types.
+/// A constant of a type other than `i64` and `duration` is left
+/// unevaluated: only those are folded with no types.
 fn constant_value(
     program: &Program,
     module: usize,
     declaration: usize,
-    following: &std::cell::RefCell<Vec<(usize, usize)>>,
+    values: &ConstantValues,
 ) -> ConstantValue {
+    let key = (module, declaration);
+    if let Some(known) = values.known.borrow().get(&key) {
+        return known.clone();
+    }
     let unit = &program.modules[module];
     let declared = &unit.declarations[declaration];
-    if declared.kind != DeclarationKind::Constant
-        || following.borrow().contains(&(module, declaration))
-        || following.borrow().len() >= CONSTANT_DEPTH
+    if declared.kind != DeclarationKind::Constant {
+        return ConstantValue::Unevaluated;
+    }
+    if values.following.borrow().contains(&key) || values.following.borrow().len() >= CONSTANT_DEPTH
     {
+        values.cut.set(true);
         return ConstantValue::Unevaluated;
     }
     let ty = type_child(&declared.syntax);
     let folded = ty
         .as_ref()
         .is_some_and(|ty| matches!(text_of(ty).as_str(), "i64" | "duration"));
-    let Some(written) = declared
+    let written = declared
         .syntax
         .children()
         .find(|child| Some(child) != ty.as_ref())
-        .filter(|_| folded)
-    else {
+        .filter(|_| folded);
+    let Some(written) = written else {
+        values
+            .known
+            .borrow_mut()
+            .insert(key, ConstantValue::Unevaluated);
         return ConstantValue::Unevaluated;
     };
     let file = unit.files[declared.file].file;
-    following.borrow_mut().push((module, declaration));
     // What a name of the expression stands for: another constant, of
     // this module or one it imports from.
     let name = |used: &SyntaxNode| {
@@ -510,13 +539,22 @@ fn constant_value(
                 module,
                 declarations,
             }) if declarations.len() == 1 => {
-                constant_value(program, *module, declarations[0], following)
+                constant_value(program, *module, declarations[0], values)
             }
             _ => ConstantValue::Unevaluated,
         }
     };
+    // Whether anything under this constant was cut is asked of this
+    // constant alone, and then added to what its caller is asking.
+    let cut_before = values.cut.replace(false);
+    values.following.borrow_mut().push(key);
     let value = fold(&written, &name);
-    following.borrow_mut().pop();
+    values.following.borrow_mut().pop();
+    let cut = values.cut.get();
+    if !cut {
+        values.known.borrow_mut().insert(key, value.clone());
+    }
+    values.cut.set(cut_before || cut);
     value
 }
 
@@ -2266,7 +2304,7 @@ impl Reader<'_> {
                     if self.program.modules[*module].declarations[declaration].kind
                         == DeclarationKind::Constant =>
                 {
-                    constant_value(self.program, *module, declaration, &Default::default())
+                    constant_value(self.program, *module, declaration, &self.constant_values)
                 }
                 _ => return None,
             },
@@ -2313,9 +2351,12 @@ impl Reader<'_> {
                 Some(Binding::Declarations {
                     module,
                     declarations,
-                }) if declarations.len() == 1 => {
-                    constant_value(self.program, *module, declarations[0], &Default::default())
-                }
+                }) if declarations.len() == 1 => constant_value(
+                    self.program,
+                    *module,
+                    declarations[0],
+                    &self.constant_values,
+                ),
                 _ => ConstantValue::Unevaluated,
             }
         };

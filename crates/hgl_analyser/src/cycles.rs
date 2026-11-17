@@ -22,7 +22,7 @@ use hgl_source::FileId;
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::program::{Binding, DeclarationKind, Module, Program};
+use crate::program::{Binding, DeclarationKind, Module, Program, Role};
 use crate::{codes, error};
 
 /// Reports each constant whose value depends on itself
@@ -85,7 +85,20 @@ fn cycles(index: usize, module: &Module, diagnostics: &mut Diagnostics) {
         let Some(from) = owner(used.at.file, used.at.span.start) else {
             continue;
         };
+        // FN-4: a name may have a temporal and a value definition, and
+        // "runtime/value evaluation chooses the value definition". What
+        // a constant's value is worked out through is value evaluation:
+        // a constant, a value function, a default. There the temporal
+        // definition of such a pair is not the one named.
+        let value_context = module.declarations[from].kind.role() != Some(Role::Temporal);
+        let paired = declarations.len() > 1;
         for &to in declarations {
+            if paired
+                && value_context
+                && module.declarations[to].kind.role() == Some(Role::Temporal)
+            {
+                continue;
+            }
             // `update_edge` adds the edge once however often it is named.
             graph.update_edge(nodes[from], nodes[to], ());
         }
