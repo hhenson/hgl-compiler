@@ -292,6 +292,40 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
     )]);
     assert_eq!(paired.summary(), NONE, "{}", paired.report);
 
+    // UNIT-8: a call reads the default of a parameter where it leaves
+    // the parameter out, and of no other. What a default names is a
+    // dependence of the calls that use it.
+    let defaults = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            // Given by position, and by name: the default is not read.
+            "const answer: i64 = choose(1)\n",
+            "const fn choose(value: i64 = answer) -> i64 => value\n",
+            "const named: i64 = pick(value: 1)\n",
+            "const fn pick(value: i64 = named) -> i64 => value\n",
+            // Left out: it is.
+            "const left: i64 = take()\n",
+            "const fn take(value: i64 = left) -> i64 => value\n",
+            "const second: i64 = two(1)\n",
+            "const fn two(first: i64, other: i64 = second) -> i64 => first + other\n",
+            // A default that calls on, with its own argument left out.
+            "const far: i64 = outer(1)\n",
+            "const fn outer(value: i64, more: i64 = inner()) -> i64 => value + more\n",
+            "const fn inner(value: i64 = far) -> i64 => value\n",
+        ),
+    )]);
+    assert_eq!(
+        defaults.summary(),
+        [
+            "m.hgl:6:7 name/constant.cycle UNIT-13",
+            "m.hgl:8:7 name/constant.cycle UNIT-13",
+            "m.hgl:10:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        defaults.report
+    );
+
     // A size that names such a constant is not followed round it.
     let sized = check(&[(
         "m.hgl",
