@@ -17,7 +17,7 @@
 //! This reads the typed program for those calls before any module is
 //! written, since a call in one module asks for an instance that is
 //! written in the declaration's module. It starts from every body that
-//! has no generic parameter of its own, and from every test. The
+//! is not itself written by instance, and from every test. The
 //! analyser gives the body of each instance
 //! ([`Program::instance`]), whose own calls ask for more: the graph
 //! above asks for core's candidate of `+` for `f64`, which core's
@@ -133,10 +133,22 @@ fn requires(body: &Body) -> bool {
     found
 }
 
-/// The generic arguments of a call as an instance's key. `None` where
-/// one of them is not whole: it names a generic parameter, or is not
-/// known.
-fn key(program: &Program, generics: &[GenericArgument]) -> Option<Vec<String>> {
+/// The generic arguments of a call of `declaration` of `module` as an
+/// instance's key. `None` where they are not whole: one of them names
+/// a generic parameter or is not known, or the call does not say what
+/// each generic parameter of the declaration is.
+fn key(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[GenericArgument],
+) -> Option<Vec<String>> {
+    let Some(Detail::Callable(signature)) = program.modules.get(module)?.details.get(declaration)
+    else {
+        return None;
+    };
+    if generics.len() != signature.generics.len() {
+        return None;
+    }
     generics
         .iter()
         .map(|argument| canonical_argument(program, argument))
@@ -146,10 +158,11 @@ fn key(program: &Program, generics: &[GenericArgument]) -> Option<Vec<String>> {
 impl Instances {
     /// The instances `program` asks for.
     ///
-    /// A generic body asks with its own generic parameters, which says
-    /// nothing until that body is an instance itself: so the search
-    /// starts from the bodies with none, and from the tests, and goes
-    /// on through each instance it finds. It ends: an instance is
+    /// A body that is written by instance asks with its own generic
+    /// parameters, which says nothing until it is an instance itself:
+    /// so the search starts from every other body, and from the tests,
+    /// and goes on through each instance it finds. A call whose
+    /// arguments are not whole asks for nothing. It ends: an instance is
     /// found once, and the analyser gives up a type that grows past
     /// its bound, which is then not whole.
     pub(crate) fn of(program: &Program) -> Instances {
@@ -168,7 +181,13 @@ impl Instances {
         let mut waiting: VecDeque<Asked> = VecDeque::new();
         for (index, module) in program.modules.iter().enumerate() {
             for (declaration, body) in module.bodies.iter().enumerate() {
-                if let (Some(body), false) = (body, generic(program, index, declaration)) {
+                // A body that is written by instance asks through its
+                // instances. Every other body is written as it is, a
+                // value function with generic parameters among them,
+                // and a call in it may name whole arguments: the
+                // `twice(1)` of `const fn pair<T>(value: T) -> i64`.
+                let own = instances.instanced(program, index, declaration);
+                if let (Some(body), false) = (body, own) {
                     waiting.extend(instances.asked(program, &body.statements));
                 }
             }
@@ -183,7 +202,7 @@ impl Instances {
             }
         }
         while let Some(next) = waiting.pop_front() {
-            let Some(key) = key(program, &next.generics) else {
+            let Some(key) = key(program, (next.module, next.declaration), &next.generics) else {
                 continue;
             };
             let found = instances.declared(next.module, next.declaration);
@@ -308,7 +327,7 @@ impl Instances {
         (module, declaration): (usize, usize),
         generics: &[GenericArgument],
     ) -> Option<&Instance> {
-        let key = key(program, generics)?;
+        let key = key(program, (module, declaration), generics)?;
         self.declared(module, declaration)
             .iter()
             .find(|instance| instance.key == key)

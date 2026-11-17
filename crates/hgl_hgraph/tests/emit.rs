@@ -1835,6 +1835,10 @@ const VALUE_GENERICS: &str = concat!(
     "const fn outer<U>(value: U) -> U requires join(U, U) -> U => twice(twice(value))\n",
     // One with no requirement.
     "const fn same<T>(value: T) -> T => value\n",
+    // One with no requirement of its own, which is written once, and
+    // calls one that requires with whole arguments: nothing else asks
+    // for `sum` of two `str`.
+    "const fn paired<T>(value: T) -> str => sum(\"a\", \"b\")\n",
     "\n",
     "const hundred: i64 = sum(40, 60)\n",
     "\n",
@@ -1850,6 +1854,7 @@ const VALUE_GENERICS: &str = concat!(
     "    assert sum(1.5, 2.0) == 3.5\n",
     "    assert outer(1) == 121\n",
     "    assert same(\"x\") == \"x\"\n",
+    "    assert paired(1) == \"ab\"\n",
     "    assert hundred == 100\n",
     "    assert twice([2]) == [22]\n",
     "    assert eval(joined(value: [1, 2])) == [11, 22]\n",
@@ -1901,8 +1906,17 @@ fn a_value_function_that_requires_is_written_for_each_call() {
             "def _inst_outer__i64(value):\n",
             "    return _inst_twice__i64(value=_inst_twice__i64(value=value))\n",
         ),
-        // No requirement: one function.
+        // No requirement: one function. A call in it with whole
+        // arguments names its instance, which nothing else asks for.
         "def same(value):\n",
+        concat!(
+            "def paired(value):\n",
+            "    return _inst_sum__str(a=\"a\", b=\"b\")\n",
+        ),
+        concat!(
+            "def _inst_sum__str(a, b):\n",
+            "    return _core.add__str_str(lhs=a, rhs=b)\n",
+        ),
         // Where an instance is called.
         "    return _inst_sum__i64(a=40, b=60)\n",
         "    return _inst_twice__i64(value=value.value)\n",

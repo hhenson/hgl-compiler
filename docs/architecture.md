@@ -1366,10 +1366,10 @@ temporal function or candidate with generic parameters is written once
 for each set of generic arguments it is called with (GEN-2). Before any
 module is written the target reads the typed program for those calls
 (`instances.rs`): a call in one module asks for an instance that is
-written in the declaration's module. It starts from the bodies with no
-generic parameter and from the tests, asks the analyser for each
-instance (`Program::instance`), and goes on through the calls of each
-instance it is given. A value function with generic parameters is
+written in the declaration's module. It starts from every body that
+is not itself written by instance and from the tests, asks the analyser
+for each instance (`Program::instance`), and goes on through the calls
+of each instance it is given. A value function with generic parameters is
 written once where it can be, as Python takes a value of any type. It
 is written by instance too where its body calls an operation the
 declaration requires, or hands a requirement on to what it calls: which
