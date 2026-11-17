@@ -380,6 +380,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-15 | runner | done | When a run succeeds; identity, kind and outcome of each case. A test is run by the executor the run is given, and is not run with none |
 | TST-15 | transpiler | partial | hgraph: a test is named `module.path::name`, and one given to the host has an outcome: passed, failed with the statement that failed, or not run with the reason. Left: the tests that need a form the target does not write yet, which are not run |
 | TST-16 | analyser | partial | A trace given to a `const fn`, an eval or a `let` bound to one, is a `list<tuple<datetime, delta<T>>>` there: it is held to the parameter's type and says what a generic parameter is. Left: a trace written out given to a `const fn`, which is read as the sequence it is written as; a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type |
+| TST-16 | transpiler | partial | hgraph: a dense trace given to a `const fn` is the list of its publications, each with its instant, the run's start plus its position in smallest steps. Left: a timed trace, which the target does not write |
 | TST-16 | runner | planned | The recorded trace as that value |
 
 ## Program execution

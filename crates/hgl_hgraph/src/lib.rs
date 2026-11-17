@@ -35,6 +35,7 @@
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
 //! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
+//! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.
 

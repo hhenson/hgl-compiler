@@ -1633,11 +1633,13 @@ impl Emitter<'_> {
             }
             ExprKind::Delta { arguments } => self.delta(function, value, arguments),
             ExprKind::Eval(call) => self.eval(function, call),
-            // TST-16: the list a `const fn` is given needs each
-            // publication's instant, which the harness does not record.
-            ExprKind::Publications(_) => {
-                self.unsupported(value.at, "a trace given to a `const fn`");
-                "None".to_string()
+            // TST-16: "A trace given to a `const fn` is an ordinary
+            // value there: ... a `list<tuple<datetime, delta<T>>>`, one
+            // tuple for each publication". The harness makes it of the
+            // dense trace an eval gives.
+            ExprKind::Publications(trace) => {
+                let trace = self.expression(function, trace);
+                format!("_harness.publications({trace})")
             }
             ExprKind::Trace(cells) => self.trace(function, cells, value.at),
             ExprKind::TraceCompare {

@@ -2656,6 +2656,78 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
     }
 }
 
+/// A trace given to a `const fn`.
+const GIVEN: &str = concat!(
+    "module demo.given\n",
+    "\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return delta_value(value) }\n",
+    "}\n",
+    "\n",
+    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+    "    var count = 0\n",
+    "    for tick in seen { count += 1 }\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "const fn total(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+    "    var sum = 0\n",
+    "    for tick in seen { sum += tick[1] }\n",
+    "    return sum\n",
+    "}\n",
+    "\n",
+    // The instants are in time order, a smallest step for each
+    // position apart.
+    "const fn ordered(seen: list<tuple<datetime, i64>>) -> bool => seen[0][0] < seen[1][0]\n",
+    "\n",
+    "test given {\n",
+    "    assert ticks(eval(pass, value: [7, _, 7, 9])) == 3\n",
+    "    let seen = eval(pass, value: [_, 1, _, 2])\n",
+    "    assert total(seen) == 3\n",
+    "    assert ordered(seen)\n",
+    "    assert ticks(eval(pass, value: [_, _])) == 0\n",
+    "}\n",
+);
+
+/// A position with no publication gives a `const fn` no tuple.
+const GIVEN_FAILS: &str = concat!(
+    "module demo.given.fails\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return delta_value(value) }\n",
+    "}\n",
+    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+    "    var count = 0\n",
+    "    for tick in seen { count += 1 }\n",
+    "    return count\n",
+    "}\n",
+    "test silence_counted { assert ticks(eval(pass, value: [7, _, 7])) == 3 }\n",
+);
+
+/// TST-16: "A trace given to a `const fn` is an ordinary value there:
+/// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple
+/// for each publication, in time order ... Nothing published is no
+/// entry: a dense trace's `_` gives none ... The instant of a dense
+/// trace's position i is the run's start plus i smallest steps".
+///
+/// The harness makes the list of the dense trace an eval gives.
+#[test]
+fn a_trace_given_to_a_const_fn_is_its_publications() {
+    let emitted = emit(&[("given.hgl", GIVEN)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_given/__init__.py");
+    for expected in [
+        // `pass` is a word of Python's, and is written `pass_`.
+        "ticks(seen=_harness.publications(_harness.evaluate(pass_, value=[7, None, 7, 9])))",
+        "    seen = _harness.evaluate(pass_, value=[None, 1, None, 2])\n",
+        "total(seen=_harness.publications(seen))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2853,6 +2925,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("compare.hgl", COMPARE));
     files.push(("stops.hgl", STOPS));
     files.push(("sets.hgl", SETS));
+    files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2873,7 +2946,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        45,
+        46,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, and one of each demo's"
     );
@@ -2906,6 +2979,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("elements.hgl", ELEMENT_FAILS));
     files.push(("stops.hgl", STOP_FAILS));
     files.push(("sets.hgl", SET_FAILS));
+    files.push(("given.hgl", GIVEN_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -2928,6 +3002,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("removed_is_not_added").0,
         emitted.test("one_more").0,
         emitted.test("removed_first").0,
+        emitted.test("silence_counted").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -2974,6 +3049,9 @@ fn a_failure_names_the_statement_that_failed() {
             "failed sets.hgl:12:5 the assertion does not hold",
             // EXPR-13: a delta's properties are evaluated as written.
             "failed sets.hgl:16:26 HglError: numeric.division_by_zero: a division by zero",
+            // TST-16: a `_` of a dense trace gives a `const fn` no
+            // tuple, so two publications are counted, and not three.
+            "failed given.hgl:10:24 the assertion does not hold",
         ]
     );
 

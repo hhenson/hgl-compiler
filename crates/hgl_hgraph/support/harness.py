@@ -3,7 +3,18 @@
 Written by the hgl compiler beside the modules it generates.
 """
 
+import datetime as _datetime
+
 from hgraph.test import eval_node
+
+# Where an eval's run starts, and how far apart two of its cycles are
+# (core's CRUN-3): "The earliest start is one smallest step after
+# `1970-01-01T00:00:00Z`", and the smallest step is a microsecond. They
+# are hgraph's own `MIN_ST` and `MIN_TD`, which `eval_node` runs from and
+# by. An instant is a `datetime` in UTC that names no zone, as hgraph has
+# them.
+_SMALLEST_STEP = _datetime.timedelta(microseconds=1)
+_EARLIEST_START = _datetime.datetime(1970, 1, 1) + _SMALLEST_STEP
 
 
 def evaluate(target, /, **arguments):
@@ -25,6 +36,21 @@ def evaluate(target, /, **arguments):
     while result and result[-1] is None:
         result.pop()
     return result
+
+
+def publications(trace):
+    """What a `const fn` is given for a dense trace (the language's TST-16).
+
+    A list with a tuple for each publication, in time order: its instant,
+    and what was published then. Position i of a dense trace is the run's
+    start plus i smallest steps (TST-6), and a position with no
+    publication gives no tuple.
+    """
+    return [
+        (_EARLIEST_START + position * _SMALLEST_STEP, published)
+        for position, published in enumerate(trace)
+        if published is not None
+    ]
 
 
 def same(left, right):

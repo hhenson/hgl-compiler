@@ -1324,6 +1324,7 @@ only where the program reaches it, at core's source.
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
+| A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
 | A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
 | `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. The properties are given by name in the order they are written, so that they are evaluated in it (EXPR-13), and one left out is an empty `_py.frozenset()` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
@@ -1342,6 +1343,10 @@ traces (TST-4): cell by cell, with a `None` at the end of either adding
 nothing. Python's `==` is not used: hgraph's set delta has `Removed(1)`
 equal to `1`, so a delta that removed an element would equal one that
 added it. `same` compares what each delta added and what each removed.
+`publications` makes of a dense trace the list a `const fn` is given
+(TST-16): position i is at the earliest start plus i smallest steps
+(core's CRUN-3), which are hgraph's own `MIN_ST` and `MIN_TD`, and an
+instant is a `datetime` in UTC that names no zone, as hgraph has them.
 
 Reported as not written yet (`target.unsupported`): as the type of an
 input, an output or configuration, any but the four scalars above, an
