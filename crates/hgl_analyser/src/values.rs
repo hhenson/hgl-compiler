@@ -4405,9 +4405,10 @@ impl<'a> Typer<'a> {
     ///
     /// A value that holds a trace at any depth, `[seen]`, is held to
     /// the same: wrapping a trace does not take it where it may not go.
-    /// What a `const fn` is given for a trace is proposed (TST-16), so
-    /// there the argument is neither converted nor held to the
-    /// parameter's type.
+    /// A trace a `const fn` is given is the list of its publications
+    /// there (TST-16), and is held to the parameter's type where the
+    /// argument is read: see `publications`. A value that holds one,
+    /// `[seen]`, is given as it is and not held to the parameter's type.
     fn traces_given(&mut self, kind: &ExprKind, evaluating: bool) {
         let ExprKind::Call {
             callee, arguments, ..
@@ -6036,6 +6037,17 @@ impl<'a> Typer<'a> {
                 style: None,
             }
         };
+        // TST-16: "A trace given to a `const fn` is an ordinary value
+        // there". Not in the call an eval stands for: a `const fn` that
+        // is an eval's target is lifted (FN-4), and its parameters take
+        // traces as any target's do (TST-5).
+        let listed = !evaluating
+            && matches!(
+                program.modules[module].declarations[declaration]
+                    .kind
+                    .role(),
+                Some(Role::Value)
+            );
         let generics = &signature.generics;
         let packed = generics
             .iter()
@@ -6075,6 +6087,7 @@ impl<'a> Typer<'a> {
                     ty: taken(parameter, known(&parameter.ty)),
                     required: required(parameter),
                     pack: parameter.pack,
+                    listed,
                 })
                 .collect();
             let arguments = self.bind(name, list, &slots, Takes::Parameters);
@@ -6126,6 +6139,7 @@ impl<'a> Typer<'a> {
                 ty: Type::Unknown,
                 required: required(parameter),
                 pack: parameter.pack,
+                listed,
             })
             .collect();
         let patterns: Vec<Type> = signature
@@ -6570,17 +6584,23 @@ impl<'a> Typer<'a> {
                 Type::Trace { .. } => &trace,
                 _ => &unknown,
             };
+            // TST-16: what a trace is where a `const fn` is given it
+            // says what the parameter is, as any value's type does.
+            let listed = slots[index].listed;
+            let as_given = |value: hir::Expr| {
+                if listed { publications(value) } else { value }
+            };
             if ordered {
                 if self.may_reread() {
                     let mark = self.mark();
-                    let value = self.expression(node, Some(read_as));
+                    let value = as_given(self.expression(node, Some(read_as)));
                     learn(self, &value.ty, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
-            let value = self.expression(node, Some(read_as));
+            let value = as_given(self.expression(node, Some(read_as)));
             learn(self, &value.ty, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
@@ -8900,6 +8920,7 @@ impl<'a> Typer<'a> {
                     required: !member.has_default && !is_optional(&ty),
                     ty: placed(ty, &own),
                     pack: None,
+                    listed: false,
                 }
             })
             .collect();
@@ -9168,6 +9189,11 @@ impl<'a> Typer<'a> {
         let value = match slot {
             Some((slot, traced)) => {
                 let value = self.expression(node, Some(&slot.ty));
+                let value = if slot.listed {
+                    publications(value)
+                } else {
+                    value
+                };
                 if !traced && holds_trace(&value.ty) {
                     value
                 } else {
@@ -11958,6 +11984,9 @@ struct Slot<'a> {
     required: bool,
     /// The pack it is, when it is one (FN-8).
     pack: Option<Pack>,
+    /// True for a parameter of a `const fn`: a trace given to it is the
+    /// list of its publications there (TST-16).
+    listed: bool,
 }
 
 /// The places a call's arguments are given to, where their types name
@@ -12035,6 +12064,32 @@ fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
     // order.
     order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
     order
+}
+
+/// TST-16: "A trace given to a `const fn` is an ordinary value there:
+/// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple
+/// for each publication, in time order."
+///
+/// A value that is a trace becomes that list. A trace's cell is already
+/// the `delta<T>` of what it is of (TST-5). Any other value, one that
+/// holds a trace among them, is as it was.
+fn publications(value: hir::Expr) -> hir::Expr {
+    let Type::Trace { cell, .. } = &value.ty else {
+        return value;
+    };
+    let ty = Type::List {
+        element: Box::new(Type::Tuple(vec![
+            Type::Scalar(Scalar::Datetime),
+            (**cell).clone(),
+        ])),
+        size: None,
+    };
+    let at = value.at;
+    hir::Expr {
+        kind: ExprKind::Publications(Box::new(value)),
+        ty,
+        at,
+    }
 }
 
 /// True when `ty` is a trace or holds one at any depth: the

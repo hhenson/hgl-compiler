@@ -31,7 +31,7 @@ const TARGETS: &str = concat!(
     "}\n",
     "fn same<T>(lhs: T, rhs: T) -> T requires add_(T, T) -> T => lhs + rhs\n",
     "const fn doubled(value: i64) -> i64 => value * 2\n",
-    "const fn close(seen: list<i64?>, wanted: list<i64?>) -> bool => true\n",
+    "const fn close(seen: list<tuple<datetime, i64>>, wanted: list<i64?>) -> bool => true\n",
     "const fn timed(seen: dict<duration, i64>) -> bool => true\n",
     "const fn maybe(value: i64?) -> i64? => value\n",
     "struct Kept {\n",
@@ -239,22 +239,92 @@ fn an_eval_written_wrong_is_reported() {
     );
 }
 
+/// TST-16: "A trace given to a `const fn` is an ordinary value there:
+/// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple
+/// for each publication, in time order ... a `delta<T>` (TYPE-16), which
+/// is T itself for a scalar ... The parameter is written with that type,
+/// and what the function returns is ordinary data."
+#[test]
+fn a_const_fn_is_given_a_trace_as_the_list_of_its_publications() {
+    let checked = module(concat!(
+        "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+        "    var count = 0\n",
+        "    for tick in seen { count += 1 }\n",
+        "    return count\n",
+        "}\n",
+        "const fn tally<T>(seen: list<tuple<datetime, T>>) -> i64 => 0\n",
+        "const fn first<T>(seen: list<tuple<datetime, T>>, otherwise: T) -> T => otherwise\n",
+        "const fn changes(seen: list<tuple<datetime, delta<set<i64>>>>) -> i64 => 0\n",
+        "const fn wholes(seen: list<tuple<datetime, set<i64>>>) -> i64 => 0\n",
+        "const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 => 0\n",
+        "test counted {\n",
+        // The specification's own case; and a trace bound first.
+        "    assert ticks(eval(pass, value: [7, _, 7, 9])) == 3\n",
+        "    let seen = eval(pass, value: [0s: 7, 2s: 9])\n",
+        "    let twice = ticks(seen)\n",
+        // What the trace is of says what a generic parameter is.
+        "    assert tally(seen) == 0\n",
+        "    let one: i64 = first(seen, 1)\n",
+        // A structural result is given as its deltas; a nullable
+        // scalar's as the optional that holds what was published.
+        "    let members = eval(relay, enabled: [true], members: [delta<set<i64>>(added: [1])])\n",
+        "    assert changes(members) == 0\n",
+        "    assert nulls(eval(maybe, value: [1, null])) == 0\n",
+        // Rejected: a parameter of another type; and a trace of `i64`
+        // where the place has said that `T` is `str`.
+        "    assert wholes(members) == 0\n",
+        "    assert ticks(members) == 0\n",
+        "    let word: str = first(seen, \"x\")\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:50:19 type/type.mismatch EXPR-5",
+            "m.hgl:51:18 type/type.mismatch EXPR-5",
+            "m.hgl:52:27 type/type.mismatch EXPR-5",
+        ]
+    );
+    // `ticks(seen)`: the argument is the trace's publications, a
+    // `list<tuple<datetime, i64>>`, around the trace itself.
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body.statements[2]
+    else {
+        panic!("the third statement is the `let`");
+    };
+    let ExprKind::Call { arguments, .. } = &value.kind else {
+        panic!("its value is the call of `ticks`");
+    };
+    let given = &arguments[0].value;
+    let ExprKind::Publications(trace) = &given.kind else {
+        panic!("the argument is the trace's publications");
+    };
+    assert_eq!(given.ty.to_string(), "list<tuple<datetime, i64>>");
+    assert_eq!(trace.ty.to_string(), "trace of i64");
+}
+
 /// TST-3: a trace is "given to a `const fn` as an argument. It is not a
-/// temporal argument outside an eval, is stored in no field". What a
-/// `const fn` is given for one is proposed (TST-16), so the argument is
-/// not held to the parameter's type. A value that holds a trace is held
-/// to the same as the trace is.
+/// temporal argument outside an eval, is stored in no field". TST-16:
+/// there it is "a `list<tuple<datetime, delta<T>>>`, one tuple for each
+/// publication", whichever style it was written in, and "the parameter
+/// is written with that type". A value that holds a trace is held to
+/// the same as the trace is.
 #[test]
 fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
     let checked = module(concat!(
         "test given {\n",
         "    let seen = eval(pass, value: [7, _, 9])\n",
         "    let spaced = eval(pass, value: [0s: 7, 2s: 9])\n",
-        // To a `const fn`, of either style and inside a sequence:
-        // accepted, and not judged against the parameter.
+        // To a `const fn`, of either style, bound or not: the list of
+        // its publications. One whose parameter is another type.
         "    assert close(seen, [7, null, 9])\n",
         "    assert close(eval(pass, value: [1]), [1])\n",
-        "    assert timed(spaced)\n",
+        "    assert close(spaced, [])\n",
         "    assert timed(seen)\n",
         "    let listed = [seen]\n",
         // A field; a temporal function; and each where the place is
@@ -272,6 +342,9 @@ fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
     assert_eq!(
         checked.summary(),
         [
+            // `timed(seen)`: a `list<tuple<datetime, i64>>` where a
+            // `dict<duration, i64>` is expected.
+            "m.hgl:37:18 type/type.mismatch EXPR-5",
             "m.hgl:39:29 type/trace.escape TST-3",
             "m.hgl:40:22 type/trace.escape TST-3",
             "m.hgl:41:30 type/trace.escape TST-3",
