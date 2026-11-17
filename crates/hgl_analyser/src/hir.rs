@@ -320,6 +320,14 @@ pub struct Expr {
 pub enum ExprKind {
     /// A literal.
     Literal(Value),
+    /// A constant of a module read by its name (UNIT-13): "The constant
+    /// has that one value wherever it is read".
+    Constant {
+        /// The position of its module in `Program::modules`.
+        module: usize,
+        /// Its position in that module's declarations.
+        declaration: usize,
+    },
     /// An operation on an endpoint (TIME-9): `valid(value)`,
     /// `modified()`, `invalidate(out)`.
     Endpoint {

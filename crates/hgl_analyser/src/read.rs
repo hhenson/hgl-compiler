@@ -413,7 +413,7 @@ pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
 }
 
 /// The first child node of `node` that is a type.
-fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
+pub(crate) fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.children().find(|child| is_type(child.kind()))
 }
 
@@ -677,6 +677,11 @@ impl Reader<'_> {
             }
             SyntaxKind::StructDecl => Detail::Struct(self.structure(node)),
             SyntaxKind::NativeTypeDecl => Detail::Native(self.native_type(node, &declaration.name)),
+            // UNIT-13: "A constant, `const name: T = expression`, names
+            // one ordinary value of the type T."
+            SyntaxKind::ConstantDecl => Detail::Constant(
+                type_child(node).map_or(Type::Unknown, |written| self.outermost(&written)),
+            ),
             _ => Detail::Plain,
         };
         self.in_signature = false;
@@ -1055,6 +1060,9 @@ impl Reader<'_> {
                 }
             }
             SyntaxKind::StructMember => Position::FIELD,
+            // UNIT-13: a constant "names one ordinary value of the type
+            // T".
+            SyntaxKind::ConstantDecl => Position::value("the type of a constant", "UNIT-13"),
             // NATIVE-6: a property is "a name and an ordinary value
             // type".
             SyntaxKind::NativeProperty => {

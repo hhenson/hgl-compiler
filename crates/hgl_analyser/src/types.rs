@@ -567,6 +567,8 @@ pub enum Detail {
     Enum(EnumType),
     /// A native type: its read-only properties (NATIVE-6).
     Native(NativeType),
+    /// A constant: the type it is written with (UNIT-13).
+    Constant(Type),
     /// An enum, before its members are read, and any other declaration
     /// of which nothing is a written type.
     Plain,

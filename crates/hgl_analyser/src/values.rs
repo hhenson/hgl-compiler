@@ -267,6 +267,32 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             };
             defaults.push(read);
         }
+        // UNIT-13: the value each constant is written with, read as a
+        // value of the constant's type with no parameter in scope.
+        let constants: Vec<Option<Expr>> = module
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(position, declaration)| {
+                let Some(Detail::Constant(ty)) = module.details.get(position) else {
+                    return None;
+                };
+                Typer::new(
+                    program,
+                    module,
+                    declaration,
+                    &empty,
+                    Tables {
+                        bindings: &bindings,
+                        written: &written,
+                        calls: &calls,
+                    },
+                    diagnostics,
+                )
+                .constant(ty)
+            })
+            .collect();
+        program.modules[index].constants = constants;
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
         program.modules[index].run_body = run_body;
@@ -602,6 +628,22 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The value a constant is written with, read as a value of
+    /// `expected`, the type it is written with (UNIT-13): "Its
+    /// expression is a const expression (EXPR-5) checked against T ...
+    /// It reads no parameter, local, temporal value, or capability."
+    /// The typer is made with no parameter, so none is in scope.
+    fn constant(mut self, expected: &Type) -> Option<Expr> {
+        let syntax = self.declaration.syntax.clone();
+        // The expression is what follows the type: the one child that
+        // is no type.
+        let ty = crate::read::type_child(&syntax);
+        let written = syntax.children().find(|child| Some(child) != ty.as_ref())?;
+        let value = self.expression(&written, Some(expected));
+        let place = format!("the constant `{}`", self.declaration.name);
+        Some(self.fit(value, expected, &place))
     }
 
     /// The default of each parameter of the declaration (UNIT-8), read
@@ -2874,9 +2916,10 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// A name: a parameter, a local, or a generic value parameter. Any
-    /// other, a function or a type or a name left for the prelude, is
-    /// for the pass that reads calls and members.
+    /// A name: a parameter, a local, a constant of a module, or a
+    /// generic value parameter. Any other, a function or a type or a
+    /// name left for the prelude, is for the pass that reads calls and
+    /// members.
     fn name(&mut self, node: &SyntaxNode) -> Expr {
         let at = self.at(node);
         let unread = Expr {
@@ -2890,6 +2933,21 @@ impl<'a> Typer<'a> {
         let Some(name) = name_token(node) else {
             return unread;
         };
+        // UNIT-13: "A constant is read by its name wherever an ordinary
+        // value is." Its type is the one it is written with.
+        if let Some((module, &[declaration])) = self.declarations(&name)
+            && let Some(Detail::Constant(ty)) =
+                self.program.modules[module].details.get(declaration)
+        {
+            return Expr {
+                kind: ExprKind::Constant {
+                    module,
+                    declaration,
+                },
+                ty: ty.clone(),
+                at,
+            };
+        }
         let Some(Binding::Local {
             at: declared,
             kind: LocalKind::GenericParameter,
@@ -4664,13 +4722,14 @@ impl<'a> Typer<'a> {
     }
 
     /// True when `value` is a constant expression (FN-1): "of literals,
-    /// enum members, generic value parameters, and the enclosing
-    /// function's own `const` parameters."
+    /// enum members, constants (UNIT-13), generic value parameters, and
+    /// the enclosing function's own `const` parameters."
     fn is_fixed(&self, value: &Expr) -> bool {
         match &value.kind {
-            ExprKind::Literal(_) | ExprKind::EnumMember { .. } | ExprKind::GenericValue { .. } => {
-                true
-            }
+            ExprKind::Literal(_)
+            | ExprKind::EnumMember { .. }
+            | ExprKind::GenericValue { .. }
+            | ExprKind::Constant { .. } => true,
             // A parameter's local has its position among the parameters.
             ExprKind::Local(local) => self
                 .signature
@@ -7699,8 +7758,8 @@ impl<'a> Typer<'a> {
 
     /// True when an expression is a compile-time constant (GEN-8): "a
     /// literal, an enum member however it is written (TYPE-7), `Zero.nan`
-    /// or `.nan`, a generic value parameter in scope, or a constant
-    /// expression of those."
+    /// or `.nan`, a constant (UNIT-13), a generic value parameter in
+    /// scope, or a constant expression of those."
     fn is_compile_time(&self, node: &SyntaxNode) -> bool {
         match node.kind() {
             SyntaxKind::Literal | SyntaxKind::ImpliedMember => true,
@@ -7724,10 +7783,20 @@ impl<'a> Typer<'a> {
                         kind: LocalKind::GenericParameter,
                         ..
                     })
-                )
+                ) || self.names_constant(&name)
             }),
             _ => false,
         }
+    }
+
+    /// True when `name` is bound to a constant of a module (UNIT-13).
+    fn names_constant(&self, name: &SyntaxToken) -> bool {
+        matches!(
+            self.declarations(name),
+            Some((module, &[declaration]))
+                if self.program.modules[module].declarations[declaration].kind
+                    == DeclarationKind::Constant
+        )
     }
 
     /// The value candidates of `operator`, wherever they are declared.
