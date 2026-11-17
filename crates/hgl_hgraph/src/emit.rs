@@ -15,8 +15,8 @@
 use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
-    Argument, BinaryOperator, Body, Callee, Cell, EndpointOperation, ErrorPart, Expr, ExprKind,
-    Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
+    Argument, BinaryOperator, Body, Callee, Case, Cell, EndpointOperation, ErrorPart, Expr,
+    ExprKind, Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
@@ -152,6 +152,16 @@ enum Mode {
     Graph,
     /// A named test: ordinary values, and evals.
     Test,
+}
+
+impl Mode {
+    /// True where the statements are run as they are written, one
+    /// after another: in a value function and in a node's hooks. A
+    /// graph and a test are composition, where a loop and a `switch`
+    /// say what is wired (CTRL-15).
+    fn runs(self) -> bool {
+        matches!(self, Mode::Value | Mode::Node | Mode::Lifecycle)
+    }
 }
 
 /// The function a body belongs to.
@@ -1215,7 +1225,112 @@ impl Emitter<'_> {
                 let value = self.expression(function, value);
                 self.line(depth, &value);
             }
+            // CTRL-12: "`while condition { ... }` repeats its body while
+            // the condition holds". The form with no condition is a
+            // source's.
+            Stmt::While {
+                condition: Some(condition),
+                body,
+                ..
+            } if function.mode.runs() => {
+                let condition = self.expression(function, condition);
+                self.line(depth, &format!("while {condition}:"));
+                self.block(function, body, depth + 1);
+            }
+            Stmt::For {
+                names,
+                sequence,
+                body,
+                at,
+            } if function.mode.runs() => {
+                self.for_loop(function, (names, sequence), body, *at, depth);
+            }
+            Stmt::Switch {
+                selector,
+                cases,
+                default,
+                ..
+            } if function.mode.runs() => {
+                self.switch(function, selector, cases, default.as_deref(), depth);
+            }
             other => self.unsupported(at_of(other, function.locals), "this statement"),
+        }
+    }
+
+    /// CTRL-12: "`for item in items` runs its body for each element of
+    /// a list, in index order, or of a set, and `for key, value in
+    /// entries` for each key and value of a dictionary."
+    ///
+    /// Python's `for` reads what it loops over once, where the loop
+    /// begins: a `var` the body assigns is not what is looped over.
+    fn for_loop(
+        &mut self,
+        function: &Function,
+        (names, sequence): (&[usize], &Expr),
+        body: &[Stmt],
+        at: Location,
+        depth: usize,
+    ) {
+        let over = self.expression(function, sequence);
+        let bound: Vec<String> = names
+            .iter()
+            .map(|&local| self.place(function, local))
+            .collect();
+        match (&sequence.ty, bound.as_slice()) {
+            (Type::List { .. } | Type::Set(_), [item]) => {
+                self.line(depth, &format!("for {item} in {over}:"));
+            }
+            (Type::Dict { .. }, [key, value]) => {
+                self.line(depth, &format!("for {key}, {value} in {over}.items():"));
+            }
+            _ => {
+                self.unsupported(at, "this loop");
+                return;
+            }
+        }
+        self.block(function, body, depth + 1);
+    }
+
+    /// CTRL-6: "Switch labels are typed source constants, compared by
+    /// resolved value ... There is no fallthrough. An unmatched
+    /// selector uses default or fails." CTRL-12: "A `switch` there
+    /// selects on a `bool`, `i64`, `str`, or enum value."
+    ///
+    /// The selector is evaluated once and held under a name of the
+    /// target's own, `_selected_N`, N the depth the `switch` is written
+    /// at: one nested in a case has another. Each case is an `if` on
+    /// it, and what no case matches falls to the `default`, or fails in
+    /// the provider.
+    fn switch(
+        &mut self,
+        function: &Function,
+        selector: &Expr,
+        cases: &[Case],
+        default: Option<&[Stmt]>,
+        depth: usize,
+    ) {
+        let selected = format!("_selected_{depth}");
+        let selector = self.expression(function, selector);
+        self.line(depth, &format!("{selected} = {selector}"));
+        for (index, case) in cases.iter().enumerate() {
+            let label = self.expression(function, &case.label);
+            let word = if index == 0 { "if" } else { "elif" };
+            self.line(depth, &format!("{word} {selected} == {label}:"));
+            self.block(function, &case.body, depth + 1);
+        }
+        // With no case there is no `if` for an `else` to follow.
+        let inner = if cases.is_empty() {
+            depth
+        } else {
+            self.line(depth, "else:");
+            depth + 1
+        };
+        match default {
+            Some(default) => self.block(function, default, inner),
+            None => {
+                self.natives = true;
+                self.line(inner, &format!("_core.unmatched({selected})"));
+            }
         }
     }
 
@@ -1412,10 +1527,17 @@ impl Emitter<'_> {
                     .collect();
                 // EXPR-9: "The use site and expected type constrain
                 // element types, keys, ordering, uniqueness": a
-                // sequence that is a set is one in Python too.
-                let is_set = matches!(&value.ty, Type::Set(_))
-                    || matches!(&value.ty, Type::Nullable(inner) if matches!(**inner, Type::Set(_)));
-                if is_set {
+                // sequence that is a set is one in Python too, and
+                // "Empty brackets have no entries": `[]` where a
+                // dictionary is expected is an empty one.
+                let made = match &value.ty {
+                    Type::Nullable(inner) => inner,
+                    ty => ty,
+                };
+                let is_set = matches!(made, Type::Set(_));
+                if matches!(made, Type::Dict { .. }) {
+                    "{}".to_string()
+                } else if is_set {
                     format!(
                         "_py.frozenset(({}{}))",
                         entries.join(", "),
@@ -1424,6 +1546,19 @@ impl Emitter<'_> {
                 } else {
                     format!("[{}]", entries.join(", "))
                 }
+            }
+            // EXPR-9: `[key: value, ...]`, a dictionary. Python evaluates
+            // each key and then its value, in the order written.
+            ExprKind::Pairs(entries) => {
+                let entries: Vec<String> = entries
+                    .iter()
+                    .map(|(key, entry)| {
+                        let key = self.expression(function, key);
+                        let entry = self.expression(function, entry);
+                        format!("{key}: {entry}")
+                    })
+                    .collect();
+                format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Eval(call) => self.eval(function, call),
             ExprKind::Trace(cells) => self.trace(function, cells, value.at),

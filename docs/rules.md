@@ -272,7 +272,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-4 | analyser | partial | A branch's locals do not escape. A `var` assigned under a temporal condition has a binding before the `if`, or every branch assigns it (with CTRL-14). Left: several results kept as separate connections |
 | CTRL-5 | analyser | partial | In a value function, a path that has returned takes no part in what is assigned or in the type of an `if`. In a graph a `return` with a value in a branch selected at runtime needs the continuation to return (CTRL-14). Left: runtime bodies |
 | CTRL-6 | analyser | partial | In a value function, a label is of the selector's type; a repeated literal or enum member is rejected (`switch.duplicate_label`); an enum's coverage stands for a `default`. Left: a label that is no constant; temporal bodies |
-| CTRL-6 | transpiler | planned | No fallthrough; an unmatched selector uses default or fails |
+| CTRL-6 | transpiler | partial | hgraph: in a value function and a node's hooks the selector is evaluated once and each case is an `if` on it, so there is no fallthrough; what no case matches runs the `default`, or fails. Left: a `switch` in composition |
 | CTRL-7 | analyser | done | What a `for` in a graph receives: ordinary values over ordinary data, a connection of `T` over a connection of `list<T, N>`, and over a connection of `list<T>`, `set<T>` or `dict<K, V>` one child for each member, with the set's member and the dictionary's key ordinary values (with CTRL-15) |
 | CTRL-7 | transpiler | planned | One child per member; update keeps it, removal stops it |
 | CTRL-8 | analyser | partial | In a loop that makes one child for each member, an assignment to a `var` declared outside it and a `return` are rejected (`loop.carried`). Left: the traversal forms `elements`, `keys`, `values` and `items`; no implicit crossing of a reference |
@@ -282,7 +282,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-10 | transpiler | planned | A block and an `if` as values |
 | CTRL-11 | analyser | partial | In a value function: what is assigned after an `if`, a `switch` and a loop; a `var` written `T?` is null from its declaration. Left: temporal bodies |
 | CTRL-12 | analyser | partial | In a value function: `for` over a list, a set or a dictionary; `while` with its condition (`while.condition`); a `switch`'s selector. Left: a label that is no constant |
-| CTRL-12 | transpiler | planned | The loops and the `switch` of a value function |
+| CTRL-12 | transpiler | partial | hgraph: in a value function and a node's hooks, `for` over a list, a set and a dictionary, `while` with its condition, and `switch`. Left: a label that is a generic value parameter |
 | CTRL-13 | analyser | done | In a graph the condition of an `if` is a `bool`, a value or a connection; the `if` has its branches' one type, and is a connection when its condition or a branch is one; with no `else` it is a `T` connection under a temporal condition, and a `T?` or a `T` connection under a wiring-time one by what its branch is |
 | CTRL-13 | transpiler | planned | A child graph for each branch of a temporal `if`; an ordinary value in a branch wired as a constant |
 | CTRL-14 | analyser | done | A `var` of a graph keeps the category of its first value, and one that holds an ordinary value is not assigned in a branch selected at runtime (`binding.category`); a `return` with a value in such a branch needs every path to return (`return.missing`). The same holds in the cases of a `switch` selected at runtime |

@@ -240,6 +240,12 @@ def with_field(value, /, **field):
     return _dataclasses.replace(value, **field)
 
 
+def unmatched(selected):
+    """A `switch` with no `default`, where no case has the selector's
+    value (CTRL-6: "An unmatched selector uses default or fails")."""
+    raise HglError(f"no case of the `switch` has the value {selected!r}")
+
+
 def _i64(value):
     if not _I64_MIN <= value <= _I64_MAX:
         raise HglError("an i64 result is outside the signed 64-bit range")

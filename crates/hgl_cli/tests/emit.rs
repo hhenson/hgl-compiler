@@ -109,8 +109,7 @@ fn nothing_is_written_for_what_cannot_be() {
     let unwritten = directory.join("unwritten.hgl");
     fs::write(
         &unwritten,
-        "module unwritten\nconst fn total(items: list<i64>) -> i64 {\n    var sum = 0\n    \
-         for item in items { sum += item }\n    return sum\n}\n",
+        "module unwritten\nconst fn total(rest: ...i64) -> i64 => 1\n",
     )
     .unwrap();
     let output = hgl(&[
@@ -125,7 +124,7 @@ fn nothing_is_written_for_what_cannot_be() {
         "nothing written: the hgraph target does not write all of the program yet\n"
     );
     assert!(text(&output.stderr).contains(
-        "error[build/target.unsupported]: the hgraph target does not write this statement yet"
+        "error[build/target.unsupported]: the hgraph target does not write a pack parameter yet"
     ));
     assert!(!out.exists());
 }
