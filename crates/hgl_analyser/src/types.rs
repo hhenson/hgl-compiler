@@ -231,8 +231,8 @@ impl Type {
     ///
     /// For most T it is another type the language has, and that type is
     /// what this returns: `f64` for `f64`, `dict<i64, f64>` for
-    /// `list<f64>`. A set's, a dictionary's and a struct's delta is a
-    /// type of its own, `Type::Delta`. So is the delta of a type not
+    /// `list<f64>`. A nullable's, a set's, a dictionary's and a
+    /// struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
     /// yet known, a generic parameter's: "In a generic declaration it
     /// stays as written until T is known", and it is formed again, here,
     /// when the parameter is replaced.
@@ -270,15 +270,16 @@ impl Type {
                     .map(|element| optional(Type::delta(element)))
                     .collect(),
             ),
-            // "`V?`, V an ordinary value type: `delta<V>?`: null for a
-            // published null"; where V is none, "the `?` marks an
+            // "`V?`, V an ordinary value type: a type of its own, an
+            // optional, with the property `value`, a `delta<V>?`: null
+            // for a published null"; where V is none, "the `?` marks an
             // argument or a field that may be left out, and is no part
             // of what is published".
             Type::Nullable(inner) => match *inner {
                 inner @ (Type::Rolling { .. } | Type::Atomic(_) | Type::Ref(_) | Type::Signal) => {
                     Type::delta(inner)
                 }
-                inner => optional(Type::delta(inner)),
+                inner => Type::Delta(Box::new(Type::Nullable(Box::new(inner)))),
             },
             // A type of its own; one not yet known; and one that has no
             // delta, a `ref` or a `signal`, which is reported where it

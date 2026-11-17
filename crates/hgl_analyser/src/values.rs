@@ -2107,24 +2107,88 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The properties of the delta of `of`, each with its type, in
+    /// the order TYPE-16 has them. `None` for a type whose delta is no
+    /// type of its own, or is not known yet.
+    ///
+    /// "`set<K>`: ... the properties `added` and `removed`, each a
+    /// `set<K>`"; "`dict<K, V>`: ... the properties `updated`, a
+    /// `dict<K, delta<V>>` of each key added or changed with its delta,
+    /// and `removed`, a `set<K>`"; "`V?`: ... an optional, with the
+    /// property `value`, a `delta<V>?`: null for a published null"; "A
+    /// struct: ... a property for each field `name: F`, of the same
+    /// name and of type `delta<F>?`: null where the field did not
+    /// change".
+    fn delta_properties(&self, of: &Type) -> Option<Vec<(String, Type)>> {
+        match of {
+            Type::Set(_) => Some(vec![
+                ("added".to_string(), of.clone()),
+                ("removed".to_string(), of.clone()),
+            ]),
+            Type::Dict { key, value } => Some(vec![
+                (
+                    "updated".to_string(),
+                    Type::Dict {
+                        key: key.clone(),
+                        value: Box::new(Type::delta((**value).clone())),
+                    },
+                ),
+                ("removed".to_string(), Type::Set(key.clone())),
+            ]),
+            Type::Nullable(payload) => Some(vec![(
+                "value".to_string(),
+                nullable(Type::delta((**payload).clone())),
+            )]),
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let Some(Detail::Struct(read)) =
+                    self.program.modules[*module].details.get(*declaration)
+                else {
+                    return None;
+                };
+                // Each field's type, with the struct's generic
+                // arguments in place, as a field read has it.
+                let map: Vec<(Location, &Argument)> =
+                    fixed(&read.generics).zip(arguments).collect();
+                let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
+                Some(
+                    read.members
+                        .iter()
+                        .map(|member| {
+                            let ty = placed(substitute_within(&member.ty, &map), &own);
+                            // A field whose type is not known has a
+                            // delta that is not known either.
+                            let delta = if open(&ty) {
+                                ty
+                            } else {
+                                nullable(Type::delta(ty))
+                            };
+                            (member.name.clone(), delta)
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
     /// A property of a delta that is a type of its own (TYPE-16):
-    /// `change.added`, of a set's delta, and `change.updated`, of a
-    /// dictionary's. The properties of a struct's delta are proposed,
-    /// and are not read.
+    /// `change.added`, of a set's delta; `change.updated`, of a
+    /// dictionary's; `change.value`, of a nullable's; `change.bid`, of
+    /// a struct's.
     fn delta_property(&mut self, base: Expr, name: &SyntaxToken, of: &Type) -> (ExprKind, Type) {
-        let Some(properties) = delta_properties(of) else {
+        let Some(properties) = self.delta_properties(of) else {
             return (ExprKind::Unread, Type::Unknown);
         };
         let member = properties
             .iter()
-            .position(|(property, _)| *property == name.text());
+            .position(|(property, _)| property == name.text());
         let Some(member) = member else {
-            let [(first, _), (second, _)] = &properties;
-            let what = if matches!(of, Type::Set(_)) {
-                "a set's"
-            } else {
-                "a dictionary's"
-            };
             self.diagnostics.emit(
                 error(
                     Category::Name,
@@ -2133,12 +2197,11 @@ impl<'a> Typer<'a> {
                     format!("`{}` has no property `{}`", base.ty, name.text()),
                     "TYPE-16",
                 )
-                .with_note(format!("{what} delta has `{first}` and `{second}`")),
+                .with_note(format!("it has {}", listed(&properties))),
             );
             return (ExprKind::Unread, Type::Unknown);
         };
-        let [first, second] = properties;
-        let ty = if member == 0 { first.1 } else { second.1 };
+        let ty = properties[member].1.clone();
         let kind = ExprKind::Field {
             base: Box::new(base),
             member,
@@ -2149,12 +2212,12 @@ impl<'a> Typer<'a> {
     /// `delta<set<i64>>(added: [1, 2], removed: [3])`: a delta made
     /// from its properties.
     ///
-    /// TYPE-16: "A set's and a dictionary's delta is constructed by its
-    /// properties, by name ... A property left out is empty. A list's
-    /// and a tuple's delta are an ordinary dictionary and tuple, and
-    /// are written as those are." The constructor of a struct's delta
-    /// is proposed, and is not read; neither is one of a type that has
-    /// no delta of its own.
+    /// TYPE-16: "One that is a type of its own is constructed by its
+    /// properties, by name ... A property left out is empty, or null
+    /// for a struct's field and a nullable's `value`. A list's and a
+    /// tuple's delta are an ordinary dictionary and tuple, and are
+    /// written as those are." The constructor of a type that has no
+    /// delta of its own is not read.
     fn delta_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let Some(list) = child(node, SyntaxKind::ArgList) else {
             return (ExprKind::Unread, Type::Unknown);
@@ -2162,26 +2225,25 @@ impl<'a> Typer<'a> {
         // The delta is recorded where the constructor starts.
         let written = self.written.get(&(self.file, node.span().start)).copied();
         let properties = match written {
-            Some(Type::Delta(of)) => delta_properties(of),
+            Some(Type::Delta(of)) => self.delta_properties(of),
             _ => None,
         };
         let (Some(ty), Some(properties)) = (written, properties) else {
             return self.unread_call(&list);
         };
         let ty = ty.clone();
-        let mut given = [false; 2];
+        let mut given = vec![false; properties.len()];
         let mut arguments = Vec::new();
         for (name, value) in self.call_arguments(&list) {
             let position = name.as_ref().and_then(|name| {
                 properties
                     .iter()
-                    .position(|(property, _)| *property == name.text())
+                    .position(|(property, _)| property == name.text())
             });
             let Some(position) = position else {
                 // A name that is no property of the delta. An argument
                 // with no name has none to report.
                 if let Some(name) = &name {
-                    let [(first, _), (second, _)] = &properties;
                     self.diagnostics.emit(
                         error(
                             Category::Name,
@@ -2190,7 +2252,7 @@ impl<'a> Typer<'a> {
                             format!("`{ty}` has no property `{}`", name.text()),
                             "TYPE-16",
                         )
-                        .with_note(format!("it has `{first}` and `{second}`")),
+                        .with_note(format!("it has {}", listed(&properties))),
                     );
                 }
                 arguments.push(hir::Argument {
@@ -2368,6 +2430,33 @@ impl<'a> Typer<'a> {
         // value: the argument of an `endpoint<T>` parameter.
         if let Some(Type::Endpoint(_)) = expected {
             return self.endpoint_given(node);
+        }
+        // TYPE-16: "A `delta<V>` is a value where a `delta<V?>` is
+        // expected". A form that takes its type from its place is read
+        // as the `delta<V>`: its entries and its elements are held to
+        // that type, a list's delta being a dictionary. The place may
+        // be one that can be left out, a `delta<V?>?`, as a struct's
+        // delta has for a field. A block and an `if` keep the place's
+        // own type, so that a branch may give the whole `delta<V?>`,
+        // and each value in them is read here in its turn. `null` is
+        // no `delta<V>`: it is left to say so, or to leave the place
+        // out.
+        if let Some(Type::Delta(of)) = not_null(expected)
+            && let Type::Nullable(payload) = &**of
+            // A literal, a tuple, a sequence and a symbol before an
+            // operand; and `.member`, `ok(value)` and `err(value)`,
+            // which have no type but their place's (ERR-2).
+            && (matches!(
+                node.kind(),
+                SyntaxKind::Literal
+                    | SyntaxKind::TupleExpr
+                    | SyntaxKind::SequenceExpr
+                    | SyntaxKind::UnaryExpr
+            ) || takes_its_type(node))
+            && !written_null(node)
+        {
+            let lifted = Type::delta((**payload).clone());
+            return self.expression(node, Some(&lifted));
         }
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
@@ -2682,13 +2771,23 @@ impl<'a> Typer<'a> {
                     // "It does not make null an admitted value of
                     // unqualified T."
                     Some(expected) if !open(expected) => {
-                        self.diagnostics.emit(error(
+                        let report = error(
                             Category::Type,
                             codes::TYPE_MISMATCH,
                             self.at(node),
                             format!("`null` is no value of `{expected}`: write `{expected}?`"),
                             "TYPE-14",
-                        ));
+                        );
+                        // TYPE-16: null in a delta's place is nothing
+                        // published, and a published null is the delta
+                        // that holds one.
+                        let optional = matches!(expected, Type::Delta(of)
+                            if matches!(**of, Type::Nullable(_)));
+                        self.diagnostics.emit(if optional {
+                            report.with_note(format!("a published null is `{expected}()`"))
+                        } else {
+                            report
+                        });
                         (ExprKind::Literal(Value::Null), Type::Unknown)
                     }
                     // What the place expects is not known.
@@ -5383,8 +5482,25 @@ impl<'a> Typer<'a> {
                 }
                 None
             } else {
-                let read = self.expression(&value, Some(cell));
-                Some(self.fit(read, cell, "a cell of the trace"))
+                // TST-5: "For a nullable scalar it is the optional that
+                // holds what was published: a cell written as a value
+                // is that value, and one written `null` a published
+                // null". A cell written `null`, in parentheses or not,
+                // is that delta. Any other is read as the delta: a
+                // value where one is expected (TYPE-16), or the delta
+                // itself, in a block or a branch as outside one.
+                let optional = matches!(cell, Type::Delta(of)
+                    if matches!(**of, Type::Nullable(_)));
+                if optional && written_null(&value) {
+                    Some(Expr {
+                        kind: ExprKind::Literal(Value::Null),
+                        ty: cell.clone(),
+                        at: self.at(&value),
+                    })
+                } else {
+                    let read = self.expression(&value, Some(cell));
+                    Some(self.fit(read, cell, "a cell of the trace"))
+                }
             };
             cells.push(hir::Cell { time, value });
         }
@@ -9459,6 +9575,12 @@ impl<'a> Typer<'a> {
         match expected {
             Type::Nullable(inner) => self.admits(inner, ty),
             Type::Named { .. } => self.inherits(ty, expected),
+            // TYPE-16: "A `delta<V>` is a value where a `delta<V?>` is
+            // expected, as a T is where a `T?` is".
+            Type::Delta(of) => match &**of {
+                Type::Nullable(payload) => self.admits(&Type::delta((**payload).clone()), ty),
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -12202,6 +12324,9 @@ fn accepts_float(expected: &Type) -> bool {
     match expected {
         Type::Scalar(Scalar::F64) => true,
         Type::Nullable(inner) => accepts_float(inner),
+        // TYPE-16: an `f64` is a value where a `delta<f64?>` is
+        // expected.
+        Type::Delta(of) => matches!(&**of, Type::Nullable(payload) if accepts_float(payload)),
         _ => false,
     }
 }
@@ -12349,6 +12474,18 @@ fn is_implied_member(node: &SyntaxNode) -> bool {
     }
 }
 
+/// True for the literal `null`, in parentheses or not.
+fn written_null(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| written_null(&inner)),
+        SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
+        _ => false,
+    }
+}
+
 /// True when an expression takes its type from its place and has none
 /// of its own: `null`, `.member`, and `ok(value)` or `err(value)`,
 /// whose "type arguments come from the complete `result<T,E>` its place
@@ -12406,26 +12543,17 @@ fn is_least_magnitude(node: &SyntaxNode) -> bool {
         })
 }
 
-/// The two properties of the delta of `of`, each with its type, in the
-/// order TYPE-16 names them: "`set<K>`: ... the properties `added` and
-/// `removed`, each a `set<K>`"; "`dict<K, V>`: ... the properties
-/// `updated`, a `dict<K, delta<V>>` of each key added or changed with
-/// its delta, and `removed`, a `set<K>`". `None` for a type whose delta
-/// has none this pass reads: a struct's are proposed.
-fn delta_properties(of: &Type) -> Option<[(&'static str, Type); 2]> {
-    match of {
-        Type::Set(_) => Some([("added", of.clone()), ("removed", of.clone())]),
-        Type::Dict { key, value } => Some([
-            (
-                "updated",
-                Type::Dict {
-                    key: key.clone(),
-                    value: Box::new(Type::delta((**value).clone())),
-                },
-            ),
-            ("removed", Type::Set(key.clone())),
-        ]),
-        _ => None,
+/// The names of a delta's properties, for a message: `` `added` and
+/// `removed` ``.
+fn listed(properties: &[(String, Type)]) -> String {
+    let names: Vec<String> = properties
+        .iter()
+        .map(|(name, _)| format!("`{name}`"))
+        .collect();
+    match names.as_slice() {
+        [] => "no property".to_string(),
+        [only] => only.clone(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
     }
 }
 
