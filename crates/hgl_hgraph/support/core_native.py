@@ -374,13 +374,18 @@ def _floordiv(lhs, rhs, zero):
     """
     if rhs == 0:
         return _zero_divisor(lhs, rhs, zero)
-    # NUM-2: floating arithmetic "preserves IEEE special values". An
-    # infinite numerator has an infinite quotient, or NaN over an
-    # infinity, and its floor is itself. Python's `//` would give NaN
-    # for every one. What a finite numerator over an infinity gives is
-    # not said by core yet (hhenson/hgl_core#35), and is Python's.
-    if _math.isinf(lhs):
-        return lhs / rhs
+    # NUM-1: "Where an f64 operand is an infinity or NaN and the divisor
+    # is not zero, `//` is the floor of the IEEE quotient". Python's own
+    # `//` is the floor of the exact quotient: NaN for an infinite
+    # numerator, and -1.0 for `-1.0 // inf`.
+    if not (_math.isfinite(lhs) and _math.isfinite(rhs)):
+        quotient = lhs / rhs
+        # An infinity and NaN are their own floor.
+        if not _math.isfinite(quotient):
+            return quotient
+        # A finite quotient here is a zero, a finite numerator over an
+        # infinity, and its floor keeps its sign.
+        return _math.copysign(float(_math.floor(quotient)), quotient)
     return float(lhs // rhs)
 
 
@@ -392,6 +397,14 @@ def _mod(lhs, rhs, zero):
         if zero not in ("ieee", "nan"):
             raise HglError(f"the zero policy `{zero}` is not provided")
         return _NAN
+    # NUM-1: there `%` is "what IEEE `fmod` gives: a remainder by an
+    # infinity is the numerator as it is, whatever its sign". Of an
+    # infinite numerator, and with a NaN operand, it is NaN, where
+    # Python's `fmod` raises and its `%` has the divisor's sign.
+    if not (_math.isfinite(lhs) and _math.isfinite(rhs)):
+        if lhs != lhs or rhs != rhs or _math.isinf(lhs):
+            return _NAN
+        return float(lhs)
     return float(lhs % rhs)
 
 
