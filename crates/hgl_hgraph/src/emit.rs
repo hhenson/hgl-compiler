@@ -1751,15 +1751,6 @@ impl Emitter<'_> {
                 format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Delta { arguments } => self.delta(function, value, arguments),
-            // RUN-1: the run's configuration is not written yet, an
-            // instant being no value of this target's.
-            ExprKind::Eval {
-                config: Some(config),
-                ..
-            } => {
-                self.unsupported(config.at, "an eval with a run configuration");
-                "None".to_string()
-            }
             // TST-17, RUN-3: a run in real time is not written yet.
             ExprKind::Eval {
                 real_time: true, ..
@@ -1767,9 +1758,7 @@ impl Emitter<'_> {
                 self.unsupported(value.at, "a run in real time");
                 "None".to_string()
             }
-            ExprKind::Eval {
-                call, config: None, ..
-            } => self.eval(function, call),
+            ExprKind::Eval { call, config, .. } => self.eval(function, call, config.as_deref()),
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the
@@ -2695,7 +2684,12 @@ impl Emitter<'_> {
 
     /// `eval(target, ...)`: the harness's `evaluate`, given the target
     /// and each argument by its parameter's name.
-    fn eval(&mut self, function: &Function, call: &Expr) -> String {
+    ///
+    /// RUN-1, core's CRUN-2: a run's configuration is given last, as
+    /// `_config`, a name no parameter has, so that it is evaluated
+    /// after the call's arguments, as EXPR-13 has them. The harness
+    /// reads its `start`, `end` and `length`.
+    fn eval(&mut self, function: &Function, call: &Expr, config: Option<&Expr>) -> String {
         let ExprKind::Call {
             callee:
                 Callee::Function {
@@ -2736,14 +2730,24 @@ impl Emitter<'_> {
                 signature.result.as_ref(),
                 call.at,
             );
-            return if written.is_empty() {
+            let mut given = written;
+            if let Some(config) = config {
+                given.push(format!("_config={}", self.expression(function, config)));
+            }
+            return if given.is_empty() {
                 format!("_harness.evaluate({node})")
             } else {
-                format!("_harness.evaluate({node}, {})", written.join(", "))
+                format!("_harness.evaluate({node}, {})", given.join(", "))
             };
         }
         let target = self.function_name(*module, *declaration);
-        let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        let mut arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        if let Some(config) = config {
+            if !arguments.is_empty() {
+                arguments.push_str(", ");
+            }
+            arguments.push_str(&format!("_config={}", self.expression(function, config)));
+        }
         if arguments.is_empty() {
             format!("_harness.evaluate({target})")
         } else {
