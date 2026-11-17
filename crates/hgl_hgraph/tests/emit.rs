@@ -674,6 +674,62 @@ const CONSTANTS: [(&str, &str); 2] = [
     ),
 ];
 
+/// TYPE-2: "elapsed `duration` ... Instants/durations use signed 64-bit
+/// microseconds". On this target a `duration` is a `timedelta`, a count
+/// of whole microseconds, as a value and as what a connection ticks.
+const DURATIONS: &str = concat!(
+    "module demo.durations\n",
+    "const pause: duration = 1h30m\n",
+    "const fn total(first: duration, second: duration) -> duration => first + second\n",
+    "const fn less(first: duration, second: duration) -> duration => first - second\n",
+    "const fn times(length: duration, count: i64) -> duration => length * count\n",
+    "const fn scaled(length: duration, by: f64) -> duration => length * by\n",
+    "fn sum(lhs: duration, rhs: duration) -> duration => lhs + rhs\n",
+    "test durations_are_values_and_ticks {\n",
+    "    assert total(1s, 250ms) == 1250ms\n",
+    "    assert less(1s, 250ms) == 750ms\n",
+    "    assert -less(250ms, 1s) == 750ms\n",
+    "    assert times(pause, 2) == 3h\n",
+    // Core writes a count times a duration as the duration times it.
+    "    assert 2 * pause == 3h\n",
+    // OPS-10: half a microsecond is a tie, and goes to the even one.
+    "    assert scaled(1us, 0.5) == 0us\n",
+    "    assert scaled(3us, 0.5) == 2us\n",
+    "    assert eval(sum(lhs: [1s, _, 5m], rhs: [2s, 3s])) == [3s, 4s, 5m3s]\n",
+    "}\n",
+);
+
+/// A `duration` is written as a `timedelta`: its literal by its count of
+/// microseconds (LEX-13), its type in an annotation, and its operators
+/// as the provider's functions (OPS-1).
+#[test]
+fn a_duration_is_a_timedelta() {
+    let emitted = emit(&[("durations.hgl", DURATIONS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_durations/__init__.py");
+    for expected in [
+        "import datetime as _dt\n",
+        "@_core.constant\ndef pause():\n    return _dt.timedelta(microseconds=5400000000)\n",
+        "return _core.add__duration_duration(lhs=first, rhs=second)",
+        "return _core.sub__duration_duration(lhs=first, rhs=second)",
+        "return _core.mul__duration_i64(lhs=length, rhs=count)",
+        "return _core.mul__duration_f64(lhs=length, rhs=by)",
+        "_hg.TS[_dt.timedelta]",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // A module that names no duration does not import the library.
+    let plain = emit(&[("demo.hgl", DEMO)]);
+    assert!(
+        !plain
+            .text("_hgl/_m_demo/_m_scaling/__init__.py")
+            .contains("import datetime")
+    );
+}
+
 /// UNIT-13: "The constant has that one value wherever it is read ... It
 /// is referenced forward as any module declaration is (UNIT-6)". A
 /// constant is a function of no parameter that the provider runs once,
@@ -1301,16 +1357,15 @@ fn a_candidate_with_a_body_is_a_function() {
 #[test]
 fn what_core_lacks_is_reported_where_a_program_reaches_it() {
     let emitted = emit(&[(
-        "spans.hgl",
+        "repeats.hgl",
         concat!(
-            "module demo.spans\n",
-            "const fn twice(length: duration) -> duration => 2 * length\n",
-            // A duration with no literal, which the target would
-            // report in the program itself. It is written, not run.
-            "const fn pause() -> duration => twice(pause())\n",
+            "module demo.repeats\n",
+            // Core writes `i64 * str` in HGL, as `str * i64` turned
+            // round, and the provider has no function for that one.
+            "const fn twice(text: str) -> str => 2 * text\n",
             "const fn fine(value: i64) -> i64 => value + 1\n",
             "test doubles { assert fine(1) == 2 }\n",
-            "test spans { assert twice(pause()) == pause() }\n",
+            "test repeats { assert twice(\"ab\") == \"abab\" }\n",
         ),
     )]);
     assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
@@ -1321,11 +1376,10 @@ fn what_core_lacks_is_reported_where_a_program_reaches_it() {
     );
     assert_eq!(emitted.blocked("doubles"), None);
     let blocked = emitted
-        .blocked("spans")
+        .blocked("repeats")
         .expect("the test reaches core's candidate");
     assert!(
-        blocked
-            .ends_with("the hgraph target does not write the candidate `mul_(duration, i64)` yet"),
+        blocked.ends_with("the hgraph target does not write the candidate `mul_(str, i64)` yet"),
         "{blocked}"
     );
 }
@@ -2887,6 +2941,12 @@ const REACH: [(&str, &str); 3] = [
             "    let big = 9223372036854775807\n",
             "    assert fine(big) == 0\n",
             "}\n",
+            // OPS-10: a duration result outside its range. The longest
+            // duration is a little over 106751991 days.
+            "test too_long {\n",
+            "    let long = 106751991d\n",
+            "    assert long + 1d == 0s\n",
+            "}\n",
         ),
     ),
     (
@@ -3045,6 +3105,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("results.hgl", RESULTS),
         ("close.hgl", CLOSE),
         ("enums.hgl", ENUMS),
+        ("durations.hgl", DURATIONS),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3074,9 +3135,9 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        48,
+        49,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
-         on enums of one name, two on constants, and one of each demo's"
+         on enums of one name, two on constants, one on durations, and one of each demo's"
     );
 }
 
@@ -3113,6 +3174,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("direct").0,
         emitted.test("wrong").0,
         emitted.test("overflows").0,
+        emitted.test("too_long").0,
         emitted.test("whole_by_zero").0,
         emitted.test("strict_by_zero").0,
         emitted.test("negative_tolerance").0,
@@ -3149,7 +3211,8 @@ fn a_failure_names_the_statement_that_failed() {
         [
             "passed",
             "failed reach.hgl:22:5 the assertion does not hold",
-            "failed reach.hgl:26:5 HglError: an i64 result is outside the signed 64-bit range",
+            "failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "failed reach.hgl:30:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
             "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
             "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
             "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
@@ -3160,7 +3223,7 @@ fn a_failure_names_the_statement_that_failed() {
             // prevents later arguments."
             "passed",
             "failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
-            "failed structs.hgl:11:17 HglError: an i64 result is outside the signed 64-bit range",
+            "failed structs.hgl:11:17 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
             "failed structs.hgl:12:16 the assertion does not hold",
             // CTRL-6: "An unmatched selector uses default or fails."
             "failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
