@@ -2431,6 +2431,28 @@ impl<'a> Typer<'a> {
         if let Some(Type::Endpoint(_)) = expected {
             return self.endpoint_given(node);
         }
+        // TYPE-16: "A `delta<V>` is a value where a `delta<V?>` is
+        // expected". A form that takes its type from its place is read
+        // as the `delta<V>`: its entries, its elements and its branches
+        // are held to that type, a list's delta being a dictionary.
+        // `null` is no `delta<V>`, and is left to say so.
+        if let Some(Type::Delta(of)) = expected
+            && let Type::Nullable(payload) = &**of
+            && matches!(
+                node.kind(),
+                SyntaxKind::Literal
+                    | SyntaxKind::TupleExpr
+                    | SyntaxKind::SequenceExpr
+                    | SyntaxKind::UnaryExpr
+                    | SyntaxKind::ImpliedMember
+                    | SyntaxKind::Block
+                    | SyntaxKind::IfExpr
+            )
+            && !is_null(node)
+        {
+            let lifted = Type::delta((**payload).clone());
+            return self.expression(node, Some(&lifted));
+        }
         let at = self.at(node);
         let (kind, ty) = match node.kind() {
             SyntaxKind::Literal => self.literal(node, expected),
@@ -12554,16 +12576,6 @@ fn shaped(ty: &Type) -> bool {
 fn not_null(expected: Option<&Type>) -> Option<&Type> {
     match expected {
         Some(Type::Nullable(inner)) => not_null(Some(inner)),
-        // TYPE-16: "A `delta<V>` is a value where a `delta<V?>` is
-        // expected". Where V is its own delta, as a scalar and an enum
-        // are, the place is one for a V: `.buy` where a `delta<Side?>`
-        // is expected.
-        Some(Type::Delta(of)) => match &**of {
-            Type::Nullable(payload) if Type::delta((**payload).clone()) == **payload => {
-                not_null(Some(payload))
-            }
-            _ => expected,
-        },
         other => other,
     }
 }

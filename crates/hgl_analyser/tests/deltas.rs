@@ -234,6 +234,7 @@ fn a_sets_and_a_dictionarys_delta_is_made_from_its_properties() {
 fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
     let checked = module(concat!(
         "struct Quote {\n    bid: f64\n    note: str? = null\n}\n",
+        "enum Side { buy, sell }\n",
         // Null is no tick; the optional holds what was published.
         "const fn seen(change: delta<i64?>?) -> str {\n",
         "    if change == null { return \"no tick\" }\n",
@@ -251,6 +252,12 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         "    let absent: delta<i64?> = null\n",
         "    let wrong = delta<i64?>(value: \"a\")\n",
         "    let other = delta<i64?>(added: 1)\n",
+        // A form that takes its type from its place is the `delta<V>`:
+        // a list's delta is a dictionary, and its entries are held to
+        // it; an enum's member; a set's delta is no literal.
+        "    let moved: delta<list<i64>?> = [0: 7]\n",
+        "    let side: delta<Side?> = .buy\n",
+        "    let keyed: delta<list<i64>?> = [\"wrong\": \"wrong\"]\n",
         "    return 1\n",
         "}\n",
         // A struct's delta: a property for each field.
@@ -279,10 +286,14 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:17:31 type/type.mismatch TYPE-14",
-            "m.hgl:18:36 type/type.mismatch EXPR-5",
-            "m.hgl:19:29 name/delta.argument_name TYPE-16",
-            "m.hgl:26:53 name/delta.argument_name TYPE-16",
+            "m.hgl:18:31 type/type.mismatch TYPE-14",
+            "m.hgl:19:36 type/type.mismatch EXPR-5",
+            "m.hgl:20:29 name/delta.argument_name TYPE-16",
+            // The key and the value of the entry, each against the
+            // dictionary a list's delta is.
+            "m.hgl:23:37 type/type.mismatch EXPR-5",
+            "m.hgl:23:46 type/type.mismatch EXPR-5",
+            "m.hgl:30:53 name/delta.argument_name TYPE-16",
         ]
     );
     assert_eq!(
@@ -296,6 +307,9 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
             "absent: delta<i64?>",
             "wrong: delta<i64?>",
             "other: delta<i64?>",
+            "moved: delta<list<i64>?>",
+            "side: delta<Side?>",
+            "keyed: delta<list<i64>?>",
         ]
     );
 }
