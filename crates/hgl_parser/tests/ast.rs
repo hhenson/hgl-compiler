@@ -30,6 +30,7 @@ fn kinds(items: impl Iterator<Item = Item>) -> Vec<&'static str> {
             Item::Instantiate(_) => "instantiate",
             Item::NativeType(_) => "native type",
             Item::NativeFunction(_) => "native fn",
+            Item::Constant(_) => "const",
             Item::Test(_) => "test",
             Item::TestContext(_) => "test context",
         })

@@ -150,6 +150,9 @@ define_syntax_kinds! {
         /// `{i64, f64}` as a constraint operand
         ConstraintSet,
 
+        /// `export const scale: i64 = 2`
+        ConstantDecl,
+
         // ---- Structures and enumerations (types-and-values.md) ----
         /// `export abstract struct Quote<T> : Base { bid: T }`
         StructDecl,

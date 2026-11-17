@@ -111,6 +111,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-10 | analyser | partial | Every name in a signature, body, type and constraint resolved to its one binding. Left: capability receivers; activation forms; the prelude |
 | UNIT-11 | analyser | partial | When the program has the module `core`, a name nothing nearer binds is its public declaration of that name. `hgl` supplies the pinned core's module to a program whose source roots hold none. Left: a name core does not declare yet is listed, not reported |
 | UNIT-12 | analyser | partial | No declaration, import, local, parameter or generic parameter takes a name already in scope, a prelude name included for a declaration, an import alias and a local. Left: a prelude name core does not declare yet |
+| UNIT-13 | parser | done | `constant_decl`: `const name: T = expression`, with `export` before it. `const` before a name begins a constant, and before `fn` a function. The type and the value are both written, the value on the declaration's line |
+| UNIT-13 | analyser | planned | A constant's type and expression; a constant read by its name; `constant.cycle` |
+| UNIT-13 | transpiler | planned | A constant as a value of the target |
 
 ## Types and values
 
@@ -453,6 +456,7 @@ the same numeric rules the transpiler rows give.
 | OPS-8 | transpiler | planned | Each rounding member, the NaN value, and the two failure policies |
 | OPS-9 | analyser | done | In a graph `invalid: .identity`, by symbol or by name, selects core's temporal candidate of `add_` or `sub_` for two operands of one type, where the value operations it requires exist for that type (GEN-16); without the option the value candidate is selected and lifted. Core's two candidates are nodes, and are read as any node is |
 | OPS-9 | transpiler | planned | One valid operand is forwarded (right-only subtraction negates it); both invalid invalidate the output; ordered handlers return after the first publication |
+| OPS-10 | transpiler | planned | A duration result rounded half to even at the type's resolution; a duration or an instant result out of range is `numeric.out_of_range` |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. For a nullable scalar it is the optional TYPE-16 gives it. Left: proof that `x` is valid and modified |

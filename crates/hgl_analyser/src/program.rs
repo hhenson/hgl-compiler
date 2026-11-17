@@ -288,6 +288,8 @@ pub enum DeclarationKind {
     Enum,
     /// `native type`.
     NativeType,
+    /// `const name: T = expression`: a constant (UNIT-13).
+    Constant,
 }
 
 impl DeclarationKind {
@@ -361,6 +363,7 @@ impl DeclarationKind {
             DeclarationKind::Struct => "struct".to_string(),
             DeclarationKind::Enum => "enum".to_string(),
             DeclarationKind::NativeType => "native type".to_string(),
+            DeclarationKind::Constant => "constant".to_string(),
         }
     }
 }

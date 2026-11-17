@@ -45,6 +45,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Module, "import.cycle"),
     (Category::Name, "name.duplicate"),
     (Category::Name, "name.used_before_declaration"),
+    (Category::Name, "constant.cycle"),
     (Category::Name, "name.test_only"),
     (Category::Name, "name.captured"),
     (Category::Name, "default.formal_argument"),

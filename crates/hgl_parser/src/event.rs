@@ -61,6 +61,7 @@ fn documentable(kind: SyntaxKind) -> bool {
             | SyntaxKind::EnumDecl
             | SyntaxKind::EnumMember
             | SyntaxKind::NativeTypeDecl
+            | SyntaxKind::ConstantDecl
             | SyntaxKind::TestDecl
     )
 }

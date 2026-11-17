@@ -92,6 +92,8 @@ ast_nodes! {
     InstantiateDecl,
     /// `export native type Handle`
     NativeTypeDecl,
+    /// `export const scale: i64 = 2`
+    ConstantDecl,
     /// `native const fn describe(value: i64) -> str`, with any contract
     /// body
     NativeFnDecl,
@@ -252,6 +254,8 @@ pub enum Item {
     Instantiate(InstantiateDecl),
     /// `native type`
     NativeType(NativeTypeDecl),
+    /// `const name: T = expression`
+    Constant(ConstantDecl),
     /// `native fn` or `native const fn`
     NativeFunction(NativeFnDecl),
     /// `test name { ... }`
@@ -272,6 +276,7 @@ impl Item {
             SyntaxKind::OperatorDecl => Item::Operator(OperatorDecl { syntax: node }),
             SyntaxKind::InstantiateDecl => Item::Instantiate(InstantiateDecl { syntax: node }),
             SyntaxKind::NativeTypeDecl => Item::NativeType(NativeTypeDecl { syntax: node }),
+            SyntaxKind::ConstantDecl => Item::Constant(ConstantDecl { syntax: node }),
             SyntaxKind::NativeFnDecl => Item::NativeFunction(NativeFnDecl { syntax: node }),
             SyntaxKind::TestDecl => Item::Test(TestDecl { syntax: node }),
             SyntaxKind::TestContext => Item::TestContext(TestContext { syntax: node }),
@@ -290,6 +295,7 @@ impl Item {
             Item::Operator(item) => item.syntax(),
             Item::Instantiate(item) => item.syntax(),
             Item::NativeType(item) => item.syntax(),
+            Item::Constant(item) => item.syntax(),
             Item::NativeFunction(item) => item.syntax(),
             Item::Test(item) => item.syntax(),
             Item::TestContext(item) => item.syntax(),
@@ -362,6 +368,21 @@ impl NativeTypeDecl {
     }
 
     /// The `export` before the type, when it has one.
+    pub fn export(&self) -> Option<SyntaxToken> {
+        tokens(&self.syntax).find(|token| token.kind() == SyntaxKind::KwExport)
+    }
+}
+
+impl ConstantDecl {
+    /// The constant's name: the identifier after `const`, which is an
+    /// identifier as well (LEX-10), so the name is the second.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        tokens(&self.syntax)
+            .filter(|token| token.kind() == SyntaxKind::Ident)
+            .nth(1)
+    }
+
+    /// The `export` before the constant, when it has one.
     pub fn export(&self) -> Option<SyntaxToken> {
         tokens(&self.syntax).find(|token| token.kind() == SyntaxKind::KwExport)
     }
