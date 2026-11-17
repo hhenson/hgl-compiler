@@ -469,7 +469,7 @@ the same numeric rules the transpiler rows give.
 | CAP-4 | transpiler | planned | Asking for a wake, cancelling a pending one, and every one |
 | CAP-5 | analyser | done | An alarm has no property, and a node injects it or `scheduler` (TIME-8). `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock |
 | CAP-5 | transpiler | planned | A best-effort wake |
-| CAP-6 | analyser | partial | `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes or its place expects. Left: one key's type across a program |
+| CAP-6 | analyser | partial | `get`, `has` and `put` on the global store, through core's candidates: the key a `str` that is a constant expression (`argument.constant`, FN-1), and `get`'s type what the call writes or its place expects. The run's own key, `"run.output"`, written out as a key is rejected (`store.reserved_key`). Left: one key's type across a program; the run's key where it is a `const` parameter, which is known when the graph is built |
 | CAP-6 | transpiler | planned | Reading or writing the global store wakes no node |
 | CONF-1 | runner | planned | Runs core's cases as written and adds no expectation |
 | CONF-2 | runner | planned | Conformance runs with core and its native providers only |
@@ -480,4 +480,13 @@ the same numeric rules the transpiler rows give.
 | CEVAL-3 | transpiler | planned | Replay publishes present entries; silence publishes nothing |
 | CEVAL-4 | transpiler | planned | Record starts with an empty recording and retains each publication and its time |
 | CEVAL-5 | runner | planned | A fresh run, with its own node state and recording, for each eval; dense results built by TST-6 |
+| CRUN-1 | runner | planned | A run of one entry with its `const` arguments under one `RunConfig`: built, started, evaluated and stopped once |
+| CRUN-2 | runner | planned | `start` inclusive and `end` exclusive; what a null `start` and a null `end` mean in each mode |
+| CRUN-3 | runner | planned | Evaluation time constant in a cycle and later in each by a microsecond or more; the earliest start |
+| CRUN-4 | runner | planned | Simulation runs each cycle without waiting and ends when nothing is scheduled; the same run gives the same publications |
+| CRUN-5 | runner | planned | Real time runs a cycle when the host clock reaches it |
+| CRUN-6 | runner | planned | Every node that started is stopped, in reverse; a failure names its node and phase, and the run has no output |
+| CRUN-7 | runner | planned | One store for a run, empty when the graph is built; nothing outside the program puts a value there |
+| CRUN-8 | analyser | partial | The run's own key written out as a key of the global store is rejected (`store.reserved_key`). Left: a key that is a `const` parameter |
+| CRUN-8 | runner | planned | The run's output, a `list<tuple<datetime, delta<T>>>` recorded under the run's own key |
 | CEVAL-6 | runner | planned | A failed run or a missing required recording fails the eval; neither is an empty result |

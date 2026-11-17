@@ -566,6 +566,20 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             "        return value\n",
             "    }\n",
             "}\n",
+            // The run's own key, in each of the store's operations. A
+            // key that only starts as it does is a program's.
+            "fn taken(value: i64) -> i64 {\n",
+            "    inject global_state\n",
+            "    start { put(global_state, \"run.output\", 0) }\n",
+            "    when {\n",
+            "        if has(global_state, \"run.output\") { return get<i64>(global_state, \"run.output\") }\n",
+            "        put(global_state, \"run.output.mine\", value)\n",
+            "        return labelled(global_state, \"run.output\", value)\n",
+            "    }\n",
+            "}\n",
+            // A function of the program that is given the store: its
+            // own `const` parameter is no key of the store.
+            "const fn labelled(store: GlobalState, const label: str, value: i64) -> i64 => value\n",
         ),
     )]);
     assert!(checked.core_supplied);
@@ -576,6 +590,11 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             "m.hgl:33:9 operator/operator.no_candidate GEN-5",
             "m.hgl:34:9 operator/operator.no_candidate GEN-5",
             "m.hgl:35:27 type/argument.constant FN-1",
+            // The global store: "The key `\"run.output\"` is the run's
+            // own ... a program that names it rejects".
+            "m.hgl:41:31 injectable/store.reserved_key TIME-8",
+            "m.hgl:43:30 injectable/store.reserved_key TIME-8",
+            "m.hgl:43:76 injectable/store.reserved_key TIME-8",
         ]
     );
     assert_eq!(checked.prelude_names("m"), [""; 0]);
