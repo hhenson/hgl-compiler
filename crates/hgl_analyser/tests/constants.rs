@@ -451,4 +451,46 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
         "{}",
         sized.report
     );
+
+    // GEN-5: an operator's candidates are found wherever they are
+    // declared. So a value is worked out through a module that does not
+    // import the constant's: `ops` imports nothing, and its `through`
+    // selects the candidate `m` declares, which reads `answer`.
+    let across = check(&[
+        (
+            "ops.hgl",
+            concat!(
+                "module ops\n",
+                "operator choose<T>(value: T) -> T\n",
+                "export const fn through() -> i64 => choose(1)\n",
+                // Read by `m` and reading nothing of it: no cycle.
+                "export const base: i64 = 1\n",
+            ),
+        ),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                // UNIT-3: an operator is public, and GEN-4: a candidate
+                // binds it through a selective import.
+                "use ops::{base, choose, through}\n",
+                "impl const fn choose(value: i64) -> i64 => answer\n",
+                "const answer: i64 = through()\n",
+                "const above: i64 = base + 1\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        across.summary(),
+        ["m.hgl:4:7 name/constant.cycle UNIT-13"],
+        "{}",
+        across.report
+    );
+    assert!(
+        across.report.contains(
+            "the value of `answer` depends on itself, through `choose` and `through` of `ops`"
+        ),
+        "{}",
+        across.report
+    );
 }
