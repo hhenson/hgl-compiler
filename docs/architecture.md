@@ -225,7 +225,7 @@ It is built in passes:
 
 | Pass | What it settles | Rules | State |
 | --- | --- | --- | --- |
-| Modules | Files grouped into modules and parts by their `module` lines | UNIT-1 | done |
+| Modules | Files grouped into modules and parts by their `module` lines, and an application's file, headed `application name`, into a unit of its own | UNIT-1, UNIT-14 | done |
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
@@ -494,15 +494,37 @@ the test's scope.
 
 ### Eval
 
-`eval(target, ...)` is read in a named test (`Typer::eval`, TST-5). Its
-first argument names a function of a module, the temporal definition
-where the name has both (FN-4); anything else, an operator among them,
-is `eval.target`. The eval is then read as the call of that function it
-stands for, from the same argument list less the target, so positional
-and named arguments, defaults, and a generic target's parameters are
+`eval(target(...))` is read in a named test (`Typer::eval`, TST-5). Its
+first argument is a call of a function of a module, the temporal
+definition where the name has both (FN-4); anything else, a call of an
+operator among them, is `eval.target`. The call is read as any call of
+that function is, so positional and named arguments, defaults, generic
+arguments written after the name, and a generic target's parameters are
 handled as any call's are. The one difference is what a parameter
 takes: a `const` parameter takes configuration, an ordinary value, and
-every other parameter a trace.
+every other parameter a trace. A second argument is the run's
+configuration, read as a value of core's `RunConfig` (RUN-1); an eval
+takes no third (`argument.unexpected`). The typed eval is
+`ExprKind::Eval`, with its call and its configuration where it writes
+one.
+
+### Applications
+
+An application's file is headed `application name` (UNIT-14). The
+modules pass makes it a unit of its own, `Module::application`, so what
+it declares is listed, named and typed as a module's is. The passes add
+what an application has that a module has not:
+
+| Check | Rule | Code |
+| --- | --- | --- |
+| Its path is no other file's. The first file of a path is the unit; each later one is reported and left out | UNIT-14 | `application.duplicate_path`, the compiler's own until the catalogue has it |
+| It exports nothing | UNIT-14 | `application.export` |
+| No `use` names one. The names of such a line are bound to nothing | UNIT-14 | `application.import` |
+| It has one run statement | UNIT-14 | `application.run_count`, at the application's path for none and at each statement after the first |
+| A run statement stands in no module | RUN-3 | `run.position` |
+
+Not read yet: the call and the configuration of a run statement
+(RUN-1, `run.entry`), and a run statement that a declaration follows.
 
 | Form | Rule | Read as |
 | --- | --- | --- |
@@ -1075,7 +1097,8 @@ the readings are counted for the whole function: past a thousand a call
 that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
 candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
-analyser has no local code.
+analyser has one local code, `application.duplicate_path`: see
+"Applications" above.
 A symbol selects as a call by name does: see "Symbols" above.
 
 The five names `ok`, `err`, `is_ok`, `is_err` and `capture` are
@@ -1323,7 +1346,7 @@ only where the program reaches it, at core's source.
 | `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
+| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness`. An eval that writes a run configuration is not written yet |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
 | A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
@@ -1365,6 +1388,7 @@ wakes, `modified([])`;
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
+an eval that writes a run configuration; an application's run statement;
 durations, dates and times; timed traces and a published null in a
 trace; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
@@ -1413,7 +1437,8 @@ conformance claim.
 ## Finding source files
 
 The compiler is given one or more source roots. It reads every `.hgl` file
-under them and groups the files by the `module` line each declares. File and
+under them and groups the files by the `module` line each declares; a file
+headed `application name` is a unit of its own (UNIT-14). File and
 directory names carry no meaning to the compiler; keeping one module's files
 together is a convention for readers. The language does not define a file
 layout, so this is a compiler rule (owner decision, 2026-11-13).

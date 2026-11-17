@@ -234,6 +234,14 @@ pub mod codes {
     pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
     /// A key of the global store that is the run's own (TIME-8).
     pub const STORE_RESERVED_KEY: &str = "store.reserved_key";
+    /// A `use` line names an application (UNIT-14).
+    pub const APPLICATION_IMPORT: &str = "application.import";
+    /// A declaration of an application is marked `export` (UNIT-14).
+    pub const APPLICATION_EXPORT: &str = "application.export";
+    /// An application has no run statement, or a second (UNIT-14).
+    pub const APPLICATION_RUN_COUNT: &str = "application.run_count";
+    /// A run statement stands in a module (RUN-3).
+    pub const RUN_POSITION: &str = "run.position";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";
@@ -414,10 +422,14 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
+        /// An application's path is a module's or another application's
+        /// (UNIT-14). Proposed to the specification's catalogue under
+        /// this code.
+        pub const APPLICATION_DUPLICATE_PATH: &str = "application.duplicate_path";
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 1] = [APPLICATION_DUPLICATE_PATH];
     }
 }
 

@@ -231,7 +231,7 @@ test {
 }
 
 test everything {
-    assert eval(arrow, x: [1, _]) == [2, _]
+    assert eval(arrow(x: [1, _])) == [2, _]
     assert raises("value.missing_key") { lookup(key) }
 }
 
@@ -277,10 +277,20 @@ fn body(
 }
 "#;
 
+/// An application's file: what a module's file has not (UNIT-14).
+const APPLICATION: &str = r#"application tour.live
+
+use tour.all::{arrow}
+
+run(arrow(1), RunConfig())
+"#;
+
 #[test]
 fn every_kind_of_node_is_reached() {
     let file = run(Entry::SourceFile, TOUR);
     assert_eq!(file.findings, [], "{}", file.report);
+    let application = run(Entry::SourceFile, APPLICATION);
+    assert_eq!(application.findings, [], "{}", application.report);
     let fragment = run(Entry::Statements, "let a = 1\n");
     assert_eq!(fragment.findings, []);
 
@@ -288,6 +298,7 @@ fn every_kind_of_node_is_reached() {
     let reached: BTreeSet<SyntaxKind> = file
         .tree
         .descendants()
+        .chain(application.tree.descendants())
         .chain(fragment.tree.descendants())
         .map(|node| node.kind())
         .collect();

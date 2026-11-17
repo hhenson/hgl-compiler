@@ -186,6 +186,10 @@ fn label(item: &Item) -> String {
         Item::Test(decl) => named("test", decl.name()),
         Item::Instantiate(_) => "instantiate".to_string(),
         Item::TestContext(_) => "test context".to_string(),
+        Item::Run(run) => match run.word() {
+            Some(word) => format!("{} statement", word.text()),
+            None => "run statement".to_string(),
+        },
     }
 }
 

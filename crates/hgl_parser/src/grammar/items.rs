@@ -22,6 +22,8 @@ enum Item {
     Constant,
     Test,
     TestContext,
+    /// An application's run statement: `run(...)` or `eval(...)`.
+    Run,
     /// `export` before something that is no declaration.
     StrayExport,
 }
@@ -29,16 +31,25 @@ enum Item {
 impl Parser<'_> {
     // ---- Roots ----
 
-    /// `source_file = [ NL ], module_decl, { NL, top_level_item }, [ NL ], EOF ;`
+    /// ```text
+    /// source_file = [ NL ], ( module_decl | application_decl ),
+    ///               { NL, top_level_item }, [ NL ], EOF ;
+    /// ```
     pub(crate) fn source_file(&mut self) {
         self.start(SourceFile);
         // UNIT-1: a file names one module, before anything else.
+        // UNIT-14: "An application is one file, headed `application
+        // name`, where a module's files are headed `module name`."
         if self.at(KwModule) {
             let errors = self.errors;
             self.module_decl();
             self.end_of_item(errors, false);
+        } else if self.at_application() {
+            let errors = self.errors;
+            self.application_decl();
+            self.end_of_item(errors, false);
         } else {
-            self.expected_rule("`module`", "UNIT-1");
+            self.expected_rule("`module` or `application`", "UNIT-1");
         }
         self.items(false);
         self.finish();
@@ -104,6 +115,10 @@ impl Parser<'_> {
                     "UNIT-1",
                     None,
                 ),
+                // RUN-1: a run statement is an item of a file. Whether
+                // the file is an application's is the analyser's to say
+                // (`run.position`).
+                Item::Run if !in_test => {}
                 Item::Function | Item::Struct | Item::Enum | Item::Test | Item::StrayExport => {}
                 // TST-1: an unnamed test context holds helper functions,
                 // types and named tests. The item is parsed all the same.
@@ -144,6 +159,14 @@ impl Parser<'_> {
             KwUse => return Some(Item::Use),
             // ERR-10: an annotation stands before a function.
             At => return Some(Item::Function),
+            // RUN-1: `eval(...)` where an item starts is a run
+            // statement.
+            KwEval => return Some(Item::Run),
+            // LEX-10: `run` is a name that takes its meaning from where
+            // it stands: before `(`, where an item starts.
+            Ident if self.nth_word(0, "run") && self.nth(1) == LParen => {
+                return Some(Item::Run);
+            }
             _ => {}
         }
         // `export` may come first; the declaration is named by what
@@ -197,6 +220,7 @@ impl Parser<'_> {
             Item::Constant => self.constant_decl(),
             Item::Test => self.test_decl(),
             Item::TestContext => self.test_context(),
+            Item::Run => self.run_statement(),
             Item::StrayExport => {
                 self.leaf(Error);
                 self.expected("a declaration");
@@ -279,6 +303,32 @@ impl Parser<'_> {
         if self.eat(KwPart) {
             self.expect_name("a part name");
         }
+        self.finish();
+    }
+
+    /// True at `application` followed by a name. LEX-10: `application`
+    /// is a name that takes its meaning "at the head of a file".
+    fn at_application(&self) -> bool {
+        self.nth_word(0, "application") && self.nth(1) == Ident
+    }
+
+    /// `application_decl = "application", module_path ;`
+    fn application_decl(&mut self) {
+        self.start(ApplicationDecl);
+        self.bump();
+        self.module_path();
+        self.finish();
+    }
+
+    /// ```text
+    /// run_statement = run_expression | eval_expression ;
+    /// ```
+    ///
+    /// The cursor is on `run` or `eval`.
+    fn run_statement(&mut self) {
+        self.start(RunStmt);
+        let kind = if self.at(KwEval) { EvalExpr } else { RunExpr };
+        self.run_form(kind);
         self.finish();
     }
 

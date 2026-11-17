@@ -5354,38 +5354,80 @@ impl<'a> Typer<'a> {
             .collect()
     }
 
-    /// `eval(target, ...)` in a named test.
+    /// `eval(target(...))` in a named test.
     ///
-    /// TST-5: "Eval selects a module function, binding arguments by its
-    /// public positional/named rules. Its first argument names a
-    /// function of a module. Temporal/value role selection follows
-    /// FN-4 ... An operator is no target: a function wraps it ... Const
-    /// parameters receive configuration; temporal parameters receive
-    /// contextually typed publication traces."
+    /// TST-5: "Eval takes a call of a module function, written as any
+    /// call is: `eval(target(value: [7, _, 9]))`. The call binds its
+    /// arguments by the function's public positional/named rules, and
+    /// its generic arguments as any call does. Temporal/value role
+    /// selection follows FN-4 ... An operator is no target: a function
+    /// wraps it ... Const parameters receive configuration; temporal
+    /// parameters receive contextually typed publication traces. A
+    /// trace is an argument of that call and of no call inside it. A
+    /// second argument is the run's configuration, a `RunConfig`".
     ///
     /// TST-3: "An eval of a target that has a result is a trace of that
     /// result's type". TST-8: "an outputless target has no recorder or
     /// comparable result. Its eval stands as a statement and has no
     /// value: binding or comparing it rejects."
     ///
-    /// The eval is read as the call of its target it stands for, from
-    /// the same list less the target, with a trace expected of each
-    /// temporal parameter.
+    /// The call is read as any call of its function is, with a trace
+    /// expected of each temporal parameter.
     fn eval(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let at = self.at(node);
         let Some(list) = child(node, SyntaxKind::ArgList) else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        let given = arguments_of(&list);
         // The parser has reported an eval given nothing.
-        let Some((label, target)) = arguments_of(&list).into_iter().next() else {
+        let Some((_, target)) = given.first().cloned() else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        let named = (label.is_none() && target.kind() == SyntaxKind::NameExpr)
-            .then(|| name_token(&target))
-            .flatten();
+        // The second argument is the run's configuration; an eval
+        // takes no third.
+        let config = given.get(1).map(|(_, written)| self.run_config(written));
+        for (_, extra) in given.iter().skip(2) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(extra),
+                "an eval takes a call and a run configuration, and nothing more".to_string(),
+                "TST-5",
+            ));
+            self.expression(extra, None);
+        }
+        // The call: `name(arguments)`, or `name<generics>(arguments)`.
+        let called = match target.kind() {
+            SyntaxKind::CallExpr => target
+                .children()
+                .next()
+                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                .and_then(|callee| name_token(&callee))
+                .zip(child(&target, SyntaxKind::ArgList))
+                .map(|(name, arguments)| (name, arguments, None)),
+            SyntaxKind::TypedConstructor => {
+                // As `typed_constructor` finds them: the generic
+                // arguments are recorded where the whole name starts.
+                let start = match child(&target, SyntaxKind::QualifiedName) {
+                    Some(qualified) => Some(qualified.span().start),
+                    None => name_token(&target).map(|name| name.span().start),
+                };
+                name_token(&target)
+                    .zip(child(&target, SyntaxKind::ArgList))
+                    .zip(start)
+                    .map(|((name, arguments), start)| {
+                        (
+                            name,
+                            arguments,
+                            self.calls.get(&(self.file, start)).copied(),
+                        )
+                    })
+            }
+            _ => None,
+        };
         // The function the name stands for. FN-4: "Composition and
         // eval choose the temporal definition if one exists".
-        let function = named.as_ref().and_then(|name| {
+        let function = called.as_ref().and_then(|(name, ..)| {
             let (module, declarations) = self.declarations(name)?;
             let kind_of =
                 |declaration: usize| self.program.modules[module].declarations[declaration].kind;
@@ -5402,37 +5444,39 @@ impl<'a> Typer<'a> {
                 .or_else(|| of_role(Role::Value))
                 .map(|declaration| (module, declaration))
         });
-        let (Some(name), Some((module, declaration))) = (named, function) else {
-            // A name nothing binds is left for the prelude, and is not
-            // judged (ERR-9).
-            let unbound = target.kind() == SyntaxKind::NameExpr
-                && name_token(&target).is_some_and(|name| {
-                    !self.bindings.contains_key(&(self.file, name.span().start))
-                });
+        let (Some((name, arguments, generics)), Some((module, declaration))) =
+            (called.clone(), function)
+        else {
+            // A call of a name nothing binds is left for the prelude,
+            // and is not judged (ERR-9).
+            let unbound = called.as_ref().is_some_and(|(name, ..)| {
+                !self.bindings.contains_key(&(self.file, name.span().start))
+            });
             if !unbound {
                 self.diagnostics.emit(
                     error(
                         Category::Type,
                         codes::EVAL_TARGET,
                         self.at(&target),
-                        "an eval's first argument names a function of a module, and this is \
-                         none"
+                        "an eval's first argument is a call of a function of a module, and this \
+                         is none"
                             .to_string(),
                         "TST-5",
                     )
                     .with_note("an operator is evaluated through a function that calls it"),
                 );
             }
-            self.callable = Some(target);
-            let unread = self.unread_call(&list);
-            self.callable = None;
-            return unread;
+            // What the call was given is read all the same, with
+            // nothing expected of it.
+            if let Some((_, arguments, _)) = &called {
+                return self.unread_call(arguments);
+            }
+            return (ExprKind::Unread, Type::Unknown);
         };
-        let outer = self.callable.replace(target);
         self.evaluating = true;
-        let (kind, ty) = self.call_function(&name, &list, (module, declaration), None, None);
+        let (kind, ty) =
+            self.call_function(&name, &arguments, (module, declaration), None, generics);
         self.evaluating = false;
-        self.callable = outer;
         // TST-7: "Within one eval all inputs and expectation use the
         // same dense/timed style." The first trace that has cells says
         // which, and a later one of the other is reported.
@@ -5485,7 +5529,13 @@ impl<'a> Typer<'a> {
                     .with_note("an eval of a target with no result stands as a statement"),
                 );
             }
-            return (ExprKind::Eval(Box::new(call)), Type::Unknown);
+            return (
+                ExprKind::Eval {
+                    call: Box::new(call),
+                    config,
+                },
+                Type::Unknown,
+            );
         }
         // "Each cell is one cycle's publication": the `delta<T>` of the
         // result's type. One not known stays so.
@@ -5498,7 +5548,23 @@ impl<'a> Typer<'a> {
             cell: Box::new(cell),
             style,
         };
-        (ExprKind::Eval(Box::new(call)), ty)
+        (
+            ExprKind::Eval {
+                call: Box::new(call),
+                config,
+            },
+            ty,
+        )
+    }
+
+    /// The configuration of a run, written as the second argument of
+    /// an eval: a value of core's `RunConfig` (RUN-1, core's CRUN-2).
+    fn run_config(&mut self, written: &SyntaxNode) -> Box<Expr> {
+        let Some(expected) = self.program.run_config_type() else {
+            return Box::new(self.expression(written, None));
+        };
+        let value = self.expression(written, Some(&expected));
+        Box::new(self.fit(value, &expected, "the run configuration of an eval"))
     }
 
     /// Reports a trace of one style where the eval it belongs to has

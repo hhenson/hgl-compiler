@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::Location;
-use hgl_parser::SyntaxNode;
-use hgl_parser::ast::SourceFile;
+use hgl_parser::ast::{AstNode, SourceFile};
+use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
 use crate::hir::{Body, Expr};
@@ -58,6 +58,26 @@ impl Program {
         })
     }
 
+    /// The type of a run's configuration: core's struct `RunConfig`
+    /// (RUN-1, core's CRUN-2). `None` where core is not supplied or
+    /// declares none.
+    pub fn run_config_type(&self) -> Option<Type> {
+        const NAME: &str = "RunConfig";
+        let core = self.core()?;
+        let module = &self.modules[core];
+        let declaration = module.scope.get(NAME)?.iter().copied().find(|&index| {
+            let declaration = &module.declarations[index];
+            declaration.kind == DeclarationKind::Struct && declaration.is_public()
+        })?;
+        Some(Type::Named {
+            name: NAME.to_string(),
+            module: core,
+            declaration,
+            arguments: Vec::new(),
+            kind: NamedKind::Struct,
+        })
+    }
+
     /// True for the type of a capability: one of core's native types
     /// that TIME-8 names.
     pub fn is_capability_type(&self, ty: &Type) -> bool {
@@ -100,6 +120,10 @@ impl Program {
 pub struct Module {
     /// The module's path, written with dots.
     pub path: String,
+    /// True for an application (UNIT-14): "one file, headed
+    /// `application name`, where a module's files are headed `module
+    /// name`. It holds what a module holds, and one run statement".
+    pub application: bool,
     /// Its files: the unnamed one first, then the parts in order of part
     /// name. That is the order the diagnostic catalogue gives for "the
     /// later of two", so what is reported does not depend on the order
@@ -171,6 +195,17 @@ impl Module {
             .into_iter()
             .flatten()
             .map(|&index| &self.declarations[index])
+    }
+
+    /// Where the path of an application is written, in the line that
+    /// heads its file (UNIT-14). `None` for a module.
+    pub fn application_at(&self) -> Option<Location> {
+        if !self.application {
+            return None;
+        }
+        let file = self.files.first()?;
+        let path = file.syntax.application_decl()?.path()?;
+        Some(Location::new(file.file, path.syntax().span()))
     }
 }
 

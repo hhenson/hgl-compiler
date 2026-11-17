@@ -100,6 +100,12 @@ define_syntax_kinds! {
         // ---- Units and names (units-and-names.md) ----
         /// `module pricing.curves part bootstrap`
         ModuleDecl,
+        /// `application pricing.live`: the line that heads an
+        /// application's file (UNIT-14)
+        ApplicationDecl,
+        /// An application's run statement: a `RunExpr` or an `EvalExpr`
+        /// that stands as an item of the file (RUN-1)
+        RunStmt,
         /// `pricing.curves`
         ModulePath,
         /// `use pricing.curves::{curve, bump}` or `use pricing.curves as pc`
@@ -267,8 +273,10 @@ define_syntax_kinds! {
         LambdaParam,
         /// `if a { b } else { c }`
         IfExpr,
-        /// `eval(doubled, value: [1.0, _, 3.0])`
+        /// `eval(doubled(value: [1.0, _, 3.0]))`
         EvalExpr,
+        /// `run(heartbeat(every: 1s))`
+        RunExpr,
         /// `{ statements }`
         Block,
         /// `f(a, b: c)`: the callee, then the argument list

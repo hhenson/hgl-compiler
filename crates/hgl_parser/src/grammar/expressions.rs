@@ -48,7 +48,8 @@ const BARE_FN: &str = "an anonymous function is parenthesized before it is calle
 pub(crate) enum ArgMode {
     /// A call or a constructor: positional and named arguments.
     Call,
-    /// `eval(...)`: the first argument is the expression under test.
+    /// `eval(...)` and `run(...)`: a call, and then a run
+    /// configuration. Neither has a label (TST-5, RUN-1).
     Eval,
     /// A delta constructor: every argument is named.
     Delta,
@@ -312,18 +313,7 @@ impl Parser<'_> {
                 return true;
             }
             KwIf => self.if_expr(),
-            KwEval => {
-                self.start(EvalExpr);
-                self.bump();
-                // LEX-27: `eval(...)` is a call too.
-                if self.at(LParen) && self.suffix_at(0) {
-                    self.attached(Bracket::Call);
-                    self.arg_list(ArgMode::Eval);
-                } else {
-                    self.expected("`(`");
-                }
-                self.finish();
-            }
+            KwEval => self.run_form(EvalExpr),
             // CTRL-9: before the body of an `if`, `for`, `switch`, `when`
             // or `while`, the first `{` opens the body. It is left for
             // the statement to take.
@@ -334,6 +324,26 @@ impl Parser<'_> {
             _ => self.expected("an expression"),
         }
         false
+    }
+
+    /// ```text
+    /// eval_expression = "eval", "(", expression, [ ",", expression ], [ "," ], ")" ;
+    /// run_expression = "run", "(", expression, [ ",", expression ], [ "," ], ")" ;
+    /// ```
+    ///
+    /// The cursor is on the word. `kind` is the node it makes: an
+    /// `EvalExpr` or a `RunExpr`.
+    pub(crate) fn run_form(&mut self, kind: crate::kind::SyntaxKind) {
+        self.start(kind);
+        self.bump();
+        // LEX-27: `eval(...)` is a call too.
+        if self.at(LParen) && self.suffix_at(0) {
+            self.attached(Bracket::Call);
+            self.arg_list(ArgMode::Eval);
+        } else {
+            self.expected("`(`");
+        }
+        self.finish();
     }
 
     // ---- Names and constructors ----
@@ -501,7 +511,7 @@ impl Parser<'_> {
     /// ```text
     /// arguments = argument, { ",", argument }, [ "," ] ;
     /// argument = [ member_name, ":" ], expression ;
-    /// eval_expression = "eval", "(", expression, { ",", argument }, [ "," ], ")" ;
+    /// eval_expression = "eval", "(", expression, [ ",", expression ], [ "," ], ")" ;
     /// delta_arguments = delta_argument, { ",", delta_argument }, [ "," ] ;
     /// delta_argument = member_name, ":", expression ;
     /// ```
@@ -517,11 +527,11 @@ impl Parser<'_> {
             }
             let mut index = 0usize;
             parser.list(RParen, "an argument", true, |parser| {
-                // LEX-9: `time` may label an argument. The first argument
-                // of `eval` is an expression and has no label.
-                let labelled = parser.at_member_name()
-                    && parser.nth(1) == Colon
-                    && !(mode == ArgMode::Eval && index == 0);
+                // LEX-9: `time` may label an argument. An argument of
+                // `eval` is an expression and has no label: the names
+                // are inside the call it takes (TST-5).
+                let labelled =
+                    parser.at_member_name() && parser.nth(1) == Colon && mode != ArgMode::Eval;
                 if !labelled && !can_start_expression(parser.current()) {
                     return;
                 }

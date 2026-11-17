@@ -91,6 +91,16 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         declared: Vec::new(),
         tested: Vec::new(),
     };
+    // UNIT-14, RUN-1: what an application declares is written as a
+    // module's is. Its run statement is not written yet.
+    if let Some(at) = program.modules[index].application_at() {
+        emitter.diagnostics.emit(Diagnostic::error(
+            Category::Build,
+            Code::Local(codes::UNSUPPORTED),
+            at,
+            "the hgraph target does not write an application's run statement yet".to_string(),
+        ));
+    }
     emitter.declarations();
     emitter.tests();
     let text = emitter.finish();
@@ -1632,7 +1642,16 @@ impl Emitter<'_> {
                 format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Delta { arguments } => self.delta(function, value, arguments),
-            ExprKind::Eval(call) => self.eval(function, call),
+            // RUN-1: the run's configuration is not written yet, an
+            // instant being no value of this target's.
+            ExprKind::Eval {
+                config: Some(config),
+                ..
+            } => {
+                self.unsupported(config.at, "an eval with a run configuration");
+                "None".to_string()
+            }
+            ExprKind::Eval { call, config: None } => self.eval(function, call),
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the

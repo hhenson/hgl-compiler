@@ -121,8 +121,8 @@ pub fn run_within(limits: Limits, entry: Entry, text: &str) -> Outcome {
 }
 
 /// What a text is, from its first tokens: a file when it starts with a
-/// `module` line, declarations when it starts as a declaration does, and
-/// statements otherwise.
+/// `module` or an `application` line, declarations when it starts as a
+/// declaration does, and statements otherwise.
 pub fn entry_for(text: &str) -> Entry {
     let mut sources = SourceMap::new();
     let file = sources.add("test.hgl", text).unwrap();
@@ -137,6 +137,9 @@ pub fn entry_for(text: &str) -> Entry {
     let second = significant.next();
     match (first, second) {
         (Some((TokenKind::KwModule, _)), _) => Entry::SourceFile,
+        // UNIT-14: `application` is a name; it heads a file when a name
+        // follows it.
+        (Some((TokenKind::Ident, "application")), Some((TokenKind::Ident, _))) => Entry::SourceFile,
         (
             Some((
                 TokenKind::KwUse

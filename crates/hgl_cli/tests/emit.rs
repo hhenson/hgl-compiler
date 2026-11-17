@@ -43,7 +43,7 @@ fn an_accepted_program_is_written() {
             "    when { return delta_value(value) }\n",
             "}\n",
             "test passes {\n",
-            "    assert eval(pass, value: [7, _, 9]) == [7, _, 9]\n",
+            "    assert eval(pass(value: [7, _, 9])) == [7, _, 9]\n",
             "}\n",
         ),
     )

@@ -508,7 +508,14 @@ pub enum ExprKind {
     /// for, with a trace given to each temporal parameter and
     /// configuration to each `const` one. Its type is a trace of the
     /// target's result, or none for a target with no result (TST-8).
-    Eval(Box<Expr>),
+    Eval {
+        /// The call the eval takes, with a trace where the function
+        /// called takes a temporal input.
+        call: Box<Expr>,
+        /// The run's configuration, a `RunConfig` of core's, where the
+        /// eval writes one (RUN-1).
+        config: Option<Box<Expr>>,
+    },
     /// A trace as the value a `const fn` is given (TST-16): "for a
     /// result type T a `list<tuple<datetime, delta<T>>>`, one tuple for
     /// each publication, in time order". The expression inside is the
