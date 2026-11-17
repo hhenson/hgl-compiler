@@ -25,6 +25,7 @@
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |
+//! | A temporal function or candidate with generic parameters | A node or a graph for each set of generic arguments it is called with, `_inst_identity_sum__f64` |
 //! | `enum Side { buy, sell }` | `Side = _enum.Enum("demo.orders::Side", [...])`, a scalar to hgraph |
 //! | `struct Point { x: f64, y: f64 }` | `Point = _core.struct("Point", ("x", "y"))`, a class whose values are never changed |
 //! | `Point(x: 1.0)`, `point.x = 2.0` | `Point(x=1.0, y=...)`, `point = _core.with_field(point, x=2.0)` |
@@ -44,6 +45,7 @@
 
 mod emit;
 mod host;
+mod instances;
 
 use std::collections::BTreeSet;
 
@@ -201,9 +203,13 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
     // the program's to report only where the program reaches it.
     let mut core_file = None;
     let mut unwritten_in_core = Diagnostics::new();
+    // GEN-2: the instances of generic temporal declarations the program
+    // asks for, found before any module is written: a call in one
+    // module asks for an instance written in another.
+    let instances = instances::Instances::of(program);
     for (index, module) in program.modules.iter().enumerate() {
         if module.path == Program::CORE {
-            let mut written = emit::module(program, index, &mut unwritten_in_core);
+            let mut written = emit::module(program, index, &instances, &mut unwritten_in_core);
             core_file = Some(File {
                 path: file_path(&module.path),
                 text: std::mem::take(&mut written.text),
@@ -211,7 +217,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             modules.push(Some(written));
             continue;
         }
-        let mut written = emit::module(program, index, diagnostics);
+        let mut written = emit::module(program, index, &instances, diagnostics);
         natives |= written.natives;
         harness |= written.harness;
         files.push(File {

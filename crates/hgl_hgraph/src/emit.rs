@@ -25,6 +25,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
+use crate::instances::{Instances, instanced};
 use crate::{codes, provided, python_module, test_function};
 
 /// What writing a module gave.
@@ -69,11 +70,18 @@ pub(crate) struct Piece {
     pub(crate) statements: Vec<(usize, Location)>,
 }
 
-/// Writes module `index` of `program`.
-pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnostics) -> Written {
+/// Writes module `index` of `program`. `instances` is the instances
+/// of generic temporal declarations the program asks for.
+pub(crate) fn module(
+    program: &Program,
+    index: usize,
+    instances: &Instances,
+    diagnostics: &mut Diagnostics,
+) -> Written {
     let mut emitter = Emitter {
         program,
         module: index,
+        instances,
         diagnostics,
         hgraph: false,
         natives: false,
@@ -422,6 +430,9 @@ struct Emitter<'a> {
     program: &'a Program,
     /// The module's position in it.
     module: usize,
+    /// The instances of generic temporal declarations the program asks
+    /// for, each of which is written in its declaration's module.
+    instances: &'a Instances,
     /// Where what cannot be written is reported.
     diagnostics: &'a mut Diagnostics,
     /// True once the text names something of hgraph.
@@ -595,6 +606,36 @@ impl Emitter<'_> {
             _ => None,
         };
         let body = module.bodies.get(index).and_then(Option::as_ref);
+        // GEN-2: a temporal function or candidate with generic
+        // parameters is written once for each set of generic arguments
+        // the program calls it with, and not at all where it calls it
+        // with none.
+        if instanced(program, self.module, index) {
+            let candidate = declaration.kind.candidate().is_some();
+            if candidate
+                && !self
+                    .candidates
+                    .insert(self.definition_name(self.module, index))
+            {
+                self.unsupported(
+                    declaration.at,
+                    "a candidate with the parameter types of another of its module",
+                );
+                return;
+            }
+            let instances = self.instances;
+            for instance in instances.declared(self.module, index) {
+                let python = self.instance_name(self.module, index, &instance.suffix);
+                self.node_or_graph(index, &python, &instance.signature, &instance.body);
+                // The instances are one piece, which is left out whole
+                // once one of them has a form that is not written: the
+                // first such form is what is reported.
+                if self.piece.broken.is_some() {
+                    break;
+                }
+            }
+            return;
+        }
         match (declaration.kind, signature, body) {
             (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
                 self.value_function(index, signature, body);
@@ -618,17 +659,16 @@ impl Emitter<'_> {
                 }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
-                self.node_or_graph(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                self.node_or_graph(index, &python, signature, body);
             }
             // GEN-4: "An `impl fn` is a temporal candidate of the
             // operator it names". It is a node or a graph as a temporal
             // function is, under a name of the target's.
             (DeclarationKind::Implementation(Role::Temporal, _), Some(signature), Some(body)) => {
-                if self
-                    .candidates
-                    .insert(self.definition_name(self.module, index))
-                {
-                    self.node_or_graph(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                if self.candidates.insert(python.clone()) {
+                    self.node_or_graph(index, &python, signature, body);
                 } else {
                     self.unsupported(
                         declaration.at,
@@ -654,16 +694,61 @@ impl Emitter<'_> {
     }
 
     /// A temporal function or a temporal candidate, the declaration
-    /// `index` of the module: a node where its body is a runtime one,
-    /// and a graph where it is composition (FN-3).
-    fn node_or_graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+    /// `index` of the module, as the Python function `python`: a node
+    /// where its body is a runtime one, and a graph where it is
+    /// composition (FN-3). `signature` and `body` are the declaration's
+    /// own, or an instance's.
+    fn node_or_graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let module = &program.modules[self.module];
         match module.phases.get(index).copied().flatten() {
-            Some(Phase::Node) => self.node(index, signature, body),
-            Some(Phase::Graph) => self.graph(index, signature, body),
+            Some(Phase::Node) => self.node(index, python, signature, body),
+            Some(Phase::Graph) => self.graph(index, python, signature, body),
             None => self.unsupported(module.declarations[index].at, "this function"),
         }
+    }
+
+    /// The Python name of an instance of `declaration` of `module`:
+    /// `_inst_`, the name the declaration would have, and the
+    /// instance's generic arguments. The `_` first makes the name the
+    /// target's own.
+    fn instance_name(&self, module: usize, declaration: usize, suffix: &str) -> String {
+        format!(
+            "_inst_{}__{suffix}",
+            self.definition_name(module, declaration)
+        )
+    }
+
+    /// The Python name of what a call of `declaration` of `module`
+    /// calls: the function, or for a declaration written by instance,
+    /// its instance for the call's generic arguments `generics`.
+    fn called_name(
+        &mut self,
+        (module, declaration): (usize, usize),
+        generics: &[GenericArgument],
+        at: Location,
+    ) -> String {
+        let program = self.program;
+        if !instanced(program, module, declaration) {
+            return self.function_name(module, declaration);
+        }
+        let instances = self.instances;
+        let Some(instance) = instances.find(program, (module, declaration), generics) else {
+            self.unsupported(
+                at,
+                "a call of a generic temporal function with generic arguments that are not known",
+            );
+            return "None".to_string();
+        };
+        let python = self.instance_name(module, declaration, &instance.suffix);
+        self.piece.uses.insert((module, declaration));
+        if module == self.module {
+            return python;
+        }
+        let path = program.modules[module].path.clone();
+        let named = format!("{}.{python}", alias(&path));
+        self.imports.insert(path);
+        named
     }
 
     /// `const name: T = expression`, the declaration `index` of the
@@ -906,9 +991,6 @@ impl Emitter<'_> {
         declaration: &Declaration,
         signature: &Signature,
     ) -> (Vec<String>, Option<String>) {
-        if !signature.generics.is_empty() {
-            self.unsupported(declaration.at, "a generic temporal function");
-        }
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
             // A `const` parameter's default is written where a call
@@ -955,7 +1037,7 @@ impl Emitter<'_> {
     /// `state` is a field of the node's `STATE`, given its value in the
     /// node's `start`. TIME-7: `inject out` is the node's own output,
     /// hgraph's `_output`.
-    fn node(&mut self, index: usize, signature: &Signature, body: &Body) {
+    fn node(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
         let function = Function {
@@ -1098,7 +1180,6 @@ impl Emitter<'_> {
         if valid.len() != inputs.len() && !handlers.is_empty() {
             options.push(format!("valid={}", names(&valid)));
         }
-        let python = self.definition_name(self.module, index);
         let decorator = if result.is_some() {
             "compute_node"
         } else {
@@ -1214,10 +1295,9 @@ impl Emitter<'_> {
     }
 
     /// A graph: `@graph`, whose body wires the nodes it calls.
-    fn graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+    fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
-        let python = self.definition_name(self.module, index);
         let function = Function {
             locals: &body.locals,
             signature: Some(signature),
@@ -2731,7 +2811,7 @@ impl Emitter<'_> {
             self.unsupported(at, &format!("a call of `{}`", declared.name));
             return "None".to_string();
         }
-        let python = self.function_name(module, declaration);
+        let python = self.called_name((module, declaration), generics, at);
         let arguments = self.arguments(function, (module, declaration), signature, arguments);
         format!("{python}({arguments})")
     }
@@ -2749,6 +2829,7 @@ impl Emitter<'_> {
                 Callee::Function {
                     module,
                     declaration,
+                    generics,
                     ..
                 },
             arguments,
@@ -2794,7 +2875,7 @@ impl Emitter<'_> {
                 format!("_harness.evaluate({node}, {})", given.join(", "))
             };
         }
-        let target = self.function_name(*module, *declaration);
+        let target = self.called_name((*module, *declaration), generics, call.at);
         let mut arguments = self.arguments(function, (*module, *declaration), signature, arguments);
         if let Some(config) = config {
             if !arguments.is_empty() {
@@ -2941,7 +3022,7 @@ fn canonical(program: &Program, ty: &Type) -> Option<String> {
 }
 
 /// A generic argument as [`canonical`] text.
-fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
+pub(crate) fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
     match argument {
         GenericArgument::Type(ty) => canonical(program, ty),
         GenericArgument::Constant(constant) => canonical_constant(constant),

@@ -73,6 +73,7 @@ mod declared;
 mod forms;
 pub mod hir;
 mod imports;
+mod instance;
 mod phases;
 mod program;
 mod read;

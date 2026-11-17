@@ -941,6 +941,154 @@ impl Expr {
     }
 }
 
+impl Expr {
+    /// [`Expr::walk`], for a `visit` that may change each expression:
+    /// one it replaces is then walked as what it was replaced with.
+    pub(crate) fn walk_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
+        visit(self);
+        match &mut self.kind {
+            ExprKind::Literal(_)
+            | ExprKind::Constant { .. }
+            | ExprKind::Endpoint { .. }
+            | ExprKind::Local(_)
+            | ExprKind::EndpointOf(_)
+            | ExprKind::GenericValue { .. }
+            | ExprKind::EnumMember { .. }
+            | ExprKind::Unread => {}
+            ExprKind::Block { statements, value } => {
+                walk_statements_mut(statements, visit);
+                if let Some(value) = value {
+                    value.walk_mut(visit);
+                }
+            }
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                condition.walk_mut(visit);
+                then.walk_mut(visit);
+                if let Some(otherwise) = otherwise {
+                    otherwise.walk_mut(visit);
+                }
+            }
+            ExprKind::Unary { operand: inner, .. }
+            | ExprKind::Widen(inner)
+            | ExprKind::EnumFrom { value: inner, .. }
+            | ExprKind::Field { base: inner, .. }
+            | ExprKind::Tagged { payload: inner, .. }
+            | ExprKind::TagTest { value: inner, .. }
+            | ExprKind::Payload { result: inner, .. }
+            | ExprKind::ErrorPart { base: inner, .. }
+            | ExprKind::Propagate(inner)
+            | ExprKind::Capture(inner)
+            | ExprKind::Captured { capture: inner, .. }
+            | ExprKind::Publications(inner) => inner.walk_mut(visit),
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Index {
+                base: left,
+                index: right,
+            }
+            | ExprKind::TraceCompare { left, right, .. } => {
+                left.walk_mut(visit);
+                right.walk_mut(visit);
+            }
+            ExprKind::Call { arguments, .. }
+            | ExprKind::Construct { arguments, .. }
+            | ExprKind::Delta { arguments } => {
+                for argument in arguments {
+                    argument.value.walk_mut(visit);
+                }
+            }
+            ExprKind::Error { message, code } => {
+                message.walk_mut(visit);
+                if let Some(code) = code {
+                    code.walk_mut(visit);
+                }
+            }
+            ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
+                for entry in entries {
+                    entry.walk_mut(visit);
+                }
+            }
+            ExprKind::Pairs(entries) => {
+                for (key, value) in entries {
+                    key.walk_mut(visit);
+                    value.walk_mut(visit);
+                }
+            }
+            ExprKind::Eval { call, config, .. } => {
+                call.walk_mut(visit);
+                if let Some(config) = config {
+                    config.walk_mut(visit);
+                }
+            }
+            ExprKind::Trace(cells) => {
+                for cell in cells {
+                    for part in [&mut cell.time, &mut cell.value].into_iter().flatten() {
+                        part.walk_mut(visit);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// [`walk_statements`], for a `visit` that may change each expression.
+pub(crate) fn walk_statements_mut(statements: &mut [Stmt], visit: &mut dyn FnMut(&mut Expr)) {
+    for statement in statements {
+        match statement {
+            Stmt::Inject { .. } | Stmt::Unread { .. } => {}
+            Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    value.walk_mut(visit);
+                }
+            }
+            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk_mut(visit),
+            Stmt::Assert { condition, .. } => condition.walk_mut(visit),
+            Stmt::AssignPlace { place, value, .. } => {
+                place.walk_mut(visit);
+                value.walk_mut(visit);
+            }
+            Stmt::Hook {
+                condition, body, ..
+            }
+            | Stmt::While {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    condition.walk_mut(visit);
+                }
+                walk_statements_mut(body, visit);
+            }
+            Stmt::AssertRaises { body, .. } => walk_statements_mut(body, visit),
+            Stmt::Yield { time, value, .. } => {
+                time.walk_mut(visit);
+                value.walk_mut(visit);
+            }
+            Stmt::For { sequence, body, .. } => {
+                sequence.walk_mut(visit);
+                walk_statements_mut(body, visit);
+            }
+            Stmt::Switch {
+                selector,
+                cases,
+                default,
+                ..
+            } => {
+                selector.walk_mut(visit);
+                for case in cases {
+                    case.label.walk_mut(visit);
+                    walk_statements_mut(&mut case.body, visit);
+                }
+                if let Some(default) = default {
+                    walk_statements_mut(default, visit);
+                }
+            }
+        }
+    }
+}
+
 /// Calls `visit` with every expression of `statements`, as
 /// [`Expr::walk`] does for one expression.
 pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
