@@ -1426,13 +1426,22 @@ what is expected, check that core's dense scalar eval cases are written
 whole, and check which tests of a program with unwritten forms are
 blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
-`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. With hgraph 0.8.19,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 13 of
-the 24 tests of the pinned core's conformance cases: the eight of
-`scalar_eval.hgl` and the five of `scalar_endpoints.hgl` that publish
-no null. The other 11 are not run, for forms the target does not write
-yet. That is a run by hand, and no
-conformance claim.
+`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
+hgraph 0.9.0. With it,
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 17 of
+the 24 tests of the pinned core's conformance cases and fails none:
+
+| File | Tests | Pass | Not run, and why |
+| --- | --- | --- | --- |
+| `scalar_eval.hgl` | 8 | 8 | |
+| `scalar_endpoints.hgl` | 6 | 5 | 1: the type `i64?` |
+| `record_eval.hgl` | 2 | 2 | |
+| `mixed_eval.hgl` | 1 | 1 | |
+| `set_endpoints.hgl` | 1 | 1 | |
+| `identity_arithmetic.hgl` | 5 | 0 | 4: a published null in a trace. 1: a duration, a date or a time |
+| `failure_eval.hgl` | 1 | 0 | 1: `assert raises` |
+
+That is a run by hand, and no conformance claim.
 
 ## Finding source files
 
