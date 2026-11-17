@@ -297,7 +297,7 @@ fn a_value_is_of_the_type_its_place_expects() {
         "    let absent: i64? = null\n",
         "    let present: i64? = a\n",
         "    let widened_too: f64? = -1\n",
-        "    let never: i64 = null\n",
+        "    let empty: i64 = null\n",
         "    let whatever: any = a\n",
         // Nothing says which nullable type this is.
         "    let unknown = null\n",
@@ -1502,7 +1502,7 @@ fn a_var_is_assigned_by_every_path_that_reaches_its_read() {
         "    let fine = d\n",
         "    var e: i64\n",
         "    for item in items { e = item }\n",
-        "    let never = e\n",
+        "    let maybe = e\n",
         "    var f: i64\n",
         "    switch side {\n        case .buy: f = 1\n        case .sell: f = 2\n    }\n",
         "    let covered = f\n",
