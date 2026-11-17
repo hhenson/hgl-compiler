@@ -135,6 +135,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-8 | analyser | planned | Typing of `any` |
 | TYPE-8 | transpiler | planned | A boxed value keeps its exact type; equality, capability failure, independent copies |
 | TYPE-9 | analyser | partial | An atomic payload is an ordinary value type. A node publishes a V to a result of `atomic<V>`. Left: temporalization of composite types; `atomic` normalisation; an atomic input's payload read as its V |
+| TYPE-9 | transpiler | partial | hgraph: a temporal set of a scalar or an enum is a `TSS`, whose tick is the set's delta. Left: temporal tuples, structs, lists and dictionaries; `atomic` |
 | TYPE-10 | analyser | partial | A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists. Left: sizes computed from other constants; an unsized pattern accepting a fixed size |
 | TYPE-11 | analyser | partial | Size kind and bounds of literal sizes and generic value parameters (`rolling.size_kind`, `rolling.size_bounds`); an omitted minimum is the maximum in identity. Left: sizes computed from other constants |
 | TYPE-11 | transpiler | planned | Window publications under core's contract |
@@ -146,7 +147,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 | TYPE-16 | analyser | partial | `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a `dict<i64, delta<V>>` for a list, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a set, a dictionary and a struct. A `ref` and a `signal` have none (`delta.unsupported_shape`). Each delta that is a type of its own has its properties: a set's `added` and `removed`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`). It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`). A `delta<V>` is a value where a `delta<V?>` is expected, and null is not. Left: a constructor written for a delta that is no type of its own, a list's or a tuple's, which is not judged |
-| TYPE-16 | transpiler | planned | A delta as the target's publication value |
+| TYPE-16 | transpiler | partial | hgraph: a set's delta, made from its properties, is hgraph's own set delta, in a node, in a trace and as a value. Left: a dictionary's, a struct's and a nullable's delta |
 
 ## Expressions and bindings
 
@@ -357,6 +358,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-2 | transpiler | planned | Artifacts omit test-only declarations |
 | TST-3 | analyser | partial | A test declares no `state` or `cache`, injects nothing, and has no hook, `yield` or `return`, in its block or a block inside it (`test.statement_phase`). Its block is read as a graph's body is, with `assert` among its statements. An eval of a target with a result is a trace of the result's type, bound with `let` and compared; a trace, or a value that holds one, stored in a field or given to a temporal function is `trace.escape`; one given to a `const fn` is the list of its publications there (TST-16). Left: an `eval` outside a named test, which is not read; a trace returned |
 | TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells |
+| TST-4 | transpiler | partial | hgraph: two dense traces are compared by the target's harness, cell by cell, a set's delta by what it added and what it removed, and a placeholder at the end of either adds nothing (TST-6). Left: the mismatch report, which says only that the assertion does not hold |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
 | TST-5 | analyser | partial | An eval's first argument names a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). Its other arguments are bound as a call's are: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. Left: a generic target given structural cells |
 | TST-6 | transpiler | partial | hgraph: a generated test gives each input its dense trace, a step a cell, and the harness ends the result at its last publication, empty where there was none. Core's eight scalar cases pass on hgraph 0.8.19 when run by hand. Left: timed traces; a published null |
@@ -455,7 +457,7 @@ the same numeric rules the transpiler rows give.
 | END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. For a nullable scalar it is the optional TYPE-16 gives it. Left: proof that `x` is valid and modified |
 | END-3 | transpiler | partial | hgraph: `delta_value(input)` of a scalar input. Left: a published null; structural inputs |
 | END-4 | transpiler | partial | hgraph: `invalidate(out)` clears the node's output. Core's publish, invalidate and recover case passes when run by hand. Left: an input invalidated |
-| END-5 | transpiler | planned | Active and passive affect scheduling only; repeated writes in one evaluation |
+| END-5 | transpiler | partial | hgraph: repeated writes to a node's own set in one evaluation are one delta. Left: active and passive |
 | END-6 | analyser | planned | `last_modified` has type `datetime?` |
 | END-6 | transpiler | planned | `last_modified` value while valid and while invalid |
 | CAP-1 | analyser | done | `inject` binds each capability but `out` to a local of the native type core declares for it; a property is read with its type and not assigned, and no call constructs the type (with TIME-8 and NATIVE-6) |

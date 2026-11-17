@@ -25,3 +25,41 @@ def evaluate(target, /, **arguments):
     while result and result[-1] is None:
         result.pop()
     return result
+
+
+def same(left, right):
+    """Whether two dense traces are the same (the language's TST-4).
+
+    They are when each cell is: both silent, or both the same
+    publication. A `None` at the end of either adds nothing: "Trailing
+    placeholders have no effect" (TST-6).
+    """
+    left, right = _trimmed(left), _trimmed(right)
+    return len(left) == len(right) and all(map(_same_cell, left, right))
+
+
+def _trimmed(trace):
+    trace = list(trace)
+    while trace and trace[-1] is None:
+        trace.pop()
+    return trace
+
+
+def _same_cell(left, right):
+    if left is None or right is None:
+        return left is None and right is None
+    if _is_set_delta(left) or _is_set_delta(right):
+        # hgraph's own equality takes `Removed(1)` for `1`, so a delta
+        # that removed an element would equal one that added it. What
+        # each added and what each removed are compared instead.
+        return (
+            _is_set_delta(left)
+            and _is_set_delta(right)
+            and frozenset(left.added) == frozenset(right.added)
+            and frozenset(left.removed) == frozenset(right.removed)
+        )
+    return left == right
+
+
+def _is_set_delta(value):
+    return hasattr(value, "added") and hasattr(value, "removed")

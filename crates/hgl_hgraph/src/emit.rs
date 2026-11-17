@@ -752,6 +752,18 @@ impl Emitter<'_> {
     /// function: `TS[int]` for a temporal `i64`, `int` for a `const`
     /// one. `None`, reported, for a type not written yet.
     fn annotation(&mut self, ty: &Type, temporal: bool, at: Location) -> Option<String> {
+        // TYPE-9: temporalization maps "sets to membership". A
+        // temporal `set<T>` is hgraph's `TSS[T]`, whose tick
+        // is the set's delta, and a `const` one a `frozenset`.
+        if let Type::Set(element) = ty {
+            let element = self.annotation(element, false, at)?;
+            return Some(if temporal {
+                self.hgraph = true;
+                format!("_hg.TSS[{element}]")
+            } else {
+                format!("_py.frozenset[{element}]")
+            });
+        }
         let python = match (scalar(ty), ty) {
             (Some(python), _) => python.to_string(),
             // An enum is a scalar to hgraph, as its Python `Enum` is.
@@ -895,7 +907,12 @@ impl Emitter<'_> {
             }
         }
         if has_out {
+            // hgraph names the output's type after its input's:
+            // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set.
             let annotation = match &result {
+                Some(result) if result.starts_with("_hg.TSS[") => {
+                    result.replacen("TSS[", "TSS_OUT[", 1)
+                }
                 Some(result) => result.replacen("TS[", "TS_OUT[", 1),
                 None => "_py.object".to_string(),
             };
@@ -1614,6 +1631,7 @@ impl Emitter<'_> {
                     .collect();
                 format!("{{{}}}", entries.join(", "))
             }
+            ExprKind::Delta { arguments } => self.delta(function, value, arguments),
             ExprKind::Eval(call) => self.eval(function, call),
             // TST-16: the list a `const fn` is given needs each
             // publication's instant, which the harness does not record.
@@ -1627,10 +1645,14 @@ impl Emitter<'_> {
                 right,
                 negated,
             } => {
-                let symbol = if *negated { "!=" } else { "==" };
+                // TST-4: "Harness comparison is intrinsic: compare
+                // presence, exact present data, and shape/length". The
+                // harness compares, and not Python's `==`: hgraph's set
+                // delta takes a removed element for an added one.
                 let left = self.expression(function, left);
                 let right = self.expression(function, right);
-                format!("{left} {symbol} {right}")
+                let not = if *negated { "not " } else { "" };
+                format!("{not}_harness.same({left}, {right})")
             }
             // TYPE-7: a member of an enum, however it was written,
             // read from its `Enum` by its name.
@@ -2547,6 +2569,47 @@ impl Emitter<'_> {
         } else {
             format!("_harness.evaluate({target}, {arguments})")
         }
+    }
+
+    /// TYPE-16: `delta<set<i64>>(added: [1, 2], removed: [3])`, a set's
+    /// delta made from its properties, as hgraph's own set delta. A
+    /// property left out is empty.
+    fn delta(&mut self, function: &Function, value: &Expr, arguments: &[Argument]) -> String {
+        let element = match &value.ty {
+            Type::Delta(of) => match &**of {
+                Type::Set(element) => Some(&**element),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(element) = element else {
+            self.unsupported(value.at, "a delta that is not a set's");
+            return "None".to_string();
+        };
+        let Some(element) = self.annotation(element, false, value.at) else {
+            return "None".to_string();
+        };
+        // EXPR-13: the properties are evaluated in the order they are
+        // written, as a call's arguments are. Python evaluates keyword
+        // arguments as written, so each is given by its name in that
+        // order, and one left out is empty.
+        const PROPERTIES: [&str; 2] = ["added", "removed"];
+        let mut given = [false; 2];
+        let mut written = Vec::new();
+        for argument in arguments {
+            let value = self.expression(function, &argument.value);
+            if let Some(index) = argument.parameter.filter(|index| *index < PROPERTIES.len()) {
+                given[index] = true;
+                written.push(format!("{}={value}", PROPERTIES[index]));
+            }
+        }
+        for (property, given) in PROPERTIES.iter().zip(given) {
+            if !given {
+                written.push(format!("{property}=_py.frozenset()"));
+            }
+        }
+        self.hgraph = true;
+        format!("_hg.set_delta({}, tp={element})", written.join(", "))
     }
 
     /// A dense trace written out: a list with `None` where it has `_`
