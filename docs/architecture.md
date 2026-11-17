@@ -1399,6 +1399,9 @@ Core's native functions are the target's to provide (NATIVE-7):
 copied out beside the modules. It holds the `i64` operations to core's
 numeric contract, which neither wraps nor promotes. The transpiler reads
 the names it defines, and a candidate it has no function for is reported.
+It is written when a module calls a function of it, and whenever the
+harness is written: the harness imports it, to know an HGL error by its
+class.
 
 `_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
 for each input through hgraph's own `eval_node` and ends the result at

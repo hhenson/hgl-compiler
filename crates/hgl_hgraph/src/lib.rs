@@ -163,10 +163,13 @@ pub fn file_path(module: &str) -> String {
 pub const ROOT_FILE: &str = "_hgl/__init__.py";
 
 /// The support file that provides core's native functions. Its name
-/// starts with `_`, as no module's Python name does.
+/// starts with `_`, as no module's Python name does. It is written when
+/// a module calls one of its functions, and with the harness, which
+/// imports it.
 pub const CORE_NATIVE_FILE: &str = "_hgl/_core_native.py";
 
-/// The support file that holds the eval harness.
+/// The support file that holds the eval harness. It is written when a
+/// test calls it.
 pub const HARNESS_FILE: &str = "_hgl/_harness.py";
 
 /// Writes `program` for hgraph: a file for each of its modules, and
@@ -266,7 +269,10 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             });
         }
     }
-    if natives {
+    // The harness imports the provider: it knows an HGL error by the
+    // provider's class (TST-10). So the provider is written with it,
+    // whether or not a module calls a function of the provider's.
+    if natives || harness {
         files.push(File {
             path: CORE_NATIVE_FILE.to_string(),
             text: CORE_NATIVE.to_string(),

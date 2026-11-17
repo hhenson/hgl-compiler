@@ -60,7 +60,7 @@ fn an_accepted_program_is_written() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(
         text(&output.stdout),
-        format!("wrote 3 files for hgraph to {}\n", out.display())
+        format!("wrote 4 files for hgraph to {}\n", out.display())
     );
     let module = fs::read_to_string(
         out.join("_hgl")
@@ -77,6 +77,8 @@ fn an_accepted_program_is_written() {
             .contains("    if not (_harness.same(_harness.evaluate(pass_, value=[7, None, 9]), [7, None, 9])):\n        raise _py.AssertionError()\n")
     );
     assert!(out.join("_hgl").join("_harness.py").is_file());
+    // The harness imports the provider, which is written with it.
+    assert!(out.join("_hgl").join("_core_native.py").is_file());
     assert!(out.join("_hgl").join("__init__.py").is_file());
 }
 

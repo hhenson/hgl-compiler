@@ -987,6 +987,20 @@ fn a_module_takes_no_other_packages_name() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_hgraph/__init__.py");
     assert!(python.contains("import hgraph as _hg\n"));
+    // The module calls no function of the provider's, and its test
+    // calls the harness, which imports the provider: both are written.
+    assert!(!python.contains("_core_native"));
+    assert!(python.contains("import _hgl._harness as _harness\n"));
+    assert!(
+        emitted
+            .text("_hgl/_harness.py")
+            .contains("import _hgl._core_native as _core")
+    );
+    assert!(
+        emitted
+            .text("_hgl/_core_native.py")
+            .contains("class HglError")
+    );
     assert_eq!(hgl_hgraph::python_module("hgraph"), "_hgl._m_hgraph");
     assert_eq!(
         hgl_hgraph::python_module("demo.pass"),
@@ -1066,6 +1080,8 @@ fn modules_nest_and_empty_forms_have_a_body() {
             "_hgl/__init__.py",
             "_hgl/_m_demo/__init__.py",
             "_hgl/_m_demo/_m_util/__init__.py",
+            // The harness, and the provider it imports.
+            "_hgl/_core_native.py",
             "_hgl/_harness.py"
         ]
     );
@@ -3219,6 +3235,22 @@ fn the_generated_tests_pass_on_hgraph() {
          on enums of one name, two on constants, one on durations, one on raises, and one of \
          each demo's"
     );
+}
+
+/// A program that calls no function of the provider's still has the
+/// provider beside its harness, which imports it: its test loads and
+/// runs. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_test_that_calls_no_native_loads_its_harness() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_harness_alone");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("shadow.hgl", SHADOW)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    assert_eq!(ran, [Ran::Passed]);
 }
 
 /// A test that fails on hgraph says which of its statements failed,
