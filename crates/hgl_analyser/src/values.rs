@@ -1859,7 +1859,8 @@ impl<'a> Typer<'a> {
                 .with_related(self.locals[local].at, "declared here"),
             );
         } else if self.graph {
-            self.assigned_category(local, &value, false);
+            let given = (self.category(&value), value.at);
+            self.assigned_category(local, given, false);
         }
         // TIME-8: a `var` a capability is assigned to is that
         // capability from there.
@@ -2034,7 +2035,26 @@ impl<'a> Typer<'a> {
                 .with_related(self.locals[local].at, "declared here"),
             );
         } else if self.graph {
-            self.assigned_category(local, &value, true);
+            // What the `var` becomes turns on the value and on every
+            // index of the place: `row[index] = 3.0` with `index` a
+            // connection selects the element as the graph runs.
+            let mut parts = vec![&value];
+            place_indices(&target, &mut parts);
+            let categories: Vec<(ValueCategory, Location)> = parts
+                .iter()
+                .map(|part| (self.category(part), part.at))
+                .collect();
+            let given = categories
+                .iter()
+                .find(|(category, _)| *category == ValueCategory::Connection)
+                .or_else(|| {
+                    categories
+                        .iter()
+                        .find(|(category, _)| *category == ValueCategory::Unsettled)
+                })
+                .copied()
+                .unwrap_or((ValueCategory::Value, value.at));
+            self.assigned_category(local, given, true);
         }
         Stmt::AssignPlace {
             place: target,
@@ -2166,14 +2186,20 @@ impl<'a> Typer<'a> {
     /// the first value it is assigned, and what is not settled is not
     /// judged.
     ///
-    /// `inside` is true for an assignment into a place of the `var`
-    /// (EXPR-15). The `var` is then rebound to itself with one place
-    /// another value: a connection stays one whatever the place is
-    /// given, an ordinary value wired there as a constant (FN-3), and
-    /// an ordinary value given a connection would become one.
-    fn assigned_category(&mut self, local: LocalId, value: &Expr, inside: bool) {
+    /// `given` is the category of what is assigned, and where it is
+    /// written. `inside` is true for an assignment into a place of the
+    /// `var` (EXPR-15). The `var` is then rebound to itself with one
+    /// place another value: a connection stays one whatever the place
+    /// is given, an ordinary value wired there as a constant (FN-3),
+    /// and an ordinary value given a connection, or a place a
+    /// connection selects, would become one.
+    fn assigned_category(
+        &mut self,
+        local: LocalId,
+        (given, at): (ValueCategory, Location),
+        inside: bool,
+    ) {
         use ValueCategory::{Connection, Unsettled, Value};
-        let given = self.category(value);
         if self.locals[local].category == Unsettled && !inside {
             self.locals[local].category = given;
         }
@@ -2200,7 +2226,7 @@ impl<'a> Typer<'a> {
             error(
                 Category::Type,
                 codes::BINDING_CATEGORY,
-                value.at,
+                at,
                 message,
                 "CTRL-14",
             )
@@ -12253,6 +12279,19 @@ fn is_least_magnitude(node: &SyntaxNode) -> bool {
             token.kind() == SyntaxKind::Int
                 && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
         })
+}
+
+/// Adds to `indices` each index of the place `place`, from the
+/// outermost in: the `i` and the `j` of `rows[i].cells[j]`.
+fn place_indices<'e>(place: &'e Expr, indices: &mut Vec<&'e Expr>) {
+    match &place.kind {
+        ExprKind::Index { base, index } => {
+            indices.push(index);
+            place_indices(base, indices);
+        }
+        ExprKind::Field { base, .. } => place_indices(base, indices),
+        _ => {}
+    }
 }
 
 /// True for a type that is a temporal shape and no ordinary value

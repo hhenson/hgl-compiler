@@ -177,7 +177,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | EXPR-13 | transpiler | partial | hgraph: a configured binary expression is written left operand, configuration, right operand, and Python evaluates a call's arguments in that order. Left: unary configuration, and short-circuiting |
 | EXPR-14 | analyser | planned | Configuration introduces no temporal input |
 | EXPR-14 | transpiler | planned | Configuration bound at graph construction in composition, per invocation elsewhere |
-| EXPR-15 | analyser | done | In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`) |
+| EXPR-15 | analyser | done | In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`) |
 | EXPR-15 | transpiler | planned | The new connection: the old one with the place's value from what is assigned |
 
 ## Functions and phases
