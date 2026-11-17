@@ -297,6 +297,44 @@ fn an_unguarded_payload_read_is_rejected() {
     );
 }
 
+/// TIME-5: "`start` reads no temporal input and gives none to an
+/// endpoint operation: it runs before any has a value. `stop` reads a
+/// temporal input under manual admission, as a `when` under
+/// `valid([])` does: no header stands over it, so each payload read is
+/// dominated by a guard (TIME-4)."
+#[test]
+fn start_reads_no_input_and_stop_reads_one_under_a_guard() {
+    let checked = module(concat!(
+        "fn last_seen(value: i64, other: i64) -> i64 {\n",
+        "    state last: i64 = 0\n",
+        "    state seen: bool = false\n",
+        "    start {\n",
+        // A read, and an endpoint operation.
+        "        last = value\n",
+        "        seen = valid(value)\n",
+        "    }\n",
+        "    when { return value }\n",
+        "    stop {\n",
+        // Under its guard, and after a guard that returns.
+        "        if valid(value) { last = value }\n",
+        "        if valid(value) && valid(other) { last = value + other }\n",
+        // No guard, and the guard of another input.
+        "        last = value\n",
+        "        if valid(value) { last = other }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:16 phase/input.lifecycle TIME-5",
+            "m.hgl:7:16 phase/input.lifecycle TIME-5",
+            "m.hgl:13:16 phase/payload.unguarded TIME-5",
+            "m.hgl:14:34 phase/payload.unguarded TIME-5",
+        ]
+    );
+}
+
 /// TIME-3: "`modified(a, b)` subscribes to both named inputs, and
 /// similarly for more inputs ... `valid(a, b)` requires both named
 /// inputs, and similarly for more inputs ... `valid([])` requires no

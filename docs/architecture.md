@@ -1298,6 +1298,7 @@ only where the program reaches it, at core's source.
 | `switch selector { case label: ... default: ... }` there (CTRL-6) | `_selected_N = selector`, N the depth it is written at, then `if _selected_N == label:` for the first case, `elif` for each after, and `else:` with the `default`, or with `_core.unmatched(_selected_N)`, which fails |
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
+| `stop { if valid(input) { ... } }` (TIME-5) | `@name.stop` on a function that takes the node's `const` parameters, its inputs as the node has them, and its state. An input is read there as in a `when`, `input.value` under `input.valid`. `start` is given no input |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | `a =={abs: t} b`, `a !={rel: r} b` (NUM-4, EXPR-13) | The provider's function for the comparison with the tolerance where the source has it, `_core.eq__f64_f64_f64_f64(lhs=a, abs=t, rhs=b, rel=0.0)`: Python evaluates the arguments in that order. The function makes the test in exact arithmetic (NUM-5). Lifted, the tolerance is configuration of the node (NUM-11) |
@@ -1344,7 +1345,7 @@ and a candidate with the parameter types of another of its module;
 generic temporal functions;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
-`out` or an input read in `start` or `stop`, which hgraph gives neither;
+`out` read in `stop`, which hgraph gives no lifecycle hook;
 `cache`, the `inject` of a capability, and sources; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
