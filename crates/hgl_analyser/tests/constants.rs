@@ -369,6 +369,37 @@ fn a_constant_whose_value_depends_on_itself_is_reported() {
         candidates.report
     );
 
+    // GEN-8: a constant given as a generic value argument is read to
+    // give it, in angle brackets or by name, and one written as a size
+    // is read to have the type.
+    let generic = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn identity<const N: i64>() -> i64 => N\n",
+            "const fn kept<const N: i64>(values: list<i64, N>) -> i64 => N\n",
+            "const bracketed: i64 = identity<bracketed>()\n",
+            "const by_name: i64 = kept([1], N: by_name)\n",
+            // The size of the parameter's type is the constant that the
+            // call of the function is to give.
+            "const fn sized(values: list<i64, wide>) -> i64 => 1\n",
+            "const wide: i64 = sized([1])\n",
+            // Given another constant, there is no cycle.
+            "const plain: i64 = 2\n",
+            "const fine: i64 = identity<plain>()\n",
+        ),
+    )]);
+    assert_eq!(
+        generic.summary(),
+        [
+            "m.hgl:4:7 name/constant.cycle UNIT-13",
+            "m.hgl:5:7 name/constant.cycle UNIT-13",
+            "m.hgl:7:7 name/constant.cycle UNIT-13",
+        ],
+        "{}",
+        generic.report
+    );
+
     // A size that names such a constant is not followed round it.
     let sized = check(&[(
         "m.hgl",

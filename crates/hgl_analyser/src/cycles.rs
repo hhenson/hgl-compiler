@@ -20,19 +20,28 @@
 //! graph. Modules do not import one another (UNIT-3), so a cycle is
 //! within one module, and each module is looked at alone.
 //!
+//! A constant is also read where the typed program has only its value:
+//! in a type, as a size or a generic value argument, given in angle
+//! brackets or by name. So every name that is bound to a constant is an
+//! edge to it too, from the part it is written in.
+//!
 //! One approximation is kept, on the safe side: a construction of a
 //! struct counts every default of the struct's fields and of its
 //! parents', given or not. What the typed program does not hold, the
-//! body of an anonymous function, is not followed.
+//! body of an anonymous function, is followed only to the constants it
+//! names.
 
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics};
+use hgl_parser::HasSpan;
+use hgl_source::{FileId, Span};
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::hir::{Callee, Expr, ExprKind, walk_statements};
-use crate::program::{DeclarationKind, Module, Program};
+use crate::program::{Binding, DeclarationKind, Module, Program};
+use crate::read::{default_of, parameters};
 use crate::types::{Detail, Type};
 use crate::{codes, error};
 
@@ -124,6 +133,92 @@ fn reads_of(index: usize, module: &Module, visited: &Expr, reads: &mut Vec<Part>
     }
 }
 
+/// Each name of module `index`, which is `module`, that is bound to a
+/// constant of the module: the part it is written in, and the constant.
+///
+/// A name read as a value is in the typed program already. This adds
+/// the ones the typed program has folded to their values: a size, and a
+/// generic value argument (GEN-8).
+fn named_constants(index: usize, module: &Module) -> Vec<(Part, Vec<Part>)> {
+    // Where each declaration is written: for each file, the start, the
+    // end and the position of each of its declarations, in order of
+    // start. No declaration is written inside another.
+    let mut written: HashMap<FileId, Vec<(u32, u32, usize)>> = HashMap::new();
+    for (position, declaration) in module.declarations.iter().enumerate() {
+        let span = declaration.syntax.span();
+        written
+            .entry(module.files[declaration.file].file)
+            .or_default()
+            .push((span.start, span.end, position));
+    }
+    for declarations in written.values_mut() {
+        declarations.sort_unstable();
+    }
+    // Where each function writes the default of each of its parameters.
+    let defaults: Vec<Vec<Option<Span>>> = module
+        .declarations
+        .iter()
+        .map(|declaration| {
+            parameters(&declaration.syntax)
+                .iter()
+                .map(|parameter| default_of(parameter).map(|default| default.span()))
+                .collect()
+        })
+        .collect();
+    // The part a name at `at` of `file` is written in.
+    let owner = |file: FileId, at: u32| -> Option<Part> {
+        let declarations = written.get(&file)?;
+        // `partition_point` gives how many start at or before `at`: the
+        // last of them is the only one that can hold it.
+        let before = declarations.partition_point(|&(start, _, _)| start <= at);
+        let &(_, end, position) = declarations.get(before.checked_sub(1)?)?;
+        if at >= end {
+            return None;
+        }
+        if module.declarations[position].kind == DeclarationKind::Constant {
+            return Some(Part::Constant(position));
+        }
+        if matches!(module.details.get(position), Some(Detail::Struct(_))) {
+            return Some(Part::Fields(position));
+        }
+        let default = defaults[position]
+            .iter()
+            .position(|default| default.is_some_and(|span| span.start <= at && at < span.end));
+        Some(match default {
+            Some(parameter) => Part::Default(position, parameter),
+            None => Part::Body(position),
+        })
+    };
+
+    let mut found = Vec::new();
+    for used in &module.uses {
+        let Binding::Declarations {
+            module: bound,
+            declarations,
+        } = &used.binding
+        else {
+            continue;
+        };
+        if *bound != index {
+            continue;
+        }
+        let constants: Vec<Part> = declarations
+            .iter()
+            .filter(|&&declaration| {
+                module.declarations[declaration].kind == DeclarationKind::Constant
+            })
+            .map(|&declaration| Part::Constant(declaration))
+            .collect();
+        if constants.is_empty() {
+            continue;
+        }
+        if let Some(part) = owner(used.at.file, used.at.span.start) {
+            found.push((part, constants));
+        }
+    }
+    found
+}
+
 /// The cycles of module `index`, which is `module`.
 fn cycles(index: usize, module: &Module, diagnostics: &mut Diagnostics) {
     // Each part, with the parts it reads.
@@ -177,20 +272,23 @@ fn cycles(index: usize, module: &Module, diagnostics: &mut Diagnostics) {
         }
     }
 
+    // A constant named where the typed program keeps only its value: in
+    // a type, as a size or a generic value argument.
+    parts.extend(named_constants(index, module));
+
+    // A node for each part, made when it is first met: a part nothing
+    // was gathered for, a function with no body say, reads nothing.
     let mut graph: DiGraph<Part, ()> = DiGraph::new();
     let mut nodes: HashMap<Part, NodeIndex> = HashMap::new();
-    for (part, _) in &parts {
-        nodes.insert(*part, graph.add_node(*part));
-    }
+    let mut node = |graph: &mut DiGraph<Part, ()>, part: Part| -> NodeIndex {
+        *nodes.entry(part).or_insert_with(|| graph.add_node(part))
+    };
     for (part, reads) in &parts {
+        let from = node(&mut graph, *part);
         for read in reads {
-            // A part nothing was gathered for reads nothing: a function
-            // with no body, say.
-            if let Some(&target) = nodes.get(read) {
-                // `update_edge` adds the edge once however often it is
-                // read.
-                graph.update_edge(nodes[part], target, ());
-            }
+            let target = node(&mut graph, *read);
+            // `update_edge` adds the edge once however often it is read.
+            graph.update_edge(from, target, ());
         }
     }
 
