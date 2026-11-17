@@ -178,6 +178,38 @@ fn a_constant_is_read_wherever_a_value_or_a_constant_is() {
     );
 }
 
+/// UNIT-13, GEN-6: a constant given as an operator's option is the
+/// value a candidate's condition compares, as the same value written
+/// out is.
+#[test]
+fn a_constant_given_as_an_option_selects_as_its_value_does() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const policy: ZeroPolicy = .error\n",
+            "const fail: ZeroPolicy = .fail\n",
+            // `.error` selects the candidate that gives a result, and
+            // `.fail` the one that gives the number.
+            "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: policy} b\n",
+            "const fn failing(a: f64, b: f64) -> f64 => a /{zero: fail} b\n",
+            // So a number is not what `policy` gives, as it is not
+            // what `.error` written out gives.
+            "const fn plain(a: f64, b: f64) -> f64 => a /{zero: policy} b\n",
+            "const fn written(a: f64, b: f64) -> f64 => a /{zero: .error} b\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:44 operator/operator.no_candidate OPS-1",
+            "m.hgl:7:46 operator/operator.no_candidate OPS-1",
+        ],
+        "{}",
+        checked.report
+    );
+}
+
 /// UNIT-13: the expression is "checked against T ... It reads no
 /// parameter, local, temporal value, or capability." The type is an
 /// ordinary value type.

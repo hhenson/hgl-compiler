@@ -7697,7 +7697,47 @@ impl<'a> Typer<'a> {
                 .member_name(module, declaration, &argument)
                 .map(OptionValue::Member);
         }
+        if node.kind() == SyntaxKind::NameExpr
+            && let Some(value) = self.constant_option(node)
+        {
+            return Some(value);
+        }
         constant_of(node)
+    }
+
+    /// The value of the constant of a module that `node` names, for a
+    /// candidate's condition to compare (UNIT-13: "a compile-time
+    /// constant where a generic value argument ... requires one"; an
+    /// option is one, GEN-6). `None` for a name that is no constant, and
+    /// for a constant whose value is not known here.
+    ///
+    /// An `i64` or a `duration` is followed to its value, as a size is.
+    /// Any other is what its expression is written as, where that is a
+    /// literal or a `.member`: the expression is in its declaration's
+    /// file, so no name in it is looked up here.
+    fn constant_option(&self, node: &SyntaxNode) -> Option<OptionValue> {
+        let name = name_token(node)?;
+        let (module, &[declaration]) = self.declarations(&name)? else {
+            return None;
+        };
+        let declared = &self.program.modules[module].declarations[declaration];
+        if declared.kind != DeclarationKind::Constant {
+            return None;
+        }
+        match crate::read::constant_value(self.program, module, declaration, &self.constant_values)
+        {
+            ConstantValue::Int(value) => return Some(OptionValue::Literal(Value::Int(value))),
+            ConstantValue::Duration(value) => {
+                return Some(OptionValue::Literal(Value::Duration(value)));
+            }
+            _ => {}
+        }
+        let ty = crate::read::type_child(&declared.syntax);
+        let written = declared
+            .syntax
+            .children()
+            .find(|child| Some(child) != ty.as_ref())?;
+        constant_of(&written)
     }
 
     /// The constant a declaration's default is, for a candidate's
