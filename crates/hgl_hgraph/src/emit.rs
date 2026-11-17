@@ -79,6 +79,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         natives: false,
         harness: false,
         enums: false,
+        datetime: false,
         imports: BTreeSet::new(),
         expanding: Vec::new(),
         text: String::new(),
@@ -299,6 +300,9 @@ fn scalar(ty: &Type) -> Option<&'static str> {
         Type::Scalar(Scalar::I64) => Some("_py.int"),
         Type::Scalar(Scalar::F64) => Some("_py.float"),
         Type::Scalar(Scalar::Str) => Some("_py.str"),
+        // TYPE-2: a `duration` is elapsed time in whole microseconds,
+        // which is what a `timedelta` holds.
+        Type::Scalar(Scalar::Duration) => Some("_dt.timedelta"),
         _ => None,
     }
 }
@@ -406,6 +410,9 @@ struct Emitter<'a> {
     harness: bool,
     /// True once the module declares an enum, which is a Python `Enum`.
     enums: bool,
+    /// True once the text names a type of Python's `datetime`, which is
+    /// what a `duration` is: a `timedelta`.
+    datetime: bool,
     /// The other generated modules this one names a function of, by
     /// module path.
     imports: BTreeSet<String>,
@@ -491,6 +498,9 @@ impl Emitter<'_> {
         // `evaluate` or `float` is then no clash with hgraph's, the
         // harness's or Python's own.
         out.push_str("import builtins as _py\n");
+        if self.datetime {
+            out.push_str("import datetime as _dt\n");
+        }
         if self.enums {
             out.push_str("import enum as _enum\n");
         }
@@ -815,7 +825,10 @@ impl Emitter<'_> {
             });
         }
         let python = match (scalar(ty), ty) {
-            (Some(python), _) => python.to_string(),
+            (Some(python), _) => {
+                self.datetime |= python.starts_with("_dt.");
+                python.to_string()
+            }
             // An enum is a scalar to hgraph, as its Python `Enum` is.
             (
                 None,
@@ -2069,8 +2082,15 @@ impl Emitter<'_> {
             Value::Bool(false) => "False".to_string(),
             Value::Str(text) => string(text),
             Value::Null => "None".to_string(),
-            Value::Duration(_) | Value::Temporal(_) => {
-                self.unsupported(at, "a duration, a date or a time");
+            // LEX-13: a duration literal is a count of whole microseconds,
+            // which the analyser has made of its parts. OPS-1: its
+            // operators are the provider's functions on that count.
+            Value::Duration(microseconds) => {
+                self.datetime = true;
+                format!("_dt.timedelta(microseconds={microseconds})")
+            }
+            Value::Temporal(_) => {
+                self.unsupported(at, "a date or a time");
                 "None".to_string()
             }
         }

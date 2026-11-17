@@ -1429,7 +1429,7 @@ call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
 an eval that writes a run configuration; an application's run statement;
 a run in real time;
-durations, dates and times; timed traces and a published null in a
+dates and times; timed traces and a published null in a
 trace; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 
@@ -1478,7 +1478,7 @@ the 24 tests of the pinned core's conformance cases and fails none:
 | `record_eval.hgl` | 2 | 2 | |
 | `mixed_eval.hgl` | 1 | 1 | |
 | `set_endpoints.hgl` | 1 | 1 | |
-| `identity_arithmetic.hgl` | 5 | 0 | 4: a published null in a trace. 1: a duration, a date or a time |
+| `identity_arithmetic.hgl` | 5 | 0 | 4: a published null in a trace. 1: a generic temporal function |
 | `failure_eval.hgl` | 1 | 0 | 1: `assert raises` |
 
 That is a run by hand, and no conformance claim.

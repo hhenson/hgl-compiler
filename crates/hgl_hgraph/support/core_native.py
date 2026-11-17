@@ -6,7 +6,11 @@ after the candidate and the types of its parameters: `add__i64_i64` is
 `native impl const fn add_(lhs: i64, rhs: i64) -> i64`.
 
 Core's numeric contract has `i64` arithmetic neither wrap nor promote: a
-result outside the signed 64-bit range is an error.
+result outside the signed 64-bit range is an error with the code
+`numeric.out_of_range` (NUM-2).
+
+A `duration` is a `timedelta`, and its arithmetic is done on its count of
+whole microseconds, which is held to the same range (TYPE-2, OPS-10).
 
 A division takes `zero`, the name of a member of core's `ZeroPolicy`,
 which says what a zero divisor gives (NUM-3, NUM-12): `"ieee"` what IEEE
@@ -23,6 +27,7 @@ that one held in two places is as good as a copy in each (TYPE-5).
 """
 
 import dataclasses as _dataclasses
+import datetime as _datetime
 import functools as _functools
 import math as _math
 from fractions import Fraction as _Fraction
@@ -33,6 +38,8 @@ _magnitude = abs
 
 _I64_MIN = -(2**63)
 _I64_MAX = 2**63 - 1
+# The smallest duration: one microsecond (TYPE-2).
+_MICROSECOND = _datetime.timedelta(microseconds=1)
 _NAN = float("nan")
 _INFINITY = float("inf")
 
@@ -304,7 +311,7 @@ def unmatched(selected):
 
 def _i64(value):
     if not _I64_MIN <= value <= _I64_MAX:
-        raise HglError("an i64 result is outside the signed 64-bit range")
+        raise HglError("an i64 result is outside the signed 64-bit range", code="numeric.out_of_range")
     return value
 
 
@@ -505,6 +512,55 @@ def mod__i64_f64(lhs, rhs, zero):
 
 def mod__f64_i64(lhs, rhs, zero):
     return _divide(_mod, lhs, rhs, zero)
+
+
+def _microseconds(value):
+    """The whole microseconds of a duration, which is a `timedelta`."""
+    return value // _MICROSECOND
+
+
+def _duration(microseconds):
+    """The duration of `microseconds`.
+
+    TYPE-2: "Instants/durations use signed 64-bit microseconds". A
+    `timedelta` holds more, so the range is checked here, on the count.
+    OPS-10: a duration result "outside its type's range is an HGL error
+    with code `numeric.out_of_range`, as an `i64` result is".
+    """
+    if not _I64_MIN <= microseconds <= _I64_MAX:
+        raise HglError(
+            "a duration result is outside the signed 64-bit range of microseconds",
+            code="numeric.out_of_range",
+        )
+    return _datetime.timedelta(microseconds=microseconds)
+
+
+def add__duration_duration(lhs, rhs):
+    return _duration(_microseconds(lhs) + _microseconds(rhs))
+
+
+def sub__duration_duration(lhs, rhs):
+    return _duration(_microseconds(lhs) - _microseconds(rhs))
+
+
+def mul__duration_i64(lhs, rhs):
+    return _duration(_microseconds(lhs) * rhs)
+
+
+def mul__duration_f64(lhs, rhs):
+    """OPS-10: "the exact result rounded to the nearest duration the type
+    holds, a tie to the even one", and a duration "multiplied ... by a NaN
+    or an infinity" is out of range. The product is exact as a fraction,
+    and Python rounds one half to even."""
+    if not _math.isfinite(rhs):
+        raise HglError(
+            "a duration multiplied by an infinity or a NaN", code="numeric.out_of_range"
+        )
+    return _duration(round(_Fraction(_microseconds(lhs)) * _Fraction(rhs)))
+
+
+def neg__duration(value):
+    return _duration(-_microseconds(value))
 
 
 def neg__i64(value):
