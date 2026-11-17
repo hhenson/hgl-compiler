@@ -2804,6 +2804,7 @@ impl<'a> Typer<'a> {
             // (GEN-4).
             Callee::Required {
                 operator: (module, declaration),
+                ..
             } => (*module, *declaration),
             Callee::Unread => return,
         };
@@ -6546,6 +6547,7 @@ impl<'a> Typer<'a> {
                 module,
                 declaration,
                 generics: Vec::new(),
+                requirements: Vec::new(),
             };
             let kind = ExprKind::Call {
                 callee,
@@ -6679,10 +6681,12 @@ impl<'a> Typer<'a> {
         let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
             placed(substitute_within(result, &map), &own)
         });
+        let requirements = self.answers(module, declaration, &resolved);
         let callee = Callee::Function {
             module,
             declaration,
             generics: resolved,
+            requirements,
         };
         let kind = ExprKind::Call {
             callee,
@@ -8232,12 +8236,14 @@ impl<'a> Typer<'a> {
                 })
             })
             .collect();
+        let requirements = self.answers(module, declaration, &generics);
         let kind = ExprKind::Call {
             callee: Callee::Candidate {
                 operator: (operator.module, operator.declaration),
                 module,
                 declaration,
                 generics,
+                requirements,
             },
             arguments,
             form,
@@ -8413,16 +8419,45 @@ impl<'a> Typer<'a> {
         if calls.is_empty() {
             return Vec::new();
         }
+        let file = self.program.modules[module].files[candidate.file].file;
+        let read = self.requirements_read(candidate, signature, (module, generics), &calls);
+        let mut verdicts = Vec::new();
+        for (call, read) in calls.iter().zip(read) {
+            let verdict = match read {
+                Some((operator, operands, result)) => {
+                    self.callable(operator, (file, operands), result.as_ref())
+                }
+                None => None,
+            };
+            verdicts.push((call.span().start, verdict));
+        }
+        verdicts
+    }
+
+    /// Each of the constraint calls `calls`, written in the `requires`
+    /// of `declared` of `module`, read with `generics` for the
+    /// declaration's generic parameters: the operator it names, the
+    /// types it is supplied with, each with where it is written, and
+    /// the type its arrow states. `None` for one that names no
+    /// operator, a predicate, and for one supplied with what is no
+    /// type, or with a type that is not known.
+    fn requirements_read(
+        &self,
+        declared: &Declaration,
+        signature: &Signature,
+        (module, generics): (usize, &[Argument]),
+        calls: &[SyntaxNode],
+    ) -> Vec<Option<Read>> {
         let program = self.program;
         let declared_in = &program.modules[module];
-        let file = declared_in.files[candidate.file].file;
+        let file = declared_in.files[declared.file].file;
         let own: Vec<Location> = signature
             .generics
             .iter()
             .map(|generic| generic.at)
             .collect();
         let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
-        // What a type written in the condition means, the candidate's
+        // What a type written in the condition means, the declaration's
         // generic parameters in place.
         let written = |node: &SyntaxNode| -> Option<Type> {
             let start = node.span().start;
@@ -8433,11 +8468,11 @@ impl<'a> Typer<'a> {
             let ty = placed(substitute_within(&read.ty, &map), &own);
             whole(&ty).then_some(ty)
         };
-        let mut verdicts = Vec::new();
-        for call in calls {
-            let verdict = (|| {
-                let name = name_token(&call)?;
-                // What the name is bound to where the candidate is
+        calls
+            .iter()
+            .map(|call| {
+                let name = name_token(call)?;
+                // What the name is bound to where the declaration is
                 // written.
                 let start = name.span().start;
                 let used = declared_in
@@ -8475,16 +8510,82 @@ impl<'a> Typer<'a> {
                     declaration,
                 };
                 Some((operator, operands, result))
-            })();
-            let verdict = match verdict {
-                Some((operator, operands, result)) => {
-                    self.callable(operator, (file, operands), result.as_ref())
-                }
-                None => None,
-            };
-            verdicts.push((call.span().start, verdict));
+            })
+            .collect()
+    }
+
+    /// What answers each requirement that `declaration` of `module`
+    /// states, at a call that takes it with `generics` for its generic
+    /// parameters: one [`hir::Answer`] for each constraint call that
+    /// holds wherever its `requires` does, in the order written.
+    ///
+    /// GEN-16: "a named operator requirement tests callability with the
+    /// supplied types ... it is tested against the operator's value
+    /// candidates, and holds where one most-specific value candidate
+    /// takes the types supplied (GEN-5)". That candidate is the answer.
+    /// GEN-7: where the types name a generic parameter of the
+    /// declaration the call is written in, a requirement that
+    /// declaration states is the answer, and what answers that is known
+    /// where it is called in turn.
+    ///
+    /// The candidate that answers may state requirements of its own,
+    /// which are answered with it. That ends: a candidate is selected
+    /// only where each of its requirements was told to hold, which is
+    /// tested no deeper than [`REQUIRING`].
+    fn answers(
+        &mut self,
+        module: usize,
+        declaration: usize,
+        generics: &[Argument],
+    ) -> Vec<hir::Answer> {
+        let program = self.program;
+        let declared_in = &program.modules[module];
+        let declared = &declared_in.declarations[declaration];
+        let Some(Detail::Callable(signature)) = declared_in.details.get(declaration) else {
+            return Vec::new();
+        };
+        let Some(clause) = child(&declared.syntax, SyntaxKind::RequiresClause) else {
+            return Vec::new();
+        };
+        let mut calls = Vec::new();
+        if let Some(condition) = clause.children().next() {
+            required_calls(&condition, &mut calls);
         }
-        verdicts
+        if calls.is_empty() {
+            return Vec::new();
+        }
+        if self.requiring >= REQUIRING {
+            return vec![hir::Answer::Unread; calls.len()];
+        }
+        let file = declared_in.files[declared.file].file;
+        let read = self.requirements_read(declared, signature, (module, generics), &calls);
+        read.into_iter()
+            .map(|read| {
+                let Some((operator, operands, result)) = read else {
+                    return hir::Answer::Unread;
+                };
+                match self.answered(operator, (file, operands), result.as_ref()) {
+                    Some(Answered::Stated(index)) => hir::Answer::Stated(index),
+                    Some(Answered::Selected {
+                        module,
+                        declaration,
+                        generics,
+                    }) => {
+                        self.requiring += 1;
+                        let requirements = self.answers(module, declaration, &generics);
+                        self.requiring -= 1;
+                        hir::Answer::Candidate {
+                            operator: (operator.module, operator.declaration),
+                            module,
+                            declaration,
+                            generics,
+                            requirements,
+                        }
+                    }
+                    Some(Answered::Unmet) | None => hir::Answer::Unread,
+                }
+            })
+            .collect()
     }
 
     /// Whether `operator` is callable with values of the types
@@ -8506,9 +8607,23 @@ impl<'a> Typer<'a> {
     fn callable(
         &mut self,
         operator: OperatorRef,
-        (file, operands): (FileId, Vec<(SyntaxNode, Type)>),
+        supplied: (FileId, Vec<(SyntaxNode, Type)>),
         result: Option<&Type>,
     ) -> Option<bool> {
+        self.answered(operator, supplied, result)
+            .map(|answered| !matches!(answered, Answered::Unmet))
+    }
+
+    /// What answers a requirement that `operator` is callable with
+    /// values of the types `operands`, to give `result` where one is
+    /// stated: see [`Typer::callable`], which says when it holds.
+    /// `None` when it cannot be told.
+    fn answered(
+        &mut self,
+        operator: OperatorRef,
+        (file, operands): (FileId, Vec<(SyntaxNode, Type)>),
+        result: Option<&Type>,
+    ) -> Option<Answered> {
         let own: Vec<Location> = self
             .signature
             .generics
@@ -8542,7 +8657,7 @@ impl<'a> Typer<'a> {
         // parameter's type as these types resolve it. The call would be
         // rejected, and so the operator is not callable with them.
         if unfit.is_some() {
-            return Some(false);
+            return Some(Answered::Unmet);
         }
         // The arrow is what the place of the call would expect. Where
         // the operator's defaults make the call's output another type,
@@ -8552,7 +8667,7 @@ impl<'a> Typer<'a> {
         if let (Some(requested), Some(arrow)) = (&requested, result)
             && !self.admits(arrow, requested)
         {
-            return Some(false);
+            return Some(Answered::Unmet);
         }
         // What the call asks of the result: with the operator's
         // defaults, or as its arrow says.
@@ -8564,13 +8679,13 @@ impl<'a> Typer<'a> {
             // not say the bare `window(T)`, which asks for the
             // operator's default, is callable.
             let types: Vec<&Type> = operands.iter().map(|(_, ty)| ty).collect();
-            let stated = self.requirements().into_iter().any(|requirement| {
+            let stated = self.requirements().into_iter().find(|requirement| {
                 requirement.operator == operator
                     && requirement.operands.iter().eq(types.iter().copied())
-                    && self.asked_by(&requirement) == Some(asked.clone())
+                    && self.asked_by(requirement) == Some(asked.clone())
             });
-            if stated {
-                return Some(true);
+            if let Some(stated) = stated {
+                return Some(Answered::Stated(stated.index));
             }
         }
         if self.requiring >= REQUIRING {
@@ -8610,9 +8725,20 @@ impl<'a> Typer<'a> {
             among,
         };
         self.requiring += 1;
-        let (selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         self.requiring -= 1;
-        (!untold).then_some(selected.len() == 1)
+        if untold {
+            return None;
+        }
+        // GEN-5: "Select exactly one most-specific admitted candidate."
+        Some(match (selected.pop(), selected.is_empty()) {
+            (Some(chosen), true) => Answered::Selected {
+                module: chosen.module,
+                declaration: chosen.declaration,
+                generics: chosen.generics,
+            },
+            _ => Answered::Unmet,
+        })
     }
 
     /// What a requirement asks of its operator's result, as the call it
@@ -8676,7 +8802,8 @@ impl<'a> Typer<'a> {
         };
         calls
             .iter()
-            .filter_map(|call| {
+            .enumerate()
+            .filter_map(|(index, call)| {
                 let name = name_token(call)?;
                 let (module, declarations) = self.declarations(&name)?;
                 let declaration = declarations.iter().copied().find(|&declaration| {
@@ -8697,6 +8824,7 @@ impl<'a> Typer<'a> {
                     }
                 }
                 Some(Requirement {
+                    index,
                     operator: OperatorRef {
                         module,
                         declaration,
@@ -8887,6 +9015,7 @@ impl<'a> Typer<'a> {
             // What the call gives: what its arrow states, or where it
             // states none what the operator's defaults make its result.
             let required = Required {
+                index: requirement.index,
                 result: requirement.result.or(asks),
                 operands: requirement.operands,
                 places: places.clone(),
@@ -8915,6 +9044,7 @@ impl<'a> Typer<'a> {
         form: Form,
     ) -> (ExprKind, Type) {
         let Required {
+            index,
             result,
             operands,
             places,
@@ -8948,6 +9078,7 @@ impl<'a> Typer<'a> {
         let kind = ExprKind::Call {
             callee: Callee::Required {
                 operator: (operator.module, operator.declaration),
+                requirement: index,
             },
             arguments,
             form,
@@ -10429,10 +10560,38 @@ struct Symbol {
     place: Option<Type>,
 }
 
+/// A requirement as it is read at a call ([`Typer::requirements_read`]):
+/// the operator it names, the types it is supplied with, each with
+/// where it is written, and the type its arrow states.
+type Read = (OperatorRef, Vec<(SyntaxNode, Type)>, Option<Type>);
+
+/// What answers a requirement: see [`Typer::answered`].
+enum Answered {
+    /// Nothing: no one value candidate takes the types supplied, or
+    /// gives what the arrow states.
+    Unmet,
+    /// A requirement the enclosing declaration states (GEN-7): its
+    /// position among that declaration's requirements.
+    Stated(usize),
+    /// The one most-specific value candidate that takes the types
+    /// supplied (GEN-5).
+    Selected {
+        /// The position of its module in `Program::modules`.
+        module: usize,
+        /// Its position in that module's `declarations`.
+        declaration: usize,
+        /// What each of its generic parameters stands for.
+        generics: Vec<Argument>,
+    },
+}
+
 /// A named operator requirement of a declaration (GEN-16): `add_(T, T)
 /// -> T` requires that `add_` is callable with two values of `T`, and
 /// that it gives a `T`.
 struct Requirement {
+    /// Its position among the constraint calls that hold wherever the
+    /// declaration's `requires` does ([`required_calls`]).
+    index: usize,
     /// The operator named.
     operator: OperatorRef,
     /// The types it is supplied with, in order.
@@ -10526,6 +10685,9 @@ fn gives_a_value(value: &Expr) -> bool {
 /// The requirement of the enclosing declaration that a call is
 /// (GEN-7): see [`Typer::required`].
 struct Required {
+    /// Its position among the declaration's requirements
+    /// ([`Requirement::index`]).
+    index: usize,
     /// The result its arrow states, when it has one.
     result: Option<Type>,
     /// The types it is supplied with, in the operator's order.

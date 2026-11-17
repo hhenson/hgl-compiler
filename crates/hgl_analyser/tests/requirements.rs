@@ -8,7 +8,8 @@
 mod common;
 
 use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
+use hgl_analyser::Detail;
+use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -48,6 +49,7 @@ fn callees(checked: &Checked, name: &str) -> Vec<String> {
             found.push(match callee {
                 Callee::Required {
                     operator: (module, declaration),
+                    ..
                 } => checked.program.modules[*module].declarations[*declaration]
                     .name
                     .clone(),
@@ -586,4 +588,183 @@ fn a_node_and_a_graph_are_checked_under_their_requirements() {
         (sum.name.as_str(), sum.category),
         ("sum", ValueCategory::Connection)
     );
+}
+
+/// An answer as a test reads it: the candidate as `name(types)`, with
+/// what answers its own requirements after it in brackets; `stated N`
+/// for the enclosing declaration's requirement N; `unread`.
+fn answer(checked: &Checked, answer: &Answer) -> String {
+    match answer {
+        Answer::Candidate {
+            module,
+            declaration,
+            requirements,
+            ..
+        } => {
+            let declared = &checked.program.modules[*module];
+            let Some(Detail::Callable(signature)) = declared.details.get(*declaration) else {
+                panic!("a candidate has a signature");
+            };
+            let types: Vec<String> = signature
+                .parameters
+                .iter()
+                .map(|parameter| parameter.ty.to_string())
+                .collect();
+            let name = &declared.declarations[*declaration].name;
+            let own: Vec<String> = requirements
+                .iter()
+                .map(|own| self::answer(checked, own))
+                .collect();
+            if own.is_empty() {
+                format!("{name}({})", types.join(", "))
+            } else {
+                format!("{name}({}) [{}]", types.join(", "), own.join(", "))
+            }
+        }
+        Answer::Stated(index) => format!("stated {index}"),
+        Answer::Unread => "unread".to_string(),
+    }
+}
+
+/// What answers the requirements of the callee of each call in `name`,
+/// in the order the calls are met; and for a call of what the
+/// declaration requires, `requirement N`.
+fn answers(checked: &Checked, name: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    hgl_analyser::hir::walk_statements(&body(checked, name).statements, &mut |value| {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return;
+        };
+        match callee {
+            Callee::Function { requirements, .. } | Callee::Candidate { requirements, .. } => {
+                let each: Vec<String> = requirements
+                    .iter()
+                    .map(|one| answer(checked, one))
+                    .collect();
+                found.push(each.join(", "));
+            }
+            Callee::Required { requirement, .. } => {
+                found.push(format!("requirement {requirement}"))
+            }
+            Callee::Unread => found.push("none".to_string()),
+        }
+    });
+    found
+}
+
+/// GEN-16: "a named operator requirement tests callability with the
+/// supplied types ... it is tested against the operator's value
+/// candidates, and holds where one most-specific value candidate takes
+/// the types supplied (GEN-5)". A call of a declaration records that
+/// candidate for each requirement the declaration states, so that what
+/// its body requires is known for that call. GEN-15: requirements
+/// joined by `&&` all hold, and each has its answer, in the order
+/// written.
+#[test]
+fn a_call_records_what_answers_each_requirement() {
+    let checked = module(concat!(
+        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn join(lhs: str, rhs: str) -> str => lhs\n",
+        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+        "const fn whole() -> i64 => twice(1)\n",
+        "const fn text() -> str => twice(\"a\")\n",
+        // No candidate takes two `bool`: nothing answers.
+        "const fn neither() -> bool => twice(true)\n",
+        // Two requirements, and the body's calls of each.
+        "const fn both<T>(value: T) -> T requires neg_(T) -> T && (join(T, T) -> T) =>\n",
+        "    join(neg_(value), value)\n",
+        "const fn uses() -> i64 => both(1)\n",
+        // A function that states none has none answered.
+        "const fn plain(value: i64) -> i64 => value\n",
+        "const fn calls() -> i64 => plain(1)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(answers(&checked, "twice"), ["requirement 0"]);
+    assert_eq!(answers(&checked, "whole"), ["join(i64, i64)"]);
+    assert_eq!(answers(&checked, "text"), ["join(str, str)"]);
+    assert_eq!(answers(&checked, "neither"), ["unread"]);
+    // The call of `join` is met before its argument's call of `neg_`.
+    assert_eq!(
+        answers(&checked, "both"),
+        ["requirement 1", "requirement 0"]
+    );
+    assert_eq!(answers(&checked, "uses"), ["neg_(i64), join(i64, i64)"]);
+    assert_eq!(answers(&checked, "calls"), [""]);
+}
+
+/// GEN-7: "A generic body is checked under its stated requirements".
+/// Where a call's types name a generic parameter of the declaration it
+/// is written in, what that declaration states is the answer: which
+/// candidate that is, is known where the declaration is called in turn.
+/// A candidate that takes any one type answers for a parameter with
+/// nothing stated.
+#[test]
+fn a_call_in_a_generic_body_is_answered_by_what_the_body_states() {
+    let checked = module(concat!(
+        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+        "const fn outer<U>(value: U) -> U requires neg_(U) -> U && join(U, U) -> U =>\n",
+        "    twice(value)\n",
+        "const fn top() -> i64 => outer(2)\n",
+        // Nothing stated, and a candidate for any one type.
+        "operator show<T>(value: T) -> str\n",
+        "impl const fn show<T>(value: T) -> str => \"\"\n",
+        "const fn shown<T>(value: T) -> str requires show(T) -> str => show(value)\n",
+        "const fn whatever<U>(value: U) -> str => shown(value)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(answers(&checked, "outer"), ["stated 1"]);
+    assert_eq!(answers(&checked, "top"), ["neg_(i64), join(i64, i64)"]);
+    assert_eq!(answers(&checked, "whatever"), ["show(T)"]);
+}
+
+/// GEN-16: the candidate that answers may state a requirement of its
+/// own, which is answered with it: a `join` of two lists is the
+/// candidate for lists, with the `join` of their elements.
+#[test]
+fn a_candidate_that_answers_has_its_own_requirements_answered() {
+    let checked = module(concat!(
+        "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
+        "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "impl const fn join<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
+        "    requires join(T, T) -> T => lhs\n",
+        "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+        "const fn lists() -> list<i64> => twice([1])\n",
+        "const fn nested() -> list<list<i64>> => twice([[1]])\n",
+        // A call of the operator itself selects the candidate, and
+        // records what answers that candidate's requirement.
+        "const fn direct(a: list<i64>) -> list<i64> => join(a, a)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        answers(&checked, "lists"),
+        ["join(list<T>, list<T>) [join(i64, i64)]"]
+    );
+    assert_eq!(
+        answers(&checked, "nested"),
+        ["join(list<T>, list<T>) [join(list<T>, list<T>) [join(i64, i64)]]"]
+    );
+    assert_eq!(answers(&checked, "direct"), ["join(i64, i64)"]);
+}
+
+/// GEN-16: "A requirement names a value operation, whatever declares
+/// it ... So what a graph requires is what a node or a value function
+/// it calls may require." Core's OPS-9: the temporal candidate of `+`
+/// under `{invalid: .identity}` requires a value `add_(T, T) -> T`. A
+/// graph that states the same answers it, and a call of that graph
+/// selects the value candidate.
+#[test]
+fn a_graph_answers_a_temporal_candidates_requirement() {
+    let checked = module(concat!(
+        "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
+        "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
+        "fn wired(a: f64, b: f64) -> f64 => identity_sum(a, b)\n",
+        "fn texts(a: str, b: str) -> str => identity_sum(a, b)\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    assert_eq!(answers(&checked, "identity_sum"), ["stated 0"]);
+    assert_eq!(answers(&checked, "wired"), ["add_(f64, f64)"]);
+    assert_eq!(answers(&checked, "texts"), ["add_(str, str)"]);
 }
