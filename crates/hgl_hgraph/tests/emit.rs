@@ -695,6 +695,8 @@ const DURATIONS: &str = concat!(
     // OPS-10: half a microsecond is a tie, and goes to the even one.
     "    assert scaled(1us, 0.5) == 0us\n",
     "    assert scaled(3us, 0.5) == 2us\n",
+    // OPS-10: a duration times an infinity is out of range.
+    "    assert raises(\"numeric.out_of_range\") { scaled(1s, 1.0 / 0.0) }\n",
     "    assert eval(sum(lhs: [1s, _, 5m], rhs: [2s, 3s])) == [3s, 4s, 5m3s]\n",
     "}\n",
 );
@@ -728,6 +730,69 @@ fn a_duration_is_a_timedelta() {
             .text("_hgl/_m_demo/_m_scaling/__init__.py")
             .contains("import datetime")
     );
+}
+
+/// OPS-1: a duration by an `i64` or an `f64` is a duration, by a duration
+/// an `f64`, and `//` of two an `i64`. OPS-10: a duration result is "the
+/// exact result rounded to the nearest duration the type holds, a tie to
+/// the even one". NUM-12: each division takes its zero policy.
+const DIVIDED: &str = concat!(
+    "module demo.durations.divided\n",
+    "const fn shared(length: duration, among: i64) -> duration => length / among\n",
+    "const fn scaled(length: duration, by: f64) -> duration => length / by\n",
+    "const fn ratio(first: duration, second: duration) -> f64 => first / second\n",
+    "const fn whole(first: duration, second: duration) -> i64 => first // second\n",
+    "const fn checked(length: duration, among: i64) -> result<duration, error> =>\n",
+    "    length /{zero: .error} among\n",
+    "const fn steps(first: duration, second: duration) -> result<i64, error> =>\n",
+    "    first //{zero: .error} second\n",
+    "test a_duration_is_divided {\n",
+    // Core's own examples (its OPS-10).
+    "    assert shared(5m, 3) == 100s\n",
+    "    assert shared(1us, 3) == 0us\n",
+    "    assert shared(2us, 3) == 1us\n",
+    // A tie goes to the even count.
+    "    assert scaled(3us, 2.0) == 2us\n",
+    "    assert scaled(1us, 2.0) == 0us\n",
+    "    assert ratio(90m, 1h) == 1.5\n",
+    // NUM-1: `//` rounds toward negative infinity.
+    "    assert whole(7s, 2s) == 3\n",
+    "    assert whole(-7s, 2s) == -4\n",
+    // NUM-9: under `error` a zero divisor is an `err`, and any other
+    // an `ok`.
+    "    assert is_ok(checked(1s, 2)) && is_err(checked(1s, 0))\n",
+    "    assert is_ok(steps(1s, 1ms)) && is_err(steps(1s, 0s))\n",
+    // NUM-3: and under `fail`, which these take by default, an error.
+    "    assert raises(\"numeric.division_by_zero\") { shared(1s, 0) }\n",
+    "    assert raises(\"numeric.division_by_zero\") { scaled(1s, 0.0) }\n",
+    "    assert raises(\"numeric.division_by_zero\") { whole(1s, 0s) }\n",
+    // OPS-10: a result outside the range a duration has, and a
+    // duration divided by an infinity.
+    "    assert raises(\"numeric.out_of_range\") { scaled(106751991d, 0.5) }\n",
+    "    assert raises(\"numeric.out_of_range\") { scaled(1s, 1.0 / 0.0) }\n",
+    "}\n",
+);
+
+/// A division of durations is the provider's function, given its zero
+/// policy by name as a division of numbers is.
+#[test]
+fn a_duration_divided_takes_its_zero_policy() {
+    let emitted = emit(&[("divided.hgl", DIVIDED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_durations/_m_divided/__init__.py");
+    for expected in [
+        "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"fail\")",
+        "return _core.div__duration_f64(lhs=length, rhs=by, zero=\"fail\")",
+        "return _core.div__duration_duration(lhs=first, rhs=second, zero=\"ieee\")",
+        "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"fail\")",
+        "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"error\")",
+        "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"error\")",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 /// TYPE-2: a `date`, a `time`, a `datetime` and a `civil_datetime` are
@@ -3264,6 +3329,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("durations.hgl", DURATIONS),
         ("raises.hgl", RAISES),
         ("instants.hgl", INSTANTS),
+        ("divided.hgl", DIVIDED),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3293,10 +3359,10 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        51,
+        52,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
-         instants, and one of each demo's"
+         instants, one on a duration divided, and one of each demo's"
     );
 }
 
