@@ -1309,6 +1309,9 @@ only where the program reaches it, at core's source.
 | A value of a generic struct, `Box(value: 1)` (TYPE-3) | `_core.applied(Box, "i64")(value=1)`: each application is a class of its own, made once, so a `Box<i64>` is no `Box<f64>` where the two meet as values of a parent. The arguments are written as text no other type has, a named type with its module's path |
 | `Point(x: 1.0)` (TYPE-5) | `Point(x=1.0, y=0.0)`: the arguments in the order written, which is the order Python evaluates them in, then each field left out with its default in its place, read from the analysed program as a parameter's is (`Module::defaults`, `Member::default`), or `None` for an optional field with none |
 | `point.x`; `point.x = 1.0`, `line.end.x += by` (EXPR-3) | `point.x`; `point = _core.with_field(point, x=1.0)`, and at depth `line = _core.with_field(line, end=_core.with_field(line.end, x=...))`. The place's root is given a new value and the old one is as it was, for whatever else holds it (TYPE-5: "later mutation of a source cannot change an earlier retained value"). A `state` is assigned the same way |
+| `items[1]`, `pair[0]`; `sizes[name]` (EXPR-7, ERR-6) | `_core.item(items, 1)`, which fails for an index outside the sequence, a negative one among them; `_core.entry(sizes, name)`, which fails with `value.missing_key` for a key that is not there |
+| `get(sizes, name)`, core's candidate for a dictionary (ERR-6) | `_core.get_dict_K__T__K(store=sizes, key=name)`: the value, or `None` |
+| `items[0] = 1`, `sizes[name] += 1`, `rows[1][0] = 9` (EXPR-3) | `items = _core.with_item(items, 0, 1)`, `sizes = _core.with_entry(sizes, name, ...)`, and at depth as a field is: a list, a tuple and a dictionary are never changed, and the place's root is given a new one. A key the dictionary has not is added, and an index outside a list fails |
 | `ok(value)`, `err(value)`, `error(message: m, code: c)` (ERR-2, ERR-4) | `_core.Ok(value)`, `_core.Err(value)`, `_core.Error(message=m, code=c)`: values of the provider's, equal when their parts are |
 | `is_ok(r)`, `is_err(r)`; `r.value`, `r.error`; `e.message`, `e.code` (ERR-3, ERR-4) | `_py.isinstance(r, _core.Ok)`, `_py.isinstance(r, _core.Err)`; the attribute of the same name |
 | `r?` in a value function (ERR-5) | `_core.propagated(r)`, which gives a success's value and raises for a failure. The function's body is in a `try`, and returns the failure raised |
@@ -1333,7 +1336,7 @@ Reported as not written yet (`target.unsupported`): as the type of an
 input, an output or configuration, any but the four scalars above and
 an enum, a nullable and a struct among them; a struct made in a graph;
 a generic struct made in a function generic in its arguments;
-an assignment to an element, `row[0] = 1`; a
+a
 temporal candidate of an operator, a native declaration of a program,
 and a candidate with the parameter types of another of its module;
 generic temporal functions;

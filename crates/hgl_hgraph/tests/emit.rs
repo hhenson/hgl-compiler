@@ -2197,6 +2197,167 @@ fn an_enums_class_is_named_with_its_module() {
     }
 }
 
+/// Elements: a list's, a tuple's and a dictionary's read in brackets
+/// and assigned, at depth and inside a struct; core's `get`; and a
+/// node that keeps a dictionary in its state.
+const ELEMENTS: &str = concat!(
+    "module demo.elements\n",
+    "\n",
+    "struct Book {\n",
+    "    levels: list<f64>\n",
+    "    sizes: dict<str, i64> = []\n",
+    "}\n",
+    "\n",
+    "const fn second(items: list<i64>) -> i64 => items[1]\n",
+    "const fn last(pair: tuple<i64, str>) -> str => pair[1]\n",
+    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
+    "const fn known(sizes: dict<str, i64>, name: str) -> i64? => get(sizes, name)\n",
+    "const fn known_or(sizes: dict<str, i64>, name: str, fallback: i64) -> i64 {\n",
+    "    let found = get(sizes, name)\n",
+    "    if found == null { return fallback }\n",
+    "    return found\n",
+    "}\n",
+    "\n",
+    "const fn doubled(items: list<i64>) -> list<i64> {\n",
+    "    var next = items\n",
+    "    next[0] = next[0] * 2\n",
+    "    next[1] += 1\n",
+    "    return next\n",
+    "}\n",
+    "\n",
+    "const fn renamed(pair: tuple<i64, str>) -> tuple<i64, str> {\n",
+    "    var next = pair\n",
+    "    next[1] = \"b\"\n",
+    "    return next\n",
+    "}\n",
+    "\n",
+    "const fn counted(names: list<str>) -> dict<str, i64> {\n",
+    "    var seen: dict<str, i64> = []\n",
+    "    for name in names {\n",
+    "        let before = get(seen, name)\n",
+    "        if before == null {\n",
+    "            seen[name] = 1\n",
+    "        } else {\n",
+    "            seen[name] = before + 1\n",
+    "        }\n",
+    "    }\n",
+    "    return seen\n",
+    "}\n",
+    "\n",
+    "const fn lifted(book: Book, by: f64) -> Book {\n",
+    "    var next = book\n",
+    "    next.levels[0] += by\n",
+    "    next.sizes[\"top\"] = 1\n",
+    "    return next\n",
+    "}\n",
+    "\n",
+    "const fn grid() -> list<list<i64>> {\n",
+    "    var rows = [[1, 2], [3, 4]]\n",
+    "    rows[1][0] = 9\n",
+    "    return rows\n",
+    "}\n",
+    "\n",
+    "fn tallied(name: str) -> i64 {\n",
+    "    state seen: dict<str, i64> = []\n",
+    "    when {\n",
+    "        let before = get(seen, name)\n",
+    "        if before == null {\n",
+    "            seen[name] = 1\n",
+    "        } else {\n",
+    "            seen[name] = before + 1\n",
+    "        }\n",
+    "        return seen[name]\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test reads {\n",
+    "    assert second([4, 5, 6]) == 5\n",
+    "    assert last((1, \"a\")) == \"a\"\n",
+    "    assert size([\"a\": 1, \"b\": 2], \"b\") == 2\n",
+    "    assert known([\"a\": 1], \"a\") != null\n",
+    "    assert known([\"a\": 1], \"z\") == null\n",
+    "    assert known_or([\"a\": 1], \"a\", 7) == 1\n",
+    "    assert known_or([\"a\": 1], \"z\", 7) == 7\n",
+    "}\n",
+    "\n",
+    "test writes {\n",
+    "    let items = [1, 2, 3]\n",
+    "    assert doubled(items) == [2, 3, 3]\n",
+    "    assert items == [1, 2, 3]\n",
+    "    assert renamed((1, \"a\")) == (1, \"b\")\n",
+    "    assert counted([\"a\", \"b\", \"a\"]) == [\"a\": 2, \"b\": 1]\n",
+    "    let book = Book(levels: [1.0, 2.0])\n",
+    "    let moved = lifted(book, 0.5)\n",
+    "    assert moved.levels == [1.5, 2.0]\n",
+    "    assert moved.sizes == [\"top\": 1]\n",
+    "    assert book.levels == [1.0, 2.0]\n",
+    "    assert grid() == [[1, 2], [9, 4]]\n",
+    "    assert eval(tallied, name: [\"a\", \"b\", \"a\"]) == [1, 1, 2]\n",
+    "}\n",
+);
+
+/// Reads and an assignment outside a list, and a key a dictionary has
+/// not.
+const ELEMENT_FAILS: &str = concat!(
+    "module demo.elements.fails\n",
+    "const fn at(items: list<i64>, index: i64) -> i64 => items[index]\n",
+    "const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]\n",
+    "const fn placed(items: list<i64>, index: i64) -> list<i64> {\n",
+    "    var next = items\n",
+    "    next[index] = 0\n",
+    "    return next\n",
+    "}\n",
+    "test beyond { assert at([1, 2], 2) == 0 }\n",
+    "test before { assert at([1, 2], -1) == 2 }\n",
+    "test absent { assert size([\"a\": 1], \"z\") == 0 }\n",
+    "test outside { assert placed([1, 2], 5) == [1, 2] }\n",
+);
+
+/// EXPR-7: "Brackets read an element of a list or a tuple by an `i64`
+/// index, and the value a dictionary has for a key." ERR-6:
+/// "Ordinary/atomic dictionary brackets and `at` are strict
+/// point-in-time reads; absence fails. `get` with no fallback or null
+/// fallback yields contextual absence." EXPR-3: an assignment's value
+/// is "of a list's element type, under an `i64` index; of a
+/// dictionary's value type, under a key of its key type; or of a
+/// tuple's position, under a constant index. A key the dictionary has
+/// not is added. An index outside a list fails where it is evaluated."
+///
+/// A list, a tuple and a dictionary are never changed: an assignment
+/// to an element gives the place's root a new value, as one to a field
+/// does.
+#[test]
+fn an_element_is_read_and_assigned_through_the_provider() {
+    let emitted = emit(&[("elements.hgl", ELEMENTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_elements/__init__.py");
+    for expected in [
+        "def second(items):\n    return _core.item(items, 1)\n",
+        "def last(pair):\n    return _core.item(pair, 1)\n",
+        "def size(sizes, name):\n    return _core.entry(sizes, name)\n",
+        "    return _core.get_dict_K__T__K(store=sizes, key=name)\n",
+        // A compound assignment reads the place first.
+        concat!(
+            "    next = _core.with_item(next, 1, ",
+            "_core.add__i64_i64(lhs=_core.item(next, 1), rhs=1))\n",
+        ),
+        "    next = _core.with_item(next, 1, \"b\")\n",
+        "            seen = _core.with_entry(seen, name, 1)\n",
+        // An element of a field, and an element of an element.
+        "    next = _core.with_field(next, sizes=_core.with_entry(next.sizes, \"top\", 1))\n",
+        "    rows = _core.with_item(rows, 1, _core.with_item(_core.item(rows, 1), 0, 9))\n",
+        // A `state` that is a dictionary.
+        "        _state.seen = _core.with_entry(_state.seen, name.value, 1)\n",
+        // `[]` where a dictionary is expected.
+        "    seen = {}\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2390,6 +2551,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
     files.push(("loops.hgl", LOOPS));
+    files.push(("elements.hgl", ELEMENTS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2410,9 +2572,9 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        40,
-        "eight of core's, six on endpoints, seven on structs, two on loops, two on enums of one \
-         name, and one of each demo's"
+        42,
+        "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
+         on enums of one name, and one of each demo's"
     );
 }
 
@@ -2425,7 +2587,8 @@ fn the_generated_tests_pass_on_hgraph() {
 /// tolerance is an HGL error". TYPE-7: an enum constructed from "a
 /// value that is none fails where it is evaluated". TYPE-5: a
 /// construction's arguments and defaults. CTRL-6: a `switch` no case
-/// of which matches. Needs hgraph, as above.
+/// of which matches. EXPR-3, ERR-6: an index outside a list, and a key
+/// a dictionary has not. Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -2439,6 +2602,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("enums.hgl", ENUM_FAILS));
     files.push(("structs.hgl", STRUCT_FAILS));
     files.push(("loops.hgl", LOOP_FAILS));
+    files.push(("elements.hgl", ELEMENT_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -2454,6 +2618,10 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("in_order").0,
         emitted.test("unequal").0,
         emitted.test("unmatched").0,
+        emitted.test("beyond").0,
+        emitted.test("before").0,
+        emitted.test("absent").0,
+        emitted.test("outside").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -2487,6 +2655,13 @@ fn a_failure_names_the_statement_that_failed() {
             "failed structs.hgl:12:16 the assertion does not hold",
             // CTRL-6: "An unmatched selector uses default or fails."
             "failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
+            // EXPR-3: "An index outside a list fails where it is
+            // evaluated", and ERR-6: a strict read of a key that is
+            // not there.
+            "failed elements.hgl:9:15 HglError: the index 2 is outside a sequence of 2",
+            "failed elements.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
+            "failed elements.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
+            "failed elements.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
         ]
     );
 

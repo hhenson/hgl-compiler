@@ -242,6 +242,48 @@ def with_field(value, /, **field):
     return _dataclasses.replace(value, **field)
 
 
+def item(sequence, index):
+    """`sequence[index]`: the element of a list or a tuple at an `i64`
+    index (EXPR-7). An index outside it fails: Python's own would count
+    a negative one back from the end."""
+    if not 0 <= index < len(sequence):
+        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    return sequence[index]
+
+
+def entry(dictionary, key):
+    """`dictionary[key]`: the value a dictionary has for a key. The
+    read is strict (ERR-6: "absence fails"), with the code
+    `value.missing_key`."""
+    try:
+        return dictionary[key]
+    except KeyError:
+        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
+
+
+def get_dict_K__T__K(store, key):
+    """Core's `get<K, T>(store: dict<K, T>, key: K) -> T?`: the value a
+    dictionary has for a key, or null where it has none (ERR-6)."""
+    return store.get(key)
+
+
+def with_item(sequence, index, value, /):
+    """`place[index] = value` for a list or a tuple (EXPR-3): the
+    sequence with one element another value. "An index outside a list
+    fails where it is evaluated." `sequence` itself is as it was, for
+    whatever else holds it."""
+    if not 0 <= index < len(sequence):
+        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+
+
+def with_entry(dictionary, key, value, /):
+    """`place[key] = value` for a dictionary (EXPR-3): the dictionary
+    with the key given the value. "A key the dictionary has not is
+    added." `dictionary` itself is as it was."""
+    return {**dictionary, key: value}
+
+
 def unmatched(selected):
     """A `switch` with no `default`, where no case has the selector's
     value (CTRL-6: "An unmatched selector uses default or fails")."""
