@@ -229,6 +229,9 @@ pub mod codes {
     /// `out` used in `start` or written in `stop`, or a `return` with a
     /// value in either (TIME-7).
     pub const OUT_LIFECYCLE: &str = "out.lifecycle";
+    /// A temporal input read, or given to an endpoint operation, in
+    /// `start` (TIME-5).
+    pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";

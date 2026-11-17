@@ -1018,7 +1018,12 @@ impl<'a> Typer<'a> {
     /// TIME-4: "A payload read under manual admission must be dominated
     /// by a successful guard": in a `when`, the input is one its header
     /// admits, or a `valid(input)` holds where the read stands. TIME-5:
-    /// "State initializers cannot read current temporal inputs."
+    /// "State initializers cannot read current temporal inputs. `start`
+    /// reads no temporal input and gives none to an endpoint operation:
+    /// it runs before any has a value. `stop` reads a temporal input
+    /// under manual admission, as a `when` under `valid([])` does: no
+    /// header stands over it, so each payload read is dominated by a
+    /// guard".
     fn payload_read(&mut self, local: LocalId, at: Location) {
         let name = self.locals[local].name.clone();
         if self.initializing {
@@ -1034,7 +1039,16 @@ impl<'a> Typer<'a> {
             ));
             return;
         }
-        if self.hook != Some(Hook::When) || self.present.contains(&Fact::Valid(local)) {
+        let (unproved, rule) = match self.hook {
+            Some(Hook::Start) => {
+                self.input_lifecycle(at, &name);
+                return;
+            }
+            Some(Hook::When) => ("this `when` does not require it to be", "TIME-4"),
+            Some(Hook::Stop) => ("`stop` requires no input to be", "TIME-5"),
+            None => return,
+        };
+        if self.present.contains(&Fact::Valid(local)) {
             return;
         }
         self.diagnostics.emit(
@@ -1043,10 +1057,10 @@ impl<'a> Typer<'a> {
                 codes::PAYLOAD_UNGUARDED,
                 at,
                 format!(
-                    "`{name}` may not be valid here: this `when` does not require it to be, \
-                     and no `valid({name})` guards the read"
+                    "`{name}` may not be valid here: {unproved}, and no `valid({name})` \
+                     guards the read"
                 ),
-                "TIME-4",
+                rule,
             )
             .with_note(format!(
                 "a guard proves it where the read stands: `if valid({name}) {{ ... }}`"
@@ -1054,6 +1068,22 @@ impl<'a> Typer<'a> {
         );
         // One report for one input on a path.
         self.present.push(Fact::Valid(local));
+    }
+
+    /// Reports a temporal input used in `start` (TIME-5): "`start`
+    /// reads no temporal input and gives none to an endpoint operation:
+    /// it runs before any has a value."
+    fn input_lifecycle(&mut self, at: Location, name: &str) {
+        self.diagnostics.emit(
+            error(
+                Category::Phase,
+                codes::INPUT_LIFECYCLE,
+                at,
+                format!("`{name}` is a temporal input, and `start` runs before any has a value"),
+                "TIME-5",
+            )
+            .with_note("a `when` reads it, and `stop` under a guard: `if valid(input) { ... }`"),
+        );
     }
 
     /// Reports a use of the node's output where TIME-7 has none: "`out`
@@ -1156,6 +1186,19 @@ impl<'a> Typer<'a> {
                     .collect(),
             )
         };
+        // TIME-5: `start` "gives none to an endpoint operation".
+        if self.hook == Some(Hook::Start)
+            && let Some(inputs) = &inputs
+        {
+            let given: Vec<String> = inputs
+                .iter()
+                .filter(|input| Some(**input) != self.out)
+                .map(|input| self.locals[*input].name.clone())
+                .collect();
+            for input in given {
+                self.input_lifecycle(at, &input);
+            }
+        }
         let writes = operation == EndpointOperation::Invalidate;
         if let (Some(inputs), Some(out)) = (&inputs, self.out)
             && inputs.contains(&out)

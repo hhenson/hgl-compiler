@@ -2444,6 +2444,86 @@ fn a_full_comparison_gives_a_member_of_cores_enum() {
     }
 }
 
+/// A node whose `stop` reads an input under its guard, and one whose
+/// `stop` would fail where the guard holds, given an input that never
+/// is valid.
+const STOPS: &str = concat!(
+    "module demo.stops\n",
+    "\n",
+    "fn last_seen(value: i64, const scale: i64) -> i64 {\n",
+    "    state last: i64 = 0\n",
+    "    state ended: i64 = 0\n",
+    "    when {\n",
+    "        last = value\n",
+    "        return value * scale\n",
+    "    }\n",
+    "    stop {\n",
+    "        if valid(value) { ended = value * scale }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn ends_badly(value: i64) -> i64 {\n",
+    "    state ended: i64 = 0\n",
+    "    when { return value }\n",
+    "    stop {\n",
+    "        if valid(value) { ended = value // 0 }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test stops {\n",
+    "    assert eval(last_seen, value: [1, 2, 3], scale: 2) == [2, 4, 6]\n",
+    "    assert eval(last_seen, value: [_, _], scale: 2) == []\n",
+    // The input is never valid: the guard does not hold, and the
+    // division is not made.
+    "    assert eval(ends_badly, value: [_, _]) == []\n",
+    "}\n",
+);
+
+/// A `stop` that fails where its guard holds.
+const STOP_FAILS: &str = concat!(
+    "module demo.stops.fails\n",
+    "fn ends_badly(value: i64) -> i64 {\n",
+    "    state ended: i64 = 0\n",
+    "    when { return value }\n",
+    "    stop {\n",
+    "        if valid(value) { ended = value // 0 }\n",
+    "    }\n",
+    "}\n",
+    "test stop_fails { eval(ends_badly, value: [7]) }\n",
+);
+
+/// TIME-5: "`stop` reads a temporal input under manual admission, as a
+/// `when` under `valid([])` does: no header stands over it, so each
+/// payload read is dominated by a guard".
+///
+/// hgraph gives a `stop` each input it names: the function takes the
+/// node's configuration, its inputs and its state, and reads an input
+/// as a `when` does. It gives a `start` none.
+#[test]
+fn a_stop_is_given_the_nodes_inputs() {
+    let emitted = emit(&[("stops.hgl", STOPS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_stops/__init__.py");
+    for expected in [
+        concat!(
+            "@last_seen.start\n",
+            "def _start_last_seen(scale: _py.int, _state: _hg.STATE = None):\n",
+        ),
+        concat!(
+            "@last_seen.stop\n",
+            "def _stop_last_seen(scale: _py.int, value: _hg.TS[_py.int], ",
+            "_state: _hg.STATE = None):\n",
+            "    if value.valid:\n",
+            "        _state.ended = _core.mul__i64_i64(lhs=value.value, rhs=scale)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2639,6 +2719,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("loops.hgl", LOOPS));
     files.push(("elements.hgl", ELEMENTS));
     files.push(("compare.hgl", COMPARE));
+    files.push(("stops.hgl", STOPS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2659,7 +2740,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        43,
+        44,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, and one of each demo's"
     );
@@ -2690,6 +2771,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("structs.hgl", STRUCT_FAILS));
     files.push(("loops.hgl", LOOP_FAILS));
     files.push(("elements.hgl", ELEMENT_FAILS));
+    files.push(("stops.hgl", STOP_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -2762,6 +2844,22 @@ fn a_failure_names_the_statement_that_failed() {
     assert_eq!(
         at.map(|at| emitted.place(at)),
         Some("node.hgl:6:19".to_string())
+    );
+    assert!(
+        message.contains("HglError: numeric.division_by_zero: a division by zero"),
+        "{message}"
+    );
+
+    // TIME-5: a `stop` reads an input under its guard. The input is
+    // valid here, so the guarded statement is run, and fails.
+    let stop = [emitted.test("stop_fails").0];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &stop);
+    let [Ran::Failed { at, message }] = ran.as_slice() else {
+        panic!("the test failed: {ran:?}");
+    };
+    assert_eq!(
+        at.map(|at| emitted.place(at)),
+        Some("stops.hgl:9:19".to_string())
     );
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),

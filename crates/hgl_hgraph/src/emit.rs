@@ -144,10 +144,14 @@ enum Mode {
     /// A node's hook: a temporal parameter is an hgraph input, read
     /// through `.value`, and a `state` is a field of the node's state.
     Node,
-    /// A node's `start` or `stop`: a function of its own to hgraph,
-    /// which is given the node's configuration and state, and neither
-    /// its inputs nor its output.
+    /// A node's `start`: a function of its own to hgraph, which is
+    /// given the node's configuration and state, and neither its inputs
+    /// nor its output.
     Lifecycle,
+    /// A node's `stop`: a function of its own to hgraph, which is given
+    /// the node's configuration, its state and its inputs, and not its
+    /// output.
+    Stop,
     /// A graph: a temporal parameter is a port, passed on as it is.
     Graph,
     /// A named test: ordinary values, and evals.
@@ -160,7 +164,10 @@ impl Mode {
     /// graph and a test are composition, where a loop and a `switch`
     /// say what is wired (CTRL-15).
     fn runs(self) -> bool {
-        matches!(self, Mode::Value | Mode::Node | Mode::Lifecycle)
+        matches!(
+            self,
+            Mode::Value | Mode::Node | Mode::Lifecycle | Mode::Stop
+        )
     }
 }
 
@@ -900,6 +907,29 @@ impl Emitter<'_> {
             parameters.push("_state: _hg.STATE = None".to_string());
             lifecycle.push("_state: _hg.STATE = None".to_string());
         }
+        // TIME-5: "`stop` reads a temporal input under manual
+        // admission". hgraph gives a `stop` each input it names, as the
+        // node has it: the configuration, then the inputs, then the
+        // state.
+        let mut stopping: Vec<String> = signature
+            .parameters
+            .iter()
+            .zip(&parameters)
+            .filter(|(parameter, _)| parameter.constant)
+            .map(|(_, written)| written.clone())
+            .collect();
+        stopping.extend(
+            signature
+                .parameters
+                .iter()
+                .zip(&parameters)
+                .filter(|(parameter, _)| !parameter.constant)
+                .map(|(_, written)| written.clone()),
+        );
+        if has_state {
+            stopping.push("_state: _hg.STATE = None".to_string());
+        }
+        let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
         // TIME-4: what the handlers ask together.
         let active: Vec<usize> = inputs
@@ -1016,6 +1046,11 @@ impl Emitter<'_> {
             signature: Some(signature),
             mode: Mode::Lifecycle,
         };
+        let stop_hook = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Stop,
+        };
         // `start`: the state's first values, then the hook's own
         // statements.
         if has_state || start.is_some() {
@@ -1044,8 +1079,8 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{python}.stop"));
-            self.line(0, &format!("def _stop_{python}({lifecycle}):"));
-            self.block(&lifecycle_hook, stop, 1);
+            self.line(0, &format!("def _stop_{python}({stopping}):"));
+            self.block(&stop_hook, stop, 1);
         }
     }
 
@@ -1129,7 +1164,7 @@ impl Emitter<'_> {
             LocalKind::Inject if declared.name == "out" => {
                 // hgraph gives a lifecycle hook no output: TIME-7's read
                 // of `out` in `stop` has nothing to be written as.
-                if function.mode == Mode::Lifecycle {
+                if matches!(function.mode, Mode::Lifecycle | Mode::Stop) {
                     self.unsupported(declared.at, "`out` in `stop`");
                 }
                 "_output.value".to_string()
@@ -1417,11 +1452,14 @@ impl Emitter<'_> {
             ExprKind::Local(local) => {
                 let read = self.place(function, *local);
                 // In a hook a temporal input is read through its
-                // payload.
-                if function.mode == Mode::Node && Self::is_input(function, *local) {
+                // payload: in a `when`, and in `stop` (TIME-5).
+                if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && Self::is_input(function, *local)
+                {
                     format!("{read}.value")
                 } else if function.mode == Mode::Lifecycle && Self::is_input(function, *local) {
-                    self.unsupported(value.at, "a temporal input read in `start` or `stop`");
+                    // The analyser rejects it (`input.lifecycle`).
+                    self.unsupported(value.at, "a temporal input read in `start`");
                     read
                 } else {
                     read
@@ -1431,10 +1469,20 @@ impl Emitter<'_> {
                 operation,
                 inputs: Some(inputs),
             } if inputs.len() == 1 => {
-                if function.mode == Mode::Lifecycle {
-                    self.unsupported(value.at, "an endpoint read in `start` or `stop`");
-                }
                 let endpoint = &function.locals[inputs[0]];
+                // hgraph gives `start` no endpoint, and `stop` its
+                // inputs and not its output: there `valid(input)` is the
+                // guard a read stands under (TIME-5).
+                let given = match function.mode {
+                    Mode::Lifecycle => false,
+                    Mode::Stop => {
+                        endpoint.kind != LocalKind::Inject && *operation == EndpointOperation::Valid
+                    }
+                    _ => true,
+                };
+                if !given {
+                    self.unsupported(value.at, "this endpoint read in `start` or `stop`");
+                }
                 // The node's own output is hgraph's `_output`.
                 let input = if endpoint.kind == LocalKind::Inject {
                     "_output".to_string()
