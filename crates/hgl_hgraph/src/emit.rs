@@ -1618,6 +1618,20 @@ impl Emitter<'_> {
                 let base = self.expression(function, base);
                 format!("{base}.{}", name(&field.name))
             }
+            // EXPR-7: "Brackets read an element of a list or a tuple by
+            // an `i64` index, and the value a dictionary has for a
+            // key." ERR-6: a dictionary's brackets "are strict
+            // point-in-time reads; absence fails".
+            ExprKind::Index { base, index } => {
+                let Some(read) = element_read(&base.ty) else {
+                    self.unsupported(value.at, "this element");
+                    return "None".to_string();
+                };
+                self.natives = true;
+                let base = self.expression(function, base);
+                let index = self.expression(function, index);
+                format!("_core.{read}({base}, {index})")
+            }
             // ERR-2: "`ok(value)` constructs a success and
             // `err(value)` a failure."
             ExprKind::Tagged { success, payload } => {
@@ -1835,11 +1849,13 @@ impl Emitter<'_> {
     ///
     /// EXPR-3: "An assignment may name a place inside a value, at any
     /// depth: a field, `point.x = 1` ... The place's root is a `var`, a
-    /// `state`, a `cache`, or, in a `when`, `out`." A struct's value is
-    /// never changed (TYPE-5: "later mutation of a source cannot change
-    /// an earlier retained value"), so the root is given a new one:
+    /// `state`, a `cache`, or, in a `when`, `out`." A value is never
+    /// changed (TYPE-5: "later mutation of a source cannot change an
+    /// earlier retained value"), so the root is given a new one:
     /// `line.end.x = 1` makes `line` the `line` whose `end` is the old
-    /// `end` with `x` 1. What held the old `line` holds it still.
+    /// `end` with `x` 1, and `rows[0][1] = 2` makes `rows` the `rows`
+    /// whose first element is the old one with its second 2. What held
+    /// the old value holds it still.
     fn assigned(
         &mut self,
         function: &Function,
@@ -1858,8 +1874,28 @@ impl Emitter<'_> {
                 let value = format!("_core.with_field({held}, {}={value})", name(&field.name));
                 self.assigned(function, base, value)
             }
+            // "of a list's element type, under an `i64` index; of a
+            // dictionary's value type, under a key of its key type; or
+            // of a tuple's position, under a constant index. A key the
+            // dictionary has not is added. An index outside a list
+            // fails where it is evaluated."
+            ExprKind::Index { base, index } => {
+                let with = match element_read(&base.ty) {
+                    Some("item") => "with_item",
+                    Some(_) => "with_entry",
+                    None => {
+                        self.unsupported(place.at, "an assignment to this element");
+                        return None;
+                    }
+                };
+                self.natives = true;
+                let held = self.expression(function, base);
+                let index = self.expression(function, index);
+                let value = format!("_core.{with}({held}, {index}, {value})");
+                self.assigned(function, base, value)
+            }
             _ => {
-                self.unsupported(place.at, "an assignment to an element");
+                self.unsupported(place.at, "an assignment to this place");
                 None
             }
         }
@@ -2538,6 +2574,18 @@ fn canonical_constant(constant: &Constant) -> Option<String> {
         ConstantValue::Other(_) => constant.unspaced(),
         ConstantValue::Parameter { .. } | ConstantValue::Unevaluated => return None,
     })
+}
+
+/// The provider's function that reads an element of a value of type
+/// `ty` in brackets: `item` for a list and a tuple, by position, and
+/// `entry` for a dictionary, by key. `None` for a type brackets do not
+/// read.
+fn element_read(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::List { .. } | Type::Tuple(_) => Some("item"),
+        Type::Dict { .. } => Some("entry"),
+        _ => None,
+    }
 }
 
 /// The field at `member` among those a struct has, for a value of the
