@@ -18,22 +18,83 @@ _SMALLEST_STEP = _datetime.timedelta(microseconds=1)
 _EARLIEST_START = _datetime.datetime(1970, 1, 1) + _SMALLEST_STEP
 
 
-def evaluate(target, /, **arguments):
+class _Trace(list):
+    """The dense trace an eval gives, with the instant its run started at.
+
+    Position i of it is the run's start plus i smallest steps (the
+    language's TST-6), so what reads its instants needs the start.
+    """
+
+    start = _EARLIEST_START
+
+
+def _bounds(config):
+    """The start and the end a run's configuration gives it, each `None`
+    where it gives none (core's CRUN-2).
+
+    "`length` gives the end counted from the start the run has, given or
+    not ... A `RunConfig` with both an `end` and a `length` is refused
+    before the run's graph is built, an HGL error with code
+    `run.end_and_length`."
+    """
+    if config is None:
+        return None, None
+    start, end, length = config.start, config.end, config.length
+    if end is not None and length is not None:
+        raise _core.HglError(
+            "a run's configuration gives both an `end` and a `length`",
+            code="run.end_and_length",
+        )
+    if length is not None:
+        end = _core.add__datetime_duration(_EARLIEST_START if start is None else start, length)
+    return start, end
+
+
+def evaluate(target, /, _config=None, **arguments):
     """Runs `target` with a dense trace for each temporal input.
 
     `target` is given by position alone, so that an input of the target
-    may itself be named `target`.
+    may itself be named `target`, and the run's configuration as
+    `_config`, a name no input has.
 
     A trace is a list with one cell for each engine step from the run's
     start, and `None` where nothing is published. The result is the dense
     trace of what the target published: it spans the run's start through
     the last publication, and is empty when there was none (the language's
     TST-6).
+
+    Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
+    runs before `start`, and none at or after `end`." hgraph's own end is
+    exclusive too, and its start is where the first cell of each trace
+    falls.
     """
-    result = eval_node(target, **arguments)
-    if result is None:
-        return []
-    result = list(result)
+    start, end = _bounds(_config)
+    result = _Trace()
+    result.start = _EARLIEST_START if start is None else start
+    if end is not None and end <= result.start:
+        # No cycle runs. hgraph has no run that ends where it starts, so
+        # none is made: the graph is not built, started or stopped.
+        return result
+    bounds = {}
+    if start is not None:
+        bounds["__start_time__"] = start
+    if end is not None:
+        bounds["__end_time__"] = end
+    try:
+        ran = eval_node(target, **bounds, **arguments)
+    except RuntimeError as error:
+        if "too many cycles to" not in str(error):
+            raise
+        # hgraph 0.9.0 keeps a dense recording from the earliest start,
+        # whatever start the run has, and holds no more than about a
+        # second of cycles of it.
+        raise RuntimeError(
+            "the hgraph target cannot give the dense trace of a run that starts this far "
+            "after the earliest start"
+        ) from error
+    if ran is None:
+        return result
+    result.extend(ran)
     while result and result[-1] is None:
         result.pop()
     return result
@@ -47,8 +108,9 @@ def publications(trace):
     start plus i smallest steps (TST-6), and a position with no
     publication gives no tuple.
     """
+    start = getattr(trace, "start", _EARLIEST_START)
     return [
-        (_EARLIEST_START + position * _SMALLEST_STEP, published)
+        (start + position * _SMALLEST_STEP, published)
         for position, published in enumerate(trace)
         if published is not None
     ]

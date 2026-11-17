@@ -1225,12 +1225,12 @@ fn modules_nest_and_empty_forms_have_a_body() {
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
-/// RUN-1, UNIT-14, TST-17: an eval's run configuration, a run in real
-/// time, and an application's run statement, are not written yet. Each
-/// is reported where it is written, and what the application declares
-/// is written all the same.
+/// UNIT-14, TST-17: a run in real time, and an application's run
+/// statement, are not written yet. Each is reported where it is written,
+/// and what the application declares is written all the same. RUN-1: an
+/// eval's run configuration is written.
 #[test]
-fn a_run_configuration_and_an_application_are_reported() {
+fn a_run_in_real_time_and_an_application_are_reported() {
     let emitted = emit(&[
         (
             "m.hgl",
@@ -1259,14 +1259,73 @@ fn a_run_configuration_and_an_application_are_reported() {
             ),
         ),
     ]);
+    // The eval's configuration is written (RUN-1); a run in real time
+    // and an application's run statement are not.
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:7:35 target.unsupported",
             "m.hgl:10:12 target.unsupported",
             "live.hgl:1:13 target.unsupported",
         ]
     );
+}
+
+/// Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
+/// runs before `start`, and none at or after `end` ... `length` gives
+/// the end counted from the start the run has, given or not".
+const BOUNDED: &str = concat!(
+    "module demo.bounded\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return delta_value(value) }\n",
+    "}\n",
+    "const fn first(seen: list<tuple<datetime, i64>>) -> datetime => seen[0][0]\n",
+    "const later: datetime = earliest_start + 10us\n",
+    "test a_run_is_bounded {\n",
+    "    assert eval(pass(value: [1, 2, 3, 4, 5]), RunConfig(length: 2us)) == [1, 2]\n",
+    "    assert eval(pass(value: [1, 2, 3, 4, 5]), RunConfig(end: earliest_start + 3us)) == [1, 2, 3]\n",
+    "    assert eval(pass(value: [1, 2, 3]), RunConfig()) == [1, 2, 3]\n",
+    // A run that ends where it starts has no cycle.
+    "    assert eval(pass(value: [1, 2, 3]), RunConfig(length: 0us)) == []\n",
+    // TST-6: the first cell of a trace is at the run's start.
+    "    assert first(eval(pass(value: [7]), RunConfig(start: later))) == later\n",
+    "    assert first(eval(pass(value: [7]))) == earliest_start\n",
+    "    assert eval(pass(value: [1, 2, 3]), RunConfig(start: later, length: 2us)) == [1, 2]\n",
+    "}\n",
+);
+
+/// Core's CRUN-2: "A `RunConfig` with both an `end` and a `length` is
+/// refused before the run's graph is built, an HGL error with code
+/// `run.end_and_length`." And what hgraph 0.9.0 cannot do: give the dense
+/// trace of a run that starts far after the earliest start.
+const BOUNDED_FAILS: &str = concat!(
+    "module demo.bounded.fails\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return delta_value(value) }\n",
+    "}\n",
+    "test both_ends {\n",
+    "    eval(pass(value: [1]), RunConfig(end: earliest_start + 1us, length: 1us))\n",
+    "}\n",
+    "test far_start {\n",
+    "    eval(pass(value: [1]), RunConfig(start: @2026-09-03T09:30:00Z))\n",
+    "}\n",
+);
+
+/// An eval's configuration is given to the harness last, as `_config`:
+/// after the call's arguments, as EXPR-13 evaluates them.
+#[test]
+fn an_evals_configuration_is_given_to_the_harness() {
+    let emitted = emit(&[("bounded.hgl", BOUNDED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_bounded/__init__.py");
+    for expected in [
+        "_harness.evaluate(pass_, value=[1, 2, 3, 4, 5], _config=",
+        "_harness.evaluate(pass_, value=[7])",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 #[test]
@@ -3330,6 +3389,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("raises.hgl", RAISES),
         ("instants.hgl", INSTANTS),
         ("divided.hgl", DIVIDED),
+        ("bounded.hgl", BOUNDED),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3359,10 +3419,10 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        52,
+        53,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
-         instants, one on a duration divided, and one of each demo's"
+         instants, one on a duration divided, one on a bounded run, and one of each demo's"
     );
 }
 
@@ -3406,6 +3466,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("enums.hgl", ENUM_FAILS));
     files.push(("structs.hgl", STRUCT_FAILS));
     files.push(("raises.hgl", RAISES_FAILS));
+    files.push(("bounded.hgl", BOUNDED_FAILS));
     files.push(("loops.hgl", LOOP_FAILS));
     files.push(("elements.hgl", ELEMENT_FAILS));
     files.push(("stops.hgl", STOP_FAILS));
@@ -3441,6 +3502,8 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("nested_assertion").0,
         emitted.test("nested_raises").0,
         emitted.test("nested_then_raised").0,
+        emitted.test("both_ends").0,
+        emitted.test("far_start").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -3503,6 +3566,10 @@ fn a_failure_names_the_statement_that_failed() {
             // match for the outer one though it has its code.
             "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
             "passed",
+            // CRUN-2: an `end` with a `length`. And a start hgraph
+            // 0.9.0 gives no dense trace from.
+            "failed bounded.hgl:6:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
+            "failed bounded.hgl:9:5 RuntimeError: the hgraph target cannot give the dense trace of a run that starts this far after the earliest start",
         ]
     );
 

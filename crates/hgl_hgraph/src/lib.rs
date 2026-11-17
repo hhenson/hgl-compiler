@@ -34,6 +34,8 @@
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
 //! | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` |
+//! | `eval(target(input: [7]), RunConfig(length: 2us))` | `_harness.evaluate(target, input=[7], _config=...)` |
+//! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!

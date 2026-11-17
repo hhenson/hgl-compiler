@@ -1384,7 +1384,8 @@ only where the program reaches it, at core's source.
 | `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness`. An eval that writes a run configuration is not written yet |
+| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
+| `eval(target(input: [7]), RunConfig(length: 2us))` (RUN-1, core's CRUN-2) | `_harness.evaluate(target, input=[7], _config=...)`: the configuration last, by a name no input has, so that it is evaluated after the call's arguments (EXPR-13). The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and gives hgraph's `eval_node` the start and the end, which hgraph also takes as exclusive |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
@@ -1431,7 +1432,7 @@ wakes, `modified([])`;
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
-an eval that writes a run configuration; an application's run statement;
+an application's run statement;
 a run in real time;
 a zoned datetime, a zoned time and a time zone; timed traces and a published null in a
 trace; a `result` or an `error` as the type of an input or an output;

@@ -498,6 +498,7 @@ the same numeric rules the transpiler rows give.
 | CEVAL-4 | transpiler | planned | Record starts with an empty recording and retains each publication and its time |
 | CEVAL-5 | runner | planned | A fresh run, with its own node state and recording, for each eval; dense results built by TST-6 |
 | CRUN-1 | runner | planned | A run of one entry with its `const` arguments under one `RunConfig`: built, started, evaluated and stopped once |
+| CRUN-2 | transpiler | partial | hgraph: an eval's `RunConfig` is given to the harness, which runs the target from its `start`, the earliest start where it gives none, and ends it before its `end`, or before `length` from that start; a configuration with both an `end` and a `length` is `run.end_and_length`, raised before anything is built. Left: a run that ends where it starts builds no graph, since hgraph has no such run; a start more than about a second after the earliest start, from which hgraph 0.9.0 gives no dense trace; a run in real time |
 | CRUN-2 | runner | planned | `start` inclusive and `end` exclusive; what a null `start` and a null `end` mean in each mode |
 | CRUN-3 | runner | planned | Evaluation time constant in a cycle and later in each by a microsecond or more; the earliest start |
 | CRUN-4 | runner | planned | Simulation runs each cycle without waiting and ends when nothing is scheduled; the same run gives the same publications |
