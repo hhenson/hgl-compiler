@@ -562,35 +562,78 @@ impl Emitter<'_> {
         if self.harness {
             out.push_str("import _hgl._harness as _harness\n");
         }
-        for module in &self.imports {
-            let python = python_module(module);
-            out.push_str(&format!("import {python} as {}\n", alias(module)));
-        }
-        // The lines written so far. A piece's statements were marked
-        // by the line of the piece they start on, counted from 0, and
-        // are now given the line of the file, counted from 1.
-        let mut lines = out.matches('\n').count();
         // The types first, then the functions, then the tests, each in
         // the order declared.
-        let (types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
+        let (mut types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
             self.declared.iter_mut().partition(|piece| piece.first);
-        let instances = self.instanced.iter_mut().map(|(_, _, piece)| piece);
-        for piece in types
-            .into_iter()
-            .chain(functions)
-            .chain(instances)
-            .chain(self.tested.iter_mut())
-        {
+        // The other modules the types name are imported before the
+        // types, and the rest after them. Modules may import one
+        // another in Python where they do not in the source: an
+        // instance is written in its declaration's module with the
+        // types of the module that calls it (GEN-2), and a call may
+        // select a candidate of a module that imports this one (GEN-5).
+        // A function's annotations are read where it is defined, so a
+        // module must have its types before it loads a module whose
+        // functions name them. A type's own definition names nothing
+        // of another module today, so every such import is after the
+        // types.
+        let program = self.program;
+        let early: BTreeSet<&str> = types
+            .iter()
+            .filter(|piece| piece.broken.is_none())
+            .flat_map(|piece| piece.uses.iter())
+            .filter(|(module, _, _)| *module != self.module)
+            .map(|(module, _, _)| program.modules[*module].path.as_str())
+            .collect();
+        let import = |module: &str| {
+            let python = python_module(module);
+            format!("import {python} as {}\n", alias(module))
+        };
+        for module in &self.imports {
+            if early.contains(module.as_str()) {
+                out.push_str(&import(module));
+            }
+        }
+        // A piece's statements were marked by the line of the piece
+        // they start on, counted from 0, and are given the line of the
+        // file, counted from 1: `lines` is the lines written so far.
+        let mut lines = out.matches('\n').count();
+        let write = |piece: &mut Piece, out: &mut String, lines: &mut usize| {
             if piece.broken.is_some() {
                 // It is in no file, so its statements are on no line.
                 piece.statements.clear();
-                continue;
+                return;
             }
             for (line, _) in &mut piece.statements {
-                *line += lines + 1;
+                *line += *lines + 1;
             }
-            lines += piece.text.matches('\n').count();
+            *lines += piece.text.matches('\n').count();
             out.push_str(&piece.text);
+        };
+        for piece in types.iter_mut() {
+            write(piece, &mut out, &mut lines);
+        }
+        let mut late = String::new();
+        for module in &self.imports {
+            if !early.contains(module.as_str()) {
+                late.push_str(&import(module));
+            }
+        }
+        if !late.is_empty() {
+            // Two blank lines after the types, as before any piece.
+            if types.iter().any(|piece| piece.broken.is_none()) {
+                late.insert_str(0, "\n\n");
+            }
+            lines += late.matches('\n').count();
+            out.push_str(&late);
+        }
+        let instances = self.instanced.iter_mut().map(|(_, _, piece)| piece);
+        for piece in functions
+            .into_iter()
+            .chain(instances)
+            .chain(self.tested.iter_mut())
+        {
+            write(piece, &mut out, &mut lines);
         }
         out
     }

@@ -1917,6 +1917,64 @@ fn a_value_function_that_requires_is_written_for_each_call() {
     assert!(!python.contains("def twice("), "{python}");
 }
 
+/// GEN-2: an instance is written in its declaration's module, with the
+/// types of the module that calls it: here an enum of a module that
+/// imports the declaration's.
+const CALLERS_TYPE: [(&str, &str); 2] = [
+    (
+        "kept.hgl",
+        concat!(
+            "module demo.kept\n",
+            "export fn held<T>(value: T) -> T {\n",
+            "    when valid(value) { return value }\n",
+            "}\n",
+        ),
+    ),
+    (
+        "sides.hgl",
+        concat!(
+            "module demo.sides\n",
+            "use demo.kept::{held}\n",
+            "enum Side { buy, sell }\n",
+            "test an_instance_of_a_callers_type {\n",
+            "    assert eval(held(value: [Side.buy, Side.sell])) == [Side.buy, Side.sell]\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// The two modules then import one another in Python, though they do
+/// not in the source. A function's annotations are read where it is
+/// defined, so a module defines its types before it imports another
+/// generated module: whichever of the two is loaded first, the enum is
+/// there when the instance that names it is defined.
+#[test]
+fn a_module_has_its_types_before_it_imports_another() {
+    let emitted = emit(&CALLERS_TYPE);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let kept = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
+    for expected in [
+        "import _hgl._m_demo._m_sides as _hgl_4demo_5sides\n",
+        concat!(
+            "def _inst_held__demo_sides__Side(value: _hg.TS[_hgl_4demo_5sides.Side]) ",
+            "-> _hg.TS[_hgl_4demo_5sides.Side]:\n",
+        ),
+    ] {
+        assert!(
+            kept.contains(expected),
+            "the module has:\n{expected}\nin:\n{kept}"
+        );
+    }
+    let sides = emitted.text("_hgl/_m_demo/_m_sides/__init__.py");
+    let defined = sides
+        .find("Side = _enum.Enum(")
+        .expect("the enum is written");
+    let imported = sides
+        .find("import _hgl._m_demo._m_kept as _hgl_4demo_4kept\n")
+        .expect("the module is imported");
+    assert!(defined < imported, "{sides}");
+}
+
 /// Each instance is a piece of its module. Where one has a form the
 /// target does not write, a type here, that is reported where the
 /// declaration is written, and a test that reaches that instance is
@@ -3842,6 +3900,8 @@ fn the_generated_tests_pass_on_hgraph() {
         TEMPORAL_CANDIDATES[1],
         ("generics.hgl", GENERICS),
         ("vals.hgl", VALUE_GENERICS),
+        CALLERS_TYPE[0],
+        CALLERS_TYPE[1],
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3871,12 +3931,12 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        56,
+        57,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
-         require, and one of each demo's"
+         require, one on an instance of a caller's type, and one of each demo's"
     );
 }
 
