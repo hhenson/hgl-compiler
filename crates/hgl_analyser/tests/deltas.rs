@@ -257,6 +257,8 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         // it; an enum's member; a set's delta is no literal.
         "    let moved: delta<list<i64>?> = [0: 7]\n",
         "    let side: delta<Side?> = .buy\n",
+        "    let good: delta<result<i64, str>?> = ok(1)\n",
+        "    let bad: delta<result<i64, str>?> = err(\"no\")\n",
         "    let keyed: delta<list<i64>?> = [\"wrong\": \"wrong\"]\n",
         "    return 1\n",
         "}\n",
@@ -302,12 +304,12 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
             "m.hgl:20:29 name/delta.argument_name TYPE-16",
             // The key and the value of the entry, each against the
             // dictionary a list's delta is.
-            "m.hgl:23:37 type/type.mismatch EXPR-5",
-            "m.hgl:23:46 type/type.mismatch EXPR-5",
-            "m.hgl:31:53 name/delta.argument_name TYPE-16",
+            "m.hgl:25:37 type/type.mismatch EXPR-5",
+            "m.hgl:25:46 type/type.mismatch EXPR-5",
+            "m.hgl:33:53 name/delta.argument_name TYPE-16",
             // Through the `?` of a struct delta's property.
-            "m.hgl:37:61 type/type.mismatch EXPR-5",
-            "m.hgl:37:70 type/type.mismatch EXPR-5",
+            "m.hgl:39:61 type/type.mismatch EXPR-5",
+            "m.hgl:39:70 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -323,6 +325,8 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
             "other: delta<i64?>",
             "moved: delta<list<i64>?>",
             "side: delta<Side?>",
+            "good: delta<result<i64, str>?>",
+            "bad: delta<result<i64, str>?>",
             "keyed: delta<list<i64>?>",
         ]
     );

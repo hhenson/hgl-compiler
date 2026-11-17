@@ -2443,15 +2443,17 @@ impl<'a> Typer<'a> {
         // out.
         if let Some(Type::Delta(of)) = not_null(expected)
             && let Type::Nullable(payload) = &**of
-            && matches!(
+            // A literal, a tuple, a sequence and a symbol before an
+            // operand; and `.member`, `ok(value)` and `err(value)`,
+            // which have no type but their place's (ERR-2).
+            && (matches!(
                 node.kind(),
                 SyntaxKind::Literal
                     | SyntaxKind::TupleExpr
                     | SyntaxKind::SequenceExpr
                     | SyntaxKind::UnaryExpr
-                    | SyntaxKind::ImpliedMember
-            )
-            && !is_null(node)
+            ) || takes_its_type(node))
+            && !written_null(node)
         {
             let lifted = Type::delta((**payload).clone());
             return self.expression(node, Some(&lifted));
