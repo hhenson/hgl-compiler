@@ -910,19 +910,31 @@ fn a_form_not_written_yet_is_reported() {
             "    }\n",
             "    return value\n",
             "}\n",
+            // A struct as a temporal input, and one made in a graph.
+            "fn quoted(quote: Quote) -> f64 {\n",
+            "    when { return quote.bid }\n",
+            "}\n",
+            "fn fixed(value: f64) -> f64 => quoted(Quote(bid: 1.0))\n",
+            // A generic struct made where its arguments are the
+            // function's own generic parameters.
+            "struct Held<T> { value: T }\n",
+            "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:2:8 target.unsupported",
             "m.hgl:6:12 target.unsupported",
             "m.hgl:9:10 target.unsupported",
             "m.hgl:17:12 target.unsupported",
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
-            // A graph's `if`, then what the test holds.
+            // A graph's `if`, the three of a struct, then what the test
+            // holds.
             "m.hgl:32:5 target.unsupported",
+            "m.hgl:37:11 target.unsupported",
+            "m.hgl:40:39 target.unsupported",
+            "m.hgl:42:42 target.unsupported",
             "m.hgl:27:30 target.unsupported",
             "m.hgl:27:42 target.unsupported",
             "m.hgl:28:17 target.unsupported",
@@ -1652,6 +1664,282 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
     assert!(at("Odd = _enum.Enum(") < at("def opposite("));
 }
 
+/// Structs: declarations, constructions that leave fields out, fields
+/// read and assigned at depth, a struct that inherits, a generic one, an
+/// operator's candidate on one, two compared as values of their
+/// parent, one that holds a NaN, and a node that keeps two in its
+/// state. The structs are declared after the functions that name them,
+/// and a second module takes a default from the first.
+const STRUCTS: [(&str, &str); 2] = [
+    (
+        "structs.hgl",
+        concat!(
+            "module demo.structs\n",
+            "\n",
+            "export const fn origin() -> Point => Point(x: 0.0)\n",
+            "\n",
+            "const fn moved(point: Point, by: f64) -> Point {\n",
+            "    var next = point\n",
+            "    next.x = next.x + by\n",
+            "    next.y += by\n",
+            "    return next\n",
+            "}\n",
+            "\n",
+            "const fn stretched(line: Line, by: f64) -> Line {\n",
+            "    var next = line\n",
+            "    next.end.x += by\n",
+            "    next.class = 4\n",
+            "    return next\n",
+            "}\n",
+            "\n",
+            "const fn held(base: Base<str>) -> str => base.held\n",
+            "const fn order() -> Order => Order(held: \"a\")\n",
+            "const fn boxed(value: i64) -> Box<i64> => Box(value: value)\n",
+            "\n",
+            "impl const fn add_(lhs: Point, rhs: Point) -> Point => Point(x: lhs.x + rhs.x, y: lhs.y + rhs.y)\n",
+            "\n",
+            "enum Side { buy, sell }\n",
+            "\n",
+            "abstract struct Base<T> {\n",
+            "    id: i64 = 1\n",
+            "    held: T\n",
+            "    rate: f64 = 2\n",
+            "}\n",
+            "\n",
+            "struct Order : Base<str> {\n",
+            "    id = 7\n",
+            "    side: Side = .buy\n",
+            "    note: str? = null\n",
+            "}\n",
+            "\n",
+            "export struct Point {\n",
+            "    x: f64\n",
+            "    y: f64 = 0.0\n",
+            "}\n",
+            "\n",
+            "struct Line {\n",
+            "    start: Point\n",
+            "    end: Point = Point(x: 1.0)\n",
+            "    class: i64 = 3\n",
+            "}\n",
+            "\n",
+            "struct Box<T> {\n",
+            "    value: T\n",
+            "    count: i64 = 0\n",
+            "}\n",
+            "\n",
+            "struct Empty {}\n",
+            "\n",
+            "abstract struct Shape {}\n",
+            "struct Tagged<T> : Shape { tag: T }\n",
+            "struct Plain : Shape {}\n",
+            "const fn same(lhs: Shape, rhs: Shape) -> bool => lhs == rhs\n",
+            "\n",
+            "fn travelled(step: f64) -> f64 {\n",
+            "    state at: Point = Point(x: 0.0)\n",
+            "    state seen: Box<i64> = boxed(0)\n",
+            "    when {\n",
+            "        at.x += step\n",
+            "        at.y = at.x * 2.0\n",
+            "        seen.count += 1\n",
+            "        return at.x + at.y\n",
+            "    }\n",
+            "}\n",
+            "\n",
+            "test points {\n",
+            "    let point = Point(y: 2.0, x: 1.0)\n",
+            "    assert point.x == 1.0\n",
+            "    assert point.y == 2.0\n",
+            "    assert origin() == Point(x: 0.0, y: 0.0)\n",
+            "    assert moved(point, 1.5) == Point(x: 2.5, y: 3.5)\n",
+            "    assert point == Point(x: 1.0, y: 2.0)\n",
+            "    assert point != origin()\n",
+            "    assert point + Point(x: 3.0) == Point(x: 4.0, y: 2.0)\n",
+            "}\n",
+            "\n",
+            "test lines {\n",
+            "    let line = Line(start: origin())\n",
+            "    assert line.end == Point(x: 1.0, y: 0.0)\n",
+            "    assert line.class == 3\n",
+            "    let longer = stretched(line, 2.0)\n",
+            "    assert longer.end.x == 3.0\n",
+            "    assert longer.class == 4\n",
+            "    assert line.end.x == 1.0\n",
+            "    assert longer.start == line.start\n",
+            "}\n",
+            "\n",
+            "test orders {\n",
+            "    let made = order()\n",
+            "    assert made.id == 7\n",
+            "    assert made.held == \"a\"\n",
+            "    assert made.rate == 2.0\n",
+            "    assert made.side == Side.buy\n",
+            "    assert made.note == null\n",
+            "    assert held(made) == \"a\"\n",
+            "    assert Order(held: \"b\", note: \"n\", id: 9).id == 9\n",
+            "    assert Order(held: \"b\", note: \"n\").note != null\n",
+            "}\n",
+            "\n",
+            "test generic {\n",
+            "    assert boxed(3) == Box(value: 3, count: 0)\n",
+            "    assert boxed(3).count == 0\n",
+            "    assert Empty() == Empty()\n",
+            "}\n",
+            "\n",
+            "test identity {\n",
+            "    assert same(Tagged(tag: 1), Tagged(tag: 1))\n",
+            "    assert !same(Tagged(tag: 1), Tagged(tag: 1.0))\n",
+            "    assert !same(Tagged(tag: 1), Plain())\n",
+            "    let odd = Point(x: 0.0 / 0.0)\n",
+            "    assert odd != odd\n",
+            "    assert !(odd == odd)\n",
+            "    assert Tagged(tag: [odd.x]) != Tagged(tag: [odd.x])\n",
+            "}\n",
+            "\n",
+            "test walks {\n",
+            "    assert eval(travelled, step: [1.0, _, 2.0]) == [3.0, _, 9.0]\n",
+            "}\n",
+        ),
+    ),
+    (
+        "structs_user.hgl",
+        concat!(
+            "module demo.structs.user\n",
+            "\n",
+            "use demo.structs::{Point}\n",
+            "use demo.structs as shapes\n",
+            "\n",
+            "const fn base() -> f64 => 5.0\n",
+            "\n",
+            "struct Marker {\n",
+            "    at: Point = shapes::origin()\n",
+            "    size: f64 = base()\n",
+            "    label: str\n",
+            "}\n",
+            "\n",
+            "const fn marker(label: str) -> Marker => Marker(label: label)\n",
+            "\n",
+            "test markers {\n",
+            "    let made = Marker(label: \"a\")\n",
+            "    assert made.size == 5.0\n",
+            "    assert made.at == shapes::origin()\n",
+            "    assert made == marker(\"a\")\n",
+            "    assert marker(\"b\").label == \"b\"\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// A default that fails where a construction leaves its field out, and
+/// two arguments that each fail.
+const STRUCT_FAILS: &str = concat!(
+    "module demo.structs.fails\n",
+    "const fn broken() -> i64 => 1 // 0\n",
+    "const fn next(value: i64) -> i64 => value + 1\n",
+    "struct Ratio { value: i64 = broken() }\n",
+    "struct Pair {\n",
+    "    first: i64\n",
+    "    second: i64\n",
+    "}\n",
+    "test given { assert Ratio(value: 2).value == 2 }\n",
+    "test omitted { assert Ratio().value == 1 }\n",
+    "test in_order { assert Pair(second: next(9223372036854775807), first: broken()).first == 1 }\n",
+    "test unequal { assert Ratio(value: 2) == Ratio(value: 3) }\n",
+);
+
+/// TYPE-3: "Structs are nominal, with public ordered fields and no
+/// methods." TYPE-5: "Its arguments are named, each for a field the
+/// struct has, a parent's included, in any order ... A field with a
+/// default, its own or one a struct below gives it, may be left out,
+/// and then has that default. An optional field with no default may be
+/// left out too, and is then null ... Retained results own their data;
+/// later mutation of a source cannot change an earlier retained
+/// value." EXPR-3: "An assignment may name a place inside a value, at
+/// any depth: a field, `point.x = 1`".
+///
+/// A struct is a class the provider makes, written before the
+/// functions of its module. Its values are never changed: an
+/// assignment to a field gives the place's root a new value.
+///
+/// TYPE-3: "Generic applications are invariant by origin and complete
+/// canonical arguments": a `Tagged<i64>` and a `Tagged<f64>` are of
+/// two classes, and are not equal where they meet as values of their
+/// parent. NUM-5: "NaN is neither equal nor close to any value,
+/// including itself", inside a struct as outside one.
+#[test]
+fn a_struct_is_a_class_whose_values_are_never_changed() {
+    let emitted = emit(&STRUCTS);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_structs/__init__.py");
+    for expected in [
+        "import _hgl._core_native as _core\n",
+        // Every field the struct has, a parent's first; a Python word
+        // has a `_` after it.
+        "Base = _core.struct(\"Base\", (\"id\", \"held\", \"rate\"))\n",
+        "Order = _core.struct(\"Order\", (\"id\", \"held\", \"rate\", \"side\", \"note\"))\n",
+        "Point = _core.struct(\"Point\", (\"x\", \"y\"))\n",
+        "Line = _core.struct(\"Line\", (\"start\", \"end\", \"class_\"))\n",
+        "Empty = _core.struct(\"Empty\", ())\n",
+        // A field left out has its default: the struct's own `id = 7`
+        // for the parent's field, the parent's for `rate`, and null
+        // for an optional field with none.
+        concat!(
+            "def order():\n",
+            "    return Order(held=\"a\", id=7, rate=_py.float(2), side=Side[\"buy\"], note=None)\n",
+        ),
+        // The arguments in the order written, then the defaults.
+        "    point = Point(y=2.0, x=1.0)\n",
+        "    line = Line(start=origin(), end=Point(x=1.0, y=0.0), class_=3)\n",
+        "def held(base):\n    return base.held\n",
+        // An assignment to a field, and to a field of a field.
+        "    next = _core.with_field(next, x=_core.add__f64_f64(lhs=next.x, rhs=by))\n",
+        concat!(
+            "    next = _core.with_field(next, end=_core.with_field(next.end, ",
+            "x=_core.add__f64_f64(lhs=next.end.x, rhs=by)))\n",
+        ),
+        "    next = _core.with_field(next, class_=4)\n",
+        // A candidate of an operator on a struct.
+        "def _impl_add__Point_Point(lhs, rhs):\n",
+        // A generic struct is made of the class for its arguments.
+        "    return _core.applied(Box, \"i64\")(value=value, count=0)\n",
+        concat!(
+            "same(lhs=_core.applied(Tagged, \"i64\")(tag=1), ",
+            "rhs=_core.applied(Tagged, \"f64\")(tag=1.0))",
+        ),
+        "_core.applied(Tagged, \"list<f64>\")(tag=[odd.x])",
+        // A `state` that is a struct.
+        "    _state.at = Point(x=0.0, y=0.0)\n",
+        concat!(
+            "    _state.seen = _core.with_field(_state.seen, ",
+            "count=_core.add__i64_i64(lhs=_state.seen.count, rhs=1))\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // The structs come before the function that is declared before
+    // them.
+    let at = |text: &str| python.find(text).expect("it is written");
+    assert!(at("Point = _core.struct(") < at("def origin("));
+    assert!(at("Empty = _core.struct(") < at("def origin("));
+
+    // UNIT-7: "Imported defaults retain their defining closure,
+    // including private references": a default is written where the
+    // construction is, and names what it names through its module.
+    let user = emitted.text("_hgl/_m_demo/_m_structs/_m_user/__init__.py");
+    for expected in [
+        "Marker = _core.struct(\"Marker\", (\"at\", \"size\", \"label\"))\n",
+        "    return Marker(label=label, at=_hgl_4demo_7structs.origin(), size=base())\n",
+    ] {
+        assert!(
+            user.contains(expected),
+            "the module has:\n{expected}\nin:\n{user}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a loop in two of its
 /// functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -1842,6 +2130,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("close.hgl", CLOSE),
         ("enums.hgl", ENUMS),
     ];
+    files.extend(STRUCTS);
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -1862,8 +2151,8 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        29,
-        "eight of core's, six on endpoints, and one of each demo's"
+        36,
+        "eight of core's, six on endpoints, seven on structs, and one of each demo's"
     );
 }
 
@@ -1874,8 +2163,8 @@ fn the_generated_tests_pass_on_hgraph() {
 /// `numeric.division_by_zero`"). ERR-5: a failure a `?` meets in a
 /// `when` fails the node, and the test with it. NUM-4: "An invalid
 /// tolerance is an HGL error". TYPE-7: an enum constructed from "a
-/// value that is none fails where it is evaluated". Needs hgraph, as
-/// above.
+/// value that is none fails where it is evaluated". TYPE-5: a
+/// construction's arguments and defaults. Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -1887,6 +2176,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("node.hgl", RESULT_FAILS));
     files.push(("close.hgl", CLOSE_FAILS));
     files.push(("enums.hgl", ENUM_FAILS));
+    files.push(("structs.hgl", STRUCT_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -1897,6 +2187,10 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("negative_tolerance").0,
         emitted.test("no_number").0,
         emitted.test("no_name").0,
+        emitted.test("given").0,
+        emitted.test("omitted").0,
+        emitted.test("in_order").0,
+        emitted.test("unequal").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -1921,6 +2215,13 @@ fn a_failure_names_the_statement_that_failed() {
             "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
             "failed enums.hgl:5:18 HglError: `Side` has no member 9",
             "failed enums.hgl:6:16 HglError: `Side` has no member 'none'",
+            // TYPE-5: "Defaults are evaluated only when omitted", and
+            // "Written arguments evaluate once in source order; failure
+            // prevents later arguments."
+            "passed",
+            "failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
+            "failed structs.hgl:11:17 HglError: an i64 result is outside the signed 64-bit range",
+            "failed structs.hgl:12:16 the assertion does not hold",
         ]
     );
 

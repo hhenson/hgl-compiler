@@ -19,8 +19,9 @@ use hgl_analyser::hir::{
     Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, LocalKind,
-    NamedKind, Parameter, Phase, Program, Role, Scalar, Signature, Type,
+    Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
+    FieldRef, LocalKind, Member, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature,
+    Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -54,7 +55,7 @@ pub(crate) struct Piece {
     /// The first form in it that the target does not write yet. A piece
     /// with one is left out of the file.
     pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the enums it names, each as its module and
+    /// The functions and the types it names, each as its module and
     /// its declaration.
     pub(crate) uses: BTreeSet<(usize, usize)>,
     /// True for a type, which is written before the functions: a
@@ -381,8 +382,9 @@ struct Emitter<'a> {
     /// The other generated modules this one names a function of, by
     /// module path.
     imports: BTreeSet<String>,
-    /// The defaults being written in place of an argument left out,
-    /// each as its module, declaration and parameter: a default is not
+    /// The defaults being written in place of an argument or a field
+    /// left out, each as its module, its declaration, and its parameter
+    /// or its field among those the struct writes: a default is not
     /// written inside itself.
     expanding: Vec<(usize, usize, usize)>,
     /// The Python of the piece being written.
@@ -567,9 +569,9 @@ impl Emitter<'_> {
             // functions: it has nothing of its own to write.
             (DeclarationKind::Operator, _, _) => {}
             (DeclarationKind::Enum, _, _) => self.enumeration(index),
+            (DeclarationKind::Struct, _, _) => self.structure(index),
             _ => {
                 let what = match declaration.kind {
-                    DeclarationKind::Struct => "a struct",
                     DeclarationKind::NativeType => "a native type",
                     kind if kind.candidate().is_some() => "an operator's candidate",
                     _ => "a native function",
@@ -621,8 +623,43 @@ impl Emitter<'_> {
         );
     }
 
-    /// The Python name of the enum `declaration` of `module`. One of
-    /// another module is named through that module, as a function is.
+    /// `struct Point { x: f64, y: f64 }`, the declaration `index` of
+    /// the module: a class the provider makes, with every field the
+    /// struct has, its parents' first (TYPE-3: "Structs are nominal,
+    /// with public ordered fields and no methods").
+    ///
+    /// A field's default is no part of the class: a construction that
+    /// leaves the field out is written with the default in its place
+    /// (see `construct`), as a call is for a parameter. An abstract
+    /// struct is a class too, of which no value is made.
+    fn structure(&mut self, index: usize) {
+        let program = self.program;
+        let module = &program.modules[self.module];
+        let declaration = &module.declarations[index];
+        let fields: Vec<String> = match module.details.get(index) {
+            Some(Detail::Struct(read)) => {
+                read.members.iter().map(|field| name(&field.name)).collect()
+            }
+            _ => Vec::new(),
+        };
+        self.natives = true;
+        self.piece.first = true;
+        self.line(0, "");
+        self.line(0, "");
+        self.line(
+            0,
+            &format!(
+                "{} = _core.struct({}, {})",
+                name(&declaration.name),
+                string(&declaration.name),
+                tuple(&fields)
+            ),
+        );
+    }
+
+    /// The Python name of the enum or the struct `declaration` of
+    /// `module`. One of another module is named through that module, as
+    /// a function is.
     fn type_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
@@ -1137,6 +1174,15 @@ impl Emitter<'_> {
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
             }
+            // EXPR-3: "An assignment may name a place inside a value, at
+            // any depth". A compound assignment's value is already the
+            // symbol with the place as its left operand.
+            Stmt::AssignPlace { place, value, .. } => {
+                let value = self.expression(function, value);
+                if let Some((target, value)) = self.assigned(function, place, value) {
+                    self.line(depth, &format!("{target} = {value}"));
+                }
+            }
             // FN-7: a `return` with a value publishes it and ends the
             // evaluation; with none, and where a body ends, nothing is
             // published. hgraph has a node that returns `None` not tick.
@@ -1422,6 +1468,21 @@ impl Emitter<'_> {
                 let value = self.expression(function, value);
                 format!("_core.member({of}, {value})")
             }
+            ExprKind::Construct {
+                module,
+                declaration,
+                arguments,
+            } => self.construct(function, (*module, *declaration), arguments, value),
+            // TYPE-3: a struct's fields are public, and read by name.
+            ExprKind::Field { base, member } => {
+                let Some(field) = field_of(self.program, &base.ty, *member) else {
+                    // A property of a native value, or of a delta.
+                    self.unsupported(value.at, "this member");
+                    return "None".to_string();
+                };
+                let base = self.expression(function, base);
+                format!("{base}.{}", name(&field.name))
+            }
             // ERR-2: "`ok(value)` constructs a success and
             // `err(value)` a failure."
             ExprKind::Tagged { success, payload } => {
@@ -1501,6 +1562,170 @@ impl Emitter<'_> {
             _ => {
                 self.unsupported(value.at, "this expression");
                 "None".to_string()
+            }
+        }
+    }
+
+    /// `Quote(bid: 1.0, ask: 2.0)`: a value of the struct `of`, a
+    /// module and a declaration of it, with each field by its name.
+    ///
+    /// TYPE-5: "Its arguments are named, each for a field the struct
+    /// has, a parent's included, in any order ... A field with a
+    /// default, its own or one a struct below gives it, may be left
+    /// out, and then has that default. An optional field with no
+    /// default may be left out too, and is then null ... Written
+    /// arguments evaluate once in source order; failure prevents later
+    /// arguments. Defaults are evaluated only when omitted."
+    ///
+    /// The arguments are written in the order the source has them,
+    /// which is the order Python evaluates them in, and then the
+    /// default of each field left out.
+    ///
+    /// TYPE-3: "Generic applications are invariant by origin and
+    /// complete canonical arguments". A value of a generic struct is
+    /// made of the class for its arguments, `_core.applied(Box,
+    /// "i64")`: a `Box<i64>` is then no `Box<f64>` where the two meet
+    /// as values of a parent. `whole` is the construction, whose type
+    /// says the arguments. Where they are not known as the module is
+    /// written, in a function generic in them, the construction is
+    /// reported.
+    fn construct(
+        &mut self,
+        function: &Function,
+        of: (usize, usize),
+        arguments: &[Argument],
+        whole: &Expr,
+    ) -> String {
+        let at = whole.at;
+        let program = self.program;
+        let Some(Detail::Struct(read)) = program.modules[of.0].details.get(of.1) else {
+            self.unsupported(at, "this construction");
+            return "None".to_string();
+        };
+        let mut written = Vec::new();
+        for argument in arguments {
+            let field = argument.parameter.and_then(|field| read.members.get(field));
+            let Some(field) = field else {
+                self.unsupported(argument.value.at, "this argument of a construction");
+                continue;
+            };
+            let value = self.expression(function, &argument.value);
+            written.push(format!("{}={value}", name(&field.name)));
+        }
+        for (index, field) in read.members.iter().enumerate() {
+            let given = arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index));
+            if given {
+                continue;
+            }
+            let value = match field.default {
+                Some(default) => self.field_default(default, at),
+                // The analyser has held the construction to every field
+                // that is not optional (TYPE-5).
+                None => "None".to_string(),
+            };
+            written.push(format!("{}={value}", name(&field.name)));
+        }
+        let class = self.type_name(of.0, of.1);
+        let applied = match &whole.ty {
+            Type::Named { arguments, .. } if !arguments.is_empty() => {
+                let texts: Option<Vec<String>> = arguments
+                    .iter()
+                    .map(|argument| canonical_argument(program, argument))
+                    .collect();
+                match texts {
+                    Some(texts) => {
+                        self.natives = true;
+                        format!("_core.applied({class}, {})", string(&texts.join(", ")))
+                    }
+                    None => {
+                        self.unsupported(
+                            at,
+                            "a generic struct made where its arguments are not known",
+                        );
+                        class
+                    }
+                }
+            }
+            // A struct with no generic parameter is its own class.
+            _ if read.generics.is_empty() => class,
+            _ => {
+                self.unsupported(
+                    at,
+                    "a generic struct made where its arguments are not known",
+                );
+                class
+            }
+        };
+        format!("{applied}({})", written.join(", "))
+    }
+
+    /// The default the field `default` writes, where the construction
+    /// at `at` leaves the field out. It is read from the analysed
+    /// program, as a parameter's is (see `left_out`): a default names
+    /// no field and no local (UNIT-7), so it means the same wherever it
+    /// is written.
+    fn field_default(&mut self, default: FieldRef, at: Location) -> String {
+        let program = self.program;
+        let value = program.modules[default.module]
+            .defaults
+            .get(default.declaration)
+            .and_then(|defaults| defaults.get(default.field))
+            .and_then(Option::as_ref);
+        let Some(value) = value else {
+            self.unsupported(at, "a default of a field left out here");
+            return "None".to_string();
+        };
+        // A default that constructs its own struct with that same
+        // field left out would be written inside itself without end.
+        let key = (default.module, default.declaration, default.field);
+        if self.expanding.contains(&key) {
+            self.unsupported(value.at, "a default that leaves itself out");
+            return "None".to_string();
+        }
+        let cold = Function {
+            locals: &[],
+            signature: None,
+            mode: Mode::Value,
+        };
+        self.expanding.push(key);
+        let written = self.expression(&cold, value);
+        self.expanding.pop();
+        written
+    }
+
+    /// What the assignment of `value` to `place` gives the place's
+    /// root: the root as it is assigned, and its new value.
+    ///
+    /// EXPR-3: "An assignment may name a place inside a value, at any
+    /// depth: a field, `point.x = 1` ... The place's root is a `var`, a
+    /// `state`, a `cache`, or, in a `when`, `out`." A struct's value is
+    /// never changed (TYPE-5: "later mutation of a source cannot change
+    /// an earlier retained value"), so the root is given a new one:
+    /// `line.end.x = 1` makes `line` the `line` whose `end` is the old
+    /// `end` with `x` 1. What held the old `line` holds it still.
+    fn assigned(
+        &mut self,
+        function: &Function,
+        place: &Expr,
+        value: String,
+    ) -> Option<(String, String)> {
+        match &place.kind {
+            ExprKind::Local(local) => Some((self.place(function, *local), value)),
+            ExprKind::Field { base, member } => {
+                let Some(field) = field_of(self.program, &base.ty, *member) else {
+                    self.unsupported(place.at, "an assignment to this member");
+                    return None;
+                };
+                self.natives = true;
+                let held = self.expression(function, base);
+                let value = format!("_core.with_field({held}, {}={value})", name(&field.name));
+                self.assigned(function, base, value)
+            }
+            _ => {
+                self.unsupported(place.at, "an assignment to an element");
+                None
             }
         }
     }
@@ -2092,6 +2317,110 @@ impl Emitter<'_> {
             })
             .collect();
         format!("[{}]", written.join(", "))
+    }
+}
+
+/// A type as text that no other type is written as, for the class of a
+/// generic struct's application (see `Emitter::construct`). A named
+/// type has its module's path before it: two modules may each declare
+/// a `Quote`. `None` for a type that is not whole as the module is
+/// written: one that names a generic parameter, or is not known.
+fn canonical(program: &Program, ty: &Type) -> Option<String> {
+    let one = |ty: &Type| canonical(program, ty);
+    Some(match ty {
+        Type::Scalar(scalar) => scalar.as_str().to_string(),
+        Type::Named {
+            name,
+            module,
+            arguments,
+            ..
+        } => {
+            let path = &program.modules[*module].path;
+            if arguments.is_empty() {
+                format!("{path}::{name}")
+            } else {
+                let arguments: Option<Vec<String>> = arguments
+                    .iter()
+                    .map(|argument| canonical_argument(program, argument))
+                    .collect();
+                format!("{path}::{name}<{}>", arguments?.join(", "))
+            }
+        }
+        Type::Tuple(elements) => {
+            let elements: Option<Vec<String>> = elements.iter().map(one).collect();
+            format!("tuple<{}>", elements?.join(", "))
+        }
+        Type::List { element, size } => match size {
+            Some(size) => format!("list<{}, {}>", one(element)?, canonical_constant(size)?),
+            None => format!("list<{}>", one(element)?),
+        },
+        Type::Set(element) => format!("set<{}>", one(element)?),
+        Type::Dict { key, value } => format!("dict<{}, {}>", one(key)?, one(value)?),
+        Type::Rolling {
+            value,
+            maximum,
+            minimum,
+        } => match minimum {
+            Some(minimum) => format!(
+                "rolling<{}, {}, {}>",
+                one(value)?,
+                canonical_constant(maximum)?,
+                canonical_constant(minimum)?
+            ),
+            None => format!("rolling<{}, {}>", one(value)?, canonical_constant(maximum)?),
+        },
+        Type::Ref(target) => format!("ref<{}>", one(target)?),
+        Type::Endpoint(target) => format!("endpoint<{}>", one(target)?),
+        Type::Signal => "signal".to_string(),
+        Type::Atomic(payload) => format!("atomic<{}>", one(payload)?),
+        Type::Result { value, error } => format!("result<{}, {}>", one(value)?, one(error)?),
+        Type::Error => "error".to_string(),
+        Type::Delta(shape) => format!("delta<{}>", one(shape)?),
+        Type::Nullable(inner) => format!("{}?", one(inner)?),
+        Type::Parameter { .. } | Type::Trace { .. } | Type::Unknown => return None,
+    })
+}
+
+/// A generic argument as [`canonical`] text.
+fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
+    match argument {
+        GenericArgument::Type(ty) => canonical(program, ty),
+        GenericArgument::Constant(constant) => canonical_constant(constant),
+    }
+}
+
+/// A constant inside a type as [`canonical`] text: what it comes to,
+/// however it was written. `None` for one whose value is not known as
+/// the module is written.
+fn canonical_constant(constant: &Constant) -> Option<String> {
+    Some(match &constant.value {
+        ConstantValue::Int(number) => number.to_string(),
+        ConstantValue::Duration(microseconds) => format!("{microseconds}us"),
+        ConstantValue::Unbounded => "unbounded".to_string(),
+        ConstantValue::Member(member) => format!(".{member}"),
+        // A literal of another kind is held as it is written, and
+        // compared without the spaces between its tokens.
+        ConstantValue::Other(_) => constant.unspaced(),
+        ConstantValue::Parameter { .. } | ConstantValue::Unevaluated => return None,
+    })
+}
+
+/// The field at `member` among those a struct has, for a value of the
+/// type `ty`. `None` where the type is no struct: a native type has
+/// properties, and a delta its own.
+fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Member> {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+    match program.modules[*module].details.get(*declaration) {
+        Some(Detail::Struct(read)) => read.members.get(member),
+        _ => None,
     }
 }
 

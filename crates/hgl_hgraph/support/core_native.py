@@ -17,8 +17,12 @@ otherwise.
 
 A `result` is an `Ok` or an `Err`, and an `error` an `Error`: the values
 the language's `ok`, `err` and `error` make (ERR-2, ERR-4).
+
+A struct is a class `struct` makes: a value that is never changed, so
+that one held in two places is as good as a copy in each (TYPE-5).
 """
 
+import dataclasses as _dataclasses
 import math as _math
 from fractions import Fraction as _Fraction
 
@@ -43,6 +47,31 @@ class HglError(Exception):
         self.code = code
 
 
+def _equal(lhs, rhs):
+    """`lhs == rhs` for two values of one type, part by part.
+
+    Python's own `==` on a list, a tuple or a dictionary takes two parts
+    that are one object to be equal and does not compare them: a NaN
+    held in both would then equal itself (NUM-5: "NaN is neither equal
+    nor close to any value, including itself"), and whether two values
+    are equal would turn on whether one was retained. Each part is
+    compared here as its own type compares.
+    """
+    if isinstance(lhs, (list, tuple)):
+        return (
+            isinstance(rhs, (list, tuple))
+            and len(lhs) == len(rhs)
+            and all(_equal(left, right) for left, right in zip(lhs, rhs))
+        )
+    if isinstance(lhs, dict):
+        return (
+            isinstance(rhs, dict)
+            and lhs.keys() == rhs.keys()
+            and all(_equal(value, rhs[key]) for key, value in lhs.items())
+        )
+    return lhs == rhs
+
+
 class Ok:
     """A success of a `result`, which owns its value (ERR-2)."""
 
@@ -55,7 +84,7 @@ class Ok:
     # adds no ordering/hash": with `__eq__` and no `__hash__`, Python
     # makes the class unhashable.
     def __eq__(self, other):
-        return type(other) is Ok and self.value == other.value
+        return type(other) is Ok and _equal(self.value, other.value)
 
     def __repr__(self):
         return f"ok({self.value!r})"
@@ -70,7 +99,7 @@ class Err:
         self.error = error
 
     def __eq__(self, other):
-        return type(other) is Err and self.error == other.error
+        return type(other) is Err and _equal(self.error, other.error)
 
     def __repr__(self):
         return f"err({self.error!r})"
@@ -142,6 +171,73 @@ def member(enum, value):
         return enum(value)
     except (KeyError, ValueError):
         raise HglError(f"`{enum.__name__}` has no member {value!r}") from None
+
+
+def struct(name, fields):
+    """A struct of the program, as a class (TYPE-3: "Structs are
+    nominal, with public ordered fields and no methods").
+
+    `fields` is every field the struct has, its parents' first, each by
+    its Python name. A value is made with each field by name, and is
+    never changed after: "Retained results own their data; later
+    mutation of a source cannot change an earlier retained value"
+    (TYPE-5).
+
+    Two are equal when they are of one struct, with the same generic
+    arguments (see `applied`), and each field is equal. The fields are
+    always compared: a value is not taken to equal itself, since a
+    field of it may be a NaN.
+    """
+
+    def equal(self, other):
+        return type(other) is type(self) and all(
+            _equal(getattr(self, field), getattr(other, field)) for field in fields
+        )
+
+    def hashed(self):
+        return hash(tuple(getattr(self, field) for field in fields))
+
+    return _dataclasses.make_dataclass(
+        name,
+        fields,
+        frozen=True,
+        slots=True,
+        kw_only=True,
+        eq=False,
+        namespace={"__eq__": equal, "__hash__": hashed},
+    )
+
+
+# The class of each generic struct with its arguments in place, by the
+# struct and the arguments.
+_applications = {}
+
+
+def applied(struct, arguments):
+    """A generic struct with its arguments in place, `Box<i64>`, as a
+    class of its own (TYPE-3: "Generic applications are invariant by
+    origin and complete canonical arguments").
+
+    `arguments` is the arguments as the compiler writes them, one text
+    for each application. The class is made once, so a `Box<i64>` is no
+    `Box<f64>`, whatever the two hold.
+    """
+    key = (struct, arguments)
+    made = _applications.get(key)
+    if made is None:
+        made = type(f"{struct.__name__}<{arguments}>", (struct,), {"__slots__": ()})
+        _applications[key] = made
+    return made
+
+
+def with_field(value, /, **field):
+    """`place.field = new` (EXPR-3): the struct `value` with one field
+    another value. `value` itself is as it was, for whatever else holds
+    it; the compiler assigns what this gives to the place.
+
+    `value` is taken by position only: a field may be named `value`.
+    """
+    return _dataclasses.replace(value, **field)
 
 
 def _i64(value):
@@ -345,11 +441,11 @@ def neg__f64(value):
 
 
 def eq__T_T(lhs, rhs):
-    return lhs == rhs
+    return _equal(lhs, rhs)
 
 
 def ne__T_T(lhs, rhs):
-    return lhs != rhs
+    return not _equal(lhs, rhs)
 
 
 def lt__T_T(lhs, rhs):
