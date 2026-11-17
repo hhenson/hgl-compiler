@@ -452,6 +452,74 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
+/// How many constants a constant's value is followed through. One that
+/// names more, each through the last, is left unevaluated.
+const CONSTANT_DEPTH: usize = 32;
+
+/// What the constant `declaration` of module `module` comes to, as far
+/// as it needs no types (UNIT-13): "a compile-time constant where a
+/// generic value argument (GEN-8) or a `switch` label (CTRL-12) requires
+/// one". Its expression is folded as a size is, and a constant it names
+/// is followed in turn.
+///
+/// `following` is the constants being followed, so that one whose value
+/// depends on itself, which is reported as that, ends here. A constant
+/// of a type other than `i64` and `duration` is left unevaluated: only
+/// those are folded with no types.
+fn constant_value(
+    program: &Program,
+    module: usize,
+    declaration: usize,
+    following: &std::cell::RefCell<Vec<(usize, usize)>>,
+) -> ConstantValue {
+    let unit = &program.modules[module];
+    let declared = &unit.declarations[declaration];
+    if declared.kind != DeclarationKind::Constant
+        || following.borrow().contains(&(module, declaration))
+        || following.borrow().len() >= CONSTANT_DEPTH
+    {
+        return ConstantValue::Unevaluated;
+    }
+    let ty = type_child(&declared.syntax);
+    let folded = ty
+        .as_ref()
+        .is_some_and(|ty| matches!(text_of(ty).as_str(), "i64" | "duration"));
+    let Some(written) = declared
+        .syntax
+        .children()
+        .find(|child| Some(child) != ty.as_ref())
+        .filter(|_| folded)
+    else {
+        return ConstantValue::Unevaluated;
+    };
+    let file = unit.files[declared.file].file;
+    following.borrow_mut().push((module, declaration));
+    // What a name of the expression stands for: another constant, of
+    // this module or one it imports from.
+    let name = |used: &SyntaxNode| {
+        let Some(name) = used_name(used) else {
+            return ConstantValue::Unevaluated;
+        };
+        let binding = unit
+            .uses
+            .iter()
+            .find(|found| found.at.file == file && found.at.span.start == name.span().start)
+            .map(|found| &found.binding);
+        match binding {
+            Some(Binding::Declarations {
+                module,
+                declarations,
+            }) if declarations.len() == 1 => {
+                constant_value(program, *module, declarations[0], following)
+            }
+            _ => ConstantValue::Unevaluated,
+        }
+    };
+    let value = fold(&written, &name);
+    following.borrow_mut().pop();
+    value
+}
+
 /// The default of a parameter or struct member: its first child node
 /// after the `=`.
 pub(crate) fn default_of(node: &SyntaxNode) -> Option<SyntaxNode> {
@@ -2187,7 +2255,21 @@ impl Reader<'_> {
                 }
             }
             Binding::Local { .. } => ConstantValue::Unevaluated,
-            Binding::Declarations { .. } => return None,
+            // UNIT-13: a constant of a module is "a compile-time
+            // constant where a generic value argument (GEN-8) ...
+            // requires one".
+            Binding::Declarations {
+                module,
+                declarations,
+            } => match declarations.as_slice() {
+                &[declaration]
+                    if self.program.modules[*module].declarations[declaration].kind
+                        == DeclarationKind::Constant =>
+                {
+                    constant_value(self.program, *module, declaration, &Default::default())
+                }
+                _ => return None,
+            },
         };
         Some(Constant {
             text: name.text().to_string(),
@@ -2226,6 +2308,14 @@ impl Reader<'_> {
                     name: name.text().to_string(),
                     at: *at,
                 },
+                // UNIT-13: a constant of a module, followed to its
+                // value.
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) if declarations.len() == 1 => {
+                    constant_value(self.program, *module, declarations[0], &Default::default())
+                }
                 _ => ConstantValue::Unevaluated,
             }
         };

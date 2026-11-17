@@ -229,6 +229,7 @@ It is built in passes:
 | Declarations | Each module's declarations, test helpers and tests; its declaration scope and test scope; a name declared twice | UNIT-5, UNIT-12, FN-4, TST-1, TST-2, NATIVE-2 | done |
 | Imports | The module and the declarations each `use` names; cycles; the operator of each candidate, `impl fn` or `impl const fn`, native or not | UNIT-2, UNIT-3, GEN-4 | done |
 | Resolution | Every name in a signature, body, type and constraint, to the one binding in scope; a binding that takes a name already there; undecided generic applications | UNIT-5, UNIT-6, UNIT-7, UNIT-10, UNIT-12, FN-14, GEN-1, GEN-14, TST-2 | done |
+| Constant cycles | A constant whose value depends on itself, directly or through the declarations its expression names | UNIT-13 | done: see "Constants" below |
 | Forms | What the grammar admits of a declaration and a rule does not: a pack with a default, const, or before a fixed parameter; a named pack of no type pack; the hooks of a native implementation | FN-8, NATIVE-3 | done |
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
@@ -758,6 +759,24 @@ Not read yet in a graph: whether a graph that returns nowhere under a
 temporal condition gives a result on every path; the traversal forms
 `elements`, `keys`, `values` and `items` (CTRL-8).
 
+### Constants
+
+A constant, `const name: T = expression` (UNIT-13), is a declaration of
+its module. What is read of it:
+
+| What | Where | How |
+| --- | --- | --- |
+| Its type | `Detail::Constant` | The type it is written with, an ordinary value type (`type.not_ordinary`) |
+| Its expression | `Module::constants` | Read as a value of that type by a typer with no parameter, so it names no parameter and no local. A call of a temporal function is `call.role` |
+| A read of it | `ExprKind::Constant` | By its name, of its own module or one imported. It is a constant expression (FN-1), so a `const` parameter takes it, and a compile-time constant (GEN-8) |
+| Its value, where a type needs one | `read::constant_value` | A list's size and a generic value argument that name a constant follow it to its value, through the constants it names in turn. Only an `i64` or a `duration` written with literals, constants and `+`, `-`, `*` is followed: it is all that folds with no types |
+| A cycle | `cycles::check` | Each declaration of a module is a node of a graph, with an edge to every declaration of the module it names. A constant in a cycle of that graph depends on itself (`constant.cycle`), whether through another constant, a function its expression calls, or a struct's default. Modules do not import one another, so a cycle is within one module |
+
+Not done: the value of a constant of any other type where a type needs
+one; the value of a `switch` label that is a constant, so two labels of
+one value are not seen as that; a dependence through an operator's
+candidate that a symbol selects, which no name leads to.
+
 ### Value expressions
 
 The body of each value function, `const fn`, is read into a typed form,
@@ -772,7 +791,7 @@ The pass is built form by form. So far it reads:
 | --- | --- | --- |
 | A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime` |
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
-| A name | UNIT-10, GEN-13 | A parameter, a local, or a generic value parameter, with its type |
+| A name | UNIT-10, GEN-13, UNIT-13 | A parameter, a local, a constant of a module (`ExprKind::Constant`), or a generic value parameter, with its type |
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
 | `&&`, `\|\|`, `!` | EXPR-6, OPS-5 | Read as they are written: their operands are bools, and the right operand of a connective is evaluated only where the left does not decide |
 | A tuple, a sequence of values | EXPR-5, EXPR-9 | Their elements take the types an expected tuple, list or set gives. With none, a sequence is a list of the one type its values have: `f64` when its integer literals stand among `f64` values, and `T?` when a `null` stands among values of `T`. `[]` and `[null]` give no type, and are rejected |
@@ -1366,6 +1385,7 @@ only where the program reaches it, at core's source.
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
 | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness`. An eval that writes a run configuration is not written yet |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
+| `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
 | A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
 | `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. The properties are given by name in the order they are written, so that they are evaluated in it (EXPR-13), and one left out is an empty `_py.frozenset()` |

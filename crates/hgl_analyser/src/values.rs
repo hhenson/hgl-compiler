@@ -641,6 +641,13 @@ impl<'a> Typer<'a> {
         // is no type.
         let ty = crate::read::type_child(&syntax);
         let written = syntax.children().find(|child| Some(child) != ty.as_ref())?;
+        // A type that is no ordinary value type has been reported
+        // (TYPE-12), and the expression is then held to none.
+        let expected = if shaped(expected) {
+            &Type::Unknown
+        } else {
+            expected
+        };
         let value = self.expression(&written, Some(expected));
         let place = format!("the constant `{}`", self.declaration.name);
         Some(self.fit(value, expected, &place))
