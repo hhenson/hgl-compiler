@@ -1859,7 +1859,8 @@ impl<'a> Typer<'a> {
                 .with_related(self.locals[local].at, "declared here"),
             );
         } else if self.graph {
-            self.assigned_category(local, &value);
+            let given = (self.category(&value), value.at);
+            self.assigned_category(local, given, false);
         }
         // TIME-8: a `var` a capability is assigned to is that
         // capability from there.
@@ -1894,8 +1895,14 @@ impl<'a> Typer<'a> {
     /// it is assigned, and a set, which has no element to read, has
     /// none to assign.
     ///
-    /// In a graph the assignment is copy on write (EXPR-15), and is
-    /// not read yet.
+    /// EXPR-15: "In a graph, an assignment into a place of a `var` is
+    /// copy on write ... `point.x = price` rebinds `point` to a new
+    /// connection, which is `point` with its `x` from `price` ... The
+    /// place, the type of its value, and a compound assignment are as
+    /// EXPR-3 has them." So it is read as any other, and is then an
+    /// assignment to the `var`: held to the `var`'s category, and to
+    /// what a loop or a branch selected at runtime admits (CTRL-14,
+    /// CTRL-15).
     fn place_assignment(
         &mut self,
         node: &SyntaxNode,
@@ -1917,9 +1924,6 @@ impl<'a> Typer<'a> {
         let Some(local) = local else {
             return self.unread(node);
         };
-        if self.graph {
-            return self.unread(node);
-        }
         let at = self.at(node);
         let operator = tokens(node).find_map(|token| compound(token.kind()));
         let operator_at = tokens(node)
@@ -2012,6 +2016,46 @@ impl<'a> Typer<'a> {
                 }
             }
         };
+        // EXPR-15: in a graph the `var` is rebound, so the assignment
+        // is one to the `var`. CTRL-15: "In such a loop an assignment
+        // to a `var` declared outside it rejects".
+        if self.graph && self.dynamic.is_some_and(|outside| local < outside) {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::LOOP_CARRIED,
+                    self.at(place),
+                    format!(
+                        "`{}` is declared outside this loop, which makes one child for each \
+                         member: nothing is carried from one child to the next",
+                        self.locals[local].name
+                    ),
+                    "CTRL-15",
+                )
+                .with_related(self.locals[local].at, "declared here"),
+            );
+        } else if self.graph {
+            // What the `var` becomes turns on the value and on every
+            // index of the place: `row[index] = 3.0` with `index` a
+            // connection selects the element as the graph runs.
+            let mut parts = vec![&value];
+            place_indices(&target, &mut parts);
+            let categories: Vec<(ValueCategory, Location)> = parts
+                .iter()
+                .map(|part| (self.category(part), part.at))
+                .collect();
+            let given = categories
+                .iter()
+                .find(|(category, _)| *category == ValueCategory::Connection)
+                .or_else(|| {
+                    categories
+                        .iter()
+                        .find(|(category, _)| *category == ValueCategory::Unsettled)
+                })
+                .copied()
+                .unwrap_or((ValueCategory::Value, value.at));
+            self.assigned_category(local, given, true);
+        }
         Stmt::AssignPlace {
             place: target,
             operator,
@@ -2141,10 +2185,22 @@ impl<'a> Typer<'a> {
     /// rejects." A `var` declared with no value takes the category of
     /// the first value it is assigned, and what is not settled is not
     /// judged.
-    fn assigned_category(&mut self, local: LocalId, value: &Expr) {
+    ///
+    /// `given` is the category of what is assigned, and where it is
+    /// written. `inside` is true for an assignment into a place of the
+    /// `var` (EXPR-15). The `var` is then rebound to itself with one
+    /// place another value: a connection stays one whatever the place
+    /// is given, an ordinary value wired there as a constant (FN-3),
+    /// and an ordinary value given a connection, or a place a
+    /// connection selects, would become one.
+    fn assigned_category(
+        &mut self,
+        local: LocalId,
+        (given, at): (ValueCategory, Location),
+        inside: bool,
+    ) {
         use ValueCategory::{Connection, Unsettled, Value};
-        let given = self.category(value);
-        if self.locals[local].category == Unsettled {
+        if self.locals[local].category == Unsettled && !inside {
             self.locals[local].category = given;
         }
         let held = self.locals[local].category;
@@ -2156,7 +2212,7 @@ impl<'a> Typer<'a> {
                 "`{name}` holds an ordinary value, and this is a connection: a `var` keeps \
                  the category of its first value"
             ),
-            (Connection, Value) => format!(
+            (Connection, Value) if !inside => format!(
                 "`{name}` is a connection, and this is an ordinary value: a `var` keeps the \
                  category of its first value"
             ),
@@ -2170,7 +2226,7 @@ impl<'a> Typer<'a> {
             error(
                 Category::Type,
                 codes::BINDING_CATEGORY,
-                value.at,
+                at,
                 message,
                 "CTRL-14",
             )
@@ -12223,6 +12279,19 @@ fn is_least_magnitude(node: &SyntaxNode) -> bool {
             token.kind() == SyntaxKind::Int
                 && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
         })
+}
+
+/// Adds to `indices` each index of the place `place`, from the
+/// outermost in: the `i` and the `j` of `rows[i].cells[j]`.
+fn place_indices<'e>(place: &'e Expr, indices: &mut Vec<&'e Expr>) {
+    match &place.kind {
+        ExprKind::Index { base, index } => {
+            indices.push(index);
+            place_indices(base, indices);
+        }
+        ExprKind::Field { base, .. } => place_indices(base, indices),
+        _ => {}
+    }
 }
 
 /// True for a type that is a temporal shape and no ordinary value
