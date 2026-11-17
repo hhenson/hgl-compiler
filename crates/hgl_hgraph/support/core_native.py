@@ -17,8 +17,12 @@ otherwise.
 
 A `result` is an `Ok` or an `Err`, and an `error` an `Error`: the values
 the language's `ok`, `err` and `error` make (ERR-2, ERR-4).
+
+A struct is a class `struct` makes: a value that is never changed, so
+that one held in two places is as good as a copy in each (TYPE-5).
 """
 
+import dataclasses as _dataclasses
 import math as _math
 from fractions import Fraction as _Fraction
 
@@ -142,6 +146,30 @@ def member(enum, value):
         return enum(value)
     except (KeyError, ValueError):
         raise HglError(f"`{enum.__name__}` has no member {value!r}") from None
+
+
+def struct(name, fields):
+    """A struct of the program, as a class (TYPE-3: "Structs are
+    nominal, with public ordered fields and no methods").
+
+    `fields` is every field the struct has, its parents' first, each by
+    its Python name. A value is made with each field by name, and is
+    never changed after: "Retained results own their data; later
+    mutation of a source cannot change an earlier retained value"
+    (TYPE-5). Two are equal when they are of one struct and each field
+    is equal.
+    """
+    return _dataclasses.make_dataclass(name, fields, frozen=True, slots=True, kw_only=True)
+
+
+def with_field(value, /, **field):
+    """`place.field = new` (EXPR-3): the struct `value` with one field
+    another value. `value` itself is as it was, for whatever else holds
+    it; the compiler assigns what this gives to the place.
+
+    `value` is taken by position only: a field may be named `value`.
+    """
+    return _dataclasses.replace(value, **field)
 
 
 def _i64(value):

@@ -1302,6 +1302,9 @@ only where the program reaches it, at core's source.
 | `operator` | Nothing: its candidates are the functions |
 | `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
 | `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
+| `struct Point { x: f64, y: f64 = 0.0 }` (TYPE-3) | `Point = _core.struct("Point", ("x", "y"))`: a class the provider makes, with every field the struct has, a parent's first. Its values are never changed, and two are equal when each field is. A module's structs are written before its functions, with its enums. An abstract struct is a class too, of which no value is made |
+| `Point(x: 1.0)` (TYPE-5) | `Point(x=1.0, y=0.0)`: the arguments in the order written, which is the order Python evaluates them in, then each field left out with its default in its place, read from the analysed program as a parameter's is (`Module::defaults`, `Member::default`), or `None` for an optional field with none |
+| `point.x`; `point.x = 1.0`, `line.end.x += by` (EXPR-3) | `point.x`; `point = _core.with_field(point, x=1.0)`, and at depth `line = _core.with_field(line, end=_core.with_field(line.end, x=...))`. The place's root is given a new value and the old one is as it was, for whatever else holds it (TYPE-5: "later mutation of a source cannot change an earlier retained value"). A `state` is assigned the same way |
 | `ok(value)`, `err(value)`, `error(message: m, code: c)` (ERR-2, ERR-4) | `_core.Ok(value)`, `_core.Err(value)`, `_core.Error(message=m, code=c)`: values of the provider's, equal when their parts are |
 | `is_ok(r)`, `is_err(r)`; `r.value`, `r.error`; `e.message`, `e.code` (ERR-3, ERR-4) | `_py.isinstance(r, _core.Ok)`, `_py.isinstance(r, _core.Err)`; the attribute of the same name |
 | `r?` in a value function (ERR-5) | `_core.propagated(r)`, which gives a success's value and raises for a failure. The function's body is in a `try`, and returns the failure raised |
@@ -1322,8 +1325,10 @@ the names it defines, and a candidate it has no function for is reported.
 for each input through hgraph's own `eval_node` and ends the result at
 its last publication (TST-6).
 
-Reported as not written yet (`target.unsupported`): a type other than
-the four scalars above and an enum, a nullable among them; structs; a
+Reported as not written yet (`target.unsupported`): as the type of an
+input, an output or configuration, any but the four scalars above and
+an enum, a nullable and a struct among them; a struct made in a graph;
+an assignment to an element, `row[0] = 1`; a
 temporal candidate of an operator, a native declaration of a program,
 and a candidate with the parameter types of another of its module;
 generic temporal functions;

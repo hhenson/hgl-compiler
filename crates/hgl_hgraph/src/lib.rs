@@ -23,6 +23,8 @@
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `enum Side { buy, sell }` | `Side = _enum.Enum("Side", [...])`, a scalar to hgraph |
+//! | `struct Point { x: f64, y: f64 }` | `Point = _core.struct("Point", ("x", "y"))`, a class whose values are never changed |
+//! | `Point(x: 1.0)`, `point.x = 2.0` | `Point(x=1.0, y=...)`, `point = _core.with_field(point, x=2.0)` |
 //! | `ok(v)`, `err(e)`, `r?` | `_core.Ok(v)`, `_core.Err(e)`, `_core.propagated(r)` |
 //! | A value function given a connection in a graph | A node of its own that calls it (FN-6) |
 //! | A named test | A function `test_name` |
