@@ -563,6 +563,44 @@ def neg__duration(value):
     return _duration(-_microseconds(value))
 
 
+def _div_duration(lhs, rhs, zero):
+    """A duration divided by a number (OPS-1).
+
+    OPS-10: "the exact result rounded to the nearest duration the type
+    holds, a tie to the even one", and a duration "divided by a NaN or an
+    infinity" is out of range. The quotient is exact as a fraction, and
+    Python rounds one half to even. NUM-12: every division takes `zero`,
+    and these candidates admit `fail`, and `error` through `_divide`.
+    """
+    if rhs == 0:
+        _whole(zero)
+    if isinstance(rhs, float) and not _math.isfinite(rhs):
+        raise HglError(
+            "a duration divided by an infinity or a NaN", code="numeric.out_of_range"
+        )
+    return _duration(round(_Fraction(_microseconds(lhs)) / _Fraction(rhs)))
+
+
+def div__duration_i64(lhs, rhs, zero):
+    return _divide(_div_duration, lhs, rhs, zero)
+
+
+def div__duration_f64(lhs, rhs, zero):
+    return _divide(_div_duration, lhs, rhs, zero)
+
+
+def div__duration_duration(lhs, rhs, zero):
+    """OPS-1: a duration by a duration is an `f64`, the quotient of
+    their counts, under the zero policies a quotient of numbers has."""
+    return _divide(_div, _microseconds(lhs), _microseconds(rhs), zero)
+
+
+def floordiv__duration_duration(lhs, rhs, zero):
+    """OPS-1: `//` of two durations is an `i64`, the floor of the
+    quotient of their counts (NUM-1)."""
+    return _divide(_floordiv_i64, _microseconds(lhs), _microseconds(rhs), zero)
+
+
 def _moved(instant, duration):
     """An instant a duration on from another (OPS-1).
 
