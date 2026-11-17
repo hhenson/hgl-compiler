@@ -1333,6 +1333,32 @@ impl Emitter<'_> {
                 self.line(depth, &format!("if not ({condition}):"));
                 self.line(depth + 1, "raise _py.AssertionError()");
             }
+            // TST-10: "Run its block once. A matching escaping error
+            // passes ...; then continue after the assertion. Normal
+            // completion, a different code ... fails the test." The
+            // harness says whether what escaped has the code, and
+            // TST-11: a failed assertion in the block does not.
+            Stmt::AssertRaises {
+                code: Some(code),
+                body,
+                at,
+            } if function.mode == Mode::Test => {
+                self.harness = true;
+                self.line(depth, "try:");
+                self.block(function, body, depth + 1);
+                // What follows the block is the assertion's own again:
+                // a block that raised nothing fails at the assertion,
+                // and not at its last statement.
+                let line = self.text.matches('\n').count();
+                self.piece.statements.push((line, *at));
+                self.line(depth, "except _py.Exception as _raised:");
+                self.line(
+                    depth + 1,
+                    &format!("_harness.raised(_raised, {})", string(code)),
+                );
+                self.line(depth, "else:");
+                self.line(depth + 1, &format!("_harness.not_raised({})", string(code)));
+            }
             Stmt::Expr(Expr {
                 kind:
                     ExprKind::If {

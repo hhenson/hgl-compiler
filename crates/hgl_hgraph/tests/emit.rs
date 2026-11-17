@@ -730,6 +730,68 @@ fn a_duration_is_a_timedelta() {
     );
 }
 
+/// TST-10: "`assert raises(\"code\")` ... Run its block once. A matching
+/// escaping error passes ...; then continue after the assertion."
+const RAISES: &str = concat!(
+    "module demo.raises\n",
+    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
+    "const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b\n",
+    "fn ratios(a: f64, b: f64) -> f64 {\n",
+    "    when { return checked(a, b)? }\n",
+    "}\n",
+    "test a_failure_is_expected {\n",
+    "    assert raises(\"numeric.division_by_zero\") { strict(1.0, 0.0) }\n",
+    // A node's failure, which comes out of an eval.
+    "    assert raises(\"numeric.division_by_zero\") {\n",
+    "        eval(ratios(a: [6.0], b: [0.0]))\n",
+    "    }\n",
+    // The test goes on after the assertion.
+    "    assert strict(6.0, 2.0) == 3.0\n",
+    "}\n",
+);
+
+/// TST-10: "Normal completion, a different code ... fails the test."
+/// TST-11: "A failed nested assertion cannot satisfy an enclosing
+/// raises."
+const RAISES_FAILS: &str = concat!(
+    "module demo.raises.fails\n",
+    "const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b\n",
+    "const fn next(value: i64) -> i64 => value + 1\n",
+    "test nothing_raised {\n",
+    "    assert raises(\"numeric.division_by_zero\") { strict(6.0, 2.0) }\n",
+    "}\n",
+    "test another_code {\n",
+    "    assert raises(\"numeric.division_by_zero\") { next(9223372036854775807) }\n",
+    "}\n",
+    "test nested_assertion {\n",
+    "    assert raises(\"numeric.division_by_zero\") {\n",
+    "        assert strict(6.0, 2.0) == 4.0\n",
+    "    }\n",
+    "}\n",
+);
+
+/// An `assert raises` is a `try` whose handler asks the harness whether
+/// what escaped has the code, and whose `else` fails the test.
+#[test]
+fn an_assert_raises_is_a_try_the_harness_judges() {
+    let emitted = emit(&[("raises.hgl", RAISES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_raises/__init__.py");
+    let expected = concat!(
+        "    try:\n",
+        "        strict(a=1.0, b=0.0)\n",
+        "    except _py.Exception as _raised:\n",
+        "        _harness.raised(_raised, \"numeric.division_by_zero\")\n",
+        "    else:\n",
+        "        _harness.not_raised(\"numeric.division_by_zero\")\n",
+    );
+    assert!(
+        python.contains(expected),
+        "the module has:\n{expected}\nin:\n{python}"
+    );
+    assert!(python.contains("import _hgl._harness as _harness\n"));
+}
+
 /// UNIT-13: "The constant has that one value wherever it is read ... It
 /// is referenced forward as any module declaration is (UNIT-6)". A
 /// constant is a function of no parameter that the provider runs once,
@@ -3106,6 +3168,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("close.hgl", CLOSE),
         ("enums.hgl", ENUMS),
         ("durations.hgl", DURATIONS),
+        ("raises.hgl", RAISES),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3135,9 +3198,10 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        49,
+        50,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
-         on enums of one name, two on constants, one on durations, and one of each demo's"
+         on enums of one name, two on constants, one on durations, one on raises, and one of \
+         each demo's"
     );
 }
 
@@ -3164,6 +3228,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("close.hgl", CLOSE_FAILS));
     files.push(("enums.hgl", ENUM_FAILS));
     files.push(("structs.hgl", STRUCT_FAILS));
+    files.push(("raises.hgl", RAISES_FAILS));
     files.push(("loops.hgl", LOOP_FAILS));
     files.push(("elements.hgl", ELEMENT_FAILS));
     files.push(("stops.hgl", STOP_FAILS));
@@ -3193,6 +3258,9 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("one_more").0,
         emitted.test("removed_first").0,
         emitted.test("silence_counted").0,
+        emitted.test("nothing_raised").0,
+        emitted.test("another_code").0,
+        emitted.test("nested_assertion").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -3243,6 +3311,13 @@ fn a_failure_names_the_statement_that_failed() {
             // TST-16: a `_` of a dense trace gives a `const fn` no
             // tuple, so two publications are counted, and not three.
             "failed given.hgl:10:24 the assertion does not hold",
+            // TST-10: a block that completes fails at the assertion, and
+            // one that lets out another code fails where that was
+            // raised, with what it says. TST-11: a failed assertion in
+            // the block is the test's failure.
+            "failed raises.hgl:5:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
+            "failed raises.hgl:8:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "failed raises.hgl:12:9 the assertion does not hold",
         ]
     );
 
