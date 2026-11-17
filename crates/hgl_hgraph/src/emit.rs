@@ -598,6 +598,12 @@ impl Emitter<'_> {
     ///
     /// It is made by a call and not as a class, so that a member may
     /// have any name: a class would take none that is a Python keyword.
+    ///
+    /// hgraph knows a Python enum by its class's name: two of one name
+    /// are one type to it, and one named as an enum of hgraph's own,
+    /// `CmpResult`, is taken for that. So the class is named with its
+    /// module's path, `demo.orders::Side`, which no other enum is and
+    /// no Python class can be.
     fn enumeration(&mut self, index: usize) {
         let program = self.program;
         let module = &program.modules[self.module];
@@ -627,7 +633,7 @@ impl Emitter<'_> {
             &format!(
                 "{} = _enum.Enum({}, [{}])",
                 name(&declaration.name),
-                string(&declaration.name),
+                string(&format!("{}::{}", module.path, declaration.name)),
                 written.join(", ")
             ),
         );
