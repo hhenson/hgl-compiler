@@ -574,9 +574,12 @@ fn the_supplied_core_declares_scheduling_and_the_store() {
             "    when {\n",
             "        if has(global_state, \"run.output\") { return get<i64>(global_state, \"run.output\") }\n",
             "        put(global_state, \"run.output.mine\", value)\n",
-            "        return value\n",
+            "        return labelled(global_state, \"run.output\", value)\n",
             "    }\n",
             "}\n",
+            // A function of the program that is given the store: its
+            // own `const` parameter is no key of the store.
+            "const fn labelled(store: GlobalState, const label: str, value: i64) -> i64 => value\n",
         ),
     )]);
     assert!(checked.core_supplied);
