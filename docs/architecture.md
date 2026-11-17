@@ -508,6 +508,21 @@ takes no third (`argument.unexpected`). The typed eval is
 `ExprKind::Eval`, with its call and its configuration where it writes
 one.
 
+| Form | Rule | Read as |
+| --- | --- | --- |
+| A trace's type | TST-3, TST-5 | `Type::Trace`, with the type of a cell and the style. It is a type of this compiler's: source writes none. A cell is one cycle's publication, the `delta<T>` of the parameter's type for an input and of the target's result for what the eval gives |
+| `[7, _, 9]`, `[0s: 7, 2s: 9]` where a trace is expected | TST-5, TST-7 | `ExprKind::Trace`: dense, or timed. Each cell is read as the cell's type. A timed trace's keys are all durations or all datetimes, constant keys strictly increase (`trace.key_order`), and it has no `_` (`trace.placeholder`) |
+| A `_` anywhere else | EXPR-8 | `trace.placeholder` |
+| An eval's traces | TST-7 | Of one style, the expectation included (`trace.style`, at the later trace) |
+| An eval of a target with no result | TST-8 | A statement. Bound or compared, it is `eval.no_result` |
+| `eval(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
+| A trace, or a value that holds one, given to a field or to a temporal function | TST-3 | `trace.escape`, reported where the construction or the call is finished (`Typer::traces_given`), so that a generic place and a trace wrapped in a sequence are held to it too |
+| A trace given to a `const fn` | TST-3, TST-16 | The list of its publications, a `list<tuple<datetime, delta<T>>>`: `Publications` in the tree, held to the parameter's type |
+
+Not read: an `eval` outside a named test; a trace that is the value of
+a block or an `if`, where it is compared; a generic target whose
+parameter is given structural cells.
+
 ### Applications
 
 An application's file is headed `application name` (UNIT-14). The
@@ -525,21 +540,6 @@ what an application has that a module has not:
 
 Not read yet: the call and the configuration of a run statement
 (RUN-1, `run.entry`), and a run statement that a declaration follows.
-
-| Form | Rule | Read as |
-| --- | --- | --- |
-| A trace's type | TST-3, TST-5 | `Type::Trace`, with the type of a cell and the style. It is a type of this compiler's: source writes none. A cell is one cycle's publication, the `delta<T>` of the parameter's type for an input and of the target's result for what the eval gives |
-| `[7, _, 9]`, `[0s: 7, 2s: 9]` where a trace is expected | TST-5, TST-7 | `ExprKind::Trace`: dense, or timed. Each cell is read as the cell's type. A timed trace's keys are all durations or all datetimes, constant keys strictly increase (`trace.key_order`), and it has no `_` (`trace.placeholder`) |
-| A `_` anywhere else | EXPR-8 | `trace.placeholder` |
-| An eval's traces | TST-7 | Of one style, the expectation included (`trace.style`, at the later trace) |
-| An eval of a target with no result | TST-8 | A statement. Bound or compared, it is `eval.no_result` |
-| `eval(...) == [...]`, `seen != other` | TST-4 | `ExprKind::TraceCompare`, a `bool`: the harness's own comparison, selected through no operator. The side that gives a trace says what the other, a sequence written out, is read as |
-| A trace, or a value that holds one, given to a field or to a temporal function | TST-3 | `trace.escape`, reported where the construction or the call is finished (`Typer::traces_given`), so that a generic place and a trace wrapped in a sequence are held to it too |
-| A trace given to a `const fn` | TST-3, TST-16 | The list of its publications, a `list<tuple<datetime, delta<T>>>`: `Publications` in the tree, held to the parameter's type |
-
-Not read: an `eval` outside a named test; a trace that is the value of
-a block or an `if`, where it is compared; a generic target whose
-parameter is given structural cells.
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:

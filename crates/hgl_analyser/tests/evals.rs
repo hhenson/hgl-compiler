@@ -305,6 +305,52 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
     );
 }
 
+/// TST-5: the call "binds ... its generic arguments as any call does".
+/// GEN-14: `name<Type>(value)` is one the parser leaves undecided, and
+/// the resolver decides it is a call.
+#[test]
+fn an_evals_call_may_be_one_the_parser_left_undecided() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "test generic {\n",
+        "    assert eval(through<Side>([.buy, _, .sell])) == [.buy, _, .sell]\n",
+        "    let seen = eval(through<Side>([.buy]), RunConfig())\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(locals(&checked, "generic"), ["seen: trace of Side"]);
+}
+
+/// EXPR-13: arguments are evaluated in the order written. An eval's
+/// call is read before its configuration, so what the call assigns the
+/// configuration may read, and not the other way about.
+#[test]
+fn an_evals_call_is_read_before_its_configuration() {
+    let checked = module(concat!(
+        "const fn configured(count: i64) -> RunConfig => RunConfig()\n",
+        "test order {\n",
+        "    var x: i64\n",
+        "    assert eval(pass(value: [{\n",
+        "        x = 7\n",
+        "        7\n",
+        "    }]), configured(x)) == [7]\n",
+        "}\n",
+        "test reversed {\n",
+        "    var y: i64\n",
+        "    assert eval(pass(value: [y]), {\n",
+        "        y = 7\n",
+        "        RunConfig()\n",
+        "    }) == [7]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:41:30 name/binding.unassigned EXPR-3"],
+        "{}",
+        checked.report
+    );
+}
+
 /// TST-16: "A trace given to a `const fn` is an ordinary value there:
 /// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple
 /// for each publication, in time order ... a `delta<T>` (TYPE-16), which
