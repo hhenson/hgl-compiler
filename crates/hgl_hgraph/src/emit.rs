@@ -2589,23 +2589,27 @@ impl Emitter<'_> {
         let Some(element) = self.annotation(element, false, value.at) else {
             return "None".to_string();
         };
-        // The properties in their own order: `added`, then `removed`.
-        // Each is a set as it is written, and one left out is empty.
-        let mut properties = ["_py.frozenset()".to_string(), "_py.frozenset()".to_string()];
+        // EXPR-13: the properties are evaluated in the order they are
+        // written, as a call's arguments are. Python evaluates keyword
+        // arguments as written, so each is given by its name in that
+        // order, and one left out is empty.
+        const PROPERTIES: [&str; 2] = ["added", "removed"];
+        let mut given = [false; 2];
+        let mut written = Vec::new();
         for argument in arguments {
-            let written = self.expression(function, &argument.value);
-            if let Some(property) = argument
-                .parameter
-                .and_then(|index| properties.get_mut(index))
-            {
-                *property = written;
+            let value = self.expression(function, &argument.value);
+            if let Some(index) = argument.parameter.filter(|index| *index < PROPERTIES.len()) {
+                given[index] = true;
+                written.push(format!("{}={value}", PROPERTIES[index]));
+            }
+        }
+        for (property, given) in PROPERTIES.iter().zip(given) {
+            if !given {
+                written.push(format!("{property}=_py.frozenset()"));
             }
         }
         self.hgraph = true;
-        format!(
-            "_hg.set_delta(added={}, removed={}, tp={element})",
-            properties[0], properties[1]
-        )
+        format!("_hg.set_delta({}, tp={element})", written.join(", "))
     }
 
     /// A dense trace written out: a list with `None` where it has `_`

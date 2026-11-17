@@ -2551,6 +2551,9 @@ const SETS: &str = concat!(
     "\n",
     "fn seen(command: i64) -> set<i64> => changes(twice(command))\n",
     "\n",
+    "const fn swapped(left: i64, joined: i64) -> delta<set<i64>> =>\n",
+    "    delta<set<i64>>(removed: [left], added: [joined])\n",
+    "\n",
     "fn relayed(enabled: bool, input: set<i64>) -> set<i64> {\n",
     "    when {\n",
     "        if enabled && modified(input) { return delta_value(input) }\n",
@@ -2597,6 +2600,11 @@ const SET_FAILS: &str = concat!(
     "test one_more {\n",
     "    assert eval(members, command: [1]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]\n",
     "}\n",
+    // The division is written first, and fails first: the addition
+    // after it would overflow.
+    "const fn swapped(divisor: i64, value: i64) -> delta<set<i64>> =>\n",
+    "    delta<set<i64>>(removed: [1 // divisor], added: [value + 1])\n",
+    "test removed_first { let change = swapped(0, 9223372036854775807) }\n",
 );
 
 /// TYPE-9, TYPE-16: a temporal `set<T>` is hgraph's `TSS[T]`, whose
@@ -2620,8 +2628,8 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
         ),
         // A property left out is empty.
         concat!(
-            "        return _hg.set_delta(added=_py.frozenset(), ",
-            "removed=_py.frozenset((2,)), tp=_py.int)\n",
+            "        return _hg.set_delta(removed=_py.frozenset((2,)), ",
+            "added=_py.frozenset(), tp=_py.int)\n",
         ),
         // END-5: the node's own output, as hgraph names a set's.
         concat!(
@@ -2633,6 +2641,11 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "removed=_py.frozenset(), tp=_py.int)\n",
         ),
         "    return input.delta_value\n",
+        // EXPR-13: the properties in the order they are written.
+        concat!(
+            "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
+            "added=_py.frozenset((joined,)), tp=_py.int)\n",
+        ),
         "    if not (_harness.same(_harness.evaluate(members, command=[0]), [])):\n",
         "    if not (not _harness.same(_harness.evaluate(members, command=[1, 3]), [",
     ] {
@@ -2914,6 +2927,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("outside").0,
         emitted.test("removed_is_not_added").0,
         emitted.test("one_more").0,
+        emitted.test("removed_first").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -2958,6 +2972,8 @@ fn a_failure_names_the_statement_that_failed() {
             // added it, and a trace of one cell is not one of two.
             "failed sets.hgl:9:5 the assertion does not hold",
             "failed sets.hgl:12:5 the assertion does not hold",
+            // EXPR-13: a delta's properties are evaluated as written.
+            "failed sets.hgl:16:26 HglError: numeric.division_by_zero: a division by zero",
         ]
     );
 
