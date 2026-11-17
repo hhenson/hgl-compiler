@@ -568,6 +568,8 @@ fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> 
 /// checked 3 files in 2 modules: no errors
 /// ```
 ///
+/// An application is counted apart: `in 2 modules and 1 application`.
+///
 /// The analyser reads modules, declarations and imports, resolves names
 /// and reads the types written so far. What an expression is, phases and
 /// constants are not checked yet, and the output says so.
@@ -601,13 +603,26 @@ fn check(arguments: &CheckArgs) -> ExitCode {
     let (errors, warnings) = (of(Severity::Error), of(Severity::Warning));
     // A warning does not reject the source (ERR-1): it is counted
     // after the errors, where there is one.
+    // UNIT-14: an application is counted apart from the modules.
+    let applications = program
+        .modules
+        .iter()
+        .filter(|module| module.application)
+        .count();
+    let modules = count(
+        program
+            .modules
+            .len()
+            .saturating_sub(supplied_modules + applications),
+        "module",
+    );
     println!(
         "checked {} in {}: {}{}",
         count(parsed.len().saturating_sub(supplied), "file"),
-        count(
-            program.modules.len().saturating_sub(supplied_modules),
-            "module"
-        ),
+        match applications {
+            0 => modules,
+            applications => format!("{modules} and {}", count(applications, "application")),
+        },
         match errors {
             0 => "no errors".to_string(),
             errors => count(errors, "error"),
@@ -976,7 +991,14 @@ fn list_modules(sources: &SourceMap, program: &Program, core_supplied: bool) -> 
         if core_supplied && module.path == CORE_MODULE {
             continue;
         }
-        out.push_str(&format!("module {}\n", module.path));
+        // UNIT-14: an application is a unit of its own, headed by its
+        // own word.
+        let unit = if module.application {
+            "application"
+        } else {
+            "module"
+        };
+        out.push_str(&format!("{unit} {}\n", module.path));
         for file in &module.files {
             let name = sources.file(file.file).name();
             match &file.part {

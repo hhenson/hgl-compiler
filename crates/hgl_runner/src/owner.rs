@@ -49,11 +49,15 @@ pub(crate) fn owners(
     let Some(tree) = SourceFile::cast(root.clone()) else {
         return found;
     };
-    let module = tree
-        .module_decl()
-        .and_then(|header| header.path())
-        .map(|path| path.dotted())
-        .unwrap_or_default();
+    // The path of the file's unit: a module's, or an application's
+    // (UNIT-14), which holds tests as a module does.
+    let module = match (tree.module_decl(), tree.application_decl()) {
+        (Some(header), _) => header.path(),
+        (None, Some(header)) => header.path(),
+        (None, None) => None,
+    }
+    .map(|path| path.dotted())
+    .unwrap_or_default();
     // The file's last node, whatever it is.
     let last_node = root.last_child();
     let mut pending: Vec<Item> = tree.items().collect();
@@ -61,13 +65,15 @@ pub(crate) fn owners(
     // front, so the result stays in source order.
     pending.reverse();
     // Lines that are not an item's to own (TST-12): those of a `module`
-    // line, and those that hold the `test {` or the `}` of an unnamed
-    // context.
+    // or an `application` line, and those that hold the `test {` or the
+    // `}` of an unnamed context.
     let mut reserved: Vec<usize> = Vec::new();
-    for header in root
-        .children()
-        .filter(|node| node.kind() == SyntaxKind::ModuleDecl)
-    {
+    for header in root.children().filter(|node| {
+        matches!(
+            node.kind(),
+            SyntaxKind::ModuleDecl | SyntaxKind::ApplicationDecl
+        )
+    }) {
         let span = header.span();
         let last = span.end.saturating_sub(1).max(span.start);
         reserved.extend(source.line_index(span.start)..=source.line_index(last));
