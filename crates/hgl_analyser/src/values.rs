@@ -5483,22 +5483,21 @@ impl<'a> Typer<'a> {
                 // TST-5: "For a nullable scalar it is the optional that
                 // holds what was published: a cell written as a value
                 // is that value, and one written `null` a published
-                // null". So such a cell is read as the nullable it
-                // publishes, and stands as the delta where it is
-                // written as one.
-                let written = match cell {
-                    Type::Delta(of) => match &**of {
-                        Type::Nullable(payload) => Some(nullable(Type::delta((**payload).clone()))),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let expected = written.as_ref().unwrap_or(cell);
-                let read = self.expression(&value, Some(expected));
-                if agree(&read.ty, cell) {
-                    Some(read)
+                // null". A cell written `null`, in parentheses or not,
+                // is that delta. Any other is read as the delta: a
+                // value where one is expected (TYPE-16), or the delta
+                // itself, in a block or a branch as outside one.
+                let optional = matches!(cell, Type::Delta(of)
+                    if matches!(**of, Type::Nullable(_)));
+                if optional && written_null(&value) {
+                    Some(Expr {
+                        kind: ExprKind::Literal(Value::Null),
+                        ty: cell.clone(),
+                        at: self.at(&value),
+                    })
                 } else {
-                    Some(self.fit(read, expected, "a cell of the trace"))
+                    let read = self.expression(&value, Some(cell));
+                    Some(self.fit(read, cell, "a cell of the trace"))
                 }
             };
             cells.push(hir::Cell { time, value });
@@ -12469,6 +12468,18 @@ fn is_implied_member(node: &SyntaxNode) -> bool {
             .next()
             .is_some_and(|inner| is_implied_member(&inner)),
         SyntaxKind::ImpliedMember => true,
+        _ => false,
+    }
+}
+
+/// True for the literal `null`, in parentheses or not.
+fn written_null(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::ParenExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| written_null(&inner)),
+        SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
         _ => false,
     }
 }
