@@ -131,6 +131,37 @@ fn a_program_is_found_under_its_roots_and_listed() {
     );
 }
 
+/// UNIT-14: an application is a unit of its own. It is listed under
+/// its own word, and counted apart from the modules.
+#[test]
+fn an_application_is_listed_and_counted_as_one() {
+    let root = scratch("application");
+    write(
+        &root,
+        "lib.hgl",
+        "module lib\nexport fn beat() -> i64 => 1\n",
+    );
+    let live = write(
+        &root,
+        "live.hgl",
+        "application lib.live\nuse lib::{beat}\nrun(beat())\n",
+    );
+    let output = hgl(&["check", &argument(&root), "--modules"]);
+    assert_eq!(text(&output.stderr), "");
+    assert_eq!(output.status.code(), Some(0));
+    let listed = text(&output.stdout);
+    assert!(
+        listed.contains(&format!(
+            "application lib.live\n  file {live}\n  use lib::{{beat}}\n"
+        )),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("checked 2 files in 1 module and 1 application: no errors\n"),
+        "{listed}"
+    );
+}
+
 /// A rejected program exits with status 1 and reports each error, from
 /// every stage, with the place it points at and the related one.
 #[test]
