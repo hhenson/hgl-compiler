@@ -1372,6 +1372,16 @@ instance (`Program::instance`), and goes on through the calls of each
 instance it is given. A value function with generic parameters is
 written once, as Python takes a value of any type.
 
+An instance is written with the types of the module that calls it, so
+its module then imports that module, which imports it: two generated
+modules may import one another where the source's do not. A call that
+selects a candidate of a module that imports the caller's does the same
+(GEN-5). Python reads a function's annotations where the function is
+defined, so each generated file defines its types before it imports
+another generated module. Whichever is loaded first, a type is there
+when a function that names it is defined, and what a function calls is
+looked up when it runs.
+
 Core is a module as any other, `_hgl/_m_core/__init__.py`, written when
 a module of the program imports it. It holds the functions and the
 candidates core has an HGL body for; core's native ones are the
