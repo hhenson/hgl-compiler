@@ -1556,6 +1556,120 @@ const CANDIDATES: &str = concat!(
     "}\n",
 );
 
+/// GEN-4: "An `impl fn` is a temporal candidate of the operator it
+/// names and an `impl const fn` a value candidate." GEN-5: "A call in
+/// composition selects among all of them ... There, a temporal
+/// candidate outranks a value candidate of the same parameter types".
+const TEMPORAL_CANDIDATES: [(&str, &str); 2] = [
+    (
+        "joins.hgl",
+        concat!(
+            "module demo.joins\n",
+            "\n",
+            "operator join_<L, R, O>(lhs: L, rhs: R) -> O\n",
+            "\n",
+            // A node, with state and a start.
+            "impl fn join_(lhs: i64, rhs: i64) -> i64 {\n",
+            "    state seen: i64 = 0\n",
+            "    start { seen = 100 }\n",
+            "    when valid(lhs, rhs) {\n",
+            "        seen = seen + 1\n",
+            "        return lhs + rhs + seen\n",
+            "    }\n",
+            "}\n",
+            // A value candidate of the same parameter types.
+            "impl const fn join_(lhs: i64, rhs: i64) -> i64 => lhs - rhs\n",
+            // A graph, of the node.
+            "impl fn join_(lhs: i64, rhs: bool) -> i64 => join_(lhs, lhs)\n",
+            // A value candidate alone: lifted in a graph.
+            "impl const fn join_(lhs: str, rhs: str) -> str => lhs + rhs\n",
+            "\n",
+            "export const fn plain(a: i64, b: i64) -> i64 => join_(a, b)\n",
+        ),
+    ),
+    (
+        "joined.hgl",
+        concat!(
+            "module demo.joined\n",
+            "\n",
+            "use demo.joins::{join_, plain}\n",
+            "\n",
+            "fn both(a: i64, b: i64) -> i64 => join_(a, b)\n",
+            "fn flagged(a: i64, b: bool) -> i64 => join_(a, b)\n",
+            "fn valued(a: i64, b: i64) -> i64 => plain(a, b)\n",
+            "fn texts(a: str, b: str) -> str => join_(a, b)\n",
+            "\n",
+            "test candidates_are_called {\n",
+            // The node: its sum, and what its state counts from 100.
+            "    assert eval(both(a: [1, 2], b: [10])) == [112, 114]\n",
+            "    assert eval(flagged(a: [1, 2], b: [true])) == [103, 106]\n",
+            // A value function selects the value candidate.
+            "    assert eval(valued(a: [1, 2], b: [10])) == [-9, -8]\n",
+            "    assert eval(texts(a: [\"a\"], b: [\"b\"])) == [\"ab\"]\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// GEN-4: a temporal candidate with a body is a node or a graph as a
+/// temporal function is, named as a value candidate is, by the
+/// operator and the types of its parameters. A call in a graph that
+/// selects it is a call of that node or graph, and is not lifted
+/// (GEN-5, FN-6). The value candidate of the same parameter types is
+/// `_value_impl_...`, as the value definition of a name with both is
+/// `_value_name` (FN-4).
+#[test]
+fn a_temporal_candidate_is_a_node_or_a_graph() {
+    let emitted = emit(&TEMPORAL_CANDIDATES);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let joins = emitted.text("_hgl/_m_demo/_m_joins/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.compute_node\n",
+            "def _impl_join__i64_i64(lhs: _hg.TS[_py.int], rhs: _hg.TS[_py.int], ",
+            "_state: _hg.STATE = None) -> _hg.TS[_py.int]:\n",
+        ),
+        concat!(
+            "@_impl_join__i64_i64.start\n",
+            "def _start__impl_join__i64_i64(_state: _hg.STATE = None):\n",
+        ),
+        concat!(
+            "def _value_impl_join__i64_i64(lhs, rhs):\n",
+            "    return _core.sub__i64_i64(lhs=lhs, rhs=rhs)\n",
+        ),
+        concat!(
+            "@_hg.graph\n",
+            "def _impl_join__i64_bool(lhs: _hg.TS[_py.int], rhs: _hg.TS[_py.bool]) ",
+            "-> _hg.TS[_py.int]:\n",
+            "    return _impl_join__i64_i64(lhs=lhs, rhs=lhs)\n",
+        ),
+        // A value function calls the value candidate.
+        concat!(
+            "def plain(a, b):\n",
+            "    return _value_impl_join__i64_i64(lhs=a, rhs=b)\n",
+        ),
+    ] {
+        assert!(
+            joins.contains(expected),
+            "the module has:\n{expected}\nin:\n{joins}"
+        );
+    }
+    let joined = emitted.text("_hgl/_m_demo/_m_joined/__init__.py");
+    for expected in [
+        // The candidate of another module, through that module.
+        "    return _hgl_4demo_5joins._impl_join__i64_i64(lhs=a, rhs=b)\n",
+        "    return _hgl_4demo_5joins._impl_join__i64_bool(lhs=a, rhs=b)\n",
+        // A value candidate is lifted, and a temporal one is not.
+        "    return _hgl_4demo_5joins._impl_join__str_str(lhs=lhs.value, rhs=rhs.value)\n",
+    ] {
+        assert!(
+            joined.contains(expected),
+            "the module has:\n{expected}\nin:\n{joined}"
+        );
+    }
+    assert_eq!(joined.matches("def _lift_").count(), 2, "{joined}");
+}
+
 /// GEN-4: an `impl const fn` is a value candidate of its operator. One
 /// with a body is written as a function, named by the operator and
 /// the types of its parameters, since an operator may have many and a
@@ -3390,6 +3504,8 @@ fn the_generated_tests_pass_on_hgraph() {
         ("instants.hgl", INSTANTS),
         ("divided.hgl", DIVIDED),
         ("bounded.hgl", BOUNDED),
+        TEMPORAL_CANDIDATES[0],
+        TEMPORAL_CANDIDATES[1],
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3419,10 +3535,11 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        53,
+        54,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
-         instants, one on a duration divided, one on a bounded run, and one of each demo's"
+         instants, one on a duration divided, one on a bounded run, one on temporal \
+         candidates, and one of each demo's"
     );
 }
 
