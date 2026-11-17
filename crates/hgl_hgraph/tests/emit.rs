@@ -1875,8 +1875,10 @@ const STRUCT_FAILS: &str = concat!(
 /// TYPE-3: "Generic applications are invariant by origin and complete
 /// canonical arguments": a `Tagged<i64>` and a `Tagged<f64>` are of
 /// two classes, and are not equal where they meet as values of their
-/// parent. NUM-5: "NaN is neither equal nor close to any value,
-/// including itself", inside a struct as outside one.
+/// parent. OPS-2: "Two structs are equal when they are of one struct
+/// with the same generic arguments ... and each field is equal ...
+/// NUM-5 holds inside a value: a struct, a list, a tuple, or a
+/// dictionary that holds a NaN is not equal to itself."
 #[test]
 fn a_struct_is_a_class_whose_values_are_never_changed() {
     let emitted = emit(&STRUCTS);

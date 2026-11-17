@@ -145,7 +145,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-14 | analyser | partial | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal input or a struct field; a set's element and a dictionary's key take none. a literal `null` is no value of a type with no `?`, and is rejected where nothing gives it a type. Left: null from other expressions |
 | TYPE-15 | parser | done | The suffix covers the whole preceding type; `?` in a type and `?` in an expression kept apart |
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
-| TYPE-16 | analyser | partial | `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a `dict<i64, delta<V>>` for a list, a tuple of each position's delta under a `?`, `delta<V>?` for a nullable, and a type of its own for a set, a dictionary and a struct. A `ref` and a `signal` have none (`delta.unsupported_shape`). A set's delta has `added` and `removed` and a dictionary's `updated` and `removed`; no property of a delta is assigned (`binding.immutable`). A set's and a dictionary's delta is constructed by its properties, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`). Left: the properties and the constructor of a struct's delta, which are proposed |
+| TYPE-16 | analyser | partial | `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a `dict<i64, delta<V>>` for a list, a tuple of each position's delta under a `?`, `delta<V>?` for a nullable, and a type of its own for a set, a dictionary and a struct. A `ref` and a `signal` have none (`delta.unsupported_shape`). A set's delta has `added` and `removed` and a dictionary's `updated` and `removed`; no property of a delta is assigned (`binding.immutable`). A set's and a dictionary's delta is constructed by its properties, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`). Left: a nullable's delta as the optional of its own type, with its `value` and its constructor, where the analyser still has `delta<V>?`; a `delta<V>` where a `delta<V?>` is expected; the properties and the constructor of a struct's delta |
 | TYPE-16 | transpiler | planned | A delta as the target's publication value |
 
 ## Expressions and bindings
@@ -251,7 +251,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TIME-3 | transpiler | partial | hgraph: a header's `modified` and `valid` selectors are the node's `active=` and `valid=`; handlers are tried in the order written, each guarded by the rest of its condition. Left: `modified([])` and `scheduled()`, which need the scheduler |
 | TIME-4 | analyser | partial | In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`). Left: aggregate subscriptions; node-wide validity; `all_valid` |
 | TIME-4 | transpiler | partial | hgraph: the node's `active=` is every input a handler subscribes to, and its `valid=` the inputs every handler requires; a handler is guarded by what it asks beyond those. Left: `all_valid`; structural inputs |
-| TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser |
+| TIME-5 | analyser | partial | A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same. A state's initialiser reads no temporal input (`state.input_read`). Left: a cache's initialiser; a temporal input in `start` (`input.lifecycle`); an input read in `stop` held to its guard (`payload.unguarded`) |
 | TIME-5 | transpiler | planned | Start follows initialisation; stop finalises |
 | TIME-6 | transpiler | partial | hgraph: a `state` is a field of the node's state, given its value in `start`. Left: recording and restoring; `cache` |
 | TIME-7 | analyser | partial | `inject out` needs a result, and is of the result's type. `out` is read in a `when` and in `stop` and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`). A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3). What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)` |
@@ -377,8 +377,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-14 | transpiler | partial | hgraph: a test whose interpreter does not start or stops early, or whose module does not load, is not run and has not failed. Left: a limit on how long a test may run |
 | TST-15 | runner | done | When a run succeeds; identity, kind and outcome of each case. A test is run by the executor the run is given, and is not run with none |
 | TST-15 | transpiler | partial | hgraph: a test is named `module.path::name`, and one given to the host has an outcome: passed, failed with the statement that failed, or not run with the reason. Left: the tests that need a form the target does not write yet, which are not run |
-| TST-16 | analyser | planned | Proposed. Until it is agreed, a trace given to a `const fn` is not held to the parameter's type |
-| TST-16 | runner | planned | Proposed. The recorded trace as that value |
+| TST-16 | analyser | planned | A trace given to a `const fn` is a `list<tuple<datetime, delta<T>>>`, one tuple for each publication. The argument is not held to the parameter's type yet |
+| TST-16 | runner | planned | The recorded trace as that value |
 
 ## Program execution
 
@@ -437,6 +437,7 @@ the same numeric rules the transpiler rows give.
 | OPS-1 | analyser | partial | In a value function a symbol is the call of the core operator it stands for, and admits the operand types that operator's candidates declare, core's and a module's own; any other pairing rejected (`operator.no_candidate`). Its operands are read as the call's arguments are, and the type its place expects is requested of the candidates. Left: temporal bodies |
 | OPS-1 | transpiler | planned | The operators on strings, durations and instants |
 | OPS-2 | analyser | partial | In a value function, ordering between two of one ordered type and equality between two values of one type, by symbol and by name through core's candidates. An operand that is a generic parameter is compared as its declaration's requirements state (GEN-7). Left: a comparison with a nullable operand; temporal bodies |
+| OPS-2 | transpiler | partial | hgraph: `==` and `!=` of two structs compare the class, which is one for each application of a generic struct, and then every field; of two lists, tuples and dictionaries, part by part; a value that holds a NaN is not equal to itself. Left: the order of the temporal scalars |
 | OPS-3 | analyser | partial | `a <=> b` and `compare_(a, b)` through core's candidates in a value function are a `CmpResult`. Left: temporal bodies |
 | OPS-4 | analyser | partial | `convert<T>(value)` through core's candidates in a value function: the conversions core declares, and no other. Left: a list of structs to a list of their parent; temporal bodies |
 | OPS-4 | transpiler | planned | Each conversion |
@@ -451,7 +452,7 @@ the same numeric rules the transpiler rows give.
 | OPS-9 | transpiler | planned | One valid operand is forwarded (right-only subtraction negates it); both invalid invalidate the output; ordered handlers return after the first publication |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
-| END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. Left: proof that `x` is valid and modified |
+| END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. Left: proof that `x` is valid and modified; a nullable scalar's, which is the optional TYPE-16 gives it |
 | END-3 | transpiler | partial | hgraph: `delta_value(input)` of a scalar input. Left: a published null; structural inputs |
 | END-4 | transpiler | partial | hgraph: `invalidate(out)` clears the node's output. Core's publish, invalidate and recover case passes when run by hand. Left: an input invalidated |
 | END-5 | transpiler | planned | Active and passive affect scheduling only; repeated writes in one evaluation |
