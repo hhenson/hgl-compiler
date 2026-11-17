@@ -596,6 +596,10 @@ pub enum Callee {
         /// and for one whose generic parameters this pass does not
         /// resolve.
         generics: Vec<GenericArgument>,
+        /// What answers each requirement the function states, with
+        /// `generics` in place: see [`Answer`]. Empty where `generics`
+        /// is.
+        requirements: Vec<Answer>,
     },
     /// The value candidate selected for a call of an operator (GEN-5).
     Candidate {
@@ -612,20 +616,70 @@ pub enum Callee {
         /// this call (GEN-2), in the order declared. Empty for a
         /// candidate with none.
         generics: Vec<GenericArgument>,
+        /// What answers each requirement the candidate states, with
+        /// `generics` in place: see [`Answer`].
+        requirements: Vec<Answer>,
     },
     /// An operation the enclosing declaration requires of its generic
     /// parameters (GEN-7, GEN-16): the `add_(lhs, rhs)` of a body under
     /// `requires add_(T, T) -> T`. Which candidate it is is selected
-    /// where the parameters are known, not here.
+    /// where the parameters are known, not here: a call of the
+    /// declaration says what answers the requirement there
+    /// ([`Answer`]).
     Required {
         /// The operator called: the position of its module in
         /// `Program::modules`, and its position in that module's
         /// `declarations`.
         operator: (usize, usize),
+        /// The requirement of the enclosing declaration the call is:
+        /// its position among the constraint calls that hold wherever
+        /// the declaration's `requires` does, in the order written.
+        requirement: usize,
     },
     /// No callee: a name left for the prelude, a function that is
     /// itself an expression, or an operator of which no candidate is
     /// selected, by its name or by a symbol.
+    Unread,
+}
+
+/// What answers a requirement a call's callee states (GEN-16).
+///
+/// A declaration's requirements are the constraint calls that hold
+/// wherever its `requires` does: the condition itself, and each side of
+/// an `&&`. A call of the declaration has one `Answer` for each, in the
+/// order written. With them, what a [`Callee::Required`] of the
+/// declaration's body calls is known for that call: under
+/// `fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T`, the call
+/// `sum(1.5, 2.5)` answers the requirement with the candidate
+/// `add_(f64, f64)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Answer {
+    /// The one most-specific value candidate that takes the types the
+    /// requirement is supplied with at this call (GEN-5, GEN-16).
+    Candidate {
+        /// The operator required: the position of its module in
+        /// `Program::modules`, and its position in that module's
+        /// `declarations`.
+        operator: (usize, usize),
+        /// The position of the candidate's module in
+        /// `Program::modules`.
+        module: usize,
+        /// The candidate's position in that module's `declarations`.
+        declaration: usize,
+        /// What each generic parameter of the candidate stands for
+        /// (GEN-2), in the order declared.
+        generics: Vec<GenericArgument>,
+        /// What answers each requirement the candidate states itself.
+        requirements: Vec<Answer>,
+    },
+    /// A requirement the declaration the call is written in states
+    /// itself (GEN-7), which is evidence for the same call: its
+    /// position among that declaration's requirements. What answers it
+    /// is known where that declaration is called.
+    Stated(usize),
+    /// Nothing read: a constraint call that is no operator requirement,
+    /// one supplied with what is no type, or one for which no one
+    /// candidate is told to be selected.
     Unread,
 }
 

@@ -2629,6 +2629,7 @@ impl Emitter<'_> {
                 module,
                 declaration,
                 generics,
+                ..
             } => (*module, *declaration, generics, false),
             Callee::Candidate {
                 module,

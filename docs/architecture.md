@@ -1080,10 +1080,26 @@ read from both sides.
 
 | Where | Rule | What is done |
 | --- | --- | --- |
-| In the body of the declaration that states it | GEN-7, EXPR-2 | A call of that operator, by name or by symbol, whose arguments are of the types supplied is admitted, and is of the arrow's type. An argument is given to the operator's parameter by its position or by that parameter's name, `add_(rhs: b, lhs: a)`. One with no type of its own, a sequence or a tuple written out, is read as the type the requirement supplies in its place: `[a] + [b]` under `requires add_(list<T>, list<T>) -> list<T>`. The typed body records `Callee::Required` with the operator: which candidate it is is selected where `T` is known |
+| In the body of the declaration that states it | GEN-7, EXPR-2 | A call of that operator, by name or by symbol, whose arguments are of the types supplied is admitted, and is of the arrow's type. An argument is given to the operator's parameter by its position or by that parameter's name, `add_(rhs: b, lhs: a)`. One with no type of its own, a sequence or a tuple written out, is read as the type the requirement supplies in its place: `[a] + [b]` under `requires add_(list<T>, list<T>) -> list<T>`. The typed body records `Callee::Required` with the operator and the requirement's position: which candidate it is is selected where `T` is known |
 | The same body, an operation nothing states | GEN-7 | Selected as any call is. `a + b` of two `T` finds no candidate and is `operator.no_candidate`; `a == b` is taken by core's `eq_<T>`, which is for any one type |
 | At a call that selects the candidate that states it | GEN-16, GEN-5 | Tested with the candidate's generic parameters in place: `add_(f64, f64) -> f64` holds when one most-specific value candidate of `add_` takes two `f64` and gives an `f64`. A requirement names a value operation whatever declares it, a graph's included: core's OPS-9 has "Addition requires a value `add_(T, T) -> T`". It is tested as the call it names would select: the arrow is what the place expects, and a generic value parameter of the operator that nothing says anything of takes its default (GEN-8) |
 | At such a call inside a generic body | GEN-7 | The types still name the body's own parameter, `add_(T, T) -> T`: it holds when the body's declaration states the same requirement, and otherwise when a value candidate takes them as they are, as core's `eq_<T>` takes any one type |
+
+What answers a requirement is kept, so that a later stage can write a
+generic body for the types of one call of it. A call of a declaration
+that states requirements records an `Answer` for each, in the order
+written, counting the constraint calls that hold wherever its
+`requires` does: the condition itself and each side of an `&&`.
+
+| `Answer` | When | For `fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T` |
+| --- | --- | --- |
+| `Candidate` | One most-specific value candidate takes the types (GEN-5). It has its own requirements answered with it | `sum(1.5, 2.5)` records core's `add_(f64, f64)` |
+| `Stated(n)` | The types name a generic parameter of the declaration the call is written in, which states the same requirement as its `n`th (GEN-7) | Inside `fn twice<U>(v: U) -> U requires add_(U, U) -> U`, `sum(v, v)` records `Stated(0)`: a call of `twice` says which candidate |
+| `Unread` | A predicate, a requirement supplied with what is no type, or one for which no one candidate is told to be selected | `sum(true, false)`: a function's requirement that does not hold has no diagnostic to be reported with (hgl_spec issue 101) |
+
+A `Callee::Required` in the body carries the same position, so the
+candidate it calls for one call of the declaration is that call's
+answer at that position.
 
 A call that writes the operator's generic arguments, `make<T>()`, is
 the requirement those agree with (GEN-8): what the operator's signature
