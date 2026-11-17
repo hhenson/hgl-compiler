@@ -508,24 +508,6 @@ takes no third (`argument.unexpected`). The typed eval is
 `ExprKind::Eval`, with its call and its configuration where it writes
 one.
 
-### Applications
-
-An application's file is headed `application name` (UNIT-14). The
-modules pass makes it a unit of its own, `Module::application`, so what
-it declares is listed, named and typed as a module's is. The passes add
-what an application has that a module has not:
-
-| Check | Rule | Code |
-| --- | --- | --- |
-| Its path is no other file's. The first file of a path is the unit; each later one is reported and left out | UNIT-14 | `application.duplicate_path`, the compiler's own until the catalogue has it |
-| It exports nothing | UNIT-14 | `application.export` |
-| No `use` names one. The names of such a line are bound to nothing | UNIT-14 | `application.import` |
-| It has one run statement | UNIT-14 | `application.run_count`, at the application's path for none and at each statement after the first |
-| A run statement stands in no module | RUN-3 | `run.position` |
-
-Not read yet: the call and the configuration of a run statement
-(RUN-1, `run.entry`), and a run statement that a declaration follows.
-
 | Form | Rule | Read as |
 | --- | --- | --- |
 | A trace's type | TST-3, TST-5 | `Type::Trace`, with the type of a cell and the style. It is a type of this compiler's: source writes none. A cell is one cycle's publication, the `delta<T>` of the parameter's type for an input and of the target's result for what the eval gives |
@@ -540,6 +522,33 @@ Not read yet: the call and the configuration of a run statement
 Not read: an `eval` outside a named test; a trace that is the value of
 a block or an `if`, where it is compared; a generic target whose
 parameter is given structural cells.
+
+### Applications
+
+An application's file is headed `application name` (UNIT-14). The
+modules pass makes it a unit of its own, `Module::application`, so what
+it declares is listed, named and typed as a module's is. The passes add
+what an application has that a module has not:
+
+| Check | Rule | Code |
+| --- | --- | --- |
+| Its path is no other file's. The first file of a path is the unit; each later one is reported and left out | UNIT-14 | `application.duplicate_path` |
+| It exports nothing | UNIT-14 | `application.export` |
+| No `use` names one. The names of such a line are bound to nothing | UNIT-14 | `application.import` |
+| It has one run statement | UNIT-14 | `application.run_count`, at the application's path for none and at each statement after the first |
+| Its run statement follows its declarations, and a run statement stands in no module | UNIT-14 | `run.position` |
+
+Not read yet: the call and the configuration of a run statement
+(RUN-1, `run.entry`).
+
+### Integration tests
+
+`integration_test name { ... }` is a test (TST-17): `Test::integration`
+marks it, and everything a test is held to holds of it. In a test's
+block the parser reads `run(` as the run form, so the analyser sees a
+`RunExpr` there and nowhere else in a body. It is read as an eval is,
+`ExprKind::Eval` with `real_time` set, and in a test that is no
+integration test it is `run.position` (RUN-3).
 
 A source, a temporal function whose body has a `yield`, is a node of
 another shape (SOURCE-1), and is held to it:
@@ -1097,8 +1106,7 @@ the readings are counted for the whole function: past a thousand a call
 that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
 candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
-analyser has one local code, `application.duplicate_path`: see
-"Applications" above.
+analyser has no local code.
 A symbol selects as a call by name does: see "Symbols" above.
 
 The five names `ok`, `err`, `is_ok`, `is_err` and `capture` are
@@ -1204,6 +1212,11 @@ The runner knows no target. It hands the selected tests, each named
 `Executor`, which says what became of each. `hgl test --target hgraph`
 gives it one made of the hgraph target and a Python interpreter;
 without `--target` it is given none, and every test is `not run`.
+
+An integration test is left out of a run (TST-17): it is no case of the
+run, and is not listed. `--integration` asks for them all, and `--test`
+with its name asks for that one. A rejection case an integration test
+owns runs nothing, and is checked as any other is.
 
 | Outcome of a test | When |
 | --- | --- |
@@ -1389,6 +1402,7 @@ and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
 an eval that writes a run configuration; an application's run statement;
+a run in real time;
 durations, dates and times; timed traces and a published null in a
 trace; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.

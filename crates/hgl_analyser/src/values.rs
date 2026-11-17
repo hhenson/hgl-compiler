@@ -5418,20 +5418,19 @@ impl<'a> Typer<'a> {
         let Some((_, target)) = given.first().cloned() else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        // The second argument is the run's configuration; an eval
-        // takes no third.
-        let config = given.get(1).map(|(_, written)| self.run_config(written));
-        for (_, extra) in given.iter().skip(2) {
-            self.diagnostics.emit(error(
-                Category::Type,
-                codes::ARGUMENT_UNEXPECTED,
-                self.at(extra),
-                "an eval takes a call and a run configuration, and nothing more".to_string(),
-                "TST-5",
-            ));
-            self.expression(extra, None);
-        }
         // The call: `name(arguments)`, or `name<generics>(arguments)`.
+        // GEN-14: `name<...>(...)` the parser left undecided is the
+        // call too, where the resolver decided it is one.
+        let target_at = self.at(&target);
+        let generic = match target.kind() {
+            SyntaxKind::TypedConstructor => true,
+            SyntaxKind::UndecidedConstructor => self
+                .module
+                .decisions
+                .iter()
+                .any(|decision| decision.at == target_at && decision.constructor == Some(true)),
+            _ => false,
+        };
         let called = match target.kind() {
             SyntaxKind::CallExpr => target
                 .children()
@@ -5440,7 +5439,7 @@ impl<'a> Typer<'a> {
                 .and_then(|callee| name_token(&callee))
                 .zip(child(&target, SyntaxKind::ArgList))
                 .map(|(name, arguments)| (name, arguments, None)),
-            SyntaxKind::TypedConstructor => {
+            _ if generic => {
                 // As `typed_constructor` finds them: the generic
                 // arguments are recorded where the whole name starts.
                 let start = match child(&target, SyntaxKind::QualifiedName) {
@@ -5502,16 +5501,21 @@ impl<'a> Typer<'a> {
                 );
             }
             // What the call was given is read all the same, with
-            // nothing expected of it.
-            if let Some((_, arguments, _)) = &called {
-                return self.unread_call(arguments);
-            }
-            return (ExprKind::Unread, Type::Unknown);
+            // nothing expected of it, and then what follows the call.
+            let unread = match &called {
+                Some((_, arguments, _)) => self.unread_call(arguments),
+                None => (ExprKind::Unread, Type::Unknown),
+            };
+            self.after_call(&given);
+            return unread;
         };
         self.evaluating = true;
         let (kind, ty) =
             self.call_function(&name, &arguments, (module, declaration), None, generics);
         self.evaluating = false;
+        // EXPR-13: arguments are read in the order written, so the
+        // call's before the configuration.
+        let config = self.after_call(&given);
         // TST-7: "Within one eval all inputs and expectation use the
         // same dense/timed style." The first trace that has cells says
         // which, and a later one of the other is reported.
@@ -5592,6 +5596,25 @@ impl<'a> Typer<'a> {
             },
             ty,
         )
+    }
+
+    /// What an eval is given after its call, `given` being all it is
+    /// given: the run's configuration, and nothing more. "A second
+    /// argument is the run's configuration" (TST-5); a third is
+    /// reported and read with nothing expected of it.
+    fn after_call(&mut self, given: &[(Option<SyntaxToken>, SyntaxNode)]) -> Option<Box<Expr>> {
+        let config = given.get(1).map(|(_, written)| self.run_config(written));
+        for (_, extra) in given.iter().skip(2) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(extra),
+                "an eval takes a call and a run configuration, and nothing more".to_string(),
+                "TST-5",
+            ));
+            self.expression(extra, None);
+        }
+        config
     }
 
     /// The configuration of a run, written as the second argument of
