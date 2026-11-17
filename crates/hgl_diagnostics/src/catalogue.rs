@@ -73,6 +73,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "source.input"),
     (Category::Phase, "state.input_read"),
     (Category::Phase, "out.lifecycle"),
+    (Category::Phase, "input.lifecycle"),
     (Category::Phase, "payload.unguarded"),
     (Category::Phase, "endpoint.argument"),
     (Category::Phase, "connection.as_constant"),
