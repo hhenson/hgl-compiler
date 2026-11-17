@@ -4396,6 +4396,85 @@ impl<'a> Typer<'a> {
         self.capabilities_given(kind);
         self.fixed_arguments(kind);
         self.traces_given(kind, evaluating);
+        self.store_keys(kind);
+    }
+
+    /// The global store: "The key `"run.output"` is the run's own,
+    /// where it keeps its output: a program that names it rejects
+    /// (`store.reserved_key`)."
+    ///
+    /// A key is the argument of a `const` `str` parameter of a function
+    /// that takes the store: the `key` of core's `get`, `has` and `put`
+    /// (CAP-6). One written out is judged here. One that is a `const`
+    /// parameter of the function it is in is known where the graph is
+    /// built, which no pass reads yet.
+    fn store_keys(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        let Some(store) = self.program.capability_type("global_state") else {
+            return;
+        };
+        if !signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.ty == store)
+        {
+            return;
+        }
+        let reserved: Vec<Location> = arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index))
+                    .is_some_and(|parameter| {
+                        parameter.constant && parameter.ty == Type::Scalar(Scalar::Str)
+                    })
+            })
+            .filter(|argument| {
+                matches!(
+                    &argument.value.kind,
+                    ExprKind::Literal(Value::Str(key)) if key == RUN_OUTPUT_KEY
+                )
+            })
+            .map(|argument| argument.value.at)
+            .collect();
+        for at in reserved {
+            self.diagnostics.emit(
+                error(
+                    Category::Injectable,
+                    codes::STORE_RESERVED_KEY,
+                    at,
+                    format!(
+                        "the key `\"{RUN_OUTPUT_KEY}\"` is the run's own: its output is kept there"
+                    ),
+                    "TIME-8",
+                )
+                .with_note("a program's own values go under another key"),
+            );
+        }
     }
 
     /// TST-3: a trace "is bound with `let`, compared ..., and given to
@@ -12065,6 +12144,10 @@ fn declared_order(assigned: &[(Option<usize>, SyntaxNode)]) -> Vec<usize> {
     order.sort_by_key(|&position| assigned[position].0.unwrap_or(usize::MAX));
     order
 }
+
+/// The key of the global store under which a run keeps its output
+/// (core's CRUN-8).
+const RUN_OUTPUT_KEY: &str = "run.output";
 
 /// TST-16: "A trace given to a `const fn` is an ordinary value there:
 /// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple

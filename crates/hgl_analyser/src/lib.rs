@@ -232,6 +232,8 @@ pub mod codes {
     /// A temporal input read, or given to an endpoint operation, in
     /// `start` (TIME-5).
     pub const INPUT_LIFECYCLE: &str = "input.lifecycle";
+    /// A key of the global store that is the run's own (TIME-8).
+    pub const STORE_RESERVED_KEY: &str = "store.reserved_key";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";

@@ -574,6 +574,7 @@ What is rejected there:
 | A temporal function called in a hook | `call.role` | FN-3 |
 | A capability retained: the value of a `state` or a `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published: `(clock, value)`, `return clock` | `capability.as_value` | TIME-8 |
 | `alarm` and `scheduler` injected in one node | `inject.alarm_and_scheduler` | TIME-8 |
+| The run's own key, `"run.output"`, written out as the key of a `get`, `has` or `put` on the global store. `Typer::store_keys` judges it where the call is finished; a key that is a `const` parameter is known when the graph is built, and is not judged | `store.reserved_key` | TIME-8 |
 
 `modified([])` subscribes to no input, so only the node's scheduler or
 alarm wakes the handler (TIME-3). Where the node injects neither, or its
