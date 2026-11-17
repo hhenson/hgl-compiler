@@ -139,11 +139,12 @@ pub struct Module {
     /// The typed block of each named test: one entry for each of
     /// `tests`, in the same order, `None` for a test with no block.
     pub test_bodies: Vec<Option<Body>>,
-    /// The default of each parameter of each callable (UNIT-8): one
-    /// entry for each of `declarations`, in the same order, and in it
-    /// one for each parameter, `None` for one with no default. It is
-    /// empty for a declaration that is no callable. A default names no
-    /// parameter (UNIT-7), so it is read with no local in scope.
+    /// The defaults each declaration writes: one entry for each of
+    /// `declarations`, in the same order. A callable's has one for each
+    /// of its parameters (UNIT-8), and a struct's one for each of its
+    /// own `fields` (TYPE-4), `None` for one with no default. It is
+    /// empty for any other declaration. A default names no parameter
+    /// and no field (UNIT-7), so it is read with no local in scope.
     pub defaults: Vec<Vec<Option<Expr>>>,
     /// What the body of each temporal function describes (FN-2): one
     /// entry for each of `declarations`, in the same order, `None` for

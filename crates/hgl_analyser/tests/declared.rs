@@ -9,6 +9,7 @@ mod common;
 
 use common::{Checked, check};
 use hgl_analyser::Detail;
+use hgl_analyser::hir::ExprKind;
 
 /// No findings.
 const NONE: [&str; 0] = [];
@@ -204,6 +205,110 @@ fn a_struct_and_its_parent_agree_on_a_field() {
              field `missing` from a parent",
             "`Twice` has two members named `bid`",
             "`TwiceOver` has two members named `id`",
+        ]
+    );
+}
+
+/// TYPE-4: "A typed field introduction fixes its type", and UNIT-8:
+/// "Defaults remain required-constant/cold expressions checked against
+/// the expected type." A field's default is a value of the field's
+/// type, and `name = value` one of the type the struct has that field
+/// with. Each is kept, typed, for the stages after, and each field a
+/// struct has says which default a construction that leaves it out
+/// takes (TYPE-5: "its own or one a struct below gives it").
+#[test]
+fn a_fields_default_is_a_value_of_its_type() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "abstract struct Base<T> {\n    id: i64 = 1\n    held: T\n    rate: f64 = 2\n}\n",
+        // An integer literal is an `f64` there; `.member` takes the
+        // field's type; an override is read against the parent's field,
+        // the parent's arguments in place.
+        "struct Order : Base<str> {\n    id = 7\n    held = \"none\"\n    side: Side = .buy\n",
+        "    note: str? = null\n    size: f64? = 3\n}\n",
+        // Of another type than the field's.
+        "struct Wrong : Base<str> {\n    id = \"x\"\n    held = 5\n    flag: bool = 1\n}\n",
+        // A generic parameter's type is a construction's to say.
+        "struct Open<T> { value: T = 1 }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:10 type/type.mismatch EXPR-5",
+            "m.hgl:17:12 type/type.mismatch EXPR-5",
+            "m.hgl:18:18 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        messages(&checked),
+        [
+            "this is `str`, and the field `id` is `i64`",
+            "this is `i64`, and the field `held` is `str`",
+            "this is `i64`, and the field `flag` is `bool`",
+        ]
+    );
+    let module = checked.program.module("m").expect("module m exists");
+    let position = |name: &str| {
+        module
+            .declarations
+            .iter()
+            .position(|declaration| declaration.name == name)
+            .expect("the struct is declared")
+    };
+    // `Order` writes five fields, each with a default.
+    let order = position("Order");
+    let types: Vec<String> = module.defaults[order]
+        .iter()
+        .map(|default| {
+            default
+                .as_ref()
+                .map_or("none".to_string(), |value| value.ty.to_string())
+        })
+        .collect();
+    assert_eq!(types, ["i64", "str", "Side", "str?", "f64"]);
+    assert!(
+        matches!(
+            module.defaults[order][4].as_ref().map(|value| &value.kind),
+            Some(ExprKind::Widen(_))
+        ),
+        "the `3` of `size: f64? = 3` is widened"
+    );
+    // `Base` writes three, the second with none.
+    let base = position("Base");
+    let written: Vec<bool> = module.defaults[base].iter().map(Option::is_some).collect();
+    assert_eq!(written, [true, false, true]);
+    // What a construction of `Order` takes for each field it has, the
+    // parent's first: `Order`'s own for `id` and `held`, and `Base`'s
+    // for `rate`.
+    let Some(Detail::Struct(read)) = module.details.get(order) else {
+        panic!("`Order` is a struct");
+    };
+    let here = checked
+        .program
+        .modules
+        .iter()
+        .position(|module| module.path == "m")
+        .expect("module m exists");
+    // Each as the field's name, the struct that writes the default and
+    // the default's position among that struct's fields.
+    let taken: Vec<(&str, usize, usize)> = read
+        .members
+        .iter()
+        .map(|member| {
+            let default = member.default.expect("each field has a default");
+            assert_eq!(default.module, here);
+            (member.name.as_str(), default.declaration, default.field)
+        })
+        .collect();
+    assert_eq!(
+        taken,
+        [
+            ("id", order, 0),
+            ("held", order, 1),
+            ("rate", base, 2),
+            ("side", order, 2),
+            ("note", order, 3),
+            ("size", order, 4),
         ]
     );
 }

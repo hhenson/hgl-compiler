@@ -1259,6 +1259,7 @@ impl Reader<'_> {
                 at: self.at(name.span()),
                 ty,
                 has_default: false,
+                default: None,
             });
         }
         NativeType { properties }

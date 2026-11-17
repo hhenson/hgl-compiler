@@ -640,6 +640,21 @@ pub struct Member {
     /// True when a construction that omits the field has a default to
     /// take: the field's own, or one a struct on the way down gives it.
     pub has_default: bool,
+    /// The field that writes that default (TYPE-5), whose value is in
+    /// `Module::defaults`. `None` for a field with no default.
+    pub default: Option<FieldRef>,
+}
+
+/// A field a struct writes, by where it is: one of the struct's own
+/// `fields`, a `name = value` among them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldRef {
+    /// The position of the struct's module in `Program::modules`.
+    pub module: usize,
+    /// The position of the struct in that module's `declarations`.
+    pub declaration: usize,
+    /// The field's position among the struct's own `fields`.
+    pub field: usize,
 }
 
 /// One member of a struct.

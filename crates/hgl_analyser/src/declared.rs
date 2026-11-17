@@ -29,7 +29,7 @@ use crate::constant::fold;
 use crate::program::{Declaration, DeclarationKind, Program};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
-    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, GenericKind, Member,
+    Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, FieldRef, GenericKind, Member,
     StructType, Type,
 };
 use crate::{codes, error};
@@ -252,6 +252,9 @@ struct Introduced {
     /// Where the field that gives that default is written: the
     /// declaration, or the last `name = value` on the way down.
     default_from: Option<Location>,
+    /// That field: the struct that writes it, and its position among
+    /// that struct's own fields.
+    default_of: Option<(Id, usize)>,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
     origin: (Id, usize),
@@ -838,12 +841,14 @@ impl Structs<'_> {
         // `name = value` or by declaring the field again, is the one a
         // construction takes, for this struct and those below it.
         if let Some(read) = self.struct_type(id) {
-            for field in read.fields.iter().filter(|field| field.has_default) {
+            let written = read.fields.iter().enumerate();
+            for (index, field) in written.filter(|(_, field)| field.has_default) {
                 for inherited in all.iter_mut().filter(|parent| parent.name == field.name) {
                     inherited.has_default = true;
                     inherited.null_default = field.null_default;
                     inherited.empty_default = field.empty_default;
                     inherited.default_from = Some(field.at);
+                    inherited.default_of = Some((id, index));
                 }
             }
         }
@@ -859,6 +864,7 @@ impl Structs<'_> {
                         null_default: field.null_default,
                         empty_default: field.empty_default,
                         default_from: field.has_default.then_some(field.at),
+                        default_of: field.has_default.then_some((id, index)),
                         origin: (id, index),
                         at: field.at,
                         via: 0,
@@ -912,6 +918,13 @@ impl Structs<'_> {
                 at: field.at,
                 ty: field.ty.clone(),
                 has_default: field.has_default,
+                default: field
+                    .default_of
+                    .map(|((module, declaration), field)| FieldRef {
+                        module,
+                        declaration,
+                        field,
+                    }),
             };
             match members.iter_mut().find(|known| known.name == member.name) {
                 Some(known) => *known = member,

@@ -46,7 +46,7 @@ use crate::program::{
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
-    NamedKind, Pack, Scalar, Signature, TraceStyle, Type,
+    NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type,
 };
 use crate::{RESULT_FORMS, codes, error, warning};
 
@@ -211,6 +211,32 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     .defaults()
                 }
                 Some(Detail::Callable(signature)) => vec![None; signature.parameters.len()],
+                // TYPE-4: a field's default is read as a value of the
+                // field's type, as a parameter's is.
+                Some(Detail::Struct(read)) if read.fields.iter().any(|field| field.has_default) => {
+                    // A struct has no parameter and no result: what a
+                    // default may name of it is its generic parameters
+                    // (UNIT-7: "with its generic environment").
+                    let signature = Signature {
+                        generics: read.generics.clone(),
+                        parameters: Vec::new(),
+                        result: None,
+                    };
+                    Typer::new(
+                        program,
+                        module,
+                        declaration,
+                        &signature,
+                        Tables {
+                            bindings: &bindings,
+                            written: &written,
+                            calls: &calls,
+                        },
+                        diagnostics,
+                    )
+                    .field_defaults(read)
+                }
+                Some(Detail::Struct(read)) => vec![None; read.fields.len()],
                 _ => Vec::new(),
             };
             defaults.push(read);
@@ -562,23 +588,79 @@ impl<'a> Typer<'a> {
                 // for a window, an atomic or a reference is not settled
                 // here: `window: rolling<f64, 5> = []` is read, and
                 // held to no type.
-                let shaped = matches!(
-                    not_null(Some(&parameter.ty)),
-                    Some(
-                        Type::Rolling { .. }
-                            | Type::Atomic(_)
-                            | Type::Ref(_)
-                            | Type::Signal
-                            | Type::Endpoint(_)
-                    )
-                );
-                let expected = if shaped || names_parameter(&parameter.ty) {
+                let expected = if shaped(&parameter.ty) || names_parameter(&parameter.ty) {
                     Type::Unknown
                 } else {
                     parameter.ty.clone()
                 };
                 let value = self.expression(&written, Some(&expected));
                 let place = format!("the parameter `{}`", parameter.name);
+                Some(self.fit(value, &expected, &place))
+            })
+            .collect()
+    }
+
+    /// The default of each field the struct writes, read as a value of
+    /// the field's type; `None` for a field with none. `read` is the
+    /// struct the typer was made for.
+    ///
+    /// TYPE-4: "A typed field introduction fixes its type and
+    /// optionality ... An untyped inherited override changes only the
+    /// construction default of a field a parent has." So `name = value`
+    /// is read against the type the struct has that field with, the
+    /// parent's arguments in place. UNIT-8: "Defaults remain
+    /// required-constant/cold expressions checked against the expected
+    /// type."
+    ///
+    /// A default is cold, as a parameter's is: it reads no field of the
+    /// struct (UNIT-7, which the resolver holds it to). A field whose
+    /// type names a generic parameter of the struct has a type only a
+    /// construction gives, and its default is not held to one; neither
+    /// is the default of an `atomic<...>` field, as a parameter's of
+    /// that shape is not.
+    fn field_defaults(mut self, read: &StructType) -> Vec<Option<Expr>> {
+        let syntax = self.declaration.syntax.clone();
+        let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
+        read.fields
+            .iter()
+            .map(|field| {
+                if !field.has_default {
+                    return None;
+                }
+                // The member that writes the field: its name is its
+                // first token.
+                let written = syntax
+                    .children()
+                    .filter(|member| member.kind() == SyntaxKind::StructMember)
+                    .find(|member| {
+                        tokens(member)
+                            .next()
+                            .is_some_and(|name| name.span().start == field.at.span.start)
+                    })
+                    .and_then(|member| default_of(&member))?;
+                // The type the struct has the field with: the one
+                // written, or for `name = value` the parent's.
+                let declared = match &field.ty {
+                    Some(ty) => Some(ty),
+                    None => read
+                        .members
+                        .iter()
+                        .find(|member| member.name == field.name)
+                        .map(|member| &member.ty),
+                };
+                let ty = declared.map_or(Type::Unknown, |ty| placed(ty.clone(), &own));
+                // "Only an optional field's default may be null": a
+                // `null` on any other field is reported as that
+                // (`field.null_default`), and not again as no value of
+                // the field's type.
+                let judged = field.null_default && !matches!(ty, Type::Nullable(_));
+                let expected = if shaped(&ty) || judged {
+                    Type::Unknown
+                } else {
+                    ty
+                };
+                let value = self.expression(&written, Some(&expected));
+                let place = format!("the field `{}`", field.name);
                 Some(self.fit(value, &expected, &place))
             })
             .collect()
@@ -12141,6 +12223,23 @@ fn is_least_magnitude(node: &SyntaxNode) -> bool {
             token.kind() == SyntaxKind::Int
                 && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
         })
+}
+
+/// True for a type that is a temporal shape and no ordinary value
+/// type, under a `?` or not: a window, an atomic, a reference, a
+/// signal, an endpoint. What a default of one is held to is not
+/// settled.
+fn shaped(ty: &Type) -> bool {
+    matches!(
+        not_null(Some(ty)),
+        Some(
+            Type::Rolling { .. }
+                | Type::Atomic(_)
+                | Type::Ref(_)
+                | Type::Signal
+                | Type::Endpoint(_)
+        )
+    )
 }
 
 /// The type a value that is not `null` is expected to have: of `T?`,
