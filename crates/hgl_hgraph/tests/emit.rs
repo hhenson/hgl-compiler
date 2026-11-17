@@ -730,6 +730,63 @@ fn a_duration_is_a_timedelta() {
     );
 }
 
+/// TYPE-2: a `date`, a `time`, a `datetime` and a `civil_datetime` are
+/// Python's own, and an instant is a `datetime` in UTC that names no zone,
+/// as hgraph has them. OPS-1: an instant and a duration, two instants, and
+/// a date and a time.
+const INSTANTS: &str = concat!(
+    "module demo.instants\n",
+    "const opened: datetime = @2026-09-03T09:30:00Z\n",
+    "const fn later(at: datetime, by: duration) -> datetime => at + by\n",
+    "const fn earlier(at: datetime, by: duration) -> datetime => at - by\n",
+    "const fn between(first: datetime, second: datetime) -> duration => second - first\n",
+    "const fn on(day: date, at: time) -> civil_datetime => day + at\n",
+    "const fn days(first: date, second: date) -> duration => second - first\n",
+    "fn shifted(at: datetime, by: duration) -> datetime => at + by\n",
+    "test instants_are_values_and_ticks {\n",
+    "    assert later(opened, 30m) == @2026-09-03T10:00:00Z\n",
+    "    assert earlier(opened, 1d) == @2026-09-02T09:30:00Z\n",
+    "    assert between(opened, @2026-09-03T10:00:00Z) == 30m\n",
+    // LEX-11: an instant written east of UTC is that far before what
+    // its date and time say.
+    "    assert @2026-09-03T10:30:00+01:00 == opened\n",
+    "    assert on(@2026-09-03, @09:30) == @2026-09-03T09:30\n",
+    "    assert days(@2026-09-01, @2026-09-03) == 2d\n",
+    // Core's named times (its CRUN-3) are constants of these types.
+    "    assert earliest_start == never + smallest_step\n",
+    "    assert latest_end == forever - smallest_step\n",
+    "    assert eval(shifted(at: [opened], by: [1h])) == [@2026-09-03T10:30:00Z]\n",
+    "}\n",
+);
+
+/// A temporal literal is written by its parts (LEX-11), and its type as
+/// Python's (TYPE-2).
+#[test]
+fn a_date_a_time_and_an_instant_are_pythons_own() {
+    let emitted = emit(&[("instants.hgl", INSTANTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_instants/__init__.py");
+    for expected in [
+        "import datetime as _dt\n",
+        "@_core.constant\ndef opened():\n    return _dt.datetime(2026, 9, 3, 9, 30, 0, 0)\n",
+        "return _core.add__datetime_duration(lhs=at, rhs=by)",
+        "return _core.sub__datetime_duration(lhs=at, rhs=by)",
+        "return _core.sub__datetime_datetime(lhs=second, rhs=first)",
+        "return _core.add__date_time(lhs=day, rhs=at)",
+        "return _core.sub__date_date(lhs=second, rhs=first)",
+        // An offset other than UTC is the provider's to apply.
+        "_core.instant(_dt.datetime(2026, 9, 3, 10, 30, 0, 0), 60)",
+        "_dt.date(2026, 9, 3)",
+        "_dt.time(9, 30, 0, 0)",
+        "_hg.TS[_dt.datetime]",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// TST-10: "`assert raises(\"code\")` ... Run its block once. A matching
 /// escaping error passes ...; then continue after the assertion."
 const RAISES: &str = concat!(
@@ -3041,6 +3098,11 @@ const REACH: [(&str, &str); 3] = [
             "    let long = 106751991d\n",
             "    assert long + 1d == 0s\n",
             "}\n",
+            // OPS-10: an instant result outside its range, core's own
+            // example.
+            "test too_late {\n",
+            "    assert @9999-12-31T23:59:59Z + 1d == @9999-12-31T23:59:59Z\n",
+            "}\n",
         ),
     ),
     (
@@ -3201,6 +3263,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("enums.hgl", ENUMS),
         ("durations.hgl", DURATIONS),
         ("raises.hgl", RAISES),
+        ("instants.hgl", INSTANTS),
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3230,10 +3293,10 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        50,
+        51,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
-         on enums of one name, two on constants, one on durations, one on raises, and one of \
-         each demo's"
+         on enums of one name, two on constants, one on durations, one on raises, one on \
+         instants, and one of each demo's"
     );
 }
 
@@ -3288,6 +3351,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("wrong").0,
         emitted.test("overflows").0,
         emitted.test("too_long").0,
+        emitted.test("too_late").0,
         emitted.test("whole_by_zero").0,
         emitted.test("strict_by_zero").0,
         emitted.test("negative_tolerance").0,
@@ -3331,6 +3395,7 @@ fn a_failure_names_the_statement_that_failed() {
             "failed reach.hgl:22:5 the assertion does not hold",
             "failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
             "failed reach.hgl:30:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
+            "failed reach.hgl:33:5 HglError: numeric.out_of_range: an instant result is outside the years 1 to 9999",
             "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
             "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
             "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",

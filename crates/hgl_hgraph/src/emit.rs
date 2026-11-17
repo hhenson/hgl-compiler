@@ -15,8 +15,8 @@
 use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
-    Argument, BinaryOperator, Body, Callee, Case, Cell, EndpointOperation, ErrorPart, Expr,
-    ExprKind, Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
+    Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
+    ErrorPart, Expr, ExprKind, Hook, Local, Stmt, Temporal, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
@@ -303,8 +303,30 @@ fn scalar(ty: &Type) -> Option<&'static str> {
         // TYPE-2: a `duration` is elapsed time in whole microseconds,
         // which is what a `timedelta` holds.
         Type::Scalar(Scalar::Duration) => Some("_dt.timedelta"),
+        // TYPE-2: a `datetime` is an instant in UTC. hgraph's instants
+        // are `datetime`s in UTC that name no zone, so one is written as
+        // that. A `civil_datetime` is a local date and time, which is a
+        // `datetime` that names no zone too: HGL's types keep the two
+        // apart, and nothing in Python has to.
+        Type::Scalar(Scalar::Datetime | Scalar::CivilDatetime) => Some("_dt.datetime"),
+        Type::Scalar(Scalar::Date) => Some("_dt.date"),
+        Type::Scalar(Scalar::Time) => Some("_dt.time"),
         _ => None,
     }
+}
+
+/// A date as Python's `date` and `datetime` take one: year, month, day.
+fn date_fields(date: CalendarDate) -> String {
+    format!("{}, {}, {}", date.year, date.month, date.day)
+}
+
+/// A time of day as Python's `time` and `datetime` take one: hour,
+/// minute, second, microsecond.
+fn time_fields(time: ClockTime) -> String {
+    format!(
+        "{}, {}, {}, {}",
+        time.hour, time.minute, time.second, time.microsecond
+    )
 }
 
 /// A type as part of a native function's name: `i64` as it is, and any
@@ -2115,8 +2137,42 @@ impl Emitter<'_> {
                 self.datetime = true;
                 format!("_dt.timedelta(microseconds={microseconds})")
             }
-            Value::Temporal(_) => {
-                self.unsupported(at, "a date or a time");
+            Value::Temporal(parts) => self.temporal(parts, at),
+        }
+    }
+
+    /// A temporal literal, by the parts it writes (LEX-11), which are
+    /// what its type goes by. TYPE-2: a `date`, a `time`, a
+    /// `civil_datetime` and a `datetime` are Python's `date`, `time` and
+    /// `datetime`. A zoned datetime, a zoned time and a time zone are not
+    /// written yet.
+    fn temporal(&mut self, parts: &Temporal, at: Location) -> String {
+        if parts.zone.is_some() {
+            self.unsupported(at, "a zoned datetime, a zoned time or a time zone");
+            return "None".to_string();
+        }
+        self.datetime = true;
+        match (parts.date, parts.time, parts.offset) {
+            (Some(date), None, _) => format!("_dt.date({})", date_fields(date)),
+            (None, Some(time), _) => format!("_dt.time({})", time_fields(time)),
+            (Some(date), Some(time), offset) => {
+                let written = format!("_dt.datetime({}, {})", date_fields(date), time_fields(time));
+                match offset {
+                    // A local date and time, and an instant written in
+                    // UTC: the parts are the value's own.
+                    None | Some(0) => written,
+                    // An instant written east or west of UTC is that
+                    // many minutes from what its parts say. The
+                    // provider works it out, with Python's calendar.
+                    Some(minutes) => {
+                        self.natives = true;
+                        format!("_core.instant({written}, {minutes})")
+                    }
+                }
+            }
+            // The lexer gives a literal a date, a time or a zone.
+            (None, None, _) => {
+                self.unsupported(at, "a temporal literal with no date and no time");
                 "None".to_string()
             }
         }

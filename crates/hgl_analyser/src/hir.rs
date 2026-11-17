@@ -690,9 +690,60 @@ pub enum Value {
     Null,
     /// A duration, in microseconds.
     Duration(i64),
-    /// A date, a time or another temporal literal, as it is written. Its
-    /// type says which.
-    Temporal(String),
+    /// A date, a time or another temporal literal: the parts it writes.
+    /// Its type says which it is.
+    Temporal(Temporal),
+}
+
+/// The parts a temporal literal writes (LEX-11): `@2026-09-03T09:30Z` has
+/// a date, a time and an offset. Which are there is what the literal's
+/// type goes by, and each part's value has been checked where the literal
+/// was read: the date exists, and the time is a time of day.
+///
+/// | Source | date | time | offset | zone | Type |
+/// | --- | --- | --- | --- | --- | --- |
+/// | `@2026-09-03` | yes | | | | `date` |
+/// | `@2026-09-03T09:30` | yes | yes | | | `civil_datetime` |
+/// | `@2026-09-03T09:30Z` | yes | yes | yes | | `datetime` |
+/// | `@2026-09-03T09:30+01:00[Europe/London]` | yes | yes | yes | yes | `zoned_datetime` |
+/// | `@09:30` | | yes | | | `time` |
+/// | `@09:30[Europe/London]` | | yes | | yes | `zoned_time` |
+/// | `@[Europe/London]` | | | | yes | `timezone` |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Temporal {
+    /// The calendar date, where one is written.
+    pub date: Option<CalendarDate>,
+    /// The time of day, where one is written.
+    pub time: Option<ClockTime>,
+    /// The offset from UTC, where one is written: minutes east of UTC,
+    /// negative for west, and zero for `Z`.
+    pub offset: Option<i16>,
+    /// The zone's name without its brackets, where one is written.
+    pub zone: Option<String>,
+}
+
+/// A date of the Gregorian calendar (TYPE-2: years 1 to 9999).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalendarDate {
+    /// The year, 1 to 9999.
+    pub year: u16,
+    /// The month, 1 to 12.
+    pub month: u8,
+    /// The day of the month, 1 to the month's length.
+    pub day: u8,
+}
+
+/// A time of day, to the microsecond (TYPE-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockTime {
+    /// The hour, 0 to 23.
+    pub hour: u8,
+    /// The minute, 0 to 59.
+    pub minute: u8,
+    /// The second, 0 to 59: zero where the literal writes none (LEX-11).
+    pub second: u8,
+    /// The microsecond within the second, 0 to 999,999.
+    pub microsecond: u32,
 }
 
 /// An operator with one operand.

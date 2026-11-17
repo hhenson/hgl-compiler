@@ -37,8 +37,9 @@ use hgl_source::FileId;
 
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
-    self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
-    Local, LocalId, Run, Stmt, UnaryOperator, Value, ValueCategory,
+    self, BinaryOperator, Body, CalendarDate, Callee, ClockTime, EndpointOperation, ErrorPart,
+    Expr, ExprKind, Form, Hook, Local, LocalId, Run, Stmt, Temporal, UnaryOperator, Value,
+    ValueCategory,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
@@ -2867,7 +2868,7 @@ impl<'a> Typer<'a> {
                 .ok()
                 .map(|value| (Value::Duration(value), Scalar::Duration)),
             SyntaxKind::Temporal => {
-                temporal_type(text).map(|scalar| (Value::Temporal(text.to_string()), scalar))
+                temporal(text).map(|(parts, scalar)| (Value::Temporal(parts), scalar))
             }
             SyntaxKind::KwNull => {
                 return match expected {
@@ -10842,7 +10843,7 @@ fn constant_of(node: &SyntaxNode) -> Option<OptionValue> {
                 SyntaxKind::KwFalse => Value::Bool(false),
                 SyntaxKind::KwNull => Value::Null,
                 SyntaxKind::Duration => Value::Duration(decode_duration(text).ok()?),
-                SyntaxKind::Temporal => Value::Temporal(text.to_string()),
+                SyntaxKind::Temporal => Value::Temporal(temporal(text)?.0),
                 _ => return None,
             };
             Some(OptionValue::Literal(value))
@@ -13221,14 +13222,17 @@ fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
-/// The type of a temporal literal, by the parts it writes (LEX-11:
-/// "Offset-free date/time is civil, not an implicit UTC instant. A
-/// zoned datetime requires an explicit offset"). `None` for one the
-/// lexer has reported.
-fn temporal_type(text: &str) -> Option<Scalar> {
+/// The parts of a temporal literal and its type, which goes by the
+/// parts it writes (LEX-11: "Offset-free date/time is civil, not an
+/// implicit UTC instant. A zoned datetime requires an explicit
+/// offset"). `None` for one the lexer has reported.
+///
+/// The parts are kept as values, so that whatever reads the typed
+/// program has no literal to read again.
+fn temporal(text: &str) -> Option<(Temporal, Scalar)> {
     let literal = decode_temporal(text).ok()?;
     let zone = literal.zone.is_some();
-    Some(match (literal.date, literal.time, literal.offset) {
+    let scalar = match (literal.date, literal.time, literal.offset) {
         (Some(_), None, _) => Scalar::Date,
         (Some(_), Some(_), None) => Scalar::CivilDatetime,
         (Some(_), Some(_), Some(_)) if zone => Scalar::ZonedDatetime,
@@ -13236,7 +13240,23 @@ fn temporal_type(text: &str) -> Option<Scalar> {
         (None, Some(_), _) if zone => Scalar::ZonedTime,
         (None, Some(_), _) => Scalar::Time,
         (None, None, _) => Scalar::Timezone,
-    })
+    };
+    let parts = Temporal {
+        date: literal.date.map(|date| CalendarDate {
+            year: date.year,
+            month: date.month,
+            day: date.day,
+        }),
+        time: literal.time.map(|time| ClockTime {
+            hour: time.hour,
+            minute: time.minute,
+            second: time.second,
+            microsecond: time.microsecond,
+        }),
+        offset: literal.offset.map(|offset| offset.minutes),
+        zone: literal.zone.map(str::to_string),
+    };
+    Some((parts, scalar))
 }
 
 /// The operator a token is, between two operands.
