@@ -90,7 +90,7 @@ pub use program::{
 };
 pub use types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
-    GenericKind, GenericParameter, Member, NamedKind, Pack, Parameter, Scalar, Signature,
+    FieldRef, GenericKind, GenericParameter, Member, NamedKind, Pack, Parameter, Scalar, Signature,
     StructType, TraceStyle, Type, WrittenType,
 };
 
