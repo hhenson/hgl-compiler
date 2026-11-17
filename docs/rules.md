@@ -401,7 +401,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | RUN-1 | parser | done | `run_expression`: `run`, a call, and then a run configuration |
-| RUN-1 | analyser | planned | A run statement's call is of an entry, a temporal function with no temporal parameters (`run.entry`), and its configuration a `RunConfig` |
+| RUN-1 | analyser | done | A run statement's first argument is a call of an entry, a temporal function with no temporal parameters (`run.entry`), read as a graph's call of it is, so the entry's `const` parameters take constants. Its second is a `RunConfig` of core's, and it takes no third. The typed statement is `Module::run_body` |
 | RUN-2 | driver | planned | Entry selection; arguments, interfaces and providers checked before start |
 | RUN-3 | analyser | done | `run` is written in an application and in an integration test: in a test that is none it is `run.position`. A run statement in a module is UNIT-14's |
 | RUN-3 | transpiler | planned | The word of a run statement is its mode; start and end come from its configuration |

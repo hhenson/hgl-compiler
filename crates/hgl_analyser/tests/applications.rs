@@ -6,6 +6,7 @@
 mod common;
 
 use common::check;
+use hgl_analyser::hir::{Callee, ExprKind};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -183,6 +184,128 @@ fn a_run_statement_stands_in_no_module_and_after_its_declarations() {
         "{}",
         checked.report
     );
+}
+
+/// The findings of an application over [`MODULE`] and a module of
+/// things that are no entry, with `run` as its run statement on line 5
+/// of `live.hgl`.
+fn running(run: &str) -> common::Checked {
+    check(&[
+        ("feed.hgl", MODULE),
+        (
+            "other.hgl",
+            concat!(
+                "module app.other\n",
+                "\n",
+                "export fn scaled(price: f64, const factor: f64 = 2.0) -> f64 => price * factor\n",
+                "export const fn fixed() -> i64 => 1\n",
+                "export struct Held { value: i64 }\n",
+            ),
+        ),
+        (
+            "live.hgl",
+            &format!(
+                "application app.feed.live\n\nuse app.feed::{{beats}}\n\
+                 use app.other::{{scaled, fixed, Held}}\n{run}\n"
+            ),
+        ),
+    ])
+}
+
+/// RUN-1: "An entry is a temporal function with no temporal parameters.
+/// An application (UNIT-14) runs one: its run statement is `run(call,
+/// config)` or `eval(call, config)`, where the call is of an entry,
+/// written as any call is and giving the entry's const arguments, and
+/// the configuration is a value of core's `RunConfig`, or `RunConfig()`
+/// where none is written." RUN-3: "The word of a run statement is its
+/// mode."
+#[test]
+fn a_run_statement_calls_an_entry_under_a_configuration() {
+    let live = running("run(beats(every: 2s))");
+    assert_eq!(live.summary(), NONE, "{}", live.report);
+    let run = live
+        .program
+        .module("app.feed.live")
+        .unwrap()
+        .run_body
+        .as_ref()
+        .expect("the run statement is read");
+    assert!(run.real_time);
+    assert!(run.config.is_none());
+    // The call is the entry's, with what it is given.
+    let ExprKind::Call {
+        callee: Callee::Function { .. },
+        arguments,
+        ..
+    } = &run.call.kind
+    else {
+        panic!("a call of a function: {:?}", run.call.kind);
+    };
+    assert_eq!(arguments.len(), 1);
+    assert_eq!(run.call.ty.to_string(), "i64");
+
+    // `eval` is a simulation, and a configuration is a `RunConfig`.
+    let backtest = running("eval((beats()), RunConfig(end: @2026-01-01T00:00:00Z))");
+    assert_eq!(backtest.summary(), NONE, "{}", backtest.report);
+    let run = backtest
+        .program
+        .module("app.feed.live")
+        .unwrap()
+        .run_body
+        .as_ref()
+        .unwrap();
+    assert!(!run.real_time);
+    assert_eq!(
+        run.config.as_ref().map(|config| config.ty.to_string()),
+        Some("RunConfig".to_string())
+    );
+    // A module has no run statement to read.
+    assert!(
+        backtest
+            .program
+            .module("app.feed")
+            .unwrap()
+            .run_body
+            .is_none()
+    );
+}
+
+/// RUN-1, `run.entry`: "A run statement's first argument is no call of
+/// an entry; the argument". The entry's arguments are a call's, and
+/// the configuration a `RunConfig`.
+#[test]
+fn a_run_statement_that_calls_no_entry_is_reported() {
+    let cases = [
+        // A function with a temporal input; a value function; a struct;
+        // what is no call.
+        (
+            "run(scaled(price: [1.0]))",
+            "live.hgl:5:5 type/run.entry RUN-1",
+        ),
+        ("run(fixed())", "live.hgl:5:5 type/run.entry RUN-1"),
+        ("run(Held(value: 1))", "live.hgl:5:5 type/run.entry RUN-1"),
+        ("eval(7)", "live.hgl:5:6 type/run.entry RUN-1"),
+        ("run((beats))", "live.hgl:5:5 type/run.entry RUN-1"),
+        // The entry's arguments.
+        (
+            "run(beats(every: 1))",
+            "live.hgl:5:18 type/type.mismatch EXPR-5",
+        ),
+        (
+            "run(beats(pace: 1s))",
+            "live.hgl:5:11 name/argument.unknown EXPR-2",
+        ),
+        // The configuration, and what follows it.
+        ("run(beats(), 3)", "live.hgl:5:14 type/type.mismatch EXPR-5"),
+        (
+            "run(beats(), RunConfig(), 4)",
+            "live.hgl:5:27 type/argument.unexpected RUN-1",
+        ),
+    ];
+    for (run, expected) in cases {
+        let checked = running(run);
+        assert_eq!(checked.summary(), [expected], "{run}\n{}", checked.report);
+    }
 }
 
 /// UNIT-14: "An application's path is no module's and no other

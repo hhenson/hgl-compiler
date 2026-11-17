@@ -13,7 +13,9 @@ use hgl_parser::ast::{AstNode, Item, UseDecl};
 use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use crate::program::{Declaration, DeclarationKind, Import, ImportKind, Module, Role, Test};
+use crate::program::{
+    Declaration, DeclarationKind, Import, ImportKind, Module, Role, RunStatement, Test,
+};
 use crate::{codes, error};
 
 /// Fills in a module's imports, declarations, tests and scope from its
@@ -61,7 +63,17 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
             }
         }
     }
-    check_runs(module, &walk.runs, walk.diagnostics);
+    let places: Vec<(Location, bool)> = walk
+        .runs
+        .iter()
+        .map(|run| (run.statement.at, run.followed))
+        .collect();
+    check_runs(module, &places, walk.diagnostics);
+    // RUN-1: an application runs its run statement: its first, where
+    // it writes more.
+    if module.application {
+        module.run = walk.runs.into_iter().next().map(|run| run.statement);
+    }
     module.declarations = walk.declarations;
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
@@ -179,10 +191,17 @@ struct Walk<'a> {
     instantiations: Vec<(usize, SyntaxNode)>,
     /// True when the unit walked is an application (UNIT-14).
     application: bool,
-    /// Where the word of each run statement is written, and whether a
-    /// declaration follows it.
-    runs: Vec<(Location, bool)>,
+    /// Each run statement, in file order and then source order.
+    runs: Vec<WalkedRun>,
     diagnostics: &'a mut Diagnostics,
+}
+
+/// A run statement the walk has met.
+struct WalkedRun {
+    /// The statement, as written.
+    statement: RunStatement,
+    /// True when a declaration of its file follows it (UNIT-14).
+    followed: bool,
 }
 
 impl Walk<'_> {
@@ -194,7 +213,7 @@ impl Walk<'_> {
         // declaration of the file after one is marked against it.
         if !in_test && !matches!(item, Item::Run(_)) {
             for run in &mut self.runs {
-                run.1 = true;
+                run.followed = true;
             }
         }
         // Each arm gives the item's name, what it is, and its `export`
@@ -212,7 +231,14 @@ impl Walk<'_> {
                         Some(word) => word.span(),
                         None => first_token_span(&syntax),
                     };
-                    self.runs.push((Location::new(file, span), false));
+                    self.runs.push(WalkedRun {
+                        statement: RunStatement {
+                            at: Location::new(file, span),
+                            file: index,
+                            syntax,
+                        },
+                        followed: false,
+                    });
                 }
                 return;
             }

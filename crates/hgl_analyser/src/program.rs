@@ -10,7 +10,7 @@ use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
-use crate::hir::{Body, Expr};
+use crate::hir::{Body, Expr, Run};
 use crate::types::{CallArguments, Detail, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
@@ -163,6 +163,12 @@ pub struct Module {
     /// The typed block of each named test: one entry for each of
     /// `tests`, in the same order, `None` for a test with no block.
     pub test_bodies: Vec<Option<Body>>,
+    /// An application's run statement, as it is written (RUN-1): its
+    /// first, where it writes more than one. `None` for a module, and
+    /// for an application that writes none.
+    pub run: Option<RunStatement>,
+    /// That statement, typed. `None` where it could not be read.
+    pub run_body: Option<Run>,
     /// The defaults each declaration writes: one entry for each of
     /// `declarations`, in the same order. A callable's has one for each
     /// of its parameters (UNIT-8), and a struct's one for each of its
@@ -467,6 +473,17 @@ pub struct Test {
     /// The position of its file in [`Module::files`].
     pub file: usize,
     /// The test's syntax tree.
+    pub syntax: SyntaxNode,
+}
+
+/// An application's run statement, as it is written.
+#[derive(Debug, Clone)]
+pub struct RunStatement {
+    /// Where its word, `run` or `eval`, is written.
+    pub at: Location,
+    /// The position of its file in [`Module::files`].
+    pub file: usize,
+    /// The statement's syntax tree: a `RunStmt`.
     pub syntax: SyntaxNode,
 }
 

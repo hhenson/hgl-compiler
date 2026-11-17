@@ -16,6 +16,23 @@ use hgl_diagnostics::Location;
 use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
 
+/// An application's run statement, typed (RUN-1): "its run statement
+/// is `run(call, config)` or `eval(call, config)`, where the call is of
+/// an entry ... and the configuration is a value of core's `RunConfig`,
+/// or `RunConfig()` where none is written."
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    /// True for `run`, a run in real time; false for `eval`, a
+    /// simulation. RUN-3: "The word of a run statement is its mode."
+    pub real_time: bool,
+    /// The call of the entry, with the entry's const arguments.
+    pub call: Expr,
+    /// The configuration, where one is written.
+    pub config: Option<Expr>,
+    /// Where the statement is written.
+    pub at: Location,
+}
+
 /// The body of one function: a value function's, a node's, or a
 /// graph's.
 #[derive(Debug, Clone, PartialEq)]
