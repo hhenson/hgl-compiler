@@ -188,6 +188,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "value.capability",
     "value.byte_range",
     "numeric.division_by_zero",
+    "numeric.out_of_range",
     "yield.negative_duration",
     "yield.non_increasing_time",
     "eval.input_delta_profile",
