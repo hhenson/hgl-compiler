@@ -77,8 +77,8 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
             "f: dict<i64, f64>",
             "g: dict<i64, delta<Quote>>",
             "h: tuple<f64?, str?>",
-            "i: f64?",
-            "j: dict<i64, f64?>",
+            "i: delta<f64?>",
+            "j: dict<i64, delta<f64?>>",
             "l: delta<set<str>>",
             "m: delta<dict<str, f64>>",
             "n: delta<Quote>",
@@ -223,6 +223,83 @@ fn a_sets_and_a_dictionarys_delta_is_made_from_its_properties() {
     assert_eq!(value.ty.to_string(), "delta<set<str>>");
 }
 
+/// TYPE-16: a nullable's delta is "a type of its own, an optional, with
+/// the property `value`, a `delta<V>?`: null for a published null".
+/// "`delta<i64?>()` is a published null. In a tuple's position or a
+/// struct's field, null leaves the position or the field as it was ...
+/// A `delta<V>` is a value where a `delta<V?>` is expected, as a T is
+/// where a `T?` is". A struct's delta has "a property for each field
+/// `name: F`, of the same name and of type `delta<F>?`".
+#[test]
+fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
+    let checked = module(concat!(
+        "struct Quote {\n    bid: f64\n    note: str? = null\n}\n",
+        // Null is no tick; the optional holds what was published.
+        "const fn seen(change: delta<i64?>?) -> str {\n",
+        "    if change == null { return \"no tick\" }\n",
+        "    if change.value == null { return \"a null\" }\n",
+        "    return \"a value\"\n",
+        "}\n",
+        "const fn made() -> i64 {\n",
+        "    let empty = delta<i64?>()\n",
+        "    let seven = delta<i64?>(value: 7)\n",
+        // A `delta<V>` where a `delta<V?>` is expected.
+        "    let direct: delta<i64?> = 7\n",
+        "    let wide: delta<f64?> = 1\n",
+        "    let position: tuple<delta<i64?>?, delta<i64?>?> = (7, null)\n",
+        // Null is no delta; a value of another type; no such property.
+        "    let absent: delta<i64?> = null\n",
+        "    let wrong = delta<i64?>(value: \"a\")\n",
+        "    let other = delta<i64?>(added: 1)\n",
+        "    return 1\n",
+        "}\n",
+        // A struct's delta: a property for each field.
+        "const fn bids(change: delta<Quote>) -> f64? => change.bid\n",
+        "const fn notes(change: delta<Quote>) -> delta<str?>? => change.note\n",
+        "const fn cleared_note() -> delta<Quote> => delta<Quote>(bid: 1.0, note: delta<str?>())\n",
+        "const fn noted() -> delta<Quote> => delta<Quote>(note: \"n\")\n",
+        "const fn no_field() -> delta<Quote> => delta<Quote>(ask: 1.0)\n",
+        // TIME-7: `return null` publishes a null, as the delta does.
+        "fn cleared(command: i64) -> i64? {\n",
+        "    when {\n",
+        "        if command == 0 { return null }\n",
+        "        if command == 1 { return delta<i64?>() }\n",
+        "        return command\n",
+        "    }\n",
+        "}\n",
+        "fn relayed(value: i64?) -> i64? {\n",
+        "    when { return delta_value(value) }\n",
+        "}\n",
+        // TST-5: a cell written `null` is a published null.
+        "test nulls {\n",
+        "    assert eval(cleared, command: [0, 2]) == [null, 2]\n",
+        "    assert eval(relayed, value: [null, _, 3]) == [null, _, 3]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:31 type/type.mismatch TYPE-14",
+            "m.hgl:18:36 type/type.mismatch EXPR-5",
+            "m.hgl:19:29 name/delta.argument_name TYPE-16",
+            "m.hgl:26:53 name/delta.argument_name TYPE-16",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "made"),
+        [
+            "empty: delta<i64?>",
+            "seven: delta<i64?>",
+            "direct: delta<i64?>",
+            "wide: delta<f64?>",
+            "position: tuple<delta<i64?>?, delta<i64?>?>",
+            "absent: delta<i64?>",
+            "wrong: delta<i64?>",
+            "other: delta<i64?>",
+        ]
+    );
+}
+
 /// END-3: "`delta_value(x)` returns what `x` published this cycle, a
 /// `delta<T>` for an endpoint of T (the language's TYPE-16). For a
 /// scalar it is the value published". TIME-7: "A runtime return
@@ -352,10 +429,10 @@ fn a_generic_delta_is_published_and_recorded() {
         "    eval_record<i64>(filtered)\n",
         "}\n",
         // Once T is known the entry's value is that T's delta: the
-        // scalar itself, a scalar or null, a set's delta.
+        // scalar itself, the optional of a nullable, a set's delta.
         "const fn made(at: datetime, change: delta<set<str>>, members: set<str>) -> i64 {\n",
         "    let scalar = EvalEntry<i64>(time: at, value: 7)\n",
-        "    let nullable = EvalEntry<i64?>(time: at, value: null)\n",
+        "    let nullable = EvalEntry<i64?>(time: at, value: delta<i64?>())\n",
         "    let structural = EvalEntry<set<str>>(time: at, value: change)\n",
         "    let whole = EvalEntry<set<str>>(time: at, value: members)\n",
         "    let absent = EvalEntry<i64>(time: at, value: null)\n",
