@@ -1997,6 +1997,28 @@ impl Emitter<'_> {
         }
     }
 
+    /// What the call `called` of a native candidate gives, as a value
+    /// of the program's. `result` is the candidate's result type.
+    ///
+    /// A candidate that gives an enum, as core's `compare_` gives a
+    /// `CmpResult` (OPS-3), gives its member's name: the provider
+    /// declares no enum of the program's. The member is read from the
+    /// enum by that name, as `Side("buy")` is (TYPE-7).
+    fn native_result(&mut self, result: Option<&Type>, called: String) -> String {
+        match result {
+            Some(Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Enum,
+                ..
+            }) => {
+                let of = self.type_name(*module, *declaration);
+                format!("_core.member({of}, {called})")
+            }
+            _ => called,
+        }
+    }
+
     /// The generic values a call gives a native candidate, each as
     /// `name=value` for the provider's function.
     ///
@@ -2180,6 +2202,10 @@ impl Emitter<'_> {
             format!("(valid={})", tuple(&required))
         };
         let call = format!("{called}({})", passed.join(", "));
+        let call = match lifts {
+            Lifts::Native(..) => self.native_result(signature.result.as_ref(), call),
+            Lifts::Function => call,
+        };
         let (decorator, after) = match (result, returns) {
             (Some(_), returns) => (
                 "compute_node",
@@ -2393,7 +2419,8 @@ impl Emitter<'_> {
                 .filter(|written| !written.is_empty())
                 .chain(options)
                 .collect();
-            return format!("_core.{native}({})", arguments.join(", "));
+            let called = format!("_core.{native}({})", arguments.join(", "));
+            return self.native_result(signature.result.as_ref(), called);
         }
         if !bodied && !matches!(declared.kind, DeclarationKind::Function(_)) {
             self.unsupported(at, &format!("a call of `{}`", declared.name));
