@@ -1670,6 +1670,297 @@ fn a_temporal_candidate_is_a_node_or_a_graph() {
     assert_eq!(joined.matches("def _lift_").count(), 2, "{joined}");
 }
 
+/// GEN-2: "Resolve every needed generic from actual inputs, requested
+/// output, or solvable equality." A temporal function with generic
+/// parameters, and core's temporal candidates of `+` and `-` under
+/// `{invalid: .identity}` (OPS-9), each called with more than one type.
+const GENERICS: &str = concat!(
+    "module demo.generics\n",
+    "\n",
+    // Graphs of core's generic temporal candidates.
+    "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
+    "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
+    "fn identity_difference<T>(lhs: T, rhs: T) -> T\n",
+    "    requires sub_(T, T) -> T && neg_(T) -> T => lhs -{invalid: .identity} rhs\n",
+    // A node, with an operation it requires in its hook.
+    "fn doubled<T>(value: T) -> T requires add_(T, T) -> T {\n",
+    "    when valid(value) { return add_(value, value) }\n",
+    "}\n",
+    // A graph of that node, twice.
+    "fn quadrupled<T>(value: T) -> T requires add_(T, T) -> T => doubled(doubled(value))\n",
+    // An operation a graph requires: the value candidate, lifted.
+    "fn summed<T>(a: T, b: T) -> T requires add_(T, T) -> T {\n",
+    "    let both = add_(a, b)\n",
+    "    return both + both\n",
+    "}\n",
+    // A generic value, read in a hook.
+    "fn scaled<const by: i64>(value: i64) -> i64 {\n",
+    "    when valid(value) { return value * by }\n",
+    "}\n",
+    // State of the generic type, and configuration of it.
+    "fn latest<T>(value: T, const fallback: T) -> T {\n",
+    "    state held: T = fallback\n",
+    "    when valid(value) {\n",
+    "        let before = held\n",
+    "        held = value\n",
+    "        return before\n",
+    "    }\n",
+    "}\n",
+    // A call from a graph with no generic parameter.
+    "fn wired(a: i64, b: i64) -> i64 => identity_sum(a, b)\n",
+    "fn tripled(value: i64) -> i64 => scaled<3>(value)\n",
+    // One no call gives its types to.
+    "fn unused<T>(value: T) -> T {\n",
+    "    when valid(value) { return value }\n",
+    "}\n",
+    "\n",
+    "test generics_are_instances {\n",
+    "    assert eval(identity_sum(lhs: [_, 1.5], rhs: [0.5])) == [0.5, 2.0]\n",
+    "    assert eval(identity_difference(lhs: [_, 1.5], rhs: [0.5])) == [-0.5, 1.0]\n",
+    "    assert eval(identity_sum(lhs: [_, 5m], rhs: [2m])) == [2m, 7m]\n",
+    "    assert eval(identity_sum(lhs: [\"\", _, \"a\"], rhs: [_, \"b\"])) == [\"\", \"b\", \"ab\"]\n",
+    "    assert eval(wired(a: [1, 2], b: [10])) == [11, 12]\n",
+    "    assert eval(doubled(value: [1, 2])) == [2, 4]\n",
+    "    assert eval(doubled(value: [\"a\"])) == [\"aa\"]\n",
+    "    assert eval(quadrupled(value: [1.5])) == [6.0]\n",
+    "    assert eval(summed(a: [1, 2], b: [10])) == [22, 24]\n",
+    "    assert eval(tripled(value: [2, 3])) == [6, 9]\n",
+    "    assert eval(scaled<4>(value: [2])) == [8]\n",
+    "    assert eval(latest(value: [1, 2], fallback: 0)) == [0, 1]\n",
+    "    assert eval(latest(value: [\"a\", \"b\"], fallback: \"\")) == [\"\", \"a\"]\n",
+    "}\n",
+);
+
+/// GEN-2: hgraph's nodes and graphs are written with their inputs'
+/// types, so a temporal function with generic parameters is written
+/// once for each set of generic arguments the program calls it with,
+/// in the module that declares it, and not at all where it is called
+/// with none. GEN-16: an operation the declaration requires is, in each
+/// instance, the call of the candidate that answers the requirement
+/// there. GEN-13: a generic value read as a value is the constant the
+/// call gives.
+#[test]
+fn a_generic_temporal_function_is_written_for_each_call() {
+    let emitted = emit(&[("generics.hgl", GENERICS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("generics_are_instances"), None);
+    let python = emitted.text("_hgl/_m_demo/_m_generics/__init__.py");
+    for expected in [
+        // A graph for each type, of core's candidate for that type.
+        concat!(
+            "@_hg.graph\n",
+            "def _inst_identity_sum__f64(lhs: _hg.TS[_py.float], rhs: _hg.TS[_py.float]) ",
+            "-> _hg.TS[_py.float]:\n",
+            "    return _hgl_4core._inst__impl_add__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+        ),
+        "def _inst_identity_sum__duration(",
+        "def _inst_identity_sum__str(",
+        "    return _hgl_4core._inst__impl_sub__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+        // A node for each type, its required `add_` the candidate.
+        concat!(
+            "@_hg.compute_node\n",
+            "def _inst_doubled__str(value: _hg.TS[_py.str]) -> _hg.TS[_py.str]:\n",
+            "    return _core.add__str_str(lhs=value.value, rhs=value.value)\n",
+        ),
+        "    return _core.add__i64_i64(lhs=value.value, rhs=value.value)\n",
+        // An instance calls the instances it asks for.
+        "    return _inst_doubled__f64(value=_inst_doubled__f64(value=value))\n",
+        // In a graph the value candidate is lifted.
+        "def _inst_summed__i64(a: _hg.TS[_py.int], b: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+        "    return _core.add__i64_i64(lhs=lhs.value, rhs=rhs.value)\n",
+        // The constant a generic value is given.
+        concat!(
+            "def _inst_scaled__3(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "    return _core.mul__i64_i64(lhs=value.value, rhs=3)\n",
+        ),
+        "    return _core.mul__i64_i64(lhs=value.value, rhs=4)\n",
+        concat!(
+            "def _inst_latest__str(value: _hg.TS[_py.str], fallback: _py.str, ",
+            "_state: _hg.STATE = None) -> _hg.TS[_py.str]:\n",
+        ),
+        // A call names the instance for its types.
+        "    return _inst_identity_sum__i64(lhs=a, rhs=b)\n",
+        "    return _inst_scaled__3(value=value)\n",
+        "_harness.evaluate(_inst_scaled__4, value=[2])",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // Nothing calls `unused`, and nothing is written for it.
+    assert!(!python.contains("unused"), "{python}");
+    // Core's candidate is written in core's file, once for each type.
+    let core = emitted.text("_hgl/_m_core/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.compute_node(valid=())\n",
+            "def _inst__impl_add__T_T__f64__identity(lhs: _hg.TS[_py.float], ",
+            "rhs: _hg.TS[_py.float], _output: _hg.TS_OUT[_py.float] = None) ",
+            "-> _hg.TS[_py.float]:\n",
+            "    if lhs.valid and rhs.valid:\n",
+            "        return _core.add__f64_f64(lhs=lhs.value, rhs=rhs.value)\n",
+        ),
+        "        return _core.add__duration_duration(lhs=lhs.value, rhs=rhs.value)\n",
+        "        return _core.neg__f64(value=rhs.value)\n",
+    ] {
+        assert!(
+            core.contains(expected),
+            "core has:\n{expected}\nin:\n{core}"
+        );
+    }
+    assert_eq!(
+        core.matches("def _inst__impl_add__T_T__").count(),
+        4,
+        "{core}"
+    );
+}
+
+/// GEN-2: an instance is written in its declaration's module, with the
+/// types of the module that calls it: here an enum of a module that
+/// imports the declaration's.
+const CALLERS_TYPE: [(&str, &str); 2] = [
+    (
+        "kept.hgl",
+        concat!(
+            "module demo.kept\n",
+            "export fn held<T>(value: T) -> T {\n",
+            "    when valid(value) { return value }\n",
+            "}\n",
+        ),
+    ),
+    (
+        "sides.hgl",
+        concat!(
+            "module demo.sides\n",
+            "use demo.kept::{held}\n",
+            "enum Side { buy, sell }\n",
+            "test an_instance_of_a_callers_type {\n",
+            "    assert eval(held(value: [Side.buy, Side.sell])) == [Side.buy, Side.sell]\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// The two modules then import one another in Python, though they do
+/// not in the source. A function's annotations are read where it is
+/// defined, so a module defines its types before it imports another
+/// generated module: whichever of the two is loaded first, the enum is
+/// there when the instance that names it is defined.
+#[test]
+fn a_module_has_its_types_before_it_imports_another() {
+    let emitted = emit(&CALLERS_TYPE);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let kept = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
+    for expected in [
+        "import _hgl._m_demo._m_sides as _hgl_4demo_5sides\n",
+        concat!(
+            "def _inst_held__demo_sides__Side(value: _hg.TS[_hgl_4demo_5sides.Side]) ",
+            "-> _hg.TS[_hgl_4demo_5sides.Side]:\n",
+        ),
+    ] {
+        assert!(
+            kept.contains(expected),
+            "the module has:\n{expected}\nin:\n{kept}"
+        );
+    }
+    let sides = emitted.text("_hgl/_m_demo/_m_sides/__init__.py");
+    let defined = sides
+        .find("Side = _enum.Enum(")
+        .expect("the enum is written");
+    let imported = sides
+        .find("import _hgl._m_demo._m_kept as _hgl_4demo_4kept\n")
+        .expect("the module is imported");
+    assert!(defined < imported, "{sides}");
+}
+
+/// Each instance is a piece of its module. Where one has a form the
+/// target does not write, a type here, that is reported where the
+/// declaration is written, and a test that reaches that instance is
+/// not run. A test that reaches another instance of the declaration
+/// is.
+#[test]
+fn an_instance_that_is_not_written_is_reported() {
+    let emitted = emit(&[(
+        "held.hgl",
+        concat!(
+            "module demo.held\n",
+            "fn held<T>(value: T) -> T {\n",
+            "    when valid(value) { return value }\n",
+            "}\n",
+            "fn again<T>(value: T) -> T => held(value)\n",
+            "test whole {\n",
+            "    assert eval(again(value: [1])) == [1]\n",
+            "}\n",
+            "test listed {\n",
+            "    let seen = eval(again(value: [[1]]))\n",
+            "}\n",
+        ),
+    )]);
+    // The type of the input, at the parameter, and of the result, at
+    // the function's name: once each for the one instance that has it,
+    // of the node and of the graph that calls it.
+    assert_eq!(
+        emitted.reported,
+        [
+            "held.hgl:2:12 target.unsupported",
+            "held.hgl:2:4 target.unsupported",
+            "held.hgl:5:13 target.unsupported",
+            "held.hgl:5:4 target.unsupported",
+        ]
+    );
+    assert_eq!(emitted.blocked("whole"), None);
+    let blocked = emitted.blocked("listed").expect("the test is not run");
+    assert!(
+        blocked.ends_with("the hgraph target does not write the type `list<i64>` yet"),
+        "{blocked}"
+    );
+    let python = emitted.text("_hgl/_m_demo/_m_held/__init__.py");
+    assert!(python.contains("def _inst_held__i64("), "{python}");
+    assert!(python.contains("def _inst_again__i64("), "{python}");
+    assert!(!python.contains("def _inst_held__list"), "{python}");
+    assert!(!python.contains("def _inst_again__list"), "{python}");
+}
+
+/// GEN-16: an operation a declaration requires is, in an instance, the
+/// call of the candidate that answers the requirement. Where no one
+/// candidate does, the instance is not written, which is reported where
+/// the operation is called, in core here, and the test that reaches it
+/// is not run. The instance for a type that has a candidate is written.
+#[test]
+fn an_instance_nothing_answers_is_reported() {
+    let emitted = emit(&[(
+        "sums.hgl",
+        concat!(
+            "module demo.sums\n",
+            "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
+            "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
+            "test numbers {\n",
+            "    assert eval(identity_sum(lhs: [1], rhs: [2])) == [3]\n",
+            "}\n",
+            // No value `add_(bool, bool)`.
+            "test flags {\n",
+            "    let seen = eval(identity_sum(lhs: [true], rhs: [false]))\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
+    assert!(
+        emitted.reported[0].ends_with(" target.unsupported"),
+        "{:?}",
+        emitted.reported
+    );
+    assert_eq!(emitted.blocked("numbers"), None);
+    let blocked = emitted.blocked("flags").expect("the test is not run");
+    assert!(
+        blocked.ends_with(
+            "the hgraph target does not write an operation a generic declaration requires, \
+             with no candidate selected for it yet"
+        ),
+        "{blocked}"
+    );
+}
+
 /// GEN-4: an `impl const fn` is a value candidate of its operator. One
 /// with a body is written as a function, named by the operator and
 /// the types of its parameters, since an operator may have many and a
@@ -3506,6 +3797,9 @@ fn the_generated_tests_pass_on_hgraph() {
         ("bounded.hgl", BOUNDED),
         TEMPORAL_CANDIDATES[0],
         TEMPORAL_CANDIDATES[1],
+        ("generics.hgl", GENERICS),
+        CALLERS_TYPE[0],
+        CALLERS_TYPE[1],
     ];
     files.extend(STRUCTS);
     files.extend(SAME_NAMES);
@@ -3535,11 +3829,12 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        54,
+        56,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
-         candidates, and one of each demo's"
+         candidates, one on generic temporal functions, one on an instance of a caller's \
+         type, and one of each demo's"
     );
 }
 

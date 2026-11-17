@@ -1101,6 +1101,17 @@ A `Callee::Required` in the body carries the same position, so the
 candidate it calls for one call of the declaration is that call's
 answer at that position.
 
+`Program::instance` puts the two together for a target with no generics
+of its own. Given a declaration, the generic arguments of one call of
+it and that call's answers, it returns the declaration's signature and
+body with each generic parameter replaced by what it stands for, each
+`Callee::Required` replaced by the call of the candidate that answers
+it, each `Stated` answer of a call in the body replaced by what answers
+the declaration's own requirement, and a generic value read as a value
+replaced by the constant given (GEN-13). So a call in the returned body
+names no generic parameter of the declaration, and asks for a whole
+instance in turn. Nothing is analysed again.
+
 A call that writes the operator's generic arguments, `make<T>()`, is
 the requirement those agree with (GEN-8): what the operator's signature
 says of a parameter or of its result with them in place is what the
@@ -1350,6 +1361,27 @@ generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
 A name that starts with `_` is the target's own: no module's or
 declaration's Python name does.
 
+An hgraph node or graph is written with the types of its inputs, so a
+temporal function or candidate with generic parameters is written once
+for each set of generic arguments it is called with (GEN-2). Before any
+module is written the target reads the typed program for those calls
+(`instances.rs`): a call in one module asks for an instance that is
+written in the declaration's module. It starts from the bodies with no
+generic parameter and from the tests, asks the analyser for each
+instance (`Program::instance`), and goes on through the calls of each
+instance it is given. A value function with generic parameters is
+written once, as Python takes a value of any type.
+
+An instance is written with the types of the module that calls it, so
+its module then imports that module, which imports it: two generated
+modules may import one another where the source's do not. A call that
+selects a candidate of a module that imports the caller's does the same
+(GEN-5). Python reads a function's annotations where the function is
+defined, so each generated file defines its types before it imports
+another generated module. Whichever is loaded first, a type is there
+when a function that names it is defined, and what a function calls is
+looked up when it runs.
+
 Core is a module as any other, `_hgl/_m_core/__init__.py`, written when
 a module of the program imports it. It holds the functions and the
 candidates core has an HGL body for; core's native ones are the
@@ -1384,6 +1416,7 @@ only where the program reaches it, at core's source.
 | A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. The analyser says which member a constant comes to, however it is written (TYPE-7), and the target reads none of its spelling. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `impl fn` with a body (GEN-4) | A node or a graph of its module, as a temporal function is, under the same kind of name: `_impl_join__i64_i64`. A call in a graph that selects it calls it, and is not lifted. Where a value candidate has the same parameter types (GEN-5), the value one is `_value_impl_join__i64_i64` |
+| A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64__identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13) |
 | `operator` | Nothing: its candidates are the functions |
 | `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("demo.orders::Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. The class is named with its module's path: hgraph knows a Python enum by its class's name, so two modules' `Side`s would be one type to it, and core's `CmpResult` hgraph's own. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
 | `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
@@ -1441,8 +1474,8 @@ a generic struct made in a function generic in its arguments;
 a native declaration of a program,
 and a candidate with the parameter types of another of its module and
 its role;
-generic temporal functions, an operator's temporal candidates among
-them;
+a call of a generic temporal function whose generic arguments are not
+known; an operation a generic value function requires;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` read in `stop`, which hgraph gives no lifecycle hook;
@@ -1491,7 +1524,7 @@ blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
 hgraph 0.9.0. With it,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 18 of
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 19 of
 the 24 tests of the pinned core's conformance cases and fails none:
 
 | File | Tests | Pass | Not run, and why |
@@ -1501,7 +1534,7 @@ the 24 tests of the pinned core's conformance cases and fails none:
 | `record_eval.hgl` | 2 | 2 | |
 | `mixed_eval.hgl` | 1 | 1 | |
 | `set_endpoints.hgl` | 1 | 1 | |
-| `identity_arithmetic.hgl` | 5 | 0 | 4: a published null in a trace. 1: a generic temporal function |
+| `identity_arithmetic.hgl` | 5 | 1 | 4: a published null in a trace |
 | `failure_eval.hgl` | 1 | 1 | |
 
 That is a run by hand, and no conformance claim.

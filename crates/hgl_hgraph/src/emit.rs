@@ -25,6 +25,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
+use crate::instances::{Instances, instanced};
 use crate::{codes, provided, python_module, test_function};
 
 /// What writing a module gave.
@@ -44,7 +45,16 @@ pub(crate) struct Written {
     /// A piece for each named test of the module, in the order
     /// declared.
     pub(crate) tests: Vec<Piece>,
+    /// A piece for each instance of a generic temporal declaration of
+    /// the module (GEN-2), with the declaration's position and the
+    /// instance's suffix, in the order written.
+    pub(crate) instances: Vec<(usize, String, Piece)>,
 }
+
+/// What a piece names: a declaration, as the position of its module in
+/// the program and its position in that module, and for a declaration
+/// that is written by instance, the suffix of the instance named.
+pub(crate) type Used = (usize, usize, Option<String>);
 
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.
@@ -55,9 +65,8 @@ pub(crate) struct Piece {
     /// The first form in it that the target does not write yet. A piece
     /// with one is left out of the file.
     pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the types it names, each as its module and
-    /// its declaration.
-    pub(crate) uses: BTreeSet<(usize, usize)>,
+    /// The functions and the types it names.
+    pub(crate) uses: BTreeSet<Used>,
     /// True for a type, which is written before the functions: a
     /// function's annotations are read where it is defined, and may
     /// name a type the source declares after it.
@@ -69,11 +78,18 @@ pub(crate) struct Piece {
     pub(crate) statements: Vec<(usize, Location)>,
 }
 
-/// Writes module `index` of `program`.
-pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnostics) -> Written {
+/// Writes module `index` of `program`. `instances` is the instances
+/// of generic temporal declarations the program asks for.
+pub(crate) fn module(
+    program: &Program,
+    index: usize,
+    instances: &Instances,
+    diagnostics: &mut Diagnostics,
+) -> Written {
     let mut emitter = Emitter {
         program,
         module: index,
+        instances,
         diagnostics,
         hgraph: false,
         natives: false,
@@ -90,6 +106,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         propagates: false,
         piece: Piece::default(),
         declared: Vec::new(),
+        instanced: Vec::new(),
         tested: Vec::new(),
     };
     // UNIT-14, RUN-1: what an application declares is written as a
@@ -112,6 +129,7 @@ pub(crate) fn module(program: &Program, index: usize, diagnostics: &mut Diagnost
         imports: emitter.imports,
         declarations: emitter.declared,
         tests: emitter.tested,
+        instances: emitter.instanced,
     }
 }
 
@@ -422,6 +440,9 @@ struct Emitter<'a> {
     program: &'a Program,
     /// The module's position in it.
     module: usize,
+    /// The instances of generic temporal declarations the program asks
+    /// for, each of which is written in its declaration's module.
+    instances: &'a Instances,
     /// Where what cannot be written is reported.
     diagnostics: &'a mut Diagnostics,
     /// True once the text names something of hgraph.
@@ -464,6 +485,10 @@ struct Emitter<'a> {
     piece: Piece,
     /// The pieces written for the module's declarations.
     declared: Vec<Piece>,
+    /// The pieces written for the instances of the module's generic
+    /// temporal declarations: each with its declaration's position and
+    /// its suffix.
+    instanced: Vec<(usize, String, Piece)>,
     /// The pieces written for the module's named tests.
     tested: Vec<Piece>,
 }
@@ -535,33 +560,78 @@ impl Emitter<'_> {
         if self.harness {
             out.push_str("import _hgl._harness as _harness\n");
         }
-        for module in &self.imports {
-            let python = python_module(module);
-            out.push_str(&format!("import {python} as {}\n", alias(module)));
-        }
-        // The lines written so far. A piece's statements were marked
-        // by the line of the piece they start on, counted from 0, and
-        // are now given the line of the file, counted from 1.
-        let mut lines = out.matches('\n').count();
         // The types first, then the functions, then the tests, each in
         // the order declared.
-        let (types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
+        let (mut types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
             self.declared.iter_mut().partition(|piece| piece.first);
-        for piece in types
-            .into_iter()
-            .chain(functions)
-            .chain(self.tested.iter_mut())
-        {
+        // The other modules the types name are imported before the
+        // types, and the rest after them. Modules may import one
+        // another in Python where they do not in the source: an
+        // instance is written in its declaration's module with the
+        // types of the module that calls it (GEN-2), and a call may
+        // select a candidate of a module that imports this one (GEN-5).
+        // A function's annotations are read where it is defined, so a
+        // module must have its types before it loads a module whose
+        // functions name them. A type's own definition names nothing
+        // of another module today, so every such import is after the
+        // types.
+        let program = self.program;
+        let early: BTreeSet<&str> = types
+            .iter()
+            .filter(|piece| piece.broken.is_none())
+            .flat_map(|piece| piece.uses.iter())
+            .filter(|(module, _, _)| *module != self.module)
+            .map(|(module, _, _)| program.modules[*module].path.as_str())
+            .collect();
+        let import = |module: &str| {
+            let python = python_module(module);
+            format!("import {python} as {}\n", alias(module))
+        };
+        for module in &self.imports {
+            if early.contains(module.as_str()) {
+                out.push_str(&import(module));
+            }
+        }
+        // A piece's statements were marked by the line of the piece
+        // they start on, counted from 0, and are given the line of the
+        // file, counted from 1: `lines` is the lines written so far.
+        let mut lines = out.matches('\n').count();
+        let write = |piece: &mut Piece, out: &mut String, lines: &mut usize| {
             if piece.broken.is_some() {
                 // It is in no file, so its statements are on no line.
                 piece.statements.clear();
-                continue;
+                return;
             }
             for (line, _) in &mut piece.statements {
-                *line += lines + 1;
+                *line += *lines + 1;
             }
-            lines += piece.text.matches('\n').count();
+            *lines += piece.text.matches('\n').count();
             out.push_str(&piece.text);
+        };
+        for piece in types.iter_mut() {
+            write(piece, &mut out, &mut lines);
+        }
+        let mut late = String::new();
+        for module in &self.imports {
+            if !early.contains(module.as_str()) {
+                late.push_str(&import(module));
+            }
+        }
+        if !late.is_empty() {
+            // Two blank lines after the types, as before any piece.
+            if types.iter().any(|piece| piece.broken.is_none()) {
+                late.insert_str(0, "\n\n");
+            }
+            lines += late.matches('\n').count();
+            out.push_str(&late);
+        }
+        let instances = self.instanced.iter_mut().map(|(_, _, piece)| piece);
+        for piece in functions
+            .into_iter()
+            .chain(instances)
+            .chain(self.tested.iter_mut())
+        {
+            write(piece, &mut out, &mut lines);
         }
         out
     }
@@ -595,6 +665,34 @@ impl Emitter<'_> {
             _ => None,
         };
         let body = module.bodies.get(index).and_then(Option::as_ref);
+        // GEN-2: a temporal function or candidate with generic
+        // parameters is written once for each set of generic arguments
+        // the program calls it with, and not at all where it calls it
+        // with none.
+        if instanced(program, self.module, index) {
+            let candidate = declaration.kind.candidate().is_some();
+            if candidate
+                && !self
+                    .candidates
+                    .insert(self.definition_name(self.module, index))
+            {
+                self.unsupported(
+                    declaration.at,
+                    "a candidate with the parameter types of another of its module",
+                );
+                return;
+            }
+            // Each instance is a piece of its own: one with a form
+            // that is not written is left out, and the others are not.
+            let instances = self.instances;
+            for instance in instances.declared(self.module, index) {
+                let python = self.instance_name(self.module, index, &instance.suffix);
+                self.node_or_graph(index, &python, &instance.signature, &instance.body);
+                let piece = self.close();
+                self.instanced.push((index, instance.suffix.clone(), piece));
+            }
+            return;
+        }
         match (declaration.kind, signature, body) {
             (DeclarationKind::Function(Role::Value), Some(signature), Some(body)) => {
                 self.value_function(index, signature, body);
@@ -618,17 +716,16 @@ impl Emitter<'_> {
                 }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
-                self.node_or_graph(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                self.node_or_graph(index, &python, signature, body);
             }
             // GEN-4: "An `impl fn` is a temporal candidate of the
             // operator it names". It is a node or a graph as a temporal
             // function is, under a name of the target's.
             (DeclarationKind::Implementation(Role::Temporal, _), Some(signature), Some(body)) => {
-                if self
-                    .candidates
-                    .insert(self.definition_name(self.module, index))
-                {
-                    self.node_or_graph(index, signature, body);
+                let python = self.definition_name(self.module, index);
+                if self.candidates.insert(python.clone()) {
+                    self.node_or_graph(index, &python, signature, body);
                 } else {
                     self.unsupported(
                         declaration.at,
@@ -654,16 +751,63 @@ impl Emitter<'_> {
     }
 
     /// A temporal function or a temporal candidate, the declaration
-    /// `index` of the module: a node where its body is a runtime one,
-    /// and a graph where it is composition (FN-3).
-    fn node_or_graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+    /// `index` of the module, as the Python function `python`: a node
+    /// where its body is a runtime one, and a graph where it is
+    /// composition (FN-3). `signature` and `body` are the declaration's
+    /// own, or an instance's.
+    fn node_or_graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let module = &program.modules[self.module];
         match module.phases.get(index).copied().flatten() {
-            Some(Phase::Node) => self.node(index, signature, body),
-            Some(Phase::Graph) => self.graph(index, signature, body),
+            Some(Phase::Node) => self.node(index, python, signature, body),
+            Some(Phase::Graph) => self.graph(index, python, signature, body),
             None => self.unsupported(module.declarations[index].at, "this function"),
         }
+    }
+
+    /// The Python name of an instance of `declaration` of `module`:
+    /// `_inst_`, the name the declaration would have, and the
+    /// instance's generic arguments. The `_` first makes the name the
+    /// target's own.
+    fn instance_name(&self, module: usize, declaration: usize, suffix: &str) -> String {
+        format!(
+            "_inst_{}__{suffix}",
+            self.definition_name(module, declaration)
+        )
+    }
+
+    /// The Python name of what a call of `declaration` of `module`
+    /// calls: the function, or for a declaration written by instance,
+    /// its instance for the call's generic arguments `generics`.
+    fn called_name(
+        &mut self,
+        (module, declaration): (usize, usize),
+        generics: &[GenericArgument],
+        at: Location,
+    ) -> String {
+        let program = self.program;
+        if !instanced(program, module, declaration) {
+            return self.function_name(module, declaration);
+        }
+        let instances = self.instances;
+        let Some(instance) = instances.find(program, (module, declaration), generics) else {
+            self.unsupported(
+                at,
+                "a call of a generic temporal function with generic arguments that are not known",
+            );
+            return "None".to_string();
+        };
+        let python = self.instance_name(module, declaration, &instance.suffix);
+        self.piece
+            .uses
+            .insert((module, declaration, Some(instance.suffix.clone())));
+        if module == self.module {
+            return python;
+        }
+        let path = program.modules[module].path.clone();
+        let named = format!("{}.{python}", alias(&path));
+        self.imports.insert(path);
+        named
     }
 
     /// `const name: T = expression`, the declaration `index` of the
@@ -793,7 +937,7 @@ impl Emitter<'_> {
     fn type_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
-        self.piece.uses.insert((module, declaration));
+        self.piece.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
@@ -906,9 +1050,6 @@ impl Emitter<'_> {
         declaration: &Declaration,
         signature: &Signature,
     ) -> (Vec<String>, Option<String>) {
-        if !signature.generics.is_empty() {
-            self.unsupported(declaration.at, "a generic temporal function");
-        }
         let mut parameters = Vec::new();
         for parameter in &signature.parameters {
             // A `const` parameter's default is written where a call
@@ -955,7 +1096,7 @@ impl Emitter<'_> {
     /// `state` is a field of the node's `STATE`, given its value in the
     /// node's `start`. TIME-7: `inject out` is the node's own output,
     /// hgraph's `_output`.
-    fn node(&mut self, index: usize, signature: &Signature, body: &Body) {
+    fn node(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
         let function = Function {
@@ -1098,7 +1239,6 @@ impl Emitter<'_> {
         if valid.len() != inputs.len() && !handlers.is_empty() {
             options.push(format!("valid={}", names(&valid)));
         }
-        let python = self.definition_name(self.module, index);
         let decorator = if result.is_some() {
             "compute_node"
         } else {
@@ -1214,10 +1354,9 @@ impl Emitter<'_> {
     }
 
     /// A graph: `@graph`, whose body wires the nodes it calls.
-    fn graph(&mut self, index: usize, signature: &Signature, body: &Body) {
+    fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
-        let python = self.definition_name(self.module, index);
         let function = Function {
             locals: &body.locals,
             signature: Some(signature),
@@ -2605,7 +2744,7 @@ impl Emitter<'_> {
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = self.definition_name(module, declaration);
-        self.piece.uses.insert((module, declaration));
+        self.piece.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
@@ -2637,7 +2776,18 @@ impl Emitter<'_> {
                 generics,
                 ..
             } => (*module, *declaration, generics, true),
-            Callee::Required { .. } | Callee::Unread => {
+            // GEN-16: in an instance this is the call of the candidate
+            // that answers the requirement. It is left where nothing
+            // answers, and in a value function with generic parameters,
+            // which is written once and not by instance.
+            Callee::Required { .. } => {
+                self.unsupported(
+                    at,
+                    "an operation a generic declaration requires, with no candidate selected for it",
+                );
+                return "None".to_string();
+            }
+            Callee::Unread => {
                 self.unsupported(at, "this call");
                 return "None".to_string();
             }
@@ -2731,7 +2881,7 @@ impl Emitter<'_> {
             self.unsupported(at, &format!("a call of `{}`", declared.name));
             return "None".to_string();
         }
-        let python = self.function_name(module, declaration);
+        let python = self.called_name((module, declaration), generics, at);
         let arguments = self.arguments(function, (module, declaration), signature, arguments);
         format!("{python}({arguments})")
     }
@@ -2749,6 +2899,7 @@ impl Emitter<'_> {
                 Callee::Function {
                     module,
                     declaration,
+                    generics,
                     ..
                 },
             arguments,
@@ -2794,7 +2945,7 @@ impl Emitter<'_> {
                 format!("_harness.evaluate({node}, {})", given.join(", "))
             };
         }
-        let target = self.function_name(*module, *declaration);
+        let target = self.called_name((*module, *declaration), generics, call.at);
         let mut arguments = self.arguments(function, (*module, *declaration), signature, arguments);
         if let Some(config) = config {
             if !arguments.is_empty() {
@@ -2941,7 +3092,7 @@ fn canonical(program: &Program, ty: &Type) -> Option<String> {
 }
 
 /// A generic argument as [`canonical`] text.
-fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
+pub(crate) fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
     match argument {
         GenericArgument::Type(ty) => canonical(program, ty),
         GenericArgument::Constant(constant) => canonical_constant(constant),
