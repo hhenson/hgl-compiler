@@ -2045,18 +2045,23 @@ impl<'a> Typer<'a> {
     }
 
     /// A property of a delta that is a type of its own (TYPE-16):
-    /// `change.added`, of a set's delta. The properties of a
-    /// dictionary's and of a struct's delta are proposed, and are not
-    /// read.
+    /// `change.added`, of a set's delta, and `change.updated`, of a
+    /// dictionary's. The properties of a struct's delta are proposed,
+    /// and are not read.
     fn delta_property(&mut self, base: Expr, name: &SyntaxToken, of: &Type) -> (ExprKind, Type) {
-        let Type::Set(_) = of else {
+        let Some(properties) = delta_properties(of) else {
             return (ExprKind::Unread, Type::Unknown);
         };
-        // The properties, in the order the rule names them.
-        let Some(member) = ["added", "removed"]
+        let member = properties
             .iter()
-            .position(|property| *property == name.text())
-        else {
+            .position(|(property, _)| *property == name.text());
+        let Some(member) = member else {
+            let [(first, _), (second, _)] = &properties;
+            let what = if matches!(of, Type::Set(_)) {
+                "a set's"
+            } else {
+                "a dictionary's"
+            };
             self.diagnostics.emit(
                 error(
                     Category::Name,
@@ -2065,16 +2070,92 @@ impl<'a> Typer<'a> {
                     format!("`{}` has no property `{}`", base.ty, name.text()),
                     "TYPE-16",
                 )
-                .with_note("a set's delta has `added` and `removed`"),
+                .with_note(format!("{what} delta has `{first}` and `{second}`")),
             );
             return (ExprKind::Unread, Type::Unknown);
         };
-        let ty = of.clone();
+        let [first, second] = properties;
+        let ty = if member == 0 { first.1 } else { second.1 };
         let kind = ExprKind::Field {
             base: Box::new(base),
             member,
         };
         (kind, ty)
+    }
+
+    /// `delta<set<i64>>(added: [1, 2], removed: [3])`: a delta made
+    /// from its properties.
+    ///
+    /// TYPE-16: "A set's and a dictionary's delta is constructed by its
+    /// properties, by name ... A property left out is empty. A list's
+    /// and a tuple's delta are an ordinary dictionary and tuple, and
+    /// are written as those are." The constructor of a struct's delta
+    /// is proposed, and is not read; neither is one of a type that has
+    /// no delta of its own.
+    fn delta_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
+        let Some(list) = child(node, SyntaxKind::ArgList) else {
+            return (ExprKind::Unread, Type::Unknown);
+        };
+        // The delta is recorded where the constructor starts.
+        let written = self.written.get(&(self.file, node.span().start)).copied();
+        let properties = match written {
+            Some(Type::Delta(of)) => delta_properties(of),
+            _ => None,
+        };
+        let (Some(ty), Some(properties)) = (written, properties) else {
+            return self.unread_call(&list);
+        };
+        let ty = ty.clone();
+        let mut given = [false; 2];
+        let mut arguments = Vec::new();
+        for (name, value) in self.call_arguments(&list) {
+            let position = name.as_ref().and_then(|name| {
+                properties
+                    .iter()
+                    .position(|(property, _)| *property == name.text())
+            });
+            let Some(position) = position else {
+                // A name that is no property of the delta. An argument
+                // with no name has none to report.
+                if let Some(name) = &name {
+                    let [(first, _), (second, _)] = &properties;
+                    self.diagnostics.emit(
+                        error(
+                            Category::Name,
+                            codes::DELTA_ARGUMENT_NAME,
+                            Location::new(self.file, name.span()),
+                            format!("`{ty}` has no property `{}`", name.text()),
+                            "TYPE-16",
+                        )
+                        .with_note(format!("it has `{first}` and `{second}`")),
+                    );
+                }
+                arguments.push(hir::Argument {
+                    parameter: None,
+                    value: self.expression(&value, Some(&Type::Unknown)),
+                });
+                continue;
+            };
+            if std::mem::replace(&mut given[position], true)
+                && let Some(name) = &name
+            {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::DELTA_DUPLICATE_ARGUMENT,
+                    Location::new(self.file, name.span()),
+                    format!("`{}` is given twice", name.text()),
+                    "TYPE-16",
+                ));
+            }
+            let (property, expected) = &properties[position];
+            let read = self.expression(&value, Some(expected));
+            let place = format!("the property `{property}`");
+            arguments.push(hir::Argument {
+                parameter: Some(position),
+                value: self.fit(read, expected, &place),
+            });
+        }
+        (ExprKind::Delta { arguments }, ty)
     }
 
     /// What a place reaches into that takes no assignment, and the rule
@@ -2235,6 +2316,7 @@ impl<'a> Typer<'a> {
             SyntaxKind::BinaryExpr => self.binary(node, expected),
             SyntaxKind::CallExpr => self.call(node, expected),
             SyntaxKind::TypedConstructor => self.typed_constructor(node, expected),
+            SyntaxKind::DeltaConstructor => self.delta_constructor(node),
             SyntaxKind::UndecidedConstructor => {
                 // GEN-14: the resolver decided what the node is. One
                 // that is comparisons is for a later part.
@@ -2372,7 +2454,7 @@ impl<'a> Typer<'a> {
                     _ => given,
                 }
             }
-            ExprKind::Construct { arguments, .. } => {
+            ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
                 all(&mut arguments.iter().map(|argument| &argument.value))
             }
             ExprKind::Unary { operand, .. } => self.category(operand),
@@ -12253,6 +12335,29 @@ fn is_least_magnitude(node: &SyntaxNode) -> bool {
             token.kind() == SyntaxKind::Int
                 && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
         })
+}
+
+/// The two properties of the delta of `of`, each with its type, in the
+/// order TYPE-16 names them: "`set<K>`: ... the properties `added` and
+/// `removed`, each a `set<K>`"; "`dict<K, V>`: ... the properties
+/// `updated`, a `dict<K, delta<V>>` of each key added or changed with
+/// its delta, and `removed`, a `set<K>`". `None` for a type whose delta
+/// has none this pass reads: a struct's are proposed.
+fn delta_properties(of: &Type) -> Option<[(&'static str, Type); 2]> {
+    match of {
+        Type::Set(_) => Some([("added", of.clone()), ("removed", of.clone())]),
+        Type::Dict { key, value } => Some([
+            (
+                "updated",
+                Type::Dict {
+                    key: key.clone(),
+                    value: Box::new(Type::delta((**value).clone())),
+                },
+            ),
+            ("removed", Type::Set(key.clone())),
+        ]),
+        _ => None,
+    }
 }
 
 /// True for a type that is a temporal shape and no ordinary value
