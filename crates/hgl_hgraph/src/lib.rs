@@ -33,7 +33,7 @@
 //! | A value function given a connection in a graph | A node of its own that calls it (FN-6) |
 //! | A named test | A function `test_name` |
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
-//! | `eval(target, input: [7, _, 9])` | `_harness.evaluate(target, input=[7, None, 9])` |
+//! | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!

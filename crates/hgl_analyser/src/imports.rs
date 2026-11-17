@@ -37,12 +37,41 @@ fn find_modules(program: &mut Program, diagnostics: &mut Diagnostics) {
         .enumerate()
         .map(|(index, module)| (module.path.clone(), index))
         .collect();
+    // UNIT-14: "no `use` names" an application.
+    let applications: HashSet<usize> = program
+        .modules
+        .iter()
+        .enumerate()
+        .filter(|(_, module)| module.application)
+        .map(|(index, _)| index)
+        .collect();
     // The `use` lines already reported, by where their path is written.
     let mut reported: HashSet<Location> = HashSet::new();
     for module in &mut program.modules {
         for file in &mut module.files {
             for import in &mut file.imports {
                 import.module = positions.get(&import.from).copied();
+                // An application is imported from as no module is: the
+                // names of the line are bound to nothing.
+                if import
+                    .module
+                    .is_some_and(|found| applications.contains(&found))
+                {
+                    import.module = None;
+                    if reported.insert(import.from_at) {
+                        diagnostics.emit(
+                            error(
+                                Category::Module,
+                                codes::APPLICATION_IMPORT,
+                                import.from_at,
+                                format!("`{}` is an application, and is not imported", import.from),
+                                "UNIT-14",
+                            )
+                            .with_note("an application's declarations are private to it"),
+                        );
+                    }
+                    continue;
+                }
                 // `insert` is true the first time a value is added.
                 if import.module.is_none() && reported.insert(import.from_at) {
                     diagnostics.emit(

@@ -290,10 +290,10 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         // TST-5: a cell written `null` is a published null. One
         // written as the delta is that delta, in a block as outside it.
         "test nulls {\n",
-        "    assert eval(cleared, command: [0, 2]) == [null, 2]\n",
-        "    assert eval(relayed, value: [null, _, 3]) == [null, _, 3]\n",
-        "    assert eval(cleared, command: [1, 2]) == [delta<i64?>(), 2]\n",
-        "    assert eval(cleared, command: [1, 0]) == [{ delta<i64?>() }, (null)]\n",
+        "    assert eval(cleared(command: [0, 2])) == [null, 2]\n",
+        "    assert eval(relayed(value: [null, _, 3])) == [null, _, 3]\n",
+        "    assert eval(cleared(command: [1, 2])) == [delta<i64?>(), 2]\n",
+        "    assert eval(cleared(command: [1, 0])) == [{ delta<i64?>() }, (null)]\n",
         "}\n",
     ));
     assert_eq!(

@@ -54,9 +54,9 @@ fn an_assert_takes_a_wiring_time_bool() {
         "    assert bound == 3\n",
         "    assert limit() > 2 && bound < 10\n",
         // A trace is compared by the harness (TST-4).
-        "    assert eval(forward, value: [7, _, 9]) == [7, _, 9]\n",
-        "    assert eval(forward, value: [_, _]) == []\n",
-        "    let outcome = eval(forward, value: [1])\n",
+        "    assert eval(forward(value: [7, _, 9])) == [7, _, 9]\n",
+        "    assert eval(forward(value: [_, _])) == []\n",
+        "    let outcome = eval(forward(value: [1]))\n",
         "    assert outcome == []\n",
         // The block of a `raises` sees the test's locals.
         "    assert raises(\"value.missing_key\") {\n",

@@ -23,8 +23,11 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         declarations: Vec::new(),
         tests: Vec::new(),
         instantiations: Vec::new(),
+        application: module.application,
+        runs: Vec::new(),
         diagnostics,
     };
+    let mut run_omitted = false;
     for (index, file) in module.files.iter_mut().enumerate() {
         let omit = omits[index];
         // UNIT-2: imports precede declarations. Once a declaration has
@@ -32,6 +35,11 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         let mut declaration_seen = false;
         for item in file.syntax.items() {
             if omit.contains(&item.syntax().span()) {
+                // TST-13: what is left out is no part of the program. A
+                // run statement left out is still the one its
+                // application has: the application is not then one
+                // with none.
+                run_omitted |= matches!(item, Item::Run(_));
                 continue;
             }
             match item {
@@ -59,6 +67,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
             }
         }
     }
+    check_runs(module, &walk.runs, run_omitted, walk.diagnostics);
     module.declarations = walk.declarations;
     module.tests = walk.tests;
     module.instantiations = walk.instantiations;
@@ -66,6 +75,66 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     bind_native_implementations(module, diagnostics);
     bind_native_candidates(module, diagnostics);
     check_tests(module, diagnostics);
+}
+
+/// UNIT-14: an application holds "one run statement", and "a module
+/// holds none". `runs` is where the word of each run statement of the
+/// unit is written, in file order and then source order.
+/// `run_omitted` is true when a run statement of the unit is left out
+/// of the program (TST-13).
+fn check_runs(
+    module: &Module,
+    runs: &[Location],
+    run_omitted: bool,
+    diagnostics: &mut Diagnostics,
+) {
+    if !module.application {
+        // RUN-3: "`eval` is written in a test and in an application;
+        // `run` in an application."
+        for &at in runs {
+            diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::RUN_POSITION,
+                    at,
+                    "a run statement stands in a module".to_string(),
+                    "RUN-3",
+                )
+                .with_note("an application runs an entry: a file headed `application name`"),
+            );
+        }
+        return;
+    }
+    match runs {
+        // The one it has is left out (TST-13).
+        [] if run_omitted => {}
+        [] => {
+            // "the application's path": where its file writes it.
+            if let Some(at) = module.application_at() {
+                diagnostics.emit(error(
+                    Category::Module,
+                    codes::APPLICATION_RUN_COUNT,
+                    at,
+                    format!("application `{}` has no run statement", module.path),
+                    "UNIT-14",
+                ));
+            }
+        }
+        [first, later @ ..] => {
+            for &at in later {
+                diagnostics.emit(
+                    error(
+                        Category::Module,
+                        codes::APPLICATION_RUN_COUNT,
+                        at,
+                        format!("application `{}` has a second run statement", module.path),
+                        "UNIT-14",
+                    )
+                    .with_related(*first, "the first is here"),
+                );
+            }
+        }
+    }
 }
 
 /// The bytes of a node's first token: the keyword a declaration starts
@@ -112,6 +181,10 @@ struct Walk<'a> {
     declarations: Vec<Declaration>,
     tests: Vec<Test>,
     instantiations: Vec<(usize, SyntaxNode)>,
+    /// True when the unit walked is an application (UNIT-14).
+    application: bool,
+    /// Where the word of each run statement is written.
+    runs: Vec<Location>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -126,6 +199,19 @@ impl Walk<'_> {
         let (name, kind, export) = match item {
             // TST-1: a context holds no import. The parser has said so.
             Item::Use(_) => return,
+            // RUN-1: a run statement declares nothing. Its word is kept
+            // for the count of them (UNIT-14). One in a test context
+            // has been rejected by the parser (TST-1).
+            Item::Run(run) => {
+                if !in_test {
+                    let span = match run.word() {
+                        Some(word) => word.span(),
+                        None => first_token_span(&syntax),
+                    };
+                    self.runs.push(Location::new(file, span));
+                }
+                return;
+            }
             // GEN-8: `instantiate` requests candidates and declares
             // nothing. It is kept for the names it uses. One in a test
             // context has been rejected by the parser (TST-1).
@@ -233,11 +319,28 @@ impl Walk<'_> {
                 ));
             }
         }
+        // UNIT-14: "Its declarations are private: an application
+        // exports nothing".
+        if self.application
+            && !in_test
+            && let Some(export) = &export
+        {
+            self.diagnostics.emit(error(
+                Category::Module,
+                codes::APPLICATION_EXPORT,
+                Location::new(file, export.span()),
+                format!(
+                    "`{}` is declared in an application, which exports nothing",
+                    name.text()
+                ),
+                "UNIT-14",
+            ));
+        }
         self.declarations.push(Declaration {
             name: name.text().to_string(),
             at,
             kind,
-            exported: export.is_some() && !in_test,
+            exported: export.is_some() && !in_test && !self.application,
             test_only: in_test,
             file: index,
             syntax,

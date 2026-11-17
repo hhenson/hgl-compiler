@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_parser::HasSpan;
 use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_source::Span;
@@ -23,6 +23,8 @@ struct Entry<'a> {
     part_at: Option<Location>,
     /// The file's `omit` list.
     omit: &'a [Span],
+    /// True for the file of an application (UNIT-14).
+    application: bool,
 }
 
 /// Builds the program's modules, each with its files and nothing else
@@ -42,18 +44,21 @@ pub(crate) fn assemble<'a>(
             continue;
         };
         // A file with no module line, or none the parser could read, is
-        // in no module. The parser has reported it (UNIT-1).
-        let Some(header) = source.module_decl() else {
-            continue;
+        // in no module. The parser has reported it (UNIT-1). UNIT-14:
+        // an application's file is headed `application name`, and has
+        // no parts.
+        let (path, part, application) = match (source.module_decl(), source.application_decl()) {
+            (Some(header), _) => (header.path(), header.part(), false),
+            (None, Some(header)) => (header.path(), None, true),
+            (None, None) => continue,
         };
-        let Some(path) = header.path() else {
+        let Some(path) = path else {
             continue;
         };
         let dotted = path.dotted();
         if dotted.is_empty() {
             continue;
         }
-        let part = header.part();
         by_path.entry(dotted).or_default().push(Entry {
             path_at: Location::new(parsed.file, path.syntax().span()),
             part_at: part
@@ -66,6 +71,7 @@ pub(crate) fn assemble<'a>(
                 syntax: source,
             },
             omit: &parsed.omit,
+            application,
         });
     }
 
@@ -76,10 +82,32 @@ pub(crate) fn assemble<'a>(
         // before `Some`. The sort is stable, so files that tie keep the
         // order they were given in; they are the ones reported below.
         entries.sort_by(|left, right| left.file.part.cmp(&right.file.part));
-        check_parts(&path, &entries, diagnostics);
+        if entries.len() > 1 && entries.iter().any(|entry| entry.application) {
+            // UNIT-14: "An application's path is no module's and no
+            // other application's." Every file of the path but its
+            // first is reported and left out: the unit is its first
+            // file, and what the others hold is no part of it.
+            for later in &entries[1..] {
+                diagnostics.emit(
+                    Diagnostic::error(
+                        Category::Module,
+                        Code::Local(codes::local::APPLICATION_DUPLICATE_PATH),
+                        later.path_at,
+                        format!("`{path}` is the path of an application, and of this file too"),
+                    )
+                    .with_rule("UNIT-14")
+                    .with_related(entries[0].path_at, "the other is here"),
+                );
+            }
+            entries.truncate(1);
+        } else {
+            check_parts(&path, &entries, diagnostics);
+        }
         omits.push(entries.iter().map(|entry| entry.omit).collect());
+        let application = entries.first().is_some_and(|entry| entry.application);
         program.modules.push(Module {
             path,
+            application,
             files: entries.into_iter().map(|entry| entry.file).collect(),
             declarations: Vec::new(),
             tests: Vec::new(),

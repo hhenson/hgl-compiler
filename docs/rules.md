@@ -114,6 +114,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-13 | parser | done | `constant_decl`: `const name: T = expression`, with `export` before it. `const` before a name begins a constant, and before `fn` a function. The type and the value are both written, the value on the declaration's line |
 | UNIT-13 | analyser | planned | A constant's type and expression; a constant read by its name; `constant.cycle` |
 | UNIT-13 | transpiler | planned | A constant as a value of the target |
+| UNIT-14 | parser | done | `application_decl`: a file is headed `module name` or `application name`. `run_statement`: `run(...)` or `eval(...)` where an item starts, with the arguments of an eval |
+| UNIT-14 | analyser | partial | An application is a unit of its own, holding what a module holds. It exports nothing (`application.export`), no `use` names one (`application.import`), and it has one run statement (`application.run_count`). Its path is no other file's: the first file of the path is the unit and each later one is reported, under the compiler's own code `application.duplicate_path`. Left: a run statement that a declaration follows |
+| UNIT-14 | transpiler | planned | An application as a program of the target |
 
 ## Types and values
 
@@ -363,7 +366,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-4 | analyser | partial | An `assert` takes a `bool` (`type.mismatch`) that is no connection (`connection.as_constant`). `==` and `!=` with a trace are the harness's own comparison, a `bool`, selected through no operator; the other side is a trace of the same cells |
 | TST-4 | transpiler | partial | hgraph: two dense traces are compared by the target's harness, cell by cell, a set's delta by what it added and what it removed, and a placeholder at the end of either adds nothing (TST-6). Left: the mismatch report, which says only that the assertion does not hold |
 | TST-4 | runner | planned | Harness comparison and the mismatch report |
-| TST-5 | analyser | partial | An eval's first argument names a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). Its other arguments are bound as a call's are: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. Left: a generic target given structural cells |
+| TST-5 | parser | done | `eval_expression`: a call and then a run configuration, neither with a label |
+| TST-5 | analyser | partial | An eval's first argument is a call of a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value). The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace, each cell read as the `delta<T>` of the parameter's type. A generic target's parameters are found from the cells. A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`). A second argument is a `RunConfig` of core's, and an eval takes no third. Left: a generic target given structural cells |
 | TST-6 | transpiler | partial | hgraph: a generated test gives each input its dense trace, a step a cell, and the harness ends the result at its last publication, empty where there was none. Core's eight scalar cases pass on hgraph 0.8.19 when run by hand. Left: timed traces; a published null |
 | TST-6 | runner | planned | Dense traces: positions, `_` placeholders, a result ending at its last publication |
 | TST-7 | analyser | partial | A timed trace's keys are all durations or all datetimes; constant duration keys strictly increase (`trace.key_order`); it has no `_` (`trace.placeholder`); an eval's traces and its expectation are of one style (`trace.style`). Left: the order of datetime keys, which are not evaluated |
@@ -392,9 +396,11 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
-| RUN-1 | analyser | planned | An entry is an exported temporal function with no temporal parameters |
+| RUN-1 | parser | done | `run_expression`: `run`, a call, and then a run configuration |
+| RUN-1 | analyser | planned | A run statement's call is of an entry, a temporal function with no temporal parameters (`run.entry`), and its configuration a `RunConfig` |
 | RUN-2 | driver | planned | Entry selection; arguments, interfaces and providers checked before start |
-| RUN-3 | transpiler | planned | Mode, clock, start and end come from run configuration |
+| RUN-3 | analyser | partial | A run statement stands in no module (`run.position`). Left: `run` written in a test |
+| RUN-3 | transpiler | planned | The word of a run statement is its mode; start and end come from its configuration |
 | RUN-4 | transpiler | planned | Independent instantiations; lifecycle order; teardown after failure |
 | RUN-5 | optimiser | planned | No pass changes an observable trace, effect, failure or cleanup |
 | RUN-5 | transpiler | planned | The generated program gives the same observations |

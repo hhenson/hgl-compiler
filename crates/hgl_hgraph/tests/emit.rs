@@ -151,10 +151,10 @@ const DEMO: &str = concat!(
     "}\n",
     "\n",
     "test scales {\n",
-    "    let seen = eval(wired, value: [1, _, 2])\n",
+    "    let seen = eval(wired(value: [1, _, 2]))\n",
     "    assert seen == [1, _, 12]\n",
-    "    assert eval(scaled, value: [5], factor: 2) != []\n",
-    "    eval(sink, value: [true])\n",
+    "    assert eval(scaled(value: [5], factor: 2)) != []\n",
+    "    eval(sink(value: [true]))\n",
     "}\n",
 );
 
@@ -283,21 +283,21 @@ const ENDPOINTS: &str = concat!(
     "}\n",
     "\n",
     "test silence_preserves_validity {\n",
-    "    assert eval(watched_valid,\n",
+    "    assert eval(watched_valid(\n",
     "                watched: [_, 7, _, _],\n",
-    "                probe: [true, true, true, true]) == [false, true, true, true]\n",
+    "                probe: [true, true, true, true])) == [false, true, true, true]\n",
     "}\n",
     "\n",
     "test equal_publication_is_modified_and_idle_is_not {\n",
-    "    assert eval(watched_modified,\n",
+    "    assert eval(watched_modified(\n",
     "                watched: [_, 7, _, 7],\n",
-    "                probe: [true, true, true, _]) == [false, true, false, true]\n",
+    "                probe: [true, true, true, _])) == [false, true, false, true]\n",
     "}\n",
     "\n",
     "test retained_value_is_read_without_a_new_tick {\n",
-    "    assert eval(sample_on_probe,\n",
+    "    assert eval(sample_on_probe(\n",
     "                watched: [_, 7, _, _, 9, _],\n",
-    "                probe: [true, _, true, true, _, true]) == [_, _, 7, 7, _, 9]\n",
+    "                probe: [true, _, true, true, _, true])) == [_, _, 7, 7, _, 9]\n",
     "}\n",
     "\n",
     "fn produce(command: i64) -> i64 {\n",
@@ -315,7 +315,7 @@ const ENDPOINTS: &str = concat!(
     "fn observe(command: i64) -> bool => watch(produce(command))\n",
     "\n",
     "test publish_invalidate_recover {\n",
-    "    assert eval(observe, command: [7, 0, 0, 7]) == [true, false, _, true]\n",
+    "    assert eval(observe(command: [7, 0, 0, 7])) == [true, false, _, true]\n",
     "}\n",
     "\n",
     "fn publish_value(value: i64) -> i64 {\n",
@@ -330,9 +330,9 @@ const ENDPOINTS: &str = concat!(
     "    read_modified(publish_value(value), probe)\n",
     "\n",
     "test equal_publications_are_modified {\n",
-    "    assert eval(observe_modified,\n",
+    "    assert eval(observe_modified(\n",
     "                value: [_, 7, _, 7],\n",
-    "                probe: [true, true, true, true]) == [false, true, false, true]\n",
+    "                probe: [true, true, true, true])) == [false, true, false, true]\n",
     "}\n",
     "\n",
     "fn two_handlers(a: i64, b: i64) -> i64 {\n",
@@ -345,7 +345,7 @@ const ENDPOINTS: &str = concat!(
     "}\n",
     "\n",
     "test handlers_in_order {\n",
-    "    assert eval(two_handlers, a: [1, 9, _, 9], b: [_, _, 3, 4]) == [_, _, 3, 9]\n",
+    "    assert eval(two_handlers(a: [1, 9, _, 9], b: [_, _, 3, 4])) == [_, _, 3, 9]\n",
     "}\n",
 );
 
@@ -430,7 +430,7 @@ const MODULES: [(&str, &str); 3] = [
             "}\n",
             "\n",
             "test keeps {\n",
-            "    assert eval(kept, value: [5, 6], first: 9) == [10, 6]\n",
+            "    assert eval(kept(value: [5, 6], first: 9)) == [10, 6]\n",
             "    assert chosen(1) == 102\n",
             "}\n",
         ),
@@ -490,9 +490,9 @@ const SELECTORS: &str = concat!(
     "}\n",
     "\n",
     "test selectors {\n",
-    "    assert eval(both_valid, a: [1, _], b: [_, 2], c: []) == [_, 3]\n",
-    "    assert eval(repeated, a: [1, _, 3], b: [_, 2, _]) == [_, 2, 3]\n",
-    "    assert eval(recovering, command: [0, 5]) == [1, 5]\n",
+    "    assert eval(both_valid(a: [1, _], b: [_, 2], c: [])) == [_, 3]\n",
+    "    assert eval(repeated(a: [1, _, 3], b: [_, 2, _])) == [_, 2, 3]\n",
+    "    assert eval(recovering(command: [0, 5])) == [1, 5]\n",
     "}\n",
 );
 
@@ -546,9 +546,9 @@ const DEFAULTS: &str = concat!(
     "test defaults {\n",
     "    assert scale(3) == 6\n",
     "    assert scale(3, 5) == 15\n",
-    "    assert eval(offset, value: [1]) == [11]\n",
-    "    assert eval(offset, value: [1], by: 1) == [2]\n",
-    "    assert eval(wired, value: [5]) == [15]\n",
+    "    assert eval(offset(value: [1])) == [11]\n",
+    "    assert eval(offset(value: [1], by: 1)) == [2]\n",
+    "    assert eval(wired(value: [5])) == [15]\n",
     "}\n",
 );
 
@@ -679,8 +679,8 @@ const NAMES: &str = concat!(
     "    assert lambda() + lambda_() + graph() + _kept() + test_me() + float() == 21\n",
     "    assert eight() == 8\n",
     "    assert sized(1, 2) == sized(2, 1)\n",
-    "    assert eval(doubled, value: [4]) == [9]\n",
-    "    assert eval(pass, target: [1]) == [1]\n",
+    "    assert eval(doubled(value: [4])) == [9]\n",
+    "    assert eval(pass(target: [1])) == [1]\n",
     "}\n",
 );
 
@@ -742,7 +742,7 @@ const NESTED: [(&str, &str); 2] = [
             "}\n",
             "test nested {\n",
             "    assert kept() == null\n",
-            "    assert eval(idle, value: [7]) == [1]\n",
+            "    assert eval(idle(value: [7])) == [1]\n",
             "}\n",
         ),
     ),
@@ -759,7 +759,7 @@ const SHADOW: &str = concat!(
     "    when { return value }\n",
     "}\n",
     "test shadows {\n",
-    "    assert eval(pass, value: [1]) == [1]\n",
+    "    assert eval(pass(value: [1])) == [1]\n",
     "}\n",
 );
 
@@ -871,6 +871,44 @@ fn modules_nest_and_empty_forms_have_a_body() {
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
+/// RUN-1, UNIT-14: an eval's run configuration, and an application's
+/// run statement, are not written yet. Each is reported where it is
+/// written, and what the application declares is written all the same.
+#[test]
+fn a_run_configuration_and_an_application_are_reported() {
+    let emitted = emit(&[
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "export fn pass(value: i64) -> i64 {\n",
+                "    when { return value }\n",
+                "}\n",
+                "export fn one() -> i64 => 1\n",
+                "test bounded {\n",
+                "    assert eval(pass(value: [7]), RunConfig()) == [7]\n",
+                "}\n",
+            ),
+        ),
+        (
+            "live.hgl",
+            concat!(
+                "application m.live\n",
+                "use m::{one}\n",
+                "const fn twice(value: i64) -> i64 => value * 2\n",
+                "run(one())\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:35 target.unsupported",
+            "live.hgl:1:13 target.unsupported",
+        ]
+    );
+}
+
 #[test]
 fn a_form_not_written_yet_is_reported() {
     let emitted = emit(&[(
@@ -900,9 +938,9 @@ fn a_form_not_written_yet_is_reported() {
             "const fn packed(rest: ...i64) -> i64 => 1\n",
             "const fn lone(value: i64) -> i64 => value\n",
             "test timed {\n",
-            "    assert eval(pass, value: [0s: 7]) == [0s: 7]\n",
+            "    assert eval(pass(value: [0s: 7])) == [0s: 7]\n",
             "    let wired = pass(7)\n",
-            "    assert eval(lone, value: [1]) == [1]\n",
+            "    assert eval(lone(value: [1])) == [1]\n",
             "}\n",
             "fn chosen(flag: bool, value: i64) -> i64 {\n",
             "    if flag {\n",
@@ -935,7 +973,7 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:37:11 target.unsupported",
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
-            "m.hgl:27:30 target.unsupported",
+            "m.hgl:27:29 target.unsupported",
             "m.hgl:27:42 target.unsupported",
             "m.hgl:28:17 target.unsupported",
         ]
@@ -971,19 +1009,19 @@ const LIFTS: &str = concat!(
     "}\n",
     "\n",
     "test lifts {\n",
-    "    assert eval(doubled, value: [1, _, 3]) == [2, _, 6]\n",
-    "    assert eval(summed, left: [1, _, 3], right: [_, 10]) == [_, 11, 13]\n",
-    "    assert eval(scaled, price: [1.0, _, 3.0, 3.0], factor: [_, 4.0]) ==\n",
+    "    assert eval(doubled(value: [1, _, 3])) == [2, _, 6]\n",
+    "    assert eval(summed(left: [1, _, 3], right: [_, 10])) == [_, 11, 13]\n",
+    "    assert eval(scaled(price: [1.0, _, 3.0, 3.0], factor: [_, 4.0])) ==\n",
     "        [2.0, 4.0, 12.0, 12.0]\n",
-    "    assert eval(half_configured, price: [1.0, 2.0]) == [3.0, 6.0]\n",
-    "    assert eval(defaulted, price: [1.5]) == [3.0]\n",
-    "    assert eval(nested, left: [1, 2], right: [10]) == [23, 25]\n",
-    "    assert eval(twice, left: [1, 2], right: [10]) == [22, 24]\n",
-    "    assert eval(positive, price: [1.0, -1.0]) == [true, false]\n",
-    "    assert eval(fixed, value: [1, 2], factor: 5) == [11, 12]\n",
-    "    assert eval(scale, value: [1.0, _, 3.0], factor: [_, 4.0]) == [2.0, 4.0, 12.0]\n",
-    "    assert eval(watched, value: [1, 2]) == [1, 2]\n",
-    "    assert eval(labelled, value: [1]) == [\"{NAME}\"]\n",
+    "    assert eval(half_configured(price: [1.0, 2.0])) == [3.0, 6.0]\n",
+    "    assert eval(defaulted(price: [1.5])) == [3.0]\n",
+    "    assert eval(nested(left: [1, 2], right: [10])) == [23, 25]\n",
+    "    assert eval(twice(left: [1, 2], right: [10])) == [22, 24]\n",
+    "    assert eval(positive(price: [1.0, -1.0])) == [true, false]\n",
+    "    assert eval(fixed(value: [1, 2], factor: 5)) == [11, 12]\n",
+    "    assert eval(scale(value: [1.0, _, 3.0], factor: [_, 4.0])) == [2.0, 4.0, 12.0]\n",
+    "    assert eval(watched(value: [1, 2])) == [1, 2]\n",
+    "    assert eval(labelled(value: [1])) == [\"{NAME}\"]\n",
     "}\n",
 );
 
@@ -1094,8 +1132,8 @@ const CANDIDATES: &str = concat!(
     "    assert 2.5 != 2\n",
     "    assert blend_(1, 2) == 12\n",
     "    assert blend_(1.5, 2) == 17.0\n",
-    "    assert eval(mixed, count: [2], price: [1.5]) == [4.0]\n",
-    "    assert eval(blended, left: [1, 2], right: [3]) == [13, 23]\n",
+    "    assert eval(mixed(count: [2], price: [1.5])) == [4.0]\n",
+    "    assert eval(blended(left: [1, 2], right: [3])) == [13, 23]\n",
     "}\n",
 );
 
@@ -1269,8 +1307,8 @@ const DIVISION: &str = concat!(
     "    assert 1.0 % (1.0 / 0.0) == 1.0\n",
     "    assert -1.0 % (1.0 / 0.0) == -1.0\n",
     "    assert 1.0 % (-1.0 / 0.0) == 1.0\n",
-    "    assert eval(ratios, a: [6.0, 1.0], b: [4.0]) == [1.5, 0.25]\n",
-    "    assert eval(halves, a: [3]) == [1.5]\n",
+    "    assert eval(ratios(a: [6.0, 1.0], b: [4.0])) == [1.5, 0.25]\n",
+    "    assert eval(halves(a: [3])) == [1.5]\n",
     "}\n",
 );
 
@@ -1385,7 +1423,7 @@ const RESULTS: &str = concat!(
     "    assert plain(\"no\") == plain(\"no\")\n",
     // EXPR-2: the failure met first is the one written first.
     "    assert met() == \"code\"\n",
-    "    assert eval(ratios, a: [6.0], b: [4.0]) == [1.5]\n",
+    "    assert eval(ratios(a: [6.0], b: [4.0])) == [1.5]\n",
     "}\n",
 );
 
@@ -1396,7 +1434,7 @@ const RESULT_FAILS: &str = concat!(
     "fn ratios(a: f64, b: f64) -> f64 {\n",
     "    when { return checked(a, b)? }\n",
     "}\n",
-    "test node_fails { eval(ratios, a: [6.0], b: [0.0]) }\n",
+    "test node_fails { eval(ratios(a: [6.0], b: [0.0])) }\n",
 );
 
 /// ERR-2: "`ok(value)` constructs a success and `err(value)` a
@@ -1500,7 +1538,7 @@ const CLOSE: &str = concat!(
     "    assert !whole(7, 10, 2.0)\n",
     "    assert mixed(9007199254740993, 9007199254740992.0, 1.0)\n",
     "    assert !mixed(9007199254740993, 9007199254740992.0, 0.5)\n",
-    "    assert eval(closes, a: [1.0, 2.0], b: [1.4]) == [true, false]\n",
+    "    assert eval(closes(a: [1.0, 2.0], b: [1.4])) == [true, false]\n",
     "}\n",
 );
 
@@ -1602,9 +1640,9 @@ const ENUMS: &str = concat!(
     "    assert odd(\"hgl_mro\") == .hgl_mro\n",
     "    assert odd(\"mro\") != odd(\"hgl_mro\")\n",
     "    assert odd(\"name\") == .name\n",
-    "    assert eval(flipped, side: [.buy, _, .sell, .hold]) == [.sell, _, .buy, .hold]\n",
-    "    assert eval(chosen, value: [0, 7], other: .hold) == [.buy, .hold]\n",
-    "    assert eval(fixed, side: [.buy, .hold]) == [false, true]\n",
+    "    assert eval(flipped(side: [.buy, _, .sell, .hold])) == [.sell, _, .buy, .hold]\n",
+    "    assert eval(chosen(value: [0, 7], other: .hold)) == [.buy, .hold]\n",
+    "    assert eval(fixed(side: [.buy, .hold])) == [false, true]\n",
     "}\n",
 );
 
@@ -1808,7 +1846,7 @@ const STRUCTS: [(&str, &str); 2] = [
             "}\n",
             "\n",
             "test walks {\n",
-            "    assert eval(travelled, step: [1.0, _, 2.0]) == [3.0, _, 9.0]\n",
+            "    assert eval(travelled(step: [1.0, _, 2.0])) == [3.0, _, 9.0]\n",
             "}\n",
         ),
     ),
@@ -2072,7 +2110,7 @@ const LOOPS: &str = concat!(
     "    assert nested(true, 5) == 11\n",
     "    assert nested(false, 1) == 20\n",
     "    assert only(4) == 5\n",
-    "    assert eval(running, value: [2, 0, 3]) == [2, 0, 5]\n",
+    "    assert eval(running(value: [2, 0, 3])) == [2, 0, 5]\n",
     "}\n",
 );
 
@@ -2157,7 +2195,7 @@ const SAME_NAMES: [(&str, &str); 2] = [
             "fn kept(side: Side) -> Side {\n",
             "    when { return side }\n",
             "}\n",
-            "test left_sides { assert eval(kept, side: [.buy, .sell]) == [.buy, .sell] }\n",
+            "test left_sides { assert eval(kept(side: [.buy, .sell])) == [.buy, .sell] }\n",
         ),
     ),
     (
@@ -2172,8 +2210,8 @@ const SAME_NAMES: [(&str, &str); 2] = [
             "    when { return value }\n",
             "}\n",
             "test right_sides {\n",
-            "    assert eval(kept, side: [.up, .down]) == [.up, .down]\n",
-            "    assert eval(outcome, value: [.less, .greater, .unordered]) == \
+            "    assert eval(kept(side: [.up, .down])) == [.up, .down]\n",
+            "    assert eval(outcome(value: [.less, .greater, .unordered])) == \
              [.less, .greater, .unordered]\n",
             "}\n",
         ),
@@ -2305,7 +2343,7 @@ const ELEMENTS: &str = concat!(
     "    assert moved.sizes == [\"top\": 1]\n",
     "    assert book.levels == [1.0, 2.0]\n",
     "    assert grid() == [[1, 2], [9, 4]]\n",
-    "    assert eval(tallied, name: [\"a\", \"b\", \"a\"]) == [1, 1, 2]\n",
+    "    assert eval(tallied(name: [\"a\", \"b\", \"a\"])) == [1, 1, 2]\n",
     "}\n",
 );
 
@@ -2398,7 +2436,7 @@ const COMPARE: &str = concat!(
     "    assert both(true, false) == false\n",
     "    assert either(true, false)\n",
     "    assert neither(false)\n",
-    "    assert eval(outcome, lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0]) == [.less, .equivalent, .greater]\n",
+    "    assert eval(outcome(lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0])) == [.less, .equivalent, .greater]\n",
     "}\n",
 );
 
@@ -2471,11 +2509,11 @@ const STOPS: &str = concat!(
     "}\n",
     "\n",
     "test stops {\n",
-    "    assert eval(last_seen, value: [1, 2, 3], scale: 2) == [2, 4, 6]\n",
-    "    assert eval(last_seen, value: [_, _], scale: 2) == []\n",
+    "    assert eval(last_seen(value: [1, 2, 3], scale: 2)) == [2, 4, 6]\n",
+    "    assert eval(last_seen(value: [_, _], scale: 2)) == []\n",
     // The input is never valid: the guard does not hold, and the
     // division is not made.
-    "    assert eval(ends_badly, value: [_, _]) == []\n",
+    "    assert eval(ends_badly(value: [_, _])) == []\n",
     "}\n",
 );
 
@@ -2489,7 +2527,7 @@ const STOP_FAILS: &str = concat!(
     "        if valid(value) { ended = value // 0 }\n",
     "    }\n",
     "}\n",
-    "test stop_fails { eval(ends_badly, value: [7]) }\n",
+    "test stop_fails { eval(ends_badly(value: [7])) }\n",
 );
 
 /// TIME-5: "`stop` reads a temporal input under manual admission, as a
@@ -2561,26 +2599,26 @@ const SETS: &str = concat!(
     "}\n",
     "\n",
     "test sets {\n",
-    "    assert eval(members, command: [1, _, 2, 3]) == [\n",
+    "    assert eval(members(command: [1, _, 2, 3])) == [\n",
     "        delta<set<i64>>(added: [1, 2]),\n",
     "        _,\n",
     "        delta<set<i64>>(added: [3], removed: [1]),\n",
     "        delta<set<i64>>(removed: [2])\n",
     "    ]\n",
-    "    assert eval(members, command: [0]) == []\n",
+    "    assert eval(members(command: [0])) == []\n",
     // What a delta adds is a set: its order is not part of it.
-    "    assert eval(members, command: [1]) == [delta<set<i64>>(added: [2, 1])]\n",
+    "    assert eval(members(command: [1])) == [delta<set<i64>>(added: [2, 1])]\n",
     // A delta that removes an element is not one that adds it.
-    "    assert eval(members, command: [1, 3]) != [\n",
+    "    assert eval(members(command: [1, 3])) != [\n",
     "        delta<set<i64>>(added: [1, 2]),\n",
     "        delta<set<i64>>(added: [2])\n",
     "    ]\n",
     // Two writes in one cycle are one delta.
-    "    assert eval(seen, command: [1, 2]) == [\n",
+    "    assert eval(seen(command: [1, 2])) == [\n",
     "        delta<set<i64>>(added: [1]),\n",
     "        delta<set<i64>>(added: [3], removed: [1])\n",
     "    ]\n",
-    "    assert eval(relayed, enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])])\n",
+    "    assert eval(relayed(enabled: [true, _, true], input: [_, delta<set<i64>>(added: [1])]))\n",
     "        == [_, delta<set<i64>>(added: [1])]\n",
     "}\n",
 );
@@ -2595,10 +2633,10 @@ const SET_FAILS: &str = concat!(
     "    }\n",
     "}\n",
     "test removed_is_not_added {\n",
-    "    assert eval(members, command: [1, 2]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]\n",
+    "    assert eval(members(command: [1, 2])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(added: [1])]\n",
     "}\n",
     "test one_more {\n",
-    "    assert eval(members, command: [1]) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]\n",
+    "    assert eval(members(command: [1])) == [delta<set<i64>>(added: [1]), delta<set<i64>>(removed: [1])]\n",
     "}\n",
     // The division is written first, and fails first: the addition
     // after it would overflow.
@@ -2681,11 +2719,11 @@ const GIVEN: &str = concat!(
     "const fn ordered(seen: list<tuple<datetime, i64>>) -> bool => seen[0][0] < seen[1][0]\n",
     "\n",
     "test given {\n",
-    "    assert ticks(eval(pass, value: [7, _, 7, 9])) == 3\n",
-    "    let seen = eval(pass, value: [_, 1, _, 2])\n",
+    "    assert ticks(eval(pass(value: [7, _, 7, 9]))) == 3\n",
+    "    let seen = eval(pass(value: [_, 1, _, 2]))\n",
     "    assert total(seen) == 3\n",
     "    assert ordered(seen)\n",
-    "    assert ticks(eval(pass, value: [_, _])) == 0\n",
+    "    assert ticks(eval(pass(value: [_, _]))) == 0\n",
     "}\n",
 );
 
@@ -2700,7 +2738,7 @@ const GIVEN_FAILS: &str = concat!(
     "    for tick in seen { count += 1 }\n",
     "    return count\n",
     "}\n",
-    "test silence_counted { assert ticks(eval(pass, value: [7, _, 7])) == 3 }\n",
+    "test silence_counted { assert ticks(eval(pass(value: [7, _, 7]))) == 3 }\n",
 );
 
 /// TST-16: "A trace given to a `const fn` is an ordinary value there:
@@ -2751,7 +2789,7 @@ const REACH: [(&str, &str); 3] = [
             "    assert fine(2) == 3\n",
             "}\n",
             "test reaches { assert outer(1) == 2 }\n",
-            "test own { assert eval(lone, value: [0s: 1]) == [0s: 1] }\n",
+            "test own { assert eval(lone(value: [0s: 1])) == [0s: 1] }\n",
             "test across { assert far::relay(1) == 2 }\n",
             "test wrong {\n",
             "    assert fine(1) == 2\n",
@@ -2795,7 +2833,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
         emitted.reported,
         [
             "reach.hgl:5:29 target.unsupported",
-            "reach.hgl:18:37 target.unsupported",
+            "reach.hgl:18:36 target.unsupported",
             "reach.hgl:18:49 target.unsupported",
             "deep.hgl:2:37 target.unsupported",
         ]
@@ -2814,7 +2852,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     );
     assert_eq!(
         emitted.blocked("own"),
-        Some("reach.hgl:18:37 the hgraph target does not write a timed trace yet".to_string())
+        Some("reach.hgl:18:36 the hgraph target does not write a timed trace yet".to_string())
     );
     let (_, direct) = emitted.test("direct");
     assert_eq!(direct.identity(), "reach::direct");

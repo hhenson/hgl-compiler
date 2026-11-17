@@ -74,6 +74,10 @@ ast_nodes! {
     SourceFile,
     /// `module pricing.curves part bootstrap`
     ModuleDecl,
+    /// `application pricing.live`
+    ApplicationDecl,
+    /// `run(heartbeat())` or `eval(heartbeat())` as an item of a file
+    RunStmt,
     /// `pricing.curves`
     ModulePath,
     /// `use pricing.curves::{curve, bump}` or `use pricing.curves as pc`
@@ -168,9 +172,42 @@ impl SourceFile {
         child(&self.syntax)
     }
 
+    /// The `application` line, for the file of an application
+    /// (UNIT-14); `None` for a module's file.
+    pub fn application_decl(&self) -> Option<ApplicationDecl> {
+        child(&self.syntax)
+    }
+
     /// The imports and declarations of the file, in source order.
     pub fn items(&self) -> impl Iterator<Item = Item> {
         self.syntax.children().filter_map(Item::cast)
+    }
+}
+
+impl ApplicationDecl {
+    /// The application's path: `pricing.live`.
+    pub fn path(&self) -> Option<ModulePath> {
+        child(&self.syntax)
+    }
+}
+
+impl RunStmt {
+    /// The `run(...)` or `eval(...)` the statement is: a `RunExpr` or
+    /// an `EvalExpr` node.
+    pub fn form(&self) -> Option<SyntaxNode> {
+        self.syntax.children().next()
+    }
+
+    /// The word of the statement, `run` or `eval`: its mode (RUN-3).
+    pub fn word(&self) -> Option<SyntaxToken> {
+        tokens(&self.form()?).next()
+    }
+
+    /// True for `run(...)`, a run in real time; false for `eval(...)`,
+    /// a simulation (RUN-3).
+    pub fn real_time(&self) -> bool {
+        self.form()
+            .is_some_and(|form| form.kind() == SyntaxKind::RunExpr)
     }
 }
 
@@ -262,6 +299,8 @@ pub enum Item {
     Test(TestDecl),
     /// `test { ... }`
     TestContext(TestContext),
+    /// `run(...)` or `eval(...)`: an application's run statement
+    Run(RunStmt),
 }
 
 impl Item {
@@ -280,6 +319,7 @@ impl Item {
             SyntaxKind::NativeFnDecl => Item::NativeFunction(NativeFnDecl { syntax: node }),
             SyntaxKind::TestDecl => Item::Test(TestDecl { syntax: node }),
             SyntaxKind::TestContext => Item::TestContext(TestContext { syntax: node }),
+            SyntaxKind::RunStmt => Item::Run(RunStmt { syntax: node }),
             _ => return None,
         };
         Some(item)
@@ -299,6 +339,7 @@ impl Item {
             Item::NativeFunction(item) => item.syntax(),
             Item::Test(item) => item.syntax(),
             Item::TestContext(item) => item.syntax(),
+            Item::Run(item) => item.syntax(),
         }
     }
 }

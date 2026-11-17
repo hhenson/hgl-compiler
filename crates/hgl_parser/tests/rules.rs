@@ -895,7 +895,7 @@ fn a_call_or_an_index_that_stands_apart_is_rejected() {
         (Entry::Statements, "let a = g(f (x))", "1:13", call),
         (Entry::Statements, "a.b (c)", "1:5", call),
         (Entry::Statements, "let s = str (x)", "1:13", call),
-        (Entry::Statements, "let e = eval (f, x: [1])", "1:14", call),
+        (Entry::Statements, "let e = eval (f(x: [1]))", "1:14", call),
         (
             Entry::Statements,
             "assert raises (\"x\") { f() }",
@@ -1074,6 +1074,74 @@ fn a_less_than_apart_from_its_name_is_a_comparison() {
     );
 }
 
+// ---- UNIT-14, RUN-1 ----
+
+#[test]
+fn an_application_is_headed_by_its_line_and_holds_a_run_statement() {
+    // UNIT-14: "An application is one file, headed `application name`,
+    // where a module's files are headed `module name`."
+    assert_eq!(
+        accepted(Entry::SourceFile, "application pricing.live\n"),
+        "ApplicationDecl[\"application\" ModulePath[\"pricing\" \".\" \"live\"]]"
+    );
+    // RUN-1: "its run statement is `run(call, config)` or `eval(call,
+    // config)`".
+    assert_eq!(
+        accepted(Entry::SourceFile, "application a\n\nrun(beat())\n"),
+        "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
+         RunStmt[RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
+         ArgList[\"(\" \")\"]]] \")\"]]]"
+    );
+    assert_eq!(
+        accepted(
+            Entry::SourceFile,
+            "application a\n\neval(beat(every: 1s), RunConfig(end: last))\n"
+        ),
+        "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
+         RunStmt[EvalExpr[\"eval\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
+         ArgList[\"(\" Arg[\"every\" \":\" Literal[\"1s\"]] \")\"]]] \",\" \
+         Arg[CallExpr[NameExpr[\"RunConfig\"] ArgList[\"(\" Arg[\"end\" \":\" \
+         NameExpr[\"last\"]] \")\"]]] \")\"]]]"
+    );
+    // LEX-10: `application` and `run` are names elsewhere. A function
+    // may be named either, and is called as any is.
+    let named = accepted(
+        Entry::SourceFile,
+        "module a\n\nfn run() {}\nfn application() { run() }\n",
+    );
+    assert!(
+        named.contains("FnDecl[\"fn\" \"run\"")
+            && named.contains("FnDecl[\"fn\" \"application\"")
+            && named.contains("CallExpr[NameExpr[\"run\"]"),
+        "{named}"
+    );
+    // An application has no parts.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a part one\n"),
+        ["LEX-5 1:15: expected a line break, found `part`"]
+    );
+    // A run statement is one form, and ends its line.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\nrun(beat()) == [1]\n"),
+        ["LEX-5 2:13: expected a line break, found `==`"]
+    );
+    // LEX-27: the `(` of a run touches its word.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\nrun (beat())\n"),
+        ["LEX-27 2:5: a call's `(` directly follows what it calls"]
+    );
+    // TST-5, RUN-1: the arguments have no labels.
+    assert_eq!(
+        rejected(Entry::SourceFile, "application a\nrun(entry: beat())\n").len(),
+        1
+    );
+    // TST-1: a test context holds no run statement.
+    assert_eq!(
+        rejected(Entry::SourceFile, "module a\ntest {\n    run(beat())\n}\n"),
+        ["TST-1 3:5: a test context holds functions, structs, enums and named tests"]
+    );
+}
+
 // ---- UNIT-1 ----
 
 #[test]
@@ -1092,11 +1160,11 @@ fn a_file_opens_with_one_module_line() {
     );
     assert_eq!(
         rejected(Entry::SourceFile, "fn f() {}"),
-        ["UNIT-1 1:1: expected `module`, found `fn`"]
+        ["UNIT-1 1:1: expected `module` or `application`, found `fn`"]
     );
     assert_eq!(
         rejected(Entry::SourceFile, ""),
-        ["UNIT-1 1:1: expected `module`, found end of file"]
+        ["UNIT-1 1:1: expected `module` or `application`, found end of file"]
     );
     assert_eq!(
         rejected(Entry::SourceFile, "module a\nmodule b"),
