@@ -1251,13 +1251,24 @@ const DIVISION: &str = concat!(
     // NUM-12: what IEEE arithmetic makes of the zero divisor.
     "    assert 1.0 // 0.0 > 1.0e308\n",
     "    assert 1.0 % 0.0 != 1.0 % 0.0\n",
-    // NUM-2: an infinite quotient stays one when it is floored, with
+    // NUM-1: "Where an f64 operand is an infinity or NaN and the
+    // divisor is not zero, `//` is the floor of the IEEE quotient and
+    // `%` what IEEE `fmod` gives". An infinite quotient stays one, with
     // the sign of both operands, and has no remainder.
     "    assert (1.0 / 0.0) // 2.0 > 1.0e308\n",
     "    assert (1.0 / 0.0) // -2.0 < -1.0e308\n",
     "    assert (-1.0 / 0.0) // 2.0 < -1.0e308\n",
     "    assert (1.0 / 0.0) // (1.0 / 0.0) != (1.0 / 0.0) // (1.0 / 0.0)\n",
     "    assert (1.0 / 0.0) % 2.0 != (1.0 / 0.0) % 2.0\n",
+    // A finite numerator over an infinity: a zero with the quotient's
+    // sign, which a division by it shows, and "a remainder by an
+    // infinity is the numerator as it is, whatever its sign".
+    "    assert 1.0 // (1.0 / 0.0) == 0.0\n",
+    "    assert 1.0 / (1.0 // (1.0 / 0.0)) > 1.0e308\n",
+    "    assert 1.0 / (-1.0 // (1.0 / 0.0)) < -1.0e308\n",
+    "    assert 1.0 % (1.0 / 0.0) == 1.0\n",
+    "    assert -1.0 % (1.0 / 0.0) == -1.0\n",
+    "    assert 1.0 % (-1.0 / 0.0) == 1.0\n",
     "    assert eval(ratios, a: [6.0, 1.0], b: [4.0]) == [1.5, 0.25]\n",
     "    assert eval(halves, a: [3]) == [1.5]\n",
     "}\n",

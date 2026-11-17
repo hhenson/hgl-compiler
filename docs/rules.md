@@ -415,7 +415,7 @@ the same numeric rules the transpiler rows give.
 | Rule | Stage | State | What the stage does |
 | --- | --- | --- | --- |
 | NUM-1 | analyser | partial | Result types of arithmetic on `i64` and `f64`, and of unary minus, in value functions, through core's candidates. Left: temporal bodies |
-| NUM-1 | transpiler | partial | hgraph: `//` rounds toward negative infinity and `%` has the divisor's sign, for `i64` and with an `f64` operand; `/` of numbers gives an `f64`. Left: durations |
+| NUM-1 | transpiler | partial | hgraph: `//` rounds toward negative infinity and `%` has the divisor's sign, for `i64` and with a finite `f64` operand; where an `f64` operand is an infinity or NaN, `//` is the floor of the IEEE quotient and `%` what IEEE `fmod` gives; `/` of numbers gives an `f64`. Left: durations |
 | NUM-2 | transpiler | done | hgraph: `+`, `-`, `*`, `//` and negation of `i64` raise where the result leaves the signed 64-bit range; float arithmetic is the host's binary64; an `i64` is compared with an `f64` by their exact values |
 | NUM-3 | transpiler | done | hgraph: a zero divisor gives a signed infinity or NaN under `ieee`, NaN under `nan`, and an error with the code `numeric.division_by_zero` under `fail` |
 | NUM-4 | transpiler | done | hgraph: `==` with no tolerance is exact, and with one the symmetric condition, made in exact arithmetic; `!=` is its complement; a tolerance that is not finite and nonnegative is an error |
