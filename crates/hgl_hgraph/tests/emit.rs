@@ -2358,6 +2358,79 @@ fn an_element_is_read_and_assigned_through_the_provider() {
     }
 }
 
+/// `<=>` on numbers, strings and in a graph, and the Boolean operators
+/// called by name.
+const COMPARE: &str = concat!(
+    "module demo.compare\n",
+    "\n",
+    "const fn ordered(lhs: f64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
+    "const fn mixed(lhs: i64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
+    "const fn words(lhs: str, rhs: str) -> CmpResult => lhs <=> rhs\n",
+    "const fn both(lhs: bool, rhs: bool) -> bool => and_(lhs, rhs)\n",
+    "const fn either(lhs: bool, rhs: bool) -> bool => or_(lhs, rhs)\n",
+    "const fn neither(value: bool) -> bool => not_(value)\n",
+    "\n",
+    "fn outcome(lhs: f64, rhs: f64) -> CmpResult => lhs <=> rhs\n",
+    "\n",
+    "test outcomes {\n",
+    "    assert ordered(1.0, 2.0) == .less\n",
+    "    assert ordered(2.0, 1.0) == .greater\n",
+    "    assert ordered(0.0, -0.0) == .equivalent\n",
+    "    assert ordered(0.0 / 0.0, 1.0) == .unordered\n",
+    "    assert ordered(0.0 / 0.0, 0.0 / 0.0) == CmpResult.unordered\n",
+    "    assert mixed(9007199254740993, 9007199254740992.0) == .greater\n",
+    "    assert mixed(1, 1.0) == .equivalent\n",
+    "    assert words(\"a\", \"b\") == .less\n",
+    "    assert (2 <=> 1) == .greater\n",
+    "    assert both(true, false) == false\n",
+    "    assert either(true, false)\n",
+    "    assert neither(false)\n",
+    "    assert eval(outcome, lhs: [1.0, 2.0, 3.0], rhs: [2.0, 2.0, 2.0]) == [.less, .equivalent, .greater]\n",
+    "}\n",
+);
+
+/// NUM-6: "The numeric full-comparison operator `compare_`, selected
+/// by `<=>`, returns an ordinary comparison outcome, a `CmpResult`:
+/// `less`, `equivalent`, `greater`, or `unordered`. A NaN operand
+/// yields `unordered`; equivalent numeric values, including opposite
+/// signed zeros, yield `equivalent`." OPS-3: "Only a numeric
+/// comparison yields `unordered`."
+///
+/// A native candidate that gives an enum gives its member's name, and
+/// the member is read from the enum the program declares: core's
+/// `CmpResult`, through core's module.
+#[test]
+fn a_full_comparison_gives_a_member_of_cores_enum() {
+    let emitted = emit(&[("compare.hgl", COMPARE)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_compare/__init__.py");
+    for expected in [
+        "import _hgl._m_core as _hgl_4core\n",
+        concat!(
+            "def ordered(lhs, rhs):\n",
+            "    return _core.member(_hgl_4core.CmpResult, ",
+            "_core.compare__T_T(lhs=lhs, rhs=rhs))\n",
+        ),
+        "_core.compare__i64_f64(lhs=lhs, rhs=rhs))\n",
+        // Lifted over connections, the node gives the member too.
+        concat!(
+            "def _lift_0_compare__T_T(lhs: _hg.TS[_py.float], rhs: _hg.TS[_py.float]) ",
+            "-> _hg.TS[_hgl_4core.CmpResult]:\n",
+            "    return _core.member(_hgl_4core.CmpResult, ",
+            "_core.compare__T_T(lhs=lhs.value, rhs=rhs.value))\n",
+        ),
+        // OPS-5: the Boolean operators, called by name.
+        "    return _core.and__bool_bool(lhs=lhs, rhs=rhs)\n",
+        "    return _core.or__bool_bool(lhs=lhs, rhs=rhs)\n",
+        "    return _core.not__bool(value=value)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2552,6 +2625,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.extend(SAME_NAMES);
     files.push(("loops.hgl", LOOPS));
     files.push(("elements.hgl", ELEMENTS));
+    files.push(("compare.hgl", COMPARE));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2572,7 +2646,7 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        42,
+        43,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, and one of each demo's"
     );
