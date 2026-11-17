@@ -338,6 +338,16 @@ impl PartialEq for Constant {
     }
 }
 
+impl Constant {
+    /// The constant's text without the spaces between its tokens: what
+    /// two constants whose value is not held here are compared by. A
+    /// stage after the analyser that needs one text for each such
+    /// constant uses this, and not `text`.
+    pub fn unspaced(&self) -> String {
+        unspaced(&self.text)
+    }
+}
+
 /// A constant's text without the spaces between its tokens. The spaces
 /// inside a string literal are the literal's own, and are kept.
 fn unspaced(text: &str) -> String {
