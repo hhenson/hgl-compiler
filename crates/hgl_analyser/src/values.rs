@@ -5499,6 +5499,9 @@ impl<'a> Typer<'a> {
             called.generics,
         );
         self.evaluating = false;
+        // The call is held to what any call in a graph is: a `const`
+        // parameter is given no connection (FN-3).
+        self.constants_of(&kind);
         // EXPR-13: arguments are read in the order written, so the
         // call's before the configuration.
         let config = self.after_call(&given, "an eval", "TST-5");
@@ -5726,13 +5729,19 @@ impl<'a> Typer<'a> {
             temporal && !inputs
         });
         let (kind, ty) = match (&called, entry) {
-            (Some(called), Some(entry)) => self.call_function(
-                &called.name,
-                &called.arguments,
-                entry,
-                None,
-                called.generics,
-            ),
+            (Some(called), Some(entry)) => {
+                let read = self.call_function(
+                    &called.name,
+                    &called.arguments,
+                    entry,
+                    None,
+                    called.generics,
+                );
+                // The call is held to what any call in a graph is: a
+                // `const` parameter is given no connection (FN-3).
+                self.constants_of(&read.0);
+                read
+            }
             _ => {
                 if !self.unbound(called.as_ref()) {
                     self.diagnostics.emit(

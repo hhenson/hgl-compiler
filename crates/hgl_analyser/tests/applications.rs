@@ -200,13 +200,14 @@ fn running(run: &str) -> common::Checked {
                 "export fn scaled(price: f64, const factor: f64 = 2.0) -> f64 => price * factor\n",
                 "export const fn fixed() -> i64 => 1\n",
                 "export struct Held { value: i64 }\n",
+                "export fn paced(const every: i64) -> i64 => every\n",
             ),
         ),
         (
             "live.hgl",
             &format!(
                 "application app.feed.live\n\nuse app.feed::{{beats}}\n\
-                 use app.other::{{scaled, fixed, Held}}\n{run}\n"
+                 use app.other::{{scaled, fixed, Held, paced}}\n{run}\n"
             ),
         ),
     ])
@@ -294,6 +295,11 @@ fn a_run_statement_that_calls_no_entry_is_reported() {
         (
             "run(beats(pace: 1s))",
             "live.hgl:5:11 name/argument.unknown EXPR-2",
+        ),
+        // FN-3: an entry's `const` parameter is given no connection.
+        (
+            "run(paced(every: beats()))",
+            "live.hgl:5:18 phase/connection.as_constant FN-3",
         ),
         // The configuration, and what follows it.
         ("run(beats(), 3)", "live.hgl:5:14 type/type.mismatch EXPR-5"),
