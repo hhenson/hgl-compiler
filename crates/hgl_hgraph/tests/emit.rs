@@ -1816,6 +1816,192 @@ fn a_generic_temporal_function_is_written_for_each_call() {
     );
 }
 
+/// GEN-16: a value function with generic parameters that calls an
+/// operation it requires, or hands a requirement on to what it calls.
+const VALUE_GENERICS: &str = concat!(
+    "module demo.vals\n",
+    "\n",
+    "operator join<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "impl const fn join(lhs: i64, rhs: i64) -> i64 => lhs * 10 + rhs\n",
+    "impl const fn join(lhs: str, rhs: str) -> str => lhs + rhs\n",
+    // A candidate that states a requirement of its own.
+    "impl const fn join<T>(lhs: list<T>, rhs: list<T>) -> list<T>\n",
+    "    requires join(T, T) -> T => [join(lhs[0], rhs[0])]\n",
+    "\n",
+    // A required operation, by name and by symbol.
+    "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
+    "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
+    // One that hands its requirement on.
+    "const fn outer<U>(value: U) -> U requires join(U, U) -> U => twice(twice(value))\n",
+    // One with no requirement.
+    "const fn same<T>(value: T) -> T => value\n",
+    // One with no requirement of its own, which is written once, and
+    // calls one that requires with whole arguments: nothing else asks
+    // for `sum` of two `str`.
+    "const fn paired<T>(value: T) -> str => sum(\"a\", \"b\")\n",
+    "\n",
+    "const hundred: i64 = sum(40, 60)\n",
+    "\n",
+    // In a node's hook, and lifted in a graph.
+    "fn joined(value: i64) -> i64 {\n",
+    "    when valid(value) { return twice(value) }\n",
+    "}\n",
+    "fn graphed(value: f64) -> f64 => sum(value, value)\n",
+    "\n",
+    "test values_are_instances {\n",
+    "    assert twice(1) == 11\n",
+    "    assert twice(\"a\") == \"aa\"\n",
+    "    assert sum(1.5, 2.0) == 3.5\n",
+    "    assert outer(1) == 121\n",
+    "    assert same(\"x\") == \"x\"\n",
+    "    assert paired(1) == \"ab\"\n",
+    "    assert hundred == 100\n",
+    "    assert twice([2]) == [22]\n",
+    "    assert eval(joined(value: [1, 2])) == [11, 22]\n",
+    "    assert eval(graphed(value: [1.5])) == [3.0]\n",
+    // TST-8: a value function an eval names is lifted.
+    "    assert eval(twice(value: [3])) == [33]\n",
+    "}\n",
+);
+
+/// GEN-16: which candidate a required operation calls depends on the
+/// types, so a value function that calls one, or hands a requirement
+/// on, is written once for each set of generic arguments it is called
+/// with, as a temporal one is (GEN-2). One with no requirement is
+/// written once: Python takes a value of any type. An instance is
+/// called wherever the function is: by a value function, a node's
+/// hook, a constant, and the node that lifts it in a graph or an eval.
+#[test]
+fn a_value_function_that_requires_is_written_for_each_call() {
+    let emitted = emit(&[("vals.hgl", VALUE_GENERICS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("values_are_instances"), None);
+    let python = emitted.text("_hgl/_m_demo/_m_vals/__init__.py");
+    for expected in [
+        concat!(
+            "def _inst_twice__i64(value):\n",
+            "    return _impl_join_i64_i64(lhs=value, rhs=value)\n",
+        ),
+        concat!(
+            "def _inst_twice__str(value):\n",
+            "    return _impl_join_str_str(lhs=value, rhs=value)\n",
+        ),
+        // The candidate for lists is an instance too, for its own
+        // requirement.
+        concat!(
+            "def _inst_twice__list_i64_(value):\n",
+            "    return _inst__impl_join_list_T__list_T___i64(lhs=value, rhs=value)\n",
+        ),
+        concat!(
+            "def _inst__impl_join_list_T__list_T___i64(lhs, rhs):\n",
+            "    return [_impl_join_i64_i64(lhs=_core.item(lhs, 0), rhs=_core.item(rhs, 0))]\n",
+        ),
+        // A symbol the function requires.
+        concat!(
+            "def _inst_sum__f64(a, b):\n",
+            "    return _core.add__f64_f64(lhs=a, rhs=b)\n",
+        ),
+        // A requirement handed on.
+        concat!(
+            "def _inst_outer__i64(value):\n",
+            "    return _inst_twice__i64(value=_inst_twice__i64(value=value))\n",
+        ),
+        // No requirement: one function. A call in it with whole
+        // arguments names its instance, which nothing else asks for.
+        "def same(value):\n",
+        concat!(
+            "def paired(value):\n",
+            "    return _inst_sum__str(a=\"a\", b=\"b\")\n",
+        ),
+        concat!(
+            "def _inst_sum__str(a, b):\n",
+            "    return _core.add__str_str(lhs=a, rhs=b)\n",
+        ),
+        // Where an instance is called.
+        "    return _inst_sum__i64(a=40, b=60)\n",
+        "    return _inst_twice__i64(value=value.value)\n",
+        "    return _inst_sum__f64(a=a.value, b=b.value)\n",
+        "lhs=_inst_twice__i64(value=1), rhs=11,",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    assert!(!python.contains("def twice("), "{python}");
+}
+
+/// GEN-7: a requirement that names a generic parameter with nothing
+/// stated is answered by a candidate that takes any one type. The
+/// caller then states no requirement and hands none on, and still
+/// calls a function that is written by instance, with its own generic
+/// parameter.
+const THROUGH: &str = concat!(
+    "module demo.through\n",
+    "\n",
+    "operator pick<L, R, O>(lhs: L, rhs: R) -> O\n",
+    "impl const fn pick<T>(lhs: T, rhs: T) -> T => lhs\n",
+    "\n",
+    "const fn first<T>(value: T) -> T requires pick(T, T) -> T => pick(value, value)\n",
+    "const fn wrapper<U>(value: U) -> U => first(value)\n",
+    "const fn outermost<V>(value: V) -> V => wrapper(value)\n",
+    // GEN-13: a generic value read as a value, and handed on.
+    "const fn width<const N: i64>() -> i64 => N\n",
+    "const fn wider<const M: i64>() -> i64 => width<M>() + 1\n",
+    "\n",
+    "test a_caller_is_an_instance_too {\n",
+    "    assert wrapper(1) == 1\n",
+    "    assert outermost(\"a\") == \"a\"\n",
+    "    assert width<3>() == 3\n",
+    "    assert wider<4>() == 5\n",
+    "}\n",
+);
+
+/// GEN-2: which instance such a caller calls is known only where its
+/// own generic parameter is. So it is written by instance too, and so
+/// is what calls it in turn with a generic parameter of its own.
+/// GEN-13: a value function that reads a generic value parameter is
+/// written for each constant it is given.
+#[test]
+fn a_caller_of_an_instance_with_its_own_parameter_is_an_instance() {
+    let emitted = emit(&[("through.hgl", THROUGH)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    assert_eq!(emitted.blocked("a_caller_is_an_instance_too"), None);
+    let python = emitted.text("_hgl/_m_demo/_m_through/__init__.py");
+    for expected in [
+        // The candidate for any one type is written once.
+        "def _impl_pick_T_T(lhs, rhs):\n",
+        concat!(
+            "def _inst_first__i64(value):\n",
+            "    return _impl_pick_T_T(lhs=value, rhs=value)\n",
+        ),
+        concat!(
+            "def _inst_wrapper__i64(value):\n",
+            "    return _inst_first__i64(value=value)\n",
+        ),
+        concat!(
+            "def _inst_outermost__str(value):\n",
+            "    return _inst_wrapper__str(value=value)\n",
+        ),
+        concat!(
+            "def _inst_wrapper__str(value):\n",
+            "    return _inst_first__str(value=value)\n",
+        ),
+        // A generic value is the constant the call gives.
+        concat!("def _inst_width__3():\n", "    return 3\n"),
+        concat!(
+            "def _inst_wider__4():\n",
+            "    return _core.add__i64_i64(lhs=_inst_width__4(), rhs=1)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    assert!(!python.contains("def wrapper("), "{python}");
+}
+
 /// GEN-2: an instance is written in its declaration's module, with the
 /// types of the module that calls it: here an enum of a module that
 /// imports the declaration's.
@@ -3798,6 +3984,8 @@ fn the_generated_tests_pass_on_hgraph() {
         TEMPORAL_CANDIDATES[0],
         TEMPORAL_CANDIDATES[1],
         ("generics.hgl", GENERICS),
+        ("vals.hgl", VALUE_GENERICS),
+        ("through.hgl", THROUGH),
         CALLERS_TYPE[0],
         CALLERS_TYPE[1],
     ];
@@ -3829,12 +4017,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        56,
+        58,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
-         candidates, one on generic temporal functions, one on an instance of a caller's \
-         type, and one of each demo's"
+         candidates, one on generic temporal functions, one on value functions that \
+         require, one on a caller of one, one on an instance of a caller's type, and one of \
+         each demo's"
     );
 }
 
