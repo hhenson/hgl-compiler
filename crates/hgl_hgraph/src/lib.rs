@@ -251,7 +251,13 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
         let Some(written) = written.as_ref().filter(|_| Some(index) != core) else {
             continue;
         };
-        for piece in written.declarations.iter().chain(&written.tests) {
+        let instances = written.instances.iter().map(|(_, _, piece)| piece);
+        for piece in written
+            .declarations
+            .iter()
+            .chain(instances)
+            .chain(&written.tests)
+        {
             if piece.broken.is_some() {
                 continue;
             }
@@ -304,25 +310,41 @@ fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diag
     if let Some(diagnostic) = &test.broken {
         return Some(diagnostic.clone());
     }
-    // The functions still to look at, the next one last, and those
-    // looked at: a function may be reached twice, or reach itself.
-    let mut waiting: Vec<(usize, usize)> = test.uses.iter().rev().copied().collect();
+    // What is still to look at, the next one last, and what was looked
+    // at: a function may be reached twice, or reach itself.
+    let mut waiting: Vec<emit::Used> = test.uses.iter().rev().cloned().collect();
     let mut seen = BTreeSet::new();
-    while let Some((module, declaration)) = waiting.pop() {
-        if !seen.insert((module, declaration)) {
+    while let Some(used) = waiting.pop() {
+        if !seen.insert(used.clone()) {
             continue;
         }
-        let piece = modules
-            .get(module)
-            .and_then(Option::as_ref)
-            .and_then(|written| written.declarations.get(declaration));
-        let Some(piece) = piece else {
+        let (module, declaration, instance) = used;
+        let Some(written) = modules.get(module).and_then(Option::as_ref) else {
             continue;
         };
-        if let Some(diagnostic) = &piece.broken {
-            return Some(diagnostic.clone());
+        // The declaration's own piece. One written by instance has
+        // nothing in it, and is still left out where the declaration
+        // itself is not written: one of a test context, say.
+        if let Some(piece) = written.declarations.get(declaration) {
+            if let Some(diagnostic) = &piece.broken {
+                return Some(diagnostic.clone());
+            }
+            waiting.extend(piece.uses.iter().rev().cloned());
         }
-        waiting.extend(piece.uses.iter().rev().copied());
+        // GEN-2: the instance named, which is a piece of its own.
+        let piece = instance.and_then(|suffix| {
+            written
+                .instances
+                .iter()
+                .find(|(of, named, _)| *of == declaration && *named == suffix)
+                .map(|(_, _, piece)| piece)
+        });
+        if let Some(piece) = piece {
+            if let Some(diagnostic) = &piece.broken {
+                return Some(diagnostic.clone());
+            }
+            waiting.extend(piece.uses.iter().rev().cloned());
+        }
     }
     None
 }

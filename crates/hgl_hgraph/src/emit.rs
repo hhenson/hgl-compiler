@@ -45,7 +45,16 @@ pub(crate) struct Written {
     /// A piece for each named test of the module, in the order
     /// declared.
     pub(crate) tests: Vec<Piece>,
+    /// A piece for each instance of a generic temporal declaration of
+    /// the module (GEN-2), with the declaration's position and the
+    /// instance's suffix, in the order written.
+    pub(crate) instances: Vec<(usize, String, Piece)>,
 }
+
+/// What a piece names: a declaration, as the position of its module in
+/// the program and its position in that module, and for a declaration
+/// that is written by instance, the suffix of the instance named.
+pub(crate) type Used = (usize, usize, Option<String>);
 
 /// One top-level part of a module as it is written: a declaration or a
 /// named test.
@@ -56,9 +65,8 @@ pub(crate) struct Piece {
     /// The first form in it that the target does not write yet. A piece
     /// with one is left out of the file.
     pub(crate) broken: Option<Diagnostic>,
-    /// The functions and the types it names, each as its module and
-    /// its declaration.
-    pub(crate) uses: BTreeSet<(usize, usize)>,
+    /// The functions and the types it names.
+    pub(crate) uses: BTreeSet<Used>,
     /// True for a type, which is written before the functions: a
     /// function's annotations are read where it is defined, and may
     /// name a type the source declares after it.
@@ -98,6 +106,7 @@ pub(crate) fn module(
         propagates: false,
         piece: Piece::default(),
         declared: Vec::new(),
+        instanced: Vec::new(),
         tested: Vec::new(),
     };
     // UNIT-14, RUN-1: what an application declares is written as a
@@ -120,6 +129,7 @@ pub(crate) fn module(
         imports: emitter.imports,
         declarations: emitter.declared,
         tests: emitter.tested,
+        instances: emitter.instanced,
     }
 }
 
@@ -475,6 +485,10 @@ struct Emitter<'a> {
     piece: Piece,
     /// The pieces written for the module's declarations.
     declared: Vec<Piece>,
+    /// The pieces written for the instances of the module's generic
+    /// temporal declarations: each with its declaration's position and
+    /// its suffix.
+    instanced: Vec<(usize, String, Piece)>,
     /// The pieces written for the module's named tests.
     tested: Vec<Piece>,
 }
@@ -558,9 +572,11 @@ impl Emitter<'_> {
         // the order declared.
         let (types, functions): (Vec<&mut Piece>, Vec<&mut Piece>) =
             self.declared.iter_mut().partition(|piece| piece.first);
+        let instances = self.instanced.iter_mut().map(|(_, _, piece)| piece);
         for piece in types
             .into_iter()
             .chain(functions)
+            .chain(instances)
             .chain(self.tested.iter_mut())
         {
             if piece.broken.is_some() {
@@ -623,16 +639,14 @@ impl Emitter<'_> {
                 );
                 return;
             }
+            // Each instance is a piece of its own: one with a form
+            // that is not written is left out, and the others are not.
             let instances = self.instances;
             for instance in instances.declared(self.module, index) {
                 let python = self.instance_name(self.module, index, &instance.suffix);
                 self.node_or_graph(index, &python, &instance.signature, &instance.body);
-                // The instances are one piece, which is left out whole
-                // once one of them has a form that is not written: the
-                // first such form is what is reported.
-                if self.piece.broken.is_some() {
-                    break;
-                }
+                let piece = self.close();
+                self.instanced.push((index, instance.suffix.clone(), piece));
             }
             return;
         }
@@ -741,7 +755,9 @@ impl Emitter<'_> {
             return "None".to_string();
         };
         let python = self.instance_name(module, declaration, &instance.suffix);
-        self.piece.uses.insert((module, declaration));
+        self.piece
+            .uses
+            .insert((module, declaration, Some(instance.suffix.clone())));
         if module == self.module {
             return python;
         }
@@ -878,7 +894,7 @@ impl Emitter<'_> {
     fn type_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
-        self.piece.uses.insert((module, declaration));
+        self.piece.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
@@ -2685,7 +2701,7 @@ impl Emitter<'_> {
     fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = self.definition_name(module, declaration);
-        self.piece.uses.insert((module, declaration));
+        self.piece.uses.insert((module, declaration, None));
         if module == self.module {
             return python;
         }
@@ -2717,7 +2733,18 @@ impl Emitter<'_> {
                 generics,
                 ..
             } => (*module, *declaration, generics, true),
-            Callee::Required { .. } | Callee::Unread => {
+            // GEN-16: in an instance this is the call of the candidate
+            // that answers the requirement. It is left where nothing
+            // answers, and in a value function with generic parameters,
+            // which is written once and not by instance.
+            Callee::Required { .. } => {
+                self.unsupported(
+                    at,
+                    "an operation a generic declaration requires, with no candidate selected for it",
+                );
+                return "None".to_string();
+            }
+            Callee::Unread => {
                 self.unsupported(at, "this call");
                 return "None".to_string();
             }

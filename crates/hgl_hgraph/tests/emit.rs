@@ -1816,11 +1816,11 @@ fn a_generic_temporal_function_is_written_for_each_call() {
     );
 }
 
-/// The instances of one declaration are written as one piece of its
-/// module. Where one of them has a form the target does not write, a
-/// type here, that is reported where the declaration is written, and a
-/// test that reaches the declaration is not run, whichever instance it
-/// asks for.
+/// Each instance is a piece of its module. Where one has a form the
+/// target does not write, a type here, that is reported where the
+/// declaration is written, and a test that reaches that instance is
+/// not run. A test that reaches another instance of the declaration
+/// is.
 #[test]
 fn an_instance_that_is_not_written_is_reported() {
     let emitted = emit(&[(
@@ -1830,30 +1830,77 @@ fn an_instance_that_is_not_written_is_reported() {
             "fn held<T>(value: T) -> T {\n",
             "    when valid(value) { return value }\n",
             "}\n",
+            "fn again<T>(value: T) -> T => held(value)\n",
             "test whole {\n",
-            "    assert eval(held(value: [1])) == [1]\n",
+            "    assert eval(again(value: [1])) == [1]\n",
             "}\n",
             "test listed {\n",
-            "    let seen = eval(held(value: [[1]]))\n",
+            "    let seen = eval(again(value: [[1]]))\n",
             "}\n",
         ),
     )]);
     // The type of the input, at the parameter, and of the result, at
-    // the function's name: once each, for the one instance that has it.
+    // the function's name: once each for the one instance that has it,
+    // of the node and of the graph that calls it.
     assert_eq!(
         emitted.reported,
         [
             "held.hgl:2:12 target.unsupported",
             "held.hgl:2:4 target.unsupported",
+            "held.hgl:5:13 target.unsupported",
+            "held.hgl:5:4 target.unsupported",
         ]
     );
-    for test in ["whole", "listed"] {
-        let blocked = emitted.blocked(test).expect("the test is not run");
-        assert!(
-            blocked.ends_with("the hgraph target does not write the type `list<i64>` yet"),
-            "{blocked}"
-        );
-    }
+    assert_eq!(emitted.blocked("whole"), None);
+    let blocked = emitted.blocked("listed").expect("the test is not run");
+    assert!(
+        blocked.ends_with("the hgraph target does not write the type `list<i64>` yet"),
+        "{blocked}"
+    );
+    let python = emitted.text("_hgl/_m_demo/_m_held/__init__.py");
+    assert!(python.contains("def _inst_held__i64("), "{python}");
+    assert!(python.contains("def _inst_again__i64("), "{python}");
+    assert!(!python.contains("def _inst_held__list"), "{python}");
+    assert!(!python.contains("def _inst_again__list"), "{python}");
+}
+
+/// GEN-16: an operation a declaration requires is, in an instance, the
+/// call of the candidate that answers the requirement. Where no one
+/// candidate does, the instance is not written, which is reported where
+/// the operation is called, in core here, and the test that reaches it
+/// is not run. The instance for a type that has a candidate is written.
+#[test]
+fn an_instance_nothing_answers_is_reported() {
+    let emitted = emit(&[(
+        "sums.hgl",
+        concat!(
+            "module demo.sums\n",
+            "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
+            "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
+            "test numbers {\n",
+            "    assert eval(identity_sum(lhs: [1], rhs: [2])) == [3]\n",
+            "}\n",
+            // No value `add_(bool, bool)`.
+            "test flags {\n",
+            "    let seen = eval(identity_sum(lhs: [true], rhs: [false]))\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
+    assert!(
+        emitted.reported[0].ends_with(" target.unsupported"),
+        "{:?}",
+        emitted.reported
+    );
+    assert_eq!(emitted.blocked("numbers"), None);
+    let blocked = emitted.blocked("flags").expect("the test is not run");
+    assert!(
+        blocked.ends_with(
+            "the hgraph target does not write an operation a generic declaration requires, \
+             with no candidate selected for it yet"
+        ),
+        "{blocked}"
+    );
 }
 
 /// GEN-4: an `impl const fn` is a value candidate of its operator. One

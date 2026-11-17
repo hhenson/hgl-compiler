@@ -195,8 +195,13 @@ impl Instances {
                     }
                 })
                 .collect();
-            if declared.iter().any(|instance| instance.suffix == suffix) {
-                suffix.push_str(&format!("_{}", declared.len()));
+            // Two sets of arguments may differ only in characters that
+            // are no letter or digit: a number then tells them apart.
+            let plain = suffix.clone();
+            let mut number = declared.len();
+            while declared.iter().any(|instance| instance.suffix == suffix) {
+                suffix = format!("{plain}_{number}");
+                number += 1;
             }
             waiting.extend(asked(program, &body));
             declared.push(Instance {
