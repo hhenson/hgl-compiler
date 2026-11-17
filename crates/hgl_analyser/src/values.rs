@@ -5380,9 +5380,11 @@ impl<'a> Typer<'a> {
         };
         let given = arguments_of(&list);
         // The parser has reported an eval given nothing.
-        let Some((_, target)) = given.first().cloned() else {
+        let Some((_, argument)) = given.first().cloned() else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        // EXPR-1: "parentheses group", so `(call)` is the call.
+        let target = ungrouped(argument.clone());
         // The call: `name(arguments)`, or `name<generics>(arguments)`.
         // GEN-14: `name<...>(...)` the parser left undecided is the
         // call too, where the resolver decided it is one.
@@ -5456,7 +5458,7 @@ impl<'a> Typer<'a> {
                     error(
                         Category::Type,
                         codes::EVAL_TARGET,
-                        self.at(&target),
+                        self.at(&argument),
                         "an eval's first argument is a call of a function of a module, and this \
                          is none"
                             .to_string(),
@@ -12298,6 +12300,18 @@ fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
     let mut arguments = arguments_of(&list).into_iter();
     let (label, argument) = arguments.next()?;
     (label.is_none() && arguments.next().is_none()).then_some(argument)
+}
+
+/// What `node` is with the parentheses around it taken off. EXPR-1:
+/// "parentheses group", so `((a))` is `a`.
+fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
+    while node.kind() == SyntaxKind::ParenExpr {
+        match node.children().next() {
+            Some(inner) => node = inner,
+            None => break,
+        }
+    }
+    node
 }
 
 /// The arguments of an argument list, in order: each with its name,
