@@ -915,6 +915,10 @@ fn a_form_not_written_yet_is_reported() {
             "    when { return quote.bid }\n",
             "}\n",
             "fn fixed(value: f64) -> f64 => quoted(Quote(bid: 1.0))\n",
+            // A generic struct made where its arguments are the
+            // function's own generic parameters.
+            "struct Held<T> { value: T }\n",
+            "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
         ),
     )]);
     assert_eq!(
@@ -925,11 +929,12 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:17:12 target.unsupported",
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
-            // A graph's `if`, the two of a struct, then what the test
+            // A graph's `if`, the three of a struct, then what the test
             // holds.
             "m.hgl:32:5 target.unsupported",
             "m.hgl:37:11 target.unsupported",
             "m.hgl:40:39 target.unsupported",
+            "m.hgl:42:42 target.unsupported",
             "m.hgl:27:30 target.unsupported",
             "m.hgl:27:42 target.unsupported",
             "m.hgl:28:17 target.unsupported",
@@ -1661,7 +1666,8 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
 
 /// Structs: declarations, constructions that leave fields out, fields
 /// read and assigned at depth, a struct that inherits, a generic one, an
-/// operator's candidate on one, and a node that keeps two in its
+/// operator's candidate on one, two compared as values of their
+/// parent, one that holds a NaN, and a node that keeps two in its
 /// state. The structs are declared after the functions that name them,
 /// and a second module takes a default from the first.
 const STRUCTS: [(&str, &str); 2] = [
@@ -1724,6 +1730,11 @@ const STRUCTS: [(&str, &str); 2] = [
             "\n",
             "struct Empty {}\n",
             "\n",
+            "abstract struct Shape {}\n",
+            "struct Tagged<T> : Shape { tag: T }\n",
+            "struct Plain : Shape {}\n",
+            "const fn same(lhs: Shape, rhs: Shape) -> bool => lhs == rhs\n",
+            "\n",
             "fn travelled(step: f64) -> f64 {\n",
             "    state at: Point = Point(x: 0.0)\n",
             "    state seen: Box<i64> = boxed(0)\n",
@@ -1773,6 +1784,16 @@ const STRUCTS: [(&str, &str); 2] = [
             "    assert boxed(3) == Box(value: 3, count: 0)\n",
             "    assert boxed(3).count == 0\n",
             "    assert Empty() == Empty()\n",
+            "}\n",
+            "\n",
+            "test identity {\n",
+            "    assert same(Tagged(tag: 1), Tagged(tag: 1))\n",
+            "    assert !same(Tagged(tag: 1), Tagged(tag: 1.0))\n",
+            "    assert !same(Tagged(tag: 1), Plain())\n",
+            "    let odd = Point(x: 0.0 / 0.0)\n",
+            "    assert odd != odd\n",
+            "    assert !(odd == odd)\n",
+            "    assert Tagged(tag: [odd.x]) != Tagged(tag: [odd.x])\n",
             "}\n",
             "\n",
             "test walks {\n",
@@ -1839,6 +1860,12 @@ const STRUCT_FAILS: &str = concat!(
 /// A struct is a class the provider makes, written before the
 /// functions of its module. Its values are never changed: an
 /// assignment to a field gives the place's root a new value.
+///
+/// TYPE-3: "Generic applications are invariant by origin and complete
+/// canonical arguments": a `Tagged<i64>` and a `Tagged<f64>` are of
+/// two classes, and are not equal where they meet as values of their
+/// parent. NUM-5: "NaN is neither equal nor close to any value,
+/// including itself", inside a struct as outside one.
 #[test]
 fn a_struct_is_a_class_whose_values_are_never_changed() {
     let emitted = emit(&STRUCTS);
@@ -1873,6 +1900,13 @@ fn a_struct_is_a_class_whose_values_are_never_changed() {
         "    next = _core.with_field(next, class_=4)\n",
         // A candidate of an operator on a struct.
         "def _impl_add__Point_Point(lhs, rhs):\n",
+        // A generic struct is made of the class for its arguments.
+        "    return _core.applied(Box, \"i64\")(value=value, count=0)\n",
+        concat!(
+            "same(lhs=_core.applied(Tagged, \"i64\")(tag=1), ",
+            "rhs=_core.applied(Tagged, \"f64\")(tag=1.0))",
+        ),
+        "_core.applied(Tagged, \"list<f64>\")(tag=[odd.x])",
         // A `state` that is a struct.
         "    _state.at = Point(x=0.0, y=0.0)\n",
         concat!(
@@ -2310,8 +2344,8 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        37,
-        "eight of core's, six on endpoints, six on structs, two on loops, and one of each demo's"
+        38,
+        "eight of core's, six on endpoints, seven on structs, two on loops, and one of each demo's"
     );
 }
 

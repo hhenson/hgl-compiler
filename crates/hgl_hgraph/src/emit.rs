@@ -19,8 +19,9 @@ use hgl_analyser::hir::{
     ExprKind, Hook, Local, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use hgl_analyser::{
-    Argument as GenericArgument, ConstantValue, Declaration, DeclarationKind, Detail, FieldRef,
-    LocalKind, Member, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature, Type,
+    Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
+    FieldRef, LocalKind, Member, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature,
+    Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -1606,7 +1607,7 @@ impl Emitter<'_> {
                 module,
                 declaration,
                 arguments,
-            } => self.construct(function, (*module, *declaration), arguments, value.at),
+            } => self.construct(function, (*module, *declaration), arguments, value),
             // TYPE-3: a struct's fields are public, and read by name.
             ExprKind::Field { base, member } => {
                 let Some(field) = field_of(self.program, &base.ty, *member) else {
@@ -1714,13 +1715,23 @@ impl Emitter<'_> {
     /// The arguments are written in the order the source has them,
     /// which is the order Python evaluates them in, and then the
     /// default of each field left out.
+    ///
+    /// TYPE-3: "Generic applications are invariant by origin and
+    /// complete canonical arguments". A value of a generic struct is
+    /// made of the class for its arguments, `_core.applied(Box,
+    /// "i64")`: a `Box<i64>` is then no `Box<f64>` where the two meet
+    /// as values of a parent. `whole` is the construction, whose type
+    /// says the arguments. Where they are not known as the module is
+    /// written, in a function generic in them, the construction is
+    /// reported.
     fn construct(
         &mut self,
         function: &Function,
         of: (usize, usize),
         arguments: &[Argument],
-        at: Location,
+        whole: &Expr,
     ) -> String {
+        let at = whole.at;
         let program = self.program;
         let Some(Detail::Struct(read)) = program.modules[of.0].details.get(of.1) else {
             self.unsupported(at, "this construction");
@@ -1752,7 +1763,37 @@ impl Emitter<'_> {
             written.push(format!("{}={value}", name(&field.name)));
         }
         let class = self.type_name(of.0, of.1);
-        format!("{class}({})", written.join(", "))
+        let applied = match &whole.ty {
+            Type::Named { arguments, .. } if !arguments.is_empty() => {
+                let texts: Option<Vec<String>> = arguments
+                    .iter()
+                    .map(|argument| canonical_argument(program, argument))
+                    .collect();
+                match texts {
+                    Some(texts) => {
+                        self.natives = true;
+                        format!("_core.applied({class}, {})", string(&texts.join(", ")))
+                    }
+                    None => {
+                        self.unsupported(
+                            at,
+                            "a generic struct made where its arguments are not known",
+                        );
+                        class
+                    }
+                }
+            }
+            // A struct with no generic parameter is its own class.
+            _ if read.generics.is_empty() => class,
+            _ => {
+                self.unsupported(
+                    at,
+                    "a generic struct made where its arguments are not known",
+                );
+                class
+            }
+        };
+        format!("{applied}({})", written.join(", "))
     }
 
     /// The default the field `default` writes, where the construction
@@ -2412,6 +2453,91 @@ impl Emitter<'_> {
             .collect();
         format!("[{}]", written.join(", "))
     }
+}
+
+/// A type as text that no other type is written as, for the class of a
+/// generic struct's application (see `Emitter::construct`). A named
+/// type has its module's path before it: two modules may each declare
+/// a `Quote`. `None` for a type that is not whole as the module is
+/// written: one that names a generic parameter, or is not known.
+fn canonical(program: &Program, ty: &Type) -> Option<String> {
+    let one = |ty: &Type| canonical(program, ty);
+    Some(match ty {
+        Type::Scalar(scalar) => scalar.as_str().to_string(),
+        Type::Named {
+            name,
+            module,
+            arguments,
+            ..
+        } => {
+            let path = &program.modules[*module].path;
+            if arguments.is_empty() {
+                format!("{path}::{name}")
+            } else {
+                let arguments: Option<Vec<String>> = arguments
+                    .iter()
+                    .map(|argument| canonical_argument(program, argument))
+                    .collect();
+                format!("{path}::{name}<{}>", arguments?.join(", "))
+            }
+        }
+        Type::Tuple(elements) => {
+            let elements: Option<Vec<String>> = elements.iter().map(one).collect();
+            format!("tuple<{}>", elements?.join(", "))
+        }
+        Type::List { element, size } => match size {
+            Some(size) => format!("list<{}, {}>", one(element)?, canonical_constant(size)?),
+            None => format!("list<{}>", one(element)?),
+        },
+        Type::Set(element) => format!("set<{}>", one(element)?),
+        Type::Dict { key, value } => format!("dict<{}, {}>", one(key)?, one(value)?),
+        Type::Rolling {
+            value,
+            maximum,
+            minimum,
+        } => match minimum {
+            Some(minimum) => format!(
+                "rolling<{}, {}, {}>",
+                one(value)?,
+                canonical_constant(maximum)?,
+                canonical_constant(minimum)?
+            ),
+            None => format!("rolling<{}, {}>", one(value)?, canonical_constant(maximum)?),
+        },
+        Type::Ref(target) => format!("ref<{}>", one(target)?),
+        Type::Endpoint(target) => format!("endpoint<{}>", one(target)?),
+        Type::Signal => "signal".to_string(),
+        Type::Atomic(payload) => format!("atomic<{}>", one(payload)?),
+        Type::Result { value, error } => format!("result<{}, {}>", one(value)?, one(error)?),
+        Type::Error => "error".to_string(),
+        Type::Delta(shape) => format!("delta<{}>", one(shape)?),
+        Type::Nullable(inner) => format!("{}?", one(inner)?),
+        Type::Parameter { .. } | Type::Trace { .. } | Type::Unknown => return None,
+    })
+}
+
+/// A generic argument as [`canonical`] text.
+fn canonical_argument(program: &Program, argument: &GenericArgument) -> Option<String> {
+    match argument {
+        GenericArgument::Type(ty) => canonical(program, ty),
+        GenericArgument::Constant(constant) => canonical_constant(constant),
+    }
+}
+
+/// A constant inside a type as [`canonical`] text: what it comes to,
+/// however it was written. `None` for one whose value is not known as
+/// the module is written.
+fn canonical_constant(constant: &Constant) -> Option<String> {
+    Some(match &constant.value {
+        ConstantValue::Int(number) => number.to_string(),
+        ConstantValue::Duration(microseconds) => format!("{microseconds}us"),
+        ConstantValue::Unbounded => "unbounded".to_string(),
+        ConstantValue::Member(member) => format!(".{member}"),
+        // A literal of another kind is held as it is written, and
+        // compared without the spaces between its tokens.
+        ConstantValue::Other(_) => constant.unspaced(),
+        ConstantValue::Parameter { .. } | ConstantValue::Unevaluated => return None,
+    })
 }
 
 /// The field at `member` among those a struct has, for a value of the
