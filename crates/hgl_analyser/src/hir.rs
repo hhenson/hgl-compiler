@@ -411,15 +411,25 @@ pub enum ExprKind {
         value: Box<Expr>,
     },
     /// A field of a struct value, `quote.bid`; a property of a native
-    /// value, `clock.now`; or a property of a set's delta,
-    /// `change.added` (TYPE-16).
+    /// value, `clock.now`; or a property of a set's or a dictionary's
+    /// delta, `change.added` (TYPE-16).
     Field {
         /// The value.
         base: Box<Expr>,
         /// The field's position among the struct's `members`, or the
         /// property's among the native type's. For a set's delta, 0 is
-        /// `added` and 1 is `removed`.
+        /// `added` and 1 is `removed`; for a dictionary's, 0 is
+        /// `updated` and 1 is `removed`.
         member: usize,
+    },
+    /// A set's or a dictionary's delta made from its properties:
+    /// `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16). The
+    /// expression's type is the delta.
+    Delta {
+        /// The properties given, as they are written. A property's
+        /// position is as [`ExprKind::Field`] has it; one left out is
+        /// empty.
+        arguments: Vec<Argument>,
     },
     /// `base[index]`.
     Index {

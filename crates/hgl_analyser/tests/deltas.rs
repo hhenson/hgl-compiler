@@ -6,6 +6,7 @@
 mod common;
 
 use common::{Checked, check};
+use hgl_analyser::hir::{ExprKind, Stmt};
 
 /// Checks one file, `m.hgl`, of module `m`, with the core the compiler
 /// is built with. The `module` line is added, so the text given starts
@@ -137,6 +138,89 @@ fn a_delta_is_a_value_with_properties_that_are_read() {
             "came: set<str>",
         ]
     );
+}
+
+/// TYPE-16: a dictionary's delta is "a type of its own, with the
+/// properties `updated`, a `dict<K, delta<V>>` of each key added or
+/// changed with its delta, and `removed`, a `set<K>`". "A set's and a
+/// dictionary's delta is constructed by its properties, by name:
+/// `delta<set<i64>>(added: [1, 2], removed: [3])`,
+/// `delta<dict<i64, i64>>(updated: [7: 10], removed: [9])`. A property
+/// left out is empty." The constructor of a struct's delta is proposed,
+/// and is not read.
+#[test]
+fn a_sets_and_a_dictionarys_delta_is_made_from_its_properties() {
+    let checked = module(concat!(
+        "struct Quote {\n    bid: f64\n    ask: f64\n}\n",
+        "const fn joined(name: str) -> delta<set<str>> => delta<set<str>>(added: [name])\n",
+        // In any order.
+        "const fn swapped(old: str, new: str) -> delta<set<str>> =>\n",
+        "    delta<set<str>>(removed: [old], added: [new])\n",
+        "const fn priced(name: str, price: f64) -> delta<dict<str, f64>> =>\n",
+        "    delta<dict<str, f64>>(updated: [name: price], removed: [])\n",
+        "const fn uses(change: delta<dict<str, f64>>, sets: delta<dict<str, set<i64>>>) -> i64 {\n",
+        "    let gone = change.removed\n",
+        "    let moved = change.updated\n",
+        // The value's own delta, where the value has one.
+        "    let inner = sets.updated\n",
+        "    let none = change.added\n",
+        "    return 1\n",
+        "}\n",
+        // A name that is no property, one given twice, and values of
+        // another type.
+        "const fn wrong_name() -> delta<set<str>> => delta<set<str>>(updated: [\"a\"])\n",
+        "const fn twice() -> delta<set<str>> => delta<set<str>>(added: [\"a\"], added: [\"b\"])\n",
+        "const fn wrong_type() -> delta<set<str>> => delta<set<str>>(added: [1])\n",
+        "const fn wrong_key() -> delta<dict<str, f64>> => delta<dict<str, f64>>(removed: [1])\n",
+        // Proposed, and not read.
+        "const fn of_struct() -> delta<Quote> => delta<Quote>(bid: 1.0)\n",
+        // TIME-7: a hook publishes a delta it makes.
+        "fn made(name: str) -> set<str> {\n",
+        "    when { return delta<set<str>>(added: [name]) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:15:23 name/member.unknown TYPE-16",
+            "m.hgl:18:61 name/delta.argument_name TYPE-16",
+            "m.hgl:19:70 name/delta.duplicate_argument TYPE-16",
+            "m.hgl:20:69 type/type.mismatch EXPR-5",
+            "m.hgl:21:82 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[2..5],
+        [
+            "gone: set<str>",
+            "moved: dict<str, f64>",
+            "inner: dict<str, delta<set<i64>>>",
+        ]
+    );
+    // The construction is kept with each property at its position:
+    // `removed`, the second, is written first in `swapped`.
+    let module = checked.program.module("m").expect("module m exists");
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == "swapped")
+        .expect("`swapped` is declared");
+    let body = module.bodies[index].as_ref().expect("it has a body");
+    let Some(Stmt::Return {
+        value: Some(value), ..
+    }) = body.statements.first()
+    else {
+        panic!("an arrow body is one return");
+    };
+    let ExprKind::Delta { arguments } = &value.kind else {
+        panic!("the value is a delta's construction: {:?}", value.kind);
+    };
+    let positions: Vec<Option<usize>> = arguments
+        .iter()
+        .map(|argument| argument.parameter)
+        .collect();
+    assert_eq!(positions, [Some(1), Some(0)]);
+    assert_eq!(value.ty.to_string(), "delta<set<str>>");
 }
 
 /// END-3: "`delta_value(x)` returns what `x` published this cycle, a

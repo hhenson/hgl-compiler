@@ -269,6 +269,11 @@ pub mod codes {
     pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
     /// `delta<T>` of a T that has no delta (TYPE-16).
     pub const DELTA_UNSUPPORTED_SHAPE: &str = "delta.unsupported_shape";
+    /// A delta's constructor given a name that is no property of the
+    /// delta (TYPE-16).
+    pub const DELTA_ARGUMENT_NAME: &str = "delta.argument_name";
+    /// A delta's constructor given one property twice (TYPE-16).
+    pub const DELTA_DUPLICATE_ARGUMENT: &str = "delta.duplicate_argument";
     /// `signal` somewhere other than the whole type of an input
     /// (TYPE-12).
     pub const SIGNAL_POSITION: &str = "signal.position";
