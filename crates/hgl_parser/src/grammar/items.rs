@@ -19,6 +19,7 @@ enum Item {
     Instantiate,
     NativeType,
     NativeFunction,
+    Constant,
     Test,
     TestContext,
     /// `export` before something that is no declaration.
@@ -161,6 +162,8 @@ impl Parser<'_> {
             // meaning from where they stand. Before `fn` or `type` at the
             // start of a declaration, they are modifiers.
             Ident if self.nth_word(n, "const") && self.nth(n + 1) == KwFn => Item::Function,
+            // UNIT-13: before a name, `const` begins a constant.
+            Ident if self.nth_word(n, "const") && self.nth(n + 1) == Ident => Item::Constant,
             Ident if self.nth_word(n, "native") && self.nth_word(n + 1, "type") => Item::NativeType,
             // `native impl` begins a native candidate of an operator:
             // `impl` is a reserved word, so nothing else follows `native`
@@ -191,6 +194,7 @@ impl Parser<'_> {
             Item::Instantiate => self.instantiate_decl(),
             Item::NativeType => self.native_type_decl(),
             Item::NativeFunction => self.native_function_decl(),
+            Item::Constant => self.constant_decl(),
             Item::Test => self.test_decl(),
             Item::TestContext => self.test_context(),
             Item::StrayExport => {
@@ -233,8 +237,36 @@ impl Parser<'_> {
     fn no_export(&mut self) {
         if self.at(KwExport) {
             self.bump();
-            self.expected("`fn`, `const fn`, `struct`, `enum` or `native type`");
+            self.expected("`fn`, `const fn`, `const`, `struct`, `enum` or `native type`");
         }
+    }
+
+    /// ```text
+    /// constant_decl = [ "export" ], "const", IDENTIFIER, ":", value_type,
+    ///     "=", const_expression ;
+    /// ```
+    ///
+    /// UNIT-13: "A constant, `const name: T = expression`, names one
+    /// ordinary value of the type T."
+    fn constant_decl(&mut self) {
+        self.start(ConstantDecl);
+        self.eat(KwExport);
+        self.expect_word("const");
+        self.expect_name("a constant's name");
+        if self.eat(Colon) {
+            self.type_();
+        } else {
+            self.expected_rule("`:`", "UNIT-13");
+        }
+        // The value is on the declaration's line, as a field's default
+        // is: an `=` on a later line begins nothing (LEX-5).
+        if self.at_assign() && !self.nl() {
+            self.eat_assign();
+            self.expression();
+        } else {
+            self.expected_rule("`=`", "UNIT-13");
+        }
+        self.finish();
     }
 
     // ---- Units and names ----

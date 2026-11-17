@@ -196,6 +196,8 @@ export const fn scale<T, ...Rest, const N: i64>(
 
 fn arrow(x: i64) -> i64 => x + 1
 
+export const limit: i64 = 2 * 5
+
 export abstract struct Quote<T> : Base, other::Mixin requires T is Shape {
     bid: T = 0.0
     time: datetime

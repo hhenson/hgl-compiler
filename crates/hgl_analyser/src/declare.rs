@@ -196,6 +196,9 @@ impl Walk<'_> {
             Item::Struct(decl) => (decl.name(), DeclarationKind::Struct, decl.export()),
             Item::Enum(decl) => (decl.name(), DeclarationKind::Enum, decl.export()),
             Item::NativeType(decl) => (decl.name(), DeclarationKind::NativeType, decl.export()),
+            // UNIT-13: a constant is a declaration of its module, private
+            // unless exported (UNIT-3).
+            Item::Constant(decl) => (decl.name(), DeclarationKind::Constant, decl.export()),
         };
         let Some(name) = name else {
             return;

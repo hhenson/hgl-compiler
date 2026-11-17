@@ -1108,6 +1108,66 @@ fn a_file_opens_with_one_module_line() {
     );
 }
 
+// ---- UNIT-13 ----
+
+#[test]
+fn a_constant_is_a_name_a_type_and_an_expression() {
+    // UNIT-13: "A constant, `const name: T = expression`, names one
+    // ordinary value of the type T."
+    assert_eq!(
+        accepted(Entry::SourceFile, "module a\nconst scale: i64 = 2\n"),
+        concat!(
+            "ModuleDecl[\"module\" ModulePath[\"a\"]] ",
+            "ConstantDecl[\"const\" \"scale\" \":\" ScalarType[\"i64\"] \"=\" Literal[\"2\"]]"
+        )
+    );
+    // UNIT-3: it is exported as a function is. Its expression is any
+    // expression, and may run over lines as any does (LEX-5).
+    assert_eq!(
+        accepted(
+            Entry::SourceFile,
+            "module a\nexport const first: list<i64> = [1,\n    scale + 1]\n"
+        ),
+        concat!(
+            "ModuleDecl[\"module\" ModulePath[\"a\"]] ",
+            "ConstantDecl[\"export\" \"const\" \"first\" \":\" ",
+            "ListType[\"list\" \"<\" ScalarType[\"i64\"] \">\"] \"=\" ",
+            "SequenceExpr[\"[\" Literal[\"1\"] \",\" ",
+            "BinaryExpr[NameExpr[\"scale\"] \"+\" Literal[\"1\"]] \"]\"]]"
+        )
+    );
+    // `const` before `fn` is still a function's modifier, and `const`
+    // is a name where no declaration starts (LEX-9).
+    assert_eq!(
+        accepted(
+            Entry::SourceFile,
+            "module a\nconst fn const() -> i64 => 1\n"
+        ),
+        concat!(
+            "ModuleDecl[\"module\" ModulePath[\"a\"]] ",
+            "FnDecl[\"const\" \"fn\" \"const\" ParamList[\"(\" \")\"] ",
+            "ReturnType[\"->\" ScalarType[\"i64\"]] ArrowBody[\"=>\" Literal[\"1\"]]]"
+        )
+    );
+    // The type and the value are both written.
+    assert_eq!(
+        rejected(Entry::SourceFile, "module a\nconst scale = 2\n"),
+        ["UNIT-13 2:13: expected `:`, found `=`"]
+    );
+    assert_eq!(
+        rejected(Entry::SourceFile, "module a\nconst scale: i64\nfn f() {}\n"),
+        ["UNIT-13 2:17: expected `=`, found end of line"]
+    );
+    // TST-1: a test context holds no constant.
+    assert_eq!(
+        rejected(
+            Entry::SourceFile,
+            "module a\ntest {\n    const scale: i64 = 2\n}\n"
+        ),
+        ["TST-1 3:5: a test context holds functions, structs, enums and named tests"]
+    );
+}
+
 // ---- TYPE-14, TYPE-15 ----
 
 #[test]
