@@ -386,6 +386,26 @@ fn an_evals_call_may_be_one_the_parser_left_undecided() {
     assert_eq!(locals(&checked, "generic"), ["seen: trace of Side"]);
 }
 
+/// EXPR-1: "parentheses group". A call in parentheses is the eval's
+/// call, and what is no call is reported where the argument is written.
+#[test]
+fn an_evals_call_may_stand_in_parentheses() {
+    let checked = module(concat!(
+        "enum Side { buy, sell }\n",
+        "test grouped {\n",
+        "    assert eval((pass(value: [7]))) == [7]\n",
+        "    assert eval(((through<Side>([.buy]))), (RunConfig())) == [.buy]\n",
+        "    assert eval((7)) == [7]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:35:17 type/eval.target TST-5"],
+        "{}",
+        checked.report
+    );
+}
+
 /// EXPR-13: arguments are evaluated in the order written. An eval's
 /// call is read before its configuration, so what the call assigns the
 /// configuration may read, and not the other way about.
