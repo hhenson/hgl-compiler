@@ -790,7 +790,7 @@ The pass is built form by form. So far it reads:
 
 | Form | Rule | What is done |
 | --- | --- | --- |
-| A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime` |
+| A literal | TYPE-1, TYPE-2, LEX-11 | The type its form gives: `1` is `i64`, `@2026-09-03T09:30` a `civil_datetime`, with an offset a `datetime`, with a zone too a `zoned_datetime`. A temporal literal's value is `hir::Temporal`, the parts it writes: a date, a time, an offset in minutes, a zone. Whatever reads the typed program has no literal to read again |
 | `null` | TYPE-14 | The nullable type its place expects. Where the type expected has no `?`, or nothing gives it a type, it is rejected |
 | A name | UNIT-10, GEN-13, UNIT-13 | A parameter, a local, a constant of a module (`ExprKind::Constant`), or a generic value parameter, with its type |
 | A symbol | NUM-1, OPS-1, OPS-2, OPS-3, EXPR-10, GEN-5 | The call of the core operator it stands for, `add_` for `+`: its operands select one of that operator's value candidates, core's or a module's own, and the result is that candidate's. No candidate for the operands is a rejection. Configuration, `a /{zero: .error} b`, gives the call its named arguments. See "Symbols" below |
@@ -1433,7 +1433,7 @@ call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
 an eval that writes a run configuration; an application's run statement;
 a run in real time;
-dates and times; timed traces and a published null in a
+a zoned datetime, a zoned time and a time zone; timed traces and a published null in a
 trace; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 

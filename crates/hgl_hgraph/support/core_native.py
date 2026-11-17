@@ -563,6 +563,66 @@ def neg__duration(value):
     return _duration(-_microseconds(value))
 
 
+def _moved(instant, duration):
+    """An instant a duration on from another (OPS-1).
+
+    OPS-10: an instant result "outside its type's range is an HGL error
+    with code `numeric.out_of_range`". The range is TYPE-2's calendar
+    range, the years 1 to 9999, which is the range of Python's own
+    `datetime`: Python says when a result leaves it.
+    """
+    try:
+        return instant + duration
+    except OverflowError:
+        raise HglError(
+            "an instant result is outside the years 1 to 9999", code="numeric.out_of_range"
+        ) from None
+
+
+def instant(written, minutes):
+    """The instant of a date and a time written `minutes` east of UTC.
+
+    LEX-11: a `datetime` literal writes its offset, and the instant is
+    that far from what its date and time say. An instant is a `datetime`
+    in UTC that names no zone, as hgraph has them.
+    """
+    return _moved(written, -_datetime.timedelta(minutes=minutes))
+
+
+def add__datetime_duration(lhs, rhs):
+    return _moved(lhs, rhs)
+
+
+def sub__datetime_duration(lhs, rhs):
+    return _moved(lhs, -rhs)
+
+
+def sub__datetime_datetime(lhs, rhs):
+    return _duration(_microseconds(lhs - rhs))
+
+
+def add__civil_datetime_duration(lhs, rhs):
+    return _moved(lhs, rhs)
+
+
+def sub__civil_datetime_duration(lhs, rhs):
+    return _moved(lhs, -rhs)
+
+
+def sub__civil_datetime_civil_datetime(lhs, rhs):
+    return _duration(_microseconds(lhs - rhs))
+
+
+def add__date_time(lhs, rhs):
+    """OPS-1: a `date` and a `time` are the `civil_datetime` of that time
+    on that date."""
+    return _datetime.datetime.combine(lhs, rhs)
+
+
+def sub__date_date(lhs, rhs):
+    return _duration(_microseconds(lhs - rhs))
+
+
 def neg__i64(value):
     return _i64(-value)
 
