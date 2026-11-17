@@ -226,6 +226,36 @@ pub enum Type {
 }
 
 impl Type {
+    /// What `atomic<payload>` is. TYPE-9: "`atomic<V>` stops expansion
+    /// at a complete ordinary V. For non-composite S, `atomic<S>`
+    /// normalizes to S before matching, recursively."
+    ///
+    /// A composite is what temporalization expands: a tuple, a struct,
+    /// a list, a dictionary and a set. Any other type publishes whole as
+    /// it is, and so is its own atomic: a scalar, an enum, a native
+    /// type, a `result`, an `error`, a delta that is a type of its own,
+    /// and a nullable of one of those. An atomic of an atomic is that
+    /// atomic. The atomic of a type not yet known, a generic parameter's,
+    /// stays as written, and is formed again, here, when the parameter is
+    /// replaced.
+    pub fn atomic(payload: Type) -> Type {
+        let whole = match &payload {
+            Type::Scalar(_) | Type::Error | Type::Result { .. } | Type::Atomic(_) => true,
+            Type::Named {
+                kind: NamedKind::Enum | NamedKind::Native,
+                ..
+            } => true,
+            Type::Delta(of) => !matches!(**of, Type::Parameter { .. } | Type::Unknown),
+            Type::Nullable(inner) => !matches!(Type::atomic((**inner).clone()), Type::Atomic(_)),
+            _ => false,
+        };
+        if whole {
+            payload
+        } else {
+            Type::Atomic(Box::new(payload))
+        }
+    }
+
     /// `delta<of>`: "the ordinary value type of what a temporal value of
     /// T publishes in one cycle" (TYPE-16).
     ///

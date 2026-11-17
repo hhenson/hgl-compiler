@@ -450,7 +450,9 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         }
         Type::Ref(inner) => Type::Ref(part(inner)),
         Type::Endpoint(inner) => Type::Endpoint(part(inner)),
-        Type::Atomic(inner) => Type::Atomic(part(inner)),
+        // TYPE-9: formed again with what its payload now is, so that
+        // `atomic<T>` with `T` an `i64` is an `i64`.
+        Type::Atomic(inner) => Type::atomic(*part(inner)),
         Type::Result { value, error } => Type::Result {
             value: part(value),
             error: part(error),

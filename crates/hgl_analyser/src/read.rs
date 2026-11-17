@@ -1128,10 +1128,9 @@ impl Reader<'_> {
             SyntaxKind::AtomicType => {
                 self.ordinary(node, position, false);
                 // TYPE-9: "`atomic<V>` stops expansion at a complete
-                // ordinary V."
-                Type::Atomic(Box::new(
-                    self.inner(node, Position::value("an atomic payload", "TYPE-9")),
-                ))
+                // ordinary V. For non-composite S, `atomic<S>`
+                // normalizes to S".
+                Type::atomic(self.inner(node, Position::value("an atomic payload", "TYPE-9")))
             }
             SyntaxKind::ResultType => self.result(node),
             SyntaxKind::DeltaType => self.delta(node),
