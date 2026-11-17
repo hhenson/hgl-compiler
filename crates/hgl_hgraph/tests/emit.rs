@@ -1624,11 +1624,11 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
     let python = emitted.text("_hgl/_m_demo/_m_enums/__init__.py");
     for expected in [
         "import enum as _enum\n",
-        "Side = _enum.Enum(\"Side\", [(\"buy\", 0), (\"sell\", 5), (\"hold\", 6)])\n",
+        "Side = _enum.Enum(\"demo.enums::Side\", [(\"buy\", 0), (\"sell\", 5), (\"hold\", 6)])\n",
         // A name that `Enum` keeps has `hgl_` before it, and so has one
         // that would then be taken for it.
         concat!(
-            "Odd = _enum.Enum(\"Odd\", [(\"hgl_mro\", 0), (\"hgl__x_\", 1), (\"class\", 2), ",
+            "Odd = _enum.Enum(\"demo.enums::Odd\", [(\"hgl_mro\", 0), (\"hgl__x_\", 1), (\"class\", 2), ",
             "(\"hgl_hgl_mro\", 3), (\"name\", 4)])\n",
         ),
         concat!(
@@ -2132,6 +2132,71 @@ fn a_loop_and_a_switch_run_as_they_are_written() {
     }
 }
 
+/// Two modules that each declare an enum `Side`, with other members,
+/// and core's `CmpResult`, which has the name of an enum of hgraph's
+/// own, each as the type of a node's input and output.
+const SAME_NAMES: [(&str, &str); 2] = [
+    (
+        "left.hgl",
+        concat!(
+            "module demo.sides.left\n",
+            "enum Side { buy, sell }\n",
+            "fn kept(side: Side) -> Side {\n",
+            "    when { return side }\n",
+            "}\n",
+            "test left_sides { assert eval(kept, side: [.buy, .sell]) == [.buy, .sell] }\n",
+        ),
+    ),
+    (
+        "right.hgl",
+        concat!(
+            "module demo.sides.right\n",
+            "enum Side { up = 5, down }\n",
+            "fn kept(side: Side) -> Side {\n",
+            "    when { return side }\n",
+            "}\n",
+            "fn outcome(value: CmpResult) -> CmpResult {\n",
+            "    when { return value }\n",
+            "}\n",
+            "test right_sides {\n",
+            "    assert eval(kept, side: [.up, .down]) == [.up, .down]\n",
+            "    assert eval(outcome, value: [.less, .greater, .unordered]) == \
+             [.less, .greater, .unordered]\n",
+            "}\n",
+        ),
+    ),
+];
+
+/// UNIT-4: a type is known by where it is declared, so two modules'
+/// enums of one name are two types. hgraph knows a Python enum by its
+/// class's name, and so the class is named with its module's path:
+/// two `Side`s stay two, and core's `CmpResult` is not hgraph's.
+#[test]
+fn an_enums_class_is_named_with_its_module() {
+    let emitted = emit(&SAME_NAMES);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    for (path, expected) in [
+        (
+            "_hgl/_m_demo/_m_sides/_m_left/__init__.py",
+            "Side = _enum.Enum(\"demo.sides.left::Side\", [(\"buy\", 0), (\"sell\", 1)])\n",
+        ),
+        (
+            "_hgl/_m_demo/_m_sides/_m_right/__init__.py",
+            "Side = _enum.Enum(\"demo.sides.right::Side\", [(\"up\", 5), (\"down\", 6)])\n",
+        ),
+        (
+            "_hgl/_m_core/__init__.py",
+            "CmpResult = _enum.Enum(\"core::CmpResult\", [(\"less\", 0), ",
+        ),
+    ] {
+        let python = emitted.text(path);
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -2323,6 +2388,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("enums.hgl", ENUMS),
     ];
     files.extend(STRUCTS);
+    files.extend(SAME_NAMES);
     files.push(("loops.hgl", LOOPS));
     files.extend(MODULES);
     files.extend(NESTED);
@@ -2344,8 +2410,9 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        38,
-        "eight of core's, six on endpoints, seven on structs, two on loops, and one of each demo's"
+        40,
+        "eight of core's, six on endpoints, seven on structs, two on loops, two on enums of one \
+         name, and one of each demo's"
     );
 }
 

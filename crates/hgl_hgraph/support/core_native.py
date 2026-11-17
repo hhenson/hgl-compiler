@@ -170,7 +170,9 @@ def member(enum, value):
             return enum["hgl_" + value if kept else value]
         return enum(value)
     except (KeyError, ValueError):
-        raise HglError(f"`{enum.__name__}` has no member {value!r}") from None
+        # The class is named with its module's path, `demo::Side`.
+        declared = enum.__name__.rsplit("::", 1)[-1]
+        raise HglError(f"`{declared}` has no member {value!r}") from None
 
 
 def struct(name, fields):
