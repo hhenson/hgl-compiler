@@ -1906,8 +1906,200 @@ fn a_struct_is_a_class_whose_values_are_never_changed() {
     }
 }
 
-/// A program with forms that are not written: a loop in two of its
-/// functions, and timed traces in one of its tests.
+/// Loops and `switch` in value functions and in a node's `when`, and
+/// a dictionary written out.
+const LOOPS: &str = concat!(
+    "module demo.loops\n",
+    "\n",
+    "enum Side { buy, sell, hold }\n",
+    "\n",
+    "const fn total(items: list<i64>) -> i64 {\n",
+    "    var sum = 0\n",
+    "    for item in items { sum += item }\n",
+    "    return sum\n",
+    "}\n",
+    "\n",
+    "const fn largest(items: set<i64>) -> i64? {\n",
+    "    var best: i64?\n",
+    "    for item in items {\n",
+    "        if best == null { best = item }\n",
+    "    }\n",
+    "    return best\n",
+    "}\n",
+    "\n",
+    "const fn weighted(weights: dict<str, f64>) -> f64 {\n",
+    "    var sum = 0.0\n",
+    "    for name, weight in weights {\n",
+    "        if name != \"skip\" { sum += weight }\n",
+    "    }\n",
+    "    return sum\n",
+    "}\n",
+    "\n",
+    "const fn halvings(first: i64) -> i64 {\n",
+    "    var value = first\n",
+    "    var count = 0\n",
+    "    while value > 1 {\n",
+    "        value = value // 2\n",
+    "        count += 1\n",
+    "    }\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "const fn sign(side: Side) -> i64 {\n",
+    "    switch side {\n",
+    "        case .buy: return 1\n",
+    "        case Side.sell: return -1\n",
+    "        case .hold: return 0\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "const fn named(number: i64) -> str {\n",
+    "    var text: str\n",
+    "    switch number {\n",
+    "        case 0: text = \"zero\"\n",
+    "        case 1:\n",
+    "            let one = \"one\"\n",
+    "            text = one\n",
+    "        default: text = \"many\"\n",
+    "    }\n",
+    "    return text\n",
+    "}\n",
+    "\n",
+    "const fn strict(text: str) -> i64 {\n",
+    "    switch text {\n",
+    "        case \"a\": return 1\n",
+    "        case \"b\": return 2\n",
+    "    }\n",
+    "    return 0\n",
+    "}\n",
+    "\n",
+    "const fn nested(flag: bool, number: i64) -> i64 {\n",
+    "    switch flag {\n",
+    "        case true:\n",
+    "            switch number {\n",
+    "                case 1: return 10\n",
+    "                default: return 11\n",
+    "            }\n",
+    "        default: return 20\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "const fn only(number: i64) -> i64 {\n",
+    "    switch number {\n",
+    "        default: return number + 1\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn running(value: i64) -> i64 {\n",
+    "    state seen: i64 = 0\n",
+    "    when {\n",
+    "        var steps = 0\n",
+    "        while steps < value {\n",
+    "            steps += 1\n",
+    "            seen += 1\n",
+    "        }\n",
+    "        switch value {\n",
+    "            case 0: return 0\n",
+    "            default: return seen\n",
+    "        }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test loops {\n",
+    "    assert total([1, 2, 3]) == 6\n",
+    "    assert total([]) == 0\n",
+    "    assert weighted([\"a\": 1.5, \"skip\": 9.0, \"b\": 2.0]) == 3.5\n",
+    "    assert halvings(16) == 4\n",
+    "    assert halvings(1) == 0\n",
+    "}\n",
+    "\n",
+    "test switches {\n",
+    "    assert sign(.buy) == 1\n",
+    "    assert sign(.sell) == -1\n",
+    "    assert sign(.hold) == 0\n",
+    "    assert named(0) == \"zero\"\n",
+    "    assert named(1) == \"one\"\n",
+    "    assert named(7) == \"many\"\n",
+    "    assert strict(\"b\") == 2\n",
+    "    assert nested(true, 1) == 10\n",
+    "    assert nested(true, 5) == 11\n",
+    "    assert nested(false, 1) == 20\n",
+    "    assert only(4) == 5\n",
+    "    assert eval(running, value: [2, 0, 3]) == [2, 0, 5]\n",
+    "}\n",
+);
+
+/// A `switch` with no `default` that no case matches.
+const LOOP_FAILS: &str = concat!(
+    "module demo.loops.fails\n",
+    "const fn strict(text: str) -> i64 {\n",
+    "    switch text {\n",
+    "        case \"a\": return 1\n",
+    "        case \"b\": return 2\n",
+    "    }\n",
+    "    return 0\n",
+    "}\n",
+    "test unmatched { assert strict(\"z\") == 0 }\n",
+);
+
+/// CTRL-12: "In a value function, `for item in items` runs its body
+/// for each element of a list, in index order, or of a set, and `for
+/// key, value in entries` for each key and value of a dictionary ...
+/// `while condition { ... }` repeats its body while the condition
+/// holds ... A `switch` there selects on a `bool`, `i64`, `str`, or
+/// enum value." CTRL-6: "There is no fallthrough. An unmatched selector
+/// uses default or fails." EXPR-9: a sequence of pairs is a dictionary.
+#[test]
+fn a_loop_and_a_switch_run_as_they_are_written() {
+    let emitted = emit(&[("loops.hgl", LOOPS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_loops/__init__.py");
+    for expected in [
+        concat!(
+            "    for item in items:\n",
+            "        sum = _core.add__i64_i64(lhs=sum, rhs=item)\n",
+        ),
+        "    for name, weight in weights.items():\n",
+        "    while _core.gt__T_T(lhs=value, rhs=1):\n",
+        // The selector is held once, and each case is an `if` on it.
+        concat!(
+            "def sign(side):\n",
+            "    _selected_1 = side\n",
+            "    if _selected_1 == Side[\"buy\"]:\n",
+            "        return 1\n",
+            "    elif _selected_1 == Side[\"sell\"]:\n",
+            "        return _core.neg__i64(value=1)\n",
+            "    elif _selected_1 == Side[\"hold\"]:\n",
+            "        return 0\n",
+            "    else:\n",
+            "        _core.unmatched(_selected_1)\n",
+        ),
+        // A `default` is the `else`.
+        "    else:\n        text = \"many\"\n",
+        // A `switch` in a case has a name of its own for its selector.
+        concat!(
+            "    if _selected_1 == True:\n",
+            "        _selected_2 = number\n",
+            "        if _selected_2 == 1:\n",
+        ),
+        // With no case there is only the `default`.
+        concat!(
+            "def only(number):\n",
+            "    _selected_1 = number\n",
+            "    return _core.add__i64_i64(lhs=number, rhs=1)\n",
+        ),
+        // A dictionary written out.
+        "weighted(weights={\"a\": 1.5, \"skip\": 9.0, \"b\": 2.0})",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// A program with forms that are not written: a pack parameter of two
+/// of its functions, and timed traces in one of its tests.
 const REACH: [(&str, &str); 3] = [
     (
         "reach.hgl",
@@ -1916,9 +2108,9 @@ const REACH: [(&str, &str); 3] = [
             "use reach.far as far\n",
             "\n",
             "const fn fine(value: i64) -> i64 => value + 1\n",
-            "const fn looped(limit: i64) -> i64 {\n",
+            "const fn looped(limit: i64, rest: ...i64) -> i64 {\n",
             "    var total = 0\n",
-            "    while total < limit { total = total + 1 }\n",
+            "    total = total + limit\n",
             "    return total\n",
             "}\n",
             "const fn outer(limit: i64) -> i64 => looped(limit) + 1\n",
@@ -1953,9 +2145,9 @@ const REACH: [(&str, &str); 3] = [
         "deep.hgl",
         concat!(
             "module reach.deep\n",
-            "export const fn counted(limit: i64) -> i64 {\n",
+            "export const fn counted(limit: i64, rest: ...i64) -> i64 {\n",
             "    var total = 0\n",
-            "    while total < limit { total = total + 1 }\n",
+            "    total = total + limit\n",
             "    return total\n",
             "}\n",
         ),
@@ -1972,23 +2164,23 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     assert_eq!(
         emitted.reported,
         [
-            "reach.hgl:7:5 target.unsupported",
+            "reach.hgl:5:29 target.unsupported",
             "reach.hgl:18:37 target.unsupported",
             "reach.hgl:18:49 target.unsupported",
-            "deep.hgl:4:5 target.unsupported",
+            "deep.hgl:2:37 target.unsupported",
         ]
     );
     assert_eq!(emitted.blocked("direct"), None);
     assert_eq!(emitted.blocked("wrong"), None);
     assert_eq!(emitted.blocked("overflows"), None);
-    let statement = "the hgraph target does not write this statement yet";
+    let pack = "the hgraph target does not write a pack parameter yet";
     assert_eq!(
         emitted.blocked("reaches"),
-        Some(format!("reach.hgl:7:5 {statement}"))
+        Some(format!("reach.hgl:5:29 {pack}"))
     );
     assert_eq!(
         emitted.blocked("across"),
-        Some(format!("deep.hgl:4:5 {statement}"))
+        Some(format!("deep.hgl:2:37 {pack}"))
     );
     assert_eq!(
         emitted.blocked("own"),
@@ -2097,6 +2289,7 @@ fn the_generated_tests_pass_on_hgraph() {
         ("enums.hgl", ENUMS),
     ];
     files.extend(STRUCTS);
+    files.push(("loops.hgl", LOOPS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -2117,8 +2310,8 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        35,
-        "eight of core's, six on endpoints, six on structs, and one of each demo's"
+        37,
+        "eight of core's, six on endpoints, six on structs, two on loops, and one of each demo's"
     );
 }
 
@@ -2130,7 +2323,8 @@ fn the_generated_tests_pass_on_hgraph() {
 /// `when` fails the node, and the test with it. NUM-4: "An invalid
 /// tolerance is an HGL error". TYPE-7: an enum constructed from "a
 /// value that is none fails where it is evaluated". TYPE-5: a
-/// construction's arguments and defaults. Needs hgraph, as above.
+/// construction's arguments and defaults. CTRL-6: a `switch` no case
+/// of which matches. Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
@@ -2143,6 +2337,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("close.hgl", CLOSE_FAILS));
     files.push(("enums.hgl", ENUM_FAILS));
     files.push(("structs.hgl", STRUCT_FAILS));
+    files.push(("loops.hgl", LOOP_FAILS));
     let emitted = emit(&files);
     let tests = [
         emitted.test("direct").0,
@@ -2157,6 +2352,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("omitted").0,
         emitted.test("in_order").0,
         emitted.test("unequal").0,
+        emitted.test("unmatched").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -2188,6 +2384,8 @@ fn a_failure_names_the_statement_that_failed() {
             "failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
             "failed structs.hgl:11:17 HglError: an i64 result is outside the signed 64-bit range",
             "failed structs.hgl:12:16 the assertion does not hold",
+            // CTRL-6: "An unmatched selector uses default or fails."
+            "failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
         ]
     );
 
