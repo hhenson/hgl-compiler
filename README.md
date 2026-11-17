@@ -44,6 +44,7 @@ cargo run -- tokens path/to/file.hgl
 cargo run -- tree path/to/file.hgl
 cargo run -- check path/to/sources --modules
 cargo run -- test path/to/sources --rejections-only
+cargo run -- test path/to/sources --integration
 cargo doc --workspace --no-deps --open
 ```
 
@@ -62,7 +63,9 @@ program's rejection cases, each an import, declaration or test marked
 `hgl test --target hgraph` also runs the tests on hgraph, with the
 Python interpreter `--python PATH` names, which must have hgraph
 installed; a test that needs a form the target does not write yet is
-reported `not run`, with the form. `hgl emit --out DIR` writes an
+reported `not run`, with the form. An `integration_test` is left out
+unless `--integration` asks for them or `--test NAME` names it.
+`hgl emit --out DIR` writes an
 accepted program as Python wiring for hgraph, and reports what the
 target does not write yet. Exit status is 0 when the source is accepted
 and every selected case passed, 1 when the source is rejected or a case

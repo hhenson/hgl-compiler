@@ -235,6 +235,10 @@ test everything {
     assert raises("value.missing_key") { lookup(key) }
 }
 
+integration_test live {
+    let seen = run(arrow(x: [1]), RunConfig())
+}
+
 fn body(
     a: tuple<i64, str>,
     b: list<f64, unbounded>,

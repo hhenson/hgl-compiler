@@ -305,6 +305,71 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
     );
 }
 
+/// TST-17: "An integration test, `integration_test name { ... }`, is a
+/// named test that may run in real time: beside `eval` it writes
+/// `run(call, config)` (RUN-3), whose value is the run's output as an
+/// eval's is ... in a test that is no integration test it rejects ...
+/// In every other respect it is a test: its name is one of its module's
+/// test names (TST-2), and its block is a test's (TST-3, TST-4)."
+#[test]
+fn an_integration_test_writes_run_and_a_test_does_not() {
+    let checked = module(concat!(
+        "integration_test live {\n",
+        "    let seen = run(pass(value: [7]))\n",
+        "    assert seen == [7]\n",
+        "    assert run(pass(value: [7]), RunConfig()) == eval(pass(value: [7]))\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(locals(&checked, "live"), ["seen: trace of i64"]);
+    let module = checked.program.module("m").unwrap();
+    assert!(module.tests[0].integration);
+    // The run is an eval's, in real time.
+    let body = module.test_bodies[0].as_ref().unwrap();
+    let Stmt::Declare {
+        value: Some(value), ..
+    } = &body.statements[0]
+    else {
+        panic!("a `let`");
+    };
+    assert!(matches!(
+        value.kind,
+        ExprKind::Eval {
+            real_time: true,
+            config: None,
+            ..
+        }
+    ));
+
+    let wrong = module_text(concat!(
+        // `run` in a test that is no integration test, read all the
+        // same: its trace is compared as an eval's is.
+        "test plain {\n",
+        "    assert run(pass(value: [7])) == [7]\n",
+        "}\n",
+        // An integration test is a test: what a test may not hold, its
+        // assertion's type, and its name among the module's.
+        "integration_test live {\n",
+        "    state count: i64 = 0\n",
+        "    assert run(pass(value: [7]))\n",
+        "    assert run(7) == [7]\n",
+        "}\n",
+        "integration_test plain { assert true }\n",
+    ));
+    assert_eq!(
+        wrong.summary(),
+        [
+            "m.hgl:32:12 phase/run.position RUN-3",
+            "m.hgl:35:5 phase/test.statement_phase TST-3",
+            "m.hgl:36:12 type/type.mismatch TST-4",
+            "m.hgl:37:16 type/eval.target TST-5",
+            "m.hgl:39:18 name/test.duplicate_name TST-2",
+        ],
+        "{}",
+        wrong.report
+    );
+}
+
 /// TST-5: the call "binds ... its generic arguments as any call does".
 /// GEN-14: `name<Type>(value)` is one the parser leaves undecided, and
 /// the resolver decides it is a call.

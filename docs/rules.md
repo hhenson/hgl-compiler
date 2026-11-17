@@ -115,7 +115,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-13 | analyser | planned | A constant's type and expression; a constant read by its name; `constant.cycle` |
 | UNIT-13 | transpiler | planned | A constant as a value of the target |
 | UNIT-14 | parser | done | `application_decl`: a file is headed `module name` or `application name`. `run_statement`: `run(...)` or `eval(...)` where an item starts, with the arguments of an eval |
-| UNIT-14 | analyser | partial | An application is a unit of its own, holding what a module holds. It exports nothing (`application.export`), no `use` names one (`application.import`), and it has one run statement (`application.run_count`). Its path is no other file's: the first file of the path is the unit and each later one is reported, under the compiler's own code `application.duplicate_path`. Left: a run statement that a declaration follows |
+| UNIT-14 | analyser | done | An application is a unit of its own, holding what a module holds. It exports nothing (`application.export`), no `use` names one (`application.import`), and it has one run statement (`application.run_count`), which follows its declarations and stands in no module (`run.position`). Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`) |
 | UNIT-14 | transpiler | planned | An application as a program of the target |
 
 ## Types and values
@@ -389,6 +389,10 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TST-16 | analyser | partial | A trace given to a `const fn`, an eval or a `let` bound to one, is a `list<tuple<datetime, delta<T>>>` there: it is held to the parameter's type and says what a generic parameter is. A sequence written as a `const fn`'s argument is the list it is written as. Left: a value that holds a trace, `[seen]`, which is given as it is and not held to the parameter's type |
 | TST-16 | transpiler | partial | hgraph: a dense trace given to a `const fn` is the list of its publications, each with its instant, the run's start plus its position in smallest steps. Left: a timed trace, which the target does not write |
 | TST-16 | runner | planned | The recorded trace as that value |
+| TST-17 | parser | done | `integration_test name { ... }` is a `TestDecl`; in a test's block `run(` begins a `RunExpr`, and outside one `run` is a name |
+| TST-17 | analyser | done | An integration test is a test, marked as one. Its `run(call, config)` is read as an eval is, in real time; in a test that is none it is `run.position` |
+| TST-17 | transpiler | planned | hgraph: a run in real time is reported as not written yet |
+| TST-17 | runner | done | An integration test is left out of a run unless `--integration` asks for them or `--test` names it |
 
 ## Program execution
 
@@ -399,7 +403,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | RUN-1 | parser | done | `run_expression`: `run`, a call, and then a run configuration |
 | RUN-1 | analyser | planned | A run statement's call is of an entry, a temporal function with no temporal parameters (`run.entry`), and its configuration a `RunConfig` |
 | RUN-2 | driver | planned | Entry selection; arguments, interfaces and providers checked before start |
-| RUN-3 | analyser | partial | A run statement stands in no module (`run.position`). Left: `run` written in a test |
+| RUN-3 | analyser | done | `run` is written in an application and in an integration test: in a test that is none it is `run.position`. A run statement in a module is UNIT-14's |
 | RUN-3 | transpiler | planned | The word of a run statement is its mode; start and end come from its configuration |
 | RUN-4 | transpiler | planned | Independent instantiations; lifecycle order; teardown after failure |
 | RUN-5 | optimiser | planned | No pass changes an observable trace, effect, failure or cleanup |

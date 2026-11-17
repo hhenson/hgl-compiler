@@ -181,6 +181,9 @@ impl Parser<'_> {
             KwInstantiate => Item::Instantiate,
             KwTest if self.nth(n + 1) == LBrace => Item::TestContext,
             KwTest => Item::Test,
+            // LEX-10, TST-17: `integration_test` is a name that takes
+            // its meaning "before a test's name".
+            Ident if self.nth_word(n, "integration_test") && self.nth(n + 1) == Ident => Item::Test,
             // LEX-9, LEX-10: `const` and `native` are names that take a
             // meaning from where they stand. Before `fn` or `type` at the
             // start of a declaration, they are modifiers.
@@ -952,13 +955,21 @@ impl Parser<'_> {
 
     // ---- Tests ----
 
-    /// `test_decl = "test", IDENTIFIER, block ;`
+    /// `test_decl = ( "test" | "integration_test" ), IDENTIFIER, block ;`
     fn test_decl(&mut self) {
         self.start(TestDecl);
         self.no_export();
-        self.expect(KwTest);
+        // `item_kind` has seen which of the two words this is.
+        if self.nth_word(0, "integration_test") {
+            self.bump();
+        } else {
+            self.expect(KwTest);
+        }
         self.expect_name("a test name");
+        // TST-17: in the block, `run(...)` is the run form.
+        let outer = std::mem::replace(&mut self.in_test, true);
         self.body_block();
+        self.in_test = outer;
         self.finish();
     }
 

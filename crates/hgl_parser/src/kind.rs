@@ -275,7 +275,8 @@ define_syntax_kinds! {
         IfExpr,
         /// `eval(doubled(value: [1.0, _, 3.0]))`
         EvalExpr,
-        /// `run(heartbeat(every: 1s))`
+        /// `run(heartbeat(every: 1s))`: an application's run statement,
+        /// or a run in real time in an integration test (TST-17)
         RunExpr,
         /// `{ statements }`
         Block,

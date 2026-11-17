@@ -461,7 +461,25 @@ impl NativeFnDecl {
 impl TestDecl {
     /// The test's name.
     pub fn name(&self) -> Option<SyntaxToken> {
+        if self.is_integration() {
+            // `integration_test name`: the word is a name too, and the
+            // test's is the one after it.
+            return tokens(&self.syntax)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .nth(1);
+        }
         name_after(&self.syntax, SyntaxKind::KwTest)
+    }
+
+    /// True for `integration_test name { ... }` (TST-17): a test that
+    /// may run in real time, and is run only when it is asked for.
+    pub fn is_integration(&self) -> bool {
+        // An `export` before it has been reported by the parser.
+        tokens(&self.syntax)
+            .find(|token| token.kind() != SyntaxKind::KwExport)
+            .is_some_and(|word| {
+                word.kind() == SyntaxKind::Ident && word.text() == "integration_test"
+            })
     }
 }
 

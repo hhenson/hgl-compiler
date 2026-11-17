@@ -271,7 +271,7 @@ impl Parser<'_> {
     /// primary_expr = literal | IDENTIFIER | qualified_name | "(", expression, ")"
     ///              | tuple_literal | sequence_literal | typed_constructor
     ///              | delta_constructor | type_call | function_expr
-    ///              | if_expression | eval_expression | block ;
+    ///              | if_expression | eval_expression | run_expression | block ;
     /// literal = INTEGER_LITERAL | FLOAT_LITERAL | STRING_LITERAL | TEMPORAL_LITERAL
     ///         | "true" | "false" | "null" ;
     /// ```
@@ -282,6 +282,17 @@ impl Parser<'_> {
             // A duration is one of the forms of `TEMPORAL_LITERAL`.
             Int | Float | Str | Duration | Temporal | KwTrue | KwFalse | KwNull => {
                 self.leaf(Literal);
+            }
+            // TST-17: "In a test's block `run` as the callee of a call
+            // is that form, whatever else is in scope (LEX-10)".
+            // Elsewhere `run(...)` is a call of what `run` names.
+            Ident
+                if self.in_test
+                    && self.nth_word(0, "run")
+                    && self.nth(1) == LParen
+                    && self.suffix_at(1) =>
+            {
+                self.run_form(RunExpr)
             }
             Ident => self.name_expr(),
             // `delta` is a reserved word. In an expression it begins a

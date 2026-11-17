@@ -871,9 +871,10 @@ fn modules_nest_and_empty_forms_have_a_body() {
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
-/// RUN-1, UNIT-14: an eval's run configuration, and an application's
-/// run statement, are not written yet. Each is reported where it is
-/// written, and what the application declares is written all the same.
+/// RUN-1, UNIT-14, TST-17: an eval's run configuration, a run in real
+/// time, and an application's run statement, are not written yet. Each
+/// is reported where it is written, and what the application declares
+/// is written all the same.
 #[test]
 fn a_run_configuration_and_an_application_are_reported() {
     let emitted = emit(&[
@@ -887,6 +888,10 @@ fn a_run_configuration_and_an_application_are_reported() {
                 "export fn one() -> i64 => 1\n",
                 "test bounded {\n",
                 "    assert eval(pass(value: [7]), RunConfig()) == [7]\n",
+                "}\n",
+                // TST-17: a run in real time.
+                "integration_test live {\n",
+                "    assert run(pass(value: [7])) == [7]\n",
                 "}\n",
             ),
         ),
@@ -904,6 +909,7 @@ fn a_run_configuration_and_an_application_are_reported() {
         emitted.reported,
         [
             "m.hgl:7:35 target.unsupported",
+            "m.hgl:10:12 target.unsupported",
             "live.hgl:1:13 target.unsupported",
         ]
     );

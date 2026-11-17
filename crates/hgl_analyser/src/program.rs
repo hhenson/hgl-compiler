@@ -459,6 +459,9 @@ impl Declaration {
 pub struct Test {
     /// Its name.
     pub name: String,
+    /// True for an integration test (TST-17): one that may run in real
+    /// time, and "is run only when it is asked for".
+    pub integration: bool,
     /// Where the name is written.
     pub at: Location,
     /// The position of its file in [`Module::files`].

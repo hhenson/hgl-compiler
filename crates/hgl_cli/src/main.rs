@@ -146,6 +146,11 @@ struct TestArgs {
     #[arg(long)]
     rejections_only: bool,
 
+    /// Run the integration tests too. Without this an
+    /// `integration_test` is left out, unless `--test` names it.
+    #[arg(long)]
+    integration: bool,
+
     /// The target to run the tests on. With none, the tests are listed
     /// and not run.
     #[arg(long, value_enum)]
@@ -712,6 +717,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
     let selection = Selection {
         tests: arguments.tests.clone(),
         rejections_only: arguments.rejections_only,
+        integration: arguments.integration,
     };
     // The target the tests run on, and where it writes the program.
     let mut on_hgraph = arguments.target.map(|Target::Hgraph| OnHgraph {

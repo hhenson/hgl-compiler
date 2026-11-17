@@ -1142,6 +1142,68 @@ fn an_application_is_headed_by_its_line_and_holds_a_run_statement() {
     );
 }
 
+// ---- TST-17 ----
+
+#[test]
+fn an_integration_test_is_a_test_that_may_write_run() {
+    // TST-17: "An integration test, `integration_test name { ... }`, is
+    // a named test that may run in real time: beside `eval` it writes
+    // `run(call, config)`".
+    assert_eq!(
+        accepted(
+            Entry::Declarations,
+            "integration_test live {\n    let seen = run(beat(), limit)\n}"
+        ),
+        "TestDecl[\"integration_test\" \"live\" Block[\"{\" LocalDecl[\"let\" \"seen\" \"=\" \
+         RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] ArgList[\"(\" \")\"]]] \
+         \",\" Arg[NameExpr[\"limit\"]] \")\"]]] \"}\"]]"
+    );
+    // "In a test's block `run` as the callee of a call is that form,
+    // whatever else is in scope": in a test that is no integration
+    // test too, where the analyser rejects it.
+    let plain = accepted(
+        Entry::Declarations,
+        "test plain {\n    let seen = run(beat())\n}",
+    );
+    assert!(plain.contains("RunExpr[\"run\""), "{plain}");
+    // The form reaches into what the block holds.
+    let inner = accepted(
+        Entry::Declarations,
+        "integration_test live {\n    if ready { assert ticks(run(beat())) > 0 }\n}",
+    );
+    assert!(inner.contains("RunExpr[\"run\""), "{inner}");
+    // Outside a test's block `run(...)` is a call of what `run` names:
+    // in a function, and in a helper of a test context.
+    let function = accepted(Entry::Declarations, "fn f() -> i64 => run(1)");
+    assert!(
+        function.contains("CallExpr[NameExpr[\"run\"]") && !function.contains("RunExpr"),
+        "{function}"
+    );
+    let helper = accepted(
+        Entry::Declarations,
+        "test {\n    fn f() -> i64 => run(1)\n}",
+    );
+    assert!(!helper.contains("RunExpr"), "{helper}");
+    // In a test, `run` not before a `(` is a name as any other.
+    let name = accepted(Entry::Declarations, "test plain {\n    let seen = run\n}");
+    assert!(name.contains("NameExpr[\"run\"]"), "{name}");
+    // LEX-10: `integration_test` is a name anywhere else.
+    let named = accepted(Entry::Declarations, "fn integration_test() {}");
+    assert!(
+        named.contains("FnDecl[\"fn\" \"integration_test\""),
+        "{named}"
+    );
+    // Its arguments are an eval's: a call, and a configuration.
+    assert_eq!(
+        rejected(
+            Entry::Declarations,
+            "integration_test live {\n    let seen = run(entry: beat())\n}"
+        )
+        .len(),
+        1
+    );
+}
+
 // ---- UNIT-1 ----
 
 #[test]

@@ -515,6 +515,10 @@ pub enum ExprKind {
         /// The run's configuration, a `RunConfig` of core's, where the
         /// eval writes one (RUN-1).
         config: Option<Box<Expr>>,
+        /// True for `run(...)` in an integration test (TST-17): the
+        /// run is in real time, where an eval's is a simulation
+        /// (RUN-3).
+        real_time: bool,
     },
     /// A trace as the value a `const fn` is given (TST-16): "for a
     /// result type T a `list<tuple<datetime, delta<T>>>`, one tuple for

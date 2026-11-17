@@ -43,6 +43,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Name, "import.unknown_name"),
     (Category::Module, "import.private"),
     (Category::Module, "import.cycle"),
+    (Category::Module, "application.duplicate_path"),
     (Category::Module, "application.import"),
     (Category::Module, "application.export"),
     (Category::Module, "application.run_count"),

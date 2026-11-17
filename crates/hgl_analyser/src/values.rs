@@ -178,7 +178,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 },
                 diagnostics,
             )
-            .test();
+            .test(test.integration);
             test_bodies.push(body);
         }
         // UNIT-8: "Defaults remain required-constant/cold expressions
@@ -327,6 +327,9 @@ struct Typer<'a> {
     /// is a statement, and what the test may not hold is reported by the
     /// phase pass and not read.
     testing: bool,
+    /// True while the block read is an integration test's (TST-17):
+    /// there `run(...)` is written beside `eval(...)`.
+    integration: bool,
     /// True while the statements of a source that yield are read
     /// (SOURCE-1): there a `yield` is a statement, a `return` with no
     /// value ends the source, and a `while` may have no condition.
@@ -415,6 +418,7 @@ impl<'a> Typer<'a> {
             present: Vec::new(),
             aliases: HashMap::new(),
             testing: false,
+            integration: false,
             generating: false,
             captures: HashMap::new(),
             callable: None,
@@ -669,10 +673,11 @@ impl<'a> Typer<'a> {
     /// The block of a named test (TST-3): "A test is a
     /// composition-phase block with assertions." It is read as a
     /// graph's body is, with `assert` among its statements.
-    fn test(mut self) -> Option<Body> {
+    fn test(mut self, integration: bool) -> Option<Body> {
         let block = child(&self.declaration.syntax, SyntaxKind::Block)?;
         self.graph = true;
         self.testing = true;
+        self.integration = integration;
         let statements = block
             .children()
             .map(|statement| self.statement(&statement))
@@ -2503,6 +2508,10 @@ impl<'a> Typer<'a> {
             // TST-3: "Eval traces are test-local values." An `eval`
             // anywhere but in a named test is not read.
             SyntaxKind::EvalExpr if self.testing => self.eval(node),
+            // TST-17: "beside `eval` it writes `run(call, config)`
+            // (RUN-3), whose value is the run's output as an eval's
+            // is."
+            SyntaxKind::RunExpr if self.testing => self.eval(node),
             // A block or an `if` whose value is used.
             SyntaxKind::Block | SyntaxKind::IfExpr => {
                 let (value, outcome) = self.flow(node, expected, true);
@@ -3808,7 +3817,7 @@ impl<'a> Typer<'a> {
                 .children()
                 .next()
                 .is_some_and(|inner| self.gives_trace(&inner)),
-            SyntaxKind::EvalExpr => true,
+            SyntaxKind::EvalExpr | SyntaxKind::RunExpr => true,
             SyntaxKind::NameExpr => self
                 .local_of(node)
                 .is_some_and(|local| matches!(self.locals[local].ty, Type::Trace { .. })),
@@ -5371,10 +5380,36 @@ impl<'a> Typer<'a> {
     /// comparable result. Its eval stands as a statement and has no
     /// value: binding or comparing it rejects."
     ///
+    /// TST-17: in an integration test `run(call, config)` is written
+    /// beside it, "whose value is the run's output as an eval's is ...
+    /// in a test that is no integration test it rejects." It is read
+    /// as an eval is, and is one in real time (RUN-3).
+    ///
     /// The call is read as any call of its function is, with a trace
     /// expected of each temporal parameter.
     fn eval(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let at = self.at(node);
+        let real_time = node.kind() == SyntaxKind::RunExpr;
+        if real_time && !self.integration {
+            // "the word": the first token of the form.
+            let word = match node.first_token() {
+                Some(word) => Location::new(self.file, word.span()),
+                None => at,
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::RUN_POSITION,
+                    word,
+                    "`run` is written in a test that is no integration test".to_string(),
+                    "RUN-3",
+                )
+                .with_note(
+                    "a test evaluates in simulation, `eval(...)`; an `integration_test` may \
+                     run in real time",
+                ),
+            );
+        }
         let Some(list) = child(node, SyntaxKind::ArgList) else {
             return (ExprKind::Unread, Type::Unknown);
         };
@@ -5539,6 +5574,7 @@ impl<'a> Typer<'a> {
                 ExprKind::Eval {
                     call: Box::new(call),
                     config,
+                    real_time,
                 },
                 Type::Unknown,
             );
@@ -5558,6 +5594,7 @@ impl<'a> Typer<'a> {
             ExprKind::Eval {
                 call: Box::new(call),
                 config,
+                real_time,
             },
             ty,
         )
@@ -5589,7 +5626,7 @@ impl<'a> Typer<'a> {
             return Box::new(self.expression(written, None));
         };
         let value = self.expression(written, Some(&expected));
-        Box::new(self.fit(value, &expected, "the run configuration of an eval"))
+        Box::new(self.fit(value, &expected, "the configuration of a run"))
     }
 
     /// Reports a trace of one style where the eval it belongs to has
