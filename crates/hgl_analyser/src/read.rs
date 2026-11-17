@@ -62,6 +62,10 @@ pub(crate) fn read(program: &mut Program, diagnostics: &mut Diagnostics) {
             reader.enter(module.files[test.file].file);
             reader.scan(&test.syntax);
         }
+        if let Some(run) = &module.run {
+            reader.enter(module.files[run.file].file);
+            reader.scan(&run.syntax);
+        }
         for (file, node) in &module.instantiations {
             reader.enter(module.files[*file].file);
             reader.scan(node);

@@ -44,6 +44,11 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         for (file, node) in &module.instantiations {
             integer_range(node, module.files[*file].file, diagnostics);
         }
+        // RUN-1: an application's run statement is read as a test's
+        // block is, and its literals are held to the same.
+        if let Some(run) = &module.run {
+            integer_range(&run.syntax, module.files[run.file].file, diagnostics);
+        }
     }
 }
 

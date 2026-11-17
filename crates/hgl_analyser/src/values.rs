@@ -38,7 +38,7 @@ use hgl_source::FileId;
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
-    Local, LocalId, Stmt, UnaryOperator, Value, ValueCategory,
+    Local, LocalId, Run, Stmt, UnaryOperator, Value, ValueCategory,
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
@@ -181,6 +181,32 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .test(test.integration);
             test_bodies.push(body);
         }
+        // RUN-1: an application's run statement. It is no declaration
+        // either, and is read as a graph with no parameter is.
+        let run_body = module.run.as_ref().and_then(|run| {
+            let stand_in = Declaration {
+                name: "run".to_string(),
+                at: run.at,
+                kind: DeclarationKind::Function(Role::Temporal),
+                exported: false,
+                test_only: false,
+                file: run.file,
+                syntax: run.syntax.clone(),
+            };
+            Typer::new(
+                program,
+                module,
+                &stand_in,
+                &empty,
+                Tables {
+                    bindings: &bindings,
+                    written: &written,
+                    calls: &calls,
+                },
+                diagnostics,
+            )
+            .run_statement()
+        });
         // UNIT-8: "Defaults remain required-constant/cold expressions
         // checked against the expected type. Any parameter but a pack
         // may have one: a value function's, const configuration, or a
@@ -243,8 +269,21 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         }
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
+        program.modules[index].run_body = run_body;
         program.modules[index].defaults = defaults;
     }
+}
+
+/// The call an eval or a run statement takes (TST-5, RUN-1).
+#[derive(Clone)]
+struct Called<'a> {
+    /// The name of what is called.
+    name: SyntaxToken,
+    /// The call's argument list.
+    arguments: SyntaxNode,
+    /// The generic arguments it writes after the name, when it writes
+    /// them (GEN-8).
+    generics: Option<&'a CallArguments>,
 }
 
 /// What the earlier passes found of a module, each by the file and
@@ -5420,75 +5459,14 @@ impl<'a> Typer<'a> {
         };
         // EXPR-1: "parentheses group", so `(call)` is the call.
         let target = ungrouped(argument.clone());
-        // The call: `name(arguments)`, or `name<generics>(arguments)`.
-        // GEN-14: `name<...>(...)` the parser left undecided is the
-        // call too, where the resolver decided it is one.
-        let target_at = self.at(&target);
-        let generic = match target.kind() {
-            SyntaxKind::TypedConstructor => true,
-            SyntaxKind::UndecidedConstructor => self
-                .module
-                .decisions
-                .iter()
-                .any(|decision| decision.at == target_at && decision.constructor == Some(true)),
-            _ => false,
-        };
-        let called = match target.kind() {
-            SyntaxKind::CallExpr => target
-                .children()
-                .next()
-                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-                .and_then(|callee| name_token(&callee))
-                .zip(child(&target, SyntaxKind::ArgList))
-                .map(|(name, arguments)| (name, arguments, None)),
-            _ if generic => {
-                // As `typed_constructor` finds them: the generic
-                // arguments are recorded where the whole name starts.
-                let start = match child(&target, SyntaxKind::QualifiedName) {
-                    Some(qualified) => Some(qualified.span().start),
-                    None => name_token(&target).map(|name| name.span().start),
-                };
-                name_token(&target)
-                    .zip(child(&target, SyntaxKind::ArgList))
-                    .zip(start)
-                    .map(|((name, arguments), start)| {
-                        (
-                            name,
-                            arguments,
-                            self.calls.get(&(self.file, start)).copied(),
-                        )
-                    })
-            }
-            _ => None,
-        };
-        // The function the name stands for. FN-4: "Composition and
-        // eval choose the temporal definition if one exists".
-        let function = called.as_ref().and_then(|(name, ..)| {
-            let (module, declarations) = self.declarations(name)?;
-            let kind_of =
-                |declaration: usize| self.program.modules[module].declarations[declaration].kind;
-            let of_role = |role: Role| {
-                declarations.iter().copied().find(|&declaration| {
-                    matches!(
-                        kind_of(declaration),
-                        DeclarationKind::Function(found) | DeclarationKind::NativeFunction(found)
-                            if found == role
-                    )
-                })
-            };
-            of_role(Role::Temporal)
-                .or_else(|| of_role(Role::Value))
-                .map(|declaration| (module, declaration))
-        });
-        let (Some((name, arguments, generics)), Some((module, declaration))) =
-            (called.clone(), function)
-        else {
+        let called = self.call_taken(&target);
+        let function = called
+            .as_ref()
+            .and_then(|called| self.evaluated(&called.name));
+        let (Some(called), Some((module, declaration))) = (called.clone(), function) else {
             // A call of a name nothing binds is left for the prelude,
             // and is not judged (ERR-9).
-            let unbound = called.as_ref().is_some_and(|(name, ..)| {
-                !self.bindings.contains_key(&(self.file, name.span().start))
-            });
-            if !unbound {
+            if !self.unbound(called.as_ref()) {
                 self.diagnostics.emit(
                     error(
                         Category::Type,
@@ -5505,19 +5483,28 @@ impl<'a> Typer<'a> {
             // What the call was given is read all the same, with
             // nothing expected of it, and then what follows the call.
             let unread = match &called {
-                Some((_, arguments, _)) => self.unread_call(arguments),
+                Some(called) => self.unread_call(&called.arguments),
                 None => (ExprKind::Unread, Type::Unknown),
             };
-            self.after_call(&given);
+            self.after_call(&given, "an eval", "TST-5");
             return unread;
         };
+        let name = called.name.clone();
         self.evaluating = true;
-        let (kind, ty) =
-            self.call_function(&name, &arguments, (module, declaration), None, generics);
+        let (kind, ty) = self.call_function(
+            &called.name,
+            &called.arguments,
+            (module, declaration),
+            None,
+            called.generics,
+        );
         self.evaluating = false;
+        // The call is held to what any call in a graph is: a `const`
+        // parameter is given no connection (FN-3).
+        self.constants_of(&kind);
         // EXPR-13: arguments are read in the order written, so the
         // call's before the configuration.
-        let config = self.after_call(&given);
+        let config = self.after_call(&given, "an eval", "TST-5");
         // TST-7: "Within one eval all inputs and expectation use the
         // same dense/timed style." The first trace that has cells says
         // which, and a later one of the other is reported.
@@ -5600,23 +5587,199 @@ impl<'a> Typer<'a> {
         )
     }
 
-    /// What an eval is given after its call, `given` being all it is
-    /// given: the run's configuration, and nothing more. "A second
-    /// argument is the run's configuration" (TST-5); a third is
-    /// reported and read with nothing expected of it.
-    fn after_call(&mut self, given: &[(Option<SyntaxToken>, SyntaxNode)]) -> Option<Box<Expr>> {
+    /// What an eval or a run statement, `what`, is given after its
+    /// call, `given` being all it is given: the run's configuration,
+    /// and nothing more. "A second argument is the run's configuration"
+    /// (TST-5, RUN-1); a third is reported under `rule` and read with
+    /// nothing expected of it.
+    fn after_call(
+        &mut self,
+        given: &[(Option<SyntaxToken>, SyntaxNode)],
+        what: &str,
+        rule: &'static str,
+    ) -> Option<Box<Expr>> {
         let config = given.get(1).map(|(_, written)| self.run_config(written));
         for (_, extra) in given.iter().skip(2) {
             self.diagnostics.emit(error(
                 Category::Type,
                 codes::ARGUMENT_UNEXPECTED,
                 self.at(extra),
-                "an eval takes a call and a run configuration, and nothing more".to_string(),
-                "TST-5",
+                format!("{what} takes a call and a run configuration, and nothing more"),
+                rule,
             ));
             self.expression(extra, None);
         }
         config
+    }
+
+    /// The call an eval or a run statement takes, `target` being its
+    /// first argument: `name(arguments)`, or `name<generics>(arguments)`.
+    /// GEN-14: `name<...>(...)` the parser left undecided is the call
+    /// too, where the resolver decided it is one. `None` for anything
+    /// else.
+    fn call_taken(&self, target: &SyntaxNode) -> Option<Called<'a>> {
+        let target_at = self.at(target);
+        let generic = match target.kind() {
+            SyntaxKind::TypedConstructor => true,
+            SyntaxKind::UndecidedConstructor => self
+                .module
+                .decisions
+                .iter()
+                .any(|decision| decision.at == target_at && decision.constructor == Some(true)),
+            _ => false,
+        };
+        let arguments = child(target, SyntaxKind::ArgList)?;
+        match target.kind() {
+            SyntaxKind::CallExpr => {
+                let callee = target
+                    .children()
+                    .next()
+                    .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+                Some(Called {
+                    name: name_token(&callee)?,
+                    arguments,
+                    generics: None,
+                })
+            }
+            _ if generic => {
+                // As `typed_constructor` finds them: the generic
+                // arguments are recorded where the whole name starts.
+                let name = name_token(target)?;
+                let start = match child(target, SyntaxKind::QualifiedName) {
+                    Some(qualified) => qualified.span().start,
+                    None => name.span().start,
+                };
+                Some(Called {
+                    name,
+                    arguments,
+                    generics: self.calls.get(&(self.file, start)).copied(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The function `name` stands for where it is evaluated or run: a
+    /// function of a module, native or not. FN-4: "Composition and eval
+    /// choose the temporal definition if one exists".
+    fn evaluated(&self, name: &SyntaxToken) -> Option<(usize, usize)> {
+        let (module, declarations) = self.declarations(name)?;
+        let kind_of =
+            |declaration: usize| self.program.modules[module].declarations[declaration].kind;
+        let of_role = |role: Role| {
+            declarations.iter().copied().find(|&declaration| {
+                matches!(
+                    kind_of(declaration),
+                    DeclarationKind::Function(found) | DeclarationKind::NativeFunction(found)
+                        if found == role
+                )
+            })
+        };
+        of_role(Role::Temporal)
+            .or_else(|| of_role(Role::Value))
+            .map(|declaration| (module, declaration))
+    }
+
+    /// True for a call of a name nothing binds, which is left for the
+    /// prelude and not judged (ERR-9).
+    fn unbound(&self, called: Option<&Called<'a>>) -> bool {
+        called.is_some_and(|called| {
+            !self
+                .bindings
+                .contains_key(&(self.file, called.name.span().start))
+        })
+    }
+
+    /// An application's run statement (RUN-1): "its run statement is
+    /// `run(call, config)` or `eval(call, config)`, where the call is
+    /// of an entry, written as any call is and giving the entry's const
+    /// arguments, and the configuration is a value of core's
+    /// `RunConfig`, or `RunConfig()` where none is written." "An entry
+    /// is a temporal function with no temporal parameters."
+    ///
+    /// The call is read as a graph's call of the entry is: a `const`
+    /// parameter takes a constant.
+    fn run_statement(mut self) -> Option<Run> {
+        self.graph = true;
+        let form = self.declaration.syntax.children().next()?;
+        let at = self.at(&form);
+        let real_time = form.kind() == SyntaxKind::RunExpr;
+        let list = child(&form, SyntaxKind::ArgList)?;
+        let given = arguments_of(&list);
+        // The parser has reported a run statement given nothing.
+        let (_, argument) = given.first().cloned()?;
+        // EXPR-1: "parentheses group", so `(call)` is the call.
+        let target = ungrouped(argument.clone());
+        let called = self.call_taken(&target);
+        let function = called
+            .as_ref()
+            .and_then(|called| self.evaluated(&called.name));
+        // "An entry is a temporal function with no temporal
+        // parameters." A signature not read is not judged.
+        let entry = function.filter(|&(module, declaration)| {
+            let module = &self.program.modules[module];
+            let temporal = module.declarations[declaration].kind.role() == Some(Role::Temporal);
+            let inputs = match module.details.get(declaration) {
+                Some(Detail::Callable(signature)) => signature
+                    .parameters
+                    .iter()
+                    .any(|parameter| !parameter.constant),
+                _ => false,
+            };
+            temporal && !inputs
+        });
+        let (kind, ty) = match (&called, entry) {
+            (Some(called), Some(entry)) => {
+                let read = self.call_function(
+                    &called.name,
+                    &called.arguments,
+                    entry,
+                    None,
+                    called.generics,
+                );
+                // The call is held to what any call in a graph is: a
+                // `const` parameter is given no connection (FN-3).
+                self.constants_of(&read.0);
+                read
+            }
+            _ => {
+                if !self.unbound(called.as_ref()) {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Type,
+                            codes::RUN_ENTRY,
+                            self.at(&argument),
+                            "a run statement's first argument is a call of an entry, and this \
+                             is none"
+                                .to_string(),
+                            "RUN-1",
+                        )
+                        .with_note("an entry is a temporal function with no temporal parameters"),
+                    );
+                }
+                // What the call was given is read all the same, with
+                // nothing expected of it.
+                match &called {
+                    Some(called) => self.unread_call(&called.arguments),
+                    None => (ExprKind::Unread, Type::Unknown),
+                }
+            }
+        };
+        let call = Expr {
+            kind,
+            ty,
+            at: self.at(&target),
+        };
+        // EXPR-13: the call is read before the configuration.
+        let config = self
+            .after_call(&given, "a run statement", "RUN-1")
+            .map(|config| *config);
+        Some(Run {
+            real_time,
+            call,
+            config,
+            at,
+        })
     }
 
     /// The configuration of a run, written as the second argument of

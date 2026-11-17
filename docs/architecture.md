@@ -538,8 +538,13 @@ what an application has that a module has not:
 | It has one run statement | UNIT-14 | `application.run_count`, at the application's path for none and at each statement after the first |
 | Its run statement follows its declarations, and a run statement stands in no module | UNIT-14 | `run.position` |
 
-Not read yet: the call and the configuration of a run statement
-(RUN-1, `run.entry`).
+The run statement is kept on its unit, `Module::run`, and read by the
+passes that read a test: its names are resolved in the unit's scope, the
+types it writes are read, and `Typer::run_statement` types it as
+`hir::Run` in `Module::run_body` (RUN-1). Its first argument is a call
+of an entry, a temporal function with no temporal parameters; anything
+else is `run.entry`. The call is read as a graph's call of the entry is,
+and the configuration as an eval's is.
 
 ### Integration tests
 

@@ -289,6 +289,8 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
         // "A trace is an argument of that call and of no call inside
         // it": the call inside takes a value, and gives one.
         "    assert eval(pass(value: forward(value: [7]))) == [7]\n",
+        // FN-3: a `const` parameter of the call is given no connection.
+        "    assert eval(scaled(left: [1], right: [2], factor: forward(3))) == [9]\n",
         "}\n",
     ));
     assert_eq!(
@@ -299,6 +301,7 @@ fn an_eval_takes_a_call_and_a_run_configuration() {
             "m.hgl:34:17 type/generic.argument_count GEN-8",
             "m.hgl:35:29 type/type.mismatch EXPR-5",
             "m.hgl:35:44 type/type.mismatch EXPR-5",
+            "m.hgl:36:55 phase/connection.as_constant FN-3",
         ],
         "{}",
         wrong.report

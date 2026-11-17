@@ -247,6 +247,8 @@ pub mod codes {
     /// An application's path is a module's or another application's
     /// (UNIT-14).
     pub const APPLICATION_DUPLICATE_PATH: &str = "application.duplicate_path";
+    /// A run statement's first argument is no call of an entry (RUN-1).
+    pub const RUN_ENTRY: &str = "run.entry";
     /// An endpoint operation given what is no temporal input of its
     /// function and not `out` (TIME-9).
     pub const ENDPOINT_ARGUMENT: &str = "endpoint.argument";

@@ -935,6 +935,19 @@ fn a_test_of_an_application_is_named_by_its_path() {
     assert_eq!(ran.stopped, NONE);
     assert_eq!(ran.cases, ["passed rejection live.hgl:3 run statement"]);
 
+    // RUN-1: what a run statement calls is checked as its case.
+    let ran = run_all(&[(
+        "live.hgl",
+        concat!(
+            "application app.live\n",
+            "const fn fixed() -> i64 => 1\n",
+            "# expect-error(type, \"run.entry\")\n",
+            "run(fixed())\n",
+        ),
+    )]);
+    assert_eq!(ran.stopped, NONE);
+    assert_eq!(ran.cases, ["passed rejection live.hgl:4 run statement"]);
+
     // An annotation over the `application` line has nothing to own, as
     // one over a `module` line has not.
     let ran = run_all(&[(

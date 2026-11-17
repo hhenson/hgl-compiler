@@ -220,6 +220,12 @@ impl Resolver<'_> {
             self.enter(test.file, true);
             self.children(&test.syntax);
         }
+        // RUN-1: the names of an application's run statement are its
+        // unit's: what it declares and imports.
+        if let Some(run) = &module.run {
+            self.enter(run.file, false);
+            self.children(&run.syntax);
+        }
         for (file, node) in &module.instantiations {
             self.enter(*file, false);
             self.children(node);
