@@ -393,6 +393,17 @@ fn a_place_assigned_in_a_graph_rebinds_its_var() {
         "    point.x = flag\n",
         "    return point\n",
         "}\n",
+        // An index is part of what the `var` becomes: one that is a
+        // connection selects the element as the graph runs.
+        "fn indexed(index: i64, const slot: i64, price: f64, levels: list<f64, 2>) -> f64 {\n",
+        "    var row = [1.0, 2.0]\n",
+        "    row[slot] = 3.0\n",
+        "    row[index] = 3.0\n",
+        "    row[index] += 1.0\n",
+        "    var live = levels\n",
+        "    live[index] = price\n",
+        "    return price\n",
+        "}\n",
         // One child for each member: nothing is carried out of it.
         "fn each(first: Point, growing: list<f64>) -> Point {\n",
         "    var point = first\n",
@@ -413,7 +424,11 @@ fn a_place_assigned_in_a_graph_rebinds_its_var() {
             "m.hgl:26:5 name/binding.immutable EXPR-3",
             "m.hgl:27:5 name/binding.immutable EXPR-3",
             "m.hgl:29:15 type/type.mismatch EXPR-5",
-            "m.hgl:35:9 phase/loop.carried CTRL-15",
+            // The index that is a connection, and the compound
+            // assignment that reads the place it selects.
+            "m.hgl:35:9 type/binding.category CTRL-14",
+            "m.hgl:36:5 type/binding.category CTRL-14",
+            "m.hgl:44:9 phase/loop.carried CTRL-15",
         ]
     );
     // The `var` is a connection before and after, and the assignment is
