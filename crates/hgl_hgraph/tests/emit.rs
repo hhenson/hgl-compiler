@@ -196,12 +196,12 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "\n",
     "def test_scales():\n",
-    "    seen = _harness.evaluate(wired, value=[1, None, 2])\n",
+    "    seen = _harness.evaluate(wired, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, None, 2])\n",
     "    if not (_harness.same(seen, [1, None, 12])):\n",
     "        raise _py.AssertionError()\n",
-    "    if not (not _harness.same(_harness.evaluate(scaled, value=[5], factor=2), [])):\n",
+    "    if not (not _harness.same(_harness.evaluate(scaled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[5], factor=2), [])):\n",
     "        raise _py.AssertionError()\n",
-    "    _harness.evaluate(sink, value=[True])\n",
+    "    _harness.evaluate(sink, {\"value\": _hg.TS[_py.bool]}, None, value=[True])\n",
 );
 
 #[test]
@@ -244,9 +244,9 @@ fn cores_scalar_eval_cases_are_written_whole() {
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
-        "    if not (_harness.same(_harness.evaluate(pass_i64, value=[None, 7, None, None]), [None, 7])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_i64, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[None, 7, None, None]), [None, 7])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.same(_harness.evaluate(pass_str, value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_str, {\"value\": _hg.TS[_py.str]}, _hg.TS[_py.str], value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(python.contains(expected), "the module has:\n{expected}");
@@ -568,9 +568,9 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         // A node's configuration, in a graph and in an eval.
         "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
         "    return offset(value=value, by=10)\n",
-        "    if not (_harness.same(_harness.evaluate(offset, value=[1], by=10), [11])):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1], by=10), [11])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.same(_harness.evaluate(offset, value=[1], by=1), [2])):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1], by=1), [2])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -1060,10 +1060,10 @@ fn no_two_names_are_one_python_name() {
             "    return _core.add__i64_i64(lhs=_value_doubled(value=value.value), rhs=1)\n",
         ),
         "def eight():\n    return _value_doubled(value=4)\n",
-        "    if not (_harness.same(_harness.evaluate(doubled, value=[4]), [9])):\n",
+        "    if not (_harness.same(_harness.evaluate(doubled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[4]), [9])):\n",
         "        raise _py.AssertionError()\n",
         // An input named as the harness's own parameter is.
-        "    if not (_harness.same(_harness.evaluate(pass_, target=[1]), [1])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_, {\"target\": _hg.TS[_py.int]}, _hg.TS[_py.int], target=[1]), [1])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -1301,23 +1301,32 @@ const BOUNDED: &str = concat!(
     "    assert first(eval(pass(value: [7]), RunConfig(start: later))) == later\n",
     "    assert first(eval(pass(value: [7]))) == earliest_start\n",
     "    assert eval(pass(value: [1, 2, 3]), RunConfig(start: later, length: 2us)) == [1, 2]\n",
+    // A run may start at any instant: a trace's cells are counted from
+    // its run's start, however far that is from the earliest one.
+    "    let day: datetime = @2026-09-03T09:30:00Z\n",
+    "    assert eval(pass(value: [1, _, 3]), RunConfig(start: day)) == [1, _, 3]\n",
+    "    assert first(eval(pass(value: [7]), RunConfig(start: day))) == day\n",
     "}\n",
 );
 
 /// Core's CRUN-2: "A `RunConfig` with both an `end` and a `length` is
 /// refused before the run's graph is built, an HGL error with code
-/// `run.end_and_length`." And what hgraph 0.9.0 cannot do: give the dense
-/// trace of a run that starts far after the earliest start.
+/// `run.end_and_length`." And a dense trace too long to give: one has a
+/// cell for each smallest step, and this source publishes a second
+/// after its run starts.
 const BOUNDED_FAILS: &str = concat!(
     "module demo.bounded.fails\n",
     "fn pass(value: i64) -> i64 {\n",
     "    when { return delta_value(value) }\n",
     "}\n",
+    "fn slow() -> i64 {\n",
+    "    yield 1s: 1\n",
+    "}\n",
     "test both_ends {\n",
     "    eval(pass(value: [1]), RunConfig(end: earliest_start + 1us, length: 1us))\n",
     "}\n",
-    "test far_start {\n",
-    "    eval(pass(value: [1]), RunConfig(start: @2026-09-03T09:30:00Z))\n",
+    "test too_dense {\n",
+    "    eval(slow())\n",
     "}\n",
 );
 
@@ -1329,8 +1338,8 @@ fn an_evals_configuration_is_given_to_the_harness() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_bounded/__init__.py");
     for expected in [
-        "_harness.evaluate(pass_, value=[1, 2, 3, 4, 5], _config=",
-        "_harness.evaluate(pass_, value=[7])",
+        "_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, 2, 3, 4, 5], _config=",
+        "_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[7])",
     ] {
         assert!(
             python.contains(expected),
@@ -1531,7 +1540,7 @@ fn a_value_function_given_a_connection_is_lifted() {
         ),
         // An eval of a value function runs it lifted.
         concat!(
-            "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, value=[1, None, 3]), [2, None, 6])):\n",
+            "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, None, 3]), [2, None, 6])):\n",
             "        raise _py.AssertionError()\n",
         ),
     ] {
@@ -1792,7 +1801,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         // A call names the instance for its types.
         "    return _inst_identity_sum__i64(lhs=a, rhs=b)\n",
         "    return _inst_scaled__3(value=value)\n",
-        "_harness.evaluate(_inst_scaled__4, value=[2])",
+        "_harness.evaluate(_inst_scaled__4, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[2])",
     ] {
         assert!(
             python.contains(expected),
@@ -2096,7 +2105,8 @@ fn an_instance_that_is_not_written_is_reported() {
     )]);
     // The type of the input, at the parameter, and of the result, at
     // the function's name: once each for the one instance that has it,
-    // of the node and of the graph that calls it.
+    // of the node and of the graph that calls it. Then at the eval,
+    // whose run is wired with that type.
     assert_eq!(
         emitted.reported,
         [
@@ -2104,6 +2114,7 @@ fn an_instance_that_is_not_written_is_reported() {
             "held.hgl:2:4 target.unsupported",
             "held.hgl:5:13 target.unsupported",
             "held.hgl:5:4 target.unsupported",
+            "held.hgl:10:16 target.unsupported",
         ]
     );
     assert_eq!(emitted.blocked("whole"), None);
@@ -2678,7 +2689,7 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
         "    return _lift_1_eq__T_T(lhs=side, rhs=Side[\"hold\"])\n",
         // A trace of members.
         concat!(
-            "_harness.same(_harness.evaluate(flipped, side=[Side[\"buy\"], None, Side[\"sell\"], ",
+            "_harness.same(_harness.evaluate(flipped, {\"side\": _hg.TS[Side]}, _hg.TS[Side], side=[Side[\"buy\"], None, Side[\"sell\"], ",
             "Side[\"hold\"]]), [Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]])",
         ),
     ] {
@@ -4057,8 +4068,8 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
             "added=_py.frozenset((joined,)), tp=_py.int)\n",
         ),
-        "    if not (_harness.same(_harness.evaluate(members, command=[0]), [])):\n",
-        "    if not (not _harness.same(_harness.evaluate(members, command=[1, 3]), [",
+        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hg.TS[_py.int]}, _hg.TSS[_py.int], command=[0]), [])):\n",
+        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hg.TS[_py.int]}, _hg.TSS[_py.int], command=[1, 3]), [",
     ] {
         assert!(
             python.contains(expected),
@@ -4128,8 +4139,8 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
     let python = emitted.text("_hgl/_m_demo/_m_given/__init__.py");
     for expected in [
         // `pass` is a word of Python's, and is written `pass_`.
-        "ticks(seen=_harness.publications(_harness.evaluate(pass_, value=[7, None, 7, 9])))",
-        "    seen = _harness.evaluate(pass_, value=[None, 1, None, 2])\n",
+        "ticks(seen=_harness.publications(_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[7, None, 7, 9])))",
+        "    seen = _harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[None, 1, None, 2])\n",
         "total(seen=_harness.publications(seen))",
     ] {
         assert!(
@@ -4472,7 +4483,7 @@ fn a_failure_names_the_statement_that_failed() {
         emitted.test("nested_raises").0,
         emitted.test("nested_then_raised").0,
         emitted.test("both_ends").0,
-        emitted.test("far_start").0,
+        emitted.test("too_dense").0,
     ];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     let said: Vec<String> = ran
@@ -4535,10 +4546,10 @@ fn a_failure_names_the_statement_that_failed() {
             // match for the outer one though it has its code.
             "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
             "passed",
-            // CRUN-2: an `end` with a `length`. And a start hgraph
-            // 0.9.0 gives no dense trace from.
-            "failed bounded.hgl:6:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
-            "failed bounded.hgl:9:5 RuntimeError: the hgraph target cannot give the dense trace of a run that starts this far after the earliest start",
+            // CRUN-2: an `end` with a `length`. And a dense trace of a
+            // million cells and one.
+            "failed bounded.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
+            "failed bounded.hgl:12:5 RuntimeError: the dense trace of this run would have 1000001 cells: its last publication is that many smallest steps after its start",
         ]
     );
 

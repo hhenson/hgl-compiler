@@ -388,10 +388,26 @@ def fn_log(logger, level, message):
     logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
 
 
+class Held:
+    """A value given to hgraph to keep as it is.
+
+    hgraph makes a value of its own of what it is given to keep, a
+    node's configuration and what its global state holds, and has none
+    for some of what an HGL value may be: a tuple that holds a set's
+    delta, say. An object of a class it does not know is kept as the
+    object it is, so a value is given to it inside one.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
 def get_GlobalState_str(store, key):
     """CAP-6: the value under `key`; "an absent key fails the node"."""
     try:
-        return store[key]
+        return store[key].value
     except KeyError:
         raise HglError(f"the global store holds nothing under {key!r}") from None
 
@@ -402,8 +418,8 @@ def has_GlobalState_str(store, key):
 
 
 def put_GlobalState_str_V(store, key, value):
-    """CAP-6: "puts one there"."""
-    store[key] = value
+    """CAP-6: "puts one there". It is kept as it is (`Held`)."""
+    store[key] = Held(value)
 
 
 def get_dict_K__T__K(store, key):
