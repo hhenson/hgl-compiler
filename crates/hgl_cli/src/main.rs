@@ -33,6 +33,8 @@
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
 
+mod replace;
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,6 +49,7 @@ use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
 use hgl_runner::{Case, CaseKind, Executor, Outcome, Report, Selection};
 use hgl_source::{FileId, SourceMap};
+use replace::Replacement;
 use walkdir::WalkDir;
 
 /// The source was rejected.
@@ -161,8 +164,9 @@ struct TestArgs {
     target: Option<Target>,
 
     /// For `--target hgraph`: the Python interpreter to run the
-    /// program with, one that has hgraph installed. `python3` when not
-    /// given, or `python` on Windows.
+    /// program with, one that has hgraph installed. When not given,
+    /// the one the environment variable `HGL_HGRAPH_PYTHON` names, and
+    /// with neither `python3`, or `python` on Windows.
     #[arg(long, value_name = "PATH", requires = "target")]
     python: Option<PathBuf>,
 
@@ -213,10 +217,23 @@ struct RunArgs {
     target: Target,
 
     /// For `--target hgraph`: the Python interpreter to run the
-    /// program with, one that has hgraph installed. `python3` when not
-    /// given, or `python` on Windows.
+    /// program with, one that has hgraph installed. When not given,
+    /// the one the environment variable `HGL_HGRAPH_PYTHON` names, and
+    /// with neither `python3`, or `python` on Windows.
     #[arg(long, value_name = "PATH")]
     python: Option<PathBuf>,
+
+    /// Replace an argument of the application's entry: `--arg upto=5`.
+    /// The value is HGL, a constant of the parameter's type, and what
+    /// the application writes is the default (RUN-2). It may be given
+    /// more than once.
+    #[arg(long = "arg", value_name = "NAME=VALUE", value_parser = replace::replacement)]
+    arguments: Vec<Replacement>,
+
+    /// Replace a field of the application's run configuration, as
+    /// `--arg` replaces an argument: `--config length=10s`.
+    #[arg(long = "config", value_name = "FIELD=VALUE", value_parser = replace::replacement)]
+    config: Vec<Replacement>,
 
     /// Keep what the target wrote for the run in this directory. With
     /// none, it is written to a temporary directory and removed after
@@ -226,6 +243,44 @@ struct RunArgs {
 
     #[command(flatten)]
     limits: LimitArgs,
+}
+
+/// The application `hgl run` runs, by its path: the one `named`, or the
+/// program's only one. On failure the reason has been printed, and the
+/// exit status to end with is returned.
+fn chosen_application(program: &Program, named: Option<&str>) -> Result<String, ExitCode> {
+    let paths: Vec<&str> = program
+        .modules
+        .iter()
+        .filter(|module| module.run_body.is_some())
+        .map(|module| module.path.as_str())
+        .collect();
+    match (named, paths.as_slice()) {
+        (_, []) => {
+            eprintln!("hgl: the program has no application to run");
+            Err(ExitCode::from(EXIT_FAILED))
+        }
+        (None, [only]) => Ok(only.to_string()),
+        (None, several) => {
+            eprintln!(
+                "hgl: the program has {}; name one with `--application`: {}",
+                count(several.len(), "application"),
+                paths.join(", ")
+            );
+            Err(ExitCode::from(EXIT_FAILED))
+        }
+        (Some(path), applications) => {
+            if applications.contains(&path) {
+                Ok(path.to_string())
+            } else {
+                eprintln!(
+                    "hgl: the program has no application `{path}`; it has: {}",
+                    paths.join(", ")
+                );
+                Err(ExitCode::from(EXIT_FAILED))
+            }
+        }
+    }
 }
 
 /// What `hgl emit` writes for, and `hgl test` and `hgl run` run on.
@@ -540,6 +595,32 @@ struct Parsed {
 /// Finds, reads, lexes and parses every source file under `roots`, and
 /// core's module when no file under the roots belongs to `module core`.
 fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> {
+    parse_program_with(roots, limits, None)
+}
+
+/// The interpreter a program is run with on hgraph: the one `--python`
+/// gave, or the one the environment variable `HGL_HGRAPH_PYTHON`
+/// names, or `python3`, which is `python` on Windows.
+fn interpreter(given: &Option<PathBuf>) -> PathBuf {
+    given
+        .clone()
+        .or_else(|| {
+            std::env::var_os("HGL_HGRAPH_PYTHON")
+                .filter(|named| !named.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }))
+}
+
+/// As [`parse_program`], with the text of one file given in place of
+/// what is on disk: `replaced` is the file's name, as it is in the
+/// source map, and the text to read for it. This is how `hgl run`
+/// reads an application with its replacements made (RUN-2).
+fn parse_program_with(
+    roots: &[PathBuf],
+    limits: Limits,
+    replaced: Option<(&str, &str)>,
+) -> Result<Parsed, ExitCode> {
     let paths = find_sources(roots)?;
     let mut sources = SourceMap::new();
     let mut diagnostics = Diagnostics::new();
@@ -559,7 +640,17 @@ fn parse_program(roots: &[PathBuf], limits: Limits) -> Result<Parsed, ExitCode> 
             ParsedFile::new(file, parse.syntax())
         };
     for path in &paths {
-        let file = load_into(&mut sources, path)?;
+        let name = path.display().to_string();
+        let file = match replaced {
+            Some((replaced, text)) if replaced == name => match sources.add(name, text) {
+                Ok(file) => file,
+                Err(error) => {
+                    eprintln!("hgl: {error}");
+                    return Err(ExitCode::from(EXIT_FAILED));
+                }
+            },
+            _ => load_into(&mut sources, path)?,
+        };
         files.push(parse_file(&sources, file, limits, &mut diagnostics));
     }
     // A program that brings its own `module core` is checked with that
@@ -744,62 +835,75 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// configuration by what starts the application is not written: the
 /// application runs as it is written.
 fn run(arguments: &RunArgs) -> ExitCode {
+    let limits = arguments.limits.limits();
     let Parsed {
-        sources,
+        mut sources,
         files: parsed,
         mut diagnostics,
         ..
-    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+    } = match parse_program(&arguments.roots, limits) {
         Ok(program) => program,
         Err(status) => return status,
     };
-    let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    let mut program = hgl_analyser::analyse(&parsed, &mut diagnostics);
     if diagnostics.has_errors() {
         println!("not run: the program is rejected");
         return report(&sources, diagnostics);
     }
     let Target::Hgraph = arguments.target;
+    let chosen = match chosen_application(&program, arguments.application.as_deref()) {
+        Ok(path) => path,
+        Err(status) => return status,
+    };
+    // RUN-2: what starts the application replaces an argument of its
+    // entry or a field of its configuration. The application is read
+    // again with each replacement written in its run statement, and the
+    // program checked again: the replacement is held to what an
+    // argument the application writes is.
+    if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
+        let (file, text) = match replace::replaced(
+            &sources,
+            &parsed,
+            &program,
+            &chosen,
+            &arguments.arguments,
+            &arguments.config,
+            limits,
+        ) {
+            Ok(replaced) => replaced,
+            Err(message) => {
+                eprintln!("hgl: {message}");
+                return ExitCode::from(EXIT_FAILED);
+            }
+        };
+        let name = sources.file(file).name().to_string();
+        let Parsed {
+            sources: read_again,
+            files: parsed,
+            diagnostics: mut found,
+            ..
+        } = match parse_program_with(&arguments.roots, limits, Some((&name, &text))) {
+            Ok(program) => program,
+            Err(status) => return status,
+        };
+        program = hgl_analyser::analyse(&parsed, &mut found);
+        sources = read_again;
+        if found.has_errors() {
+            println!("not run: the program is rejected with the replacements given");
+            return report(&sources, found);
+        }
+    }
     // What the target does not write yet is no error of the program:
     // it matters where the application needs it.
     let mut unwritten = Diagnostics::new();
     let output = hgl_hgraph::transpile(&program, &mut unwritten);
-    let paths = || {
-        let paths: Vec<&str> = output
-            .applications
-            .iter()
-            .map(|application| application.path.as_str())
-            .collect();
-        paths.join(", ")
-    };
-    let chosen = match (&arguments.application, output.applications.as_slice()) {
-        (_, []) => {
-            eprintln!("hgl: the program has no application to run");
-            return ExitCode::from(EXIT_FAILED);
-        }
-        (None, [_]) => 0,
-        (None, several) => {
-            eprintln!(
-                "hgl: the program has {}; name one with `--application`: {}",
-                count(several.len(), "application"),
-                paths()
-            );
-            return ExitCode::from(EXIT_FAILED);
-        }
-        (Some(path), applications) => {
-            match applications
-                .iter()
-                .position(|application| application.path == *path)
-            {
-                Some(found) => found,
-                None => {
-                    eprintln!(
-                        "hgl: the program has no application `{path}`; it has: {}",
-                        paths()
-                    );
-                    return ExitCode::from(EXIT_FAILED);
-                }
-            }
-        }
+    let Some(chosen) = output
+        .applications
+        .iter()
+        .position(|application| application.path == chosen)
+    else {
+        eprintln!("hgl: the target wrote no application `{chosen}`");
+        return ExitCode::from(EXIT_FAILED);
     };
     let application = &output.applications[chosen];
     let name = hgl_hgraph::TARGET;
@@ -835,10 +939,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             }
         },
     };
-    let python = arguments
-        .python
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
+    let python = interpreter(&arguments.python);
     // An interrupt or a request to end, of this process, is the host's
     // stop of the run (RUN-3). It is passed to the interpreter, which
     // one sent to this process alone does not reach, and this process
@@ -923,10 +1024,7 @@ fn test(arguments: &TestArgs) -> ExitCode {
     // The target the tests run on, and where it writes the program.
     let mut on_hgraph = arguments.target.map(|Target::Hgraph| OnHgraph {
         sources: &sources,
-        python: arguments
-            .python
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" })),
+        python: interpreter(&arguments.python),
         keep: arguments.keep.as_deref(),
     });
     let executor = on_hgraph

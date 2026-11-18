@@ -146,6 +146,131 @@ fn a_rejected_program_is_not_run() {
     );
 }
 
+/// RUN-2: "What starts an application may replace an argument of its
+/// entry or a field of its configuration with a constant checked
+/// against the type it replaces". A replacement that names nothing the
+/// entry or the configuration has is refused before anything is run:
+/// status 2. One of the wrong type is the program's error, reported
+/// where the application would have written it: status 1.
+#[test]
+fn a_replacement_is_checked_before_the_application_is_run() {
+    let root = scratch("replacements_checked");
+    write(&root, "ticks.hgl", TICKS);
+    let application = write(&root, "backtest.hgl", BACKTEST);
+    let run = |given: &[&str]| {
+        let mut arguments = vec!["run".to_string(), argument(&root)];
+        arguments.extend(given.iter().map(|given| given.to_string()));
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        hgl(&arguments)
+    };
+
+    let output = run(&["--arg", "limit=4"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stderr),
+        "hgl: the entry `counted` has no parameter `limit`: it has upto, every\n"
+    );
+    let output = run(&["--config", "until=4"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stderr),
+        "hgl: the configuration `RunConfig` has no field `until`: it has start, end, length\n"
+    );
+    // Text that would add an argument of its own is no one expression.
+    let output = run(&["--arg", "upto=3, every: 2s"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        text(&output.stderr).starts_with("hgl: the value of `upto`, `3, every: 2s`, is not HGL"),
+        "{}",
+        text(&output.stderr)
+    );
+
+    // "a constant checked against the type it replaces".
+    let output = run(&["--arg", "upto=\"three\""]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stdout),
+        "not run: the program is rejected with the replacements given\n"
+    );
+    let reported = text(&output.stderr);
+    assert!(reported.contains("type.mismatch"), "{reported}");
+    // The error is where the application would have written the value,
+    // and shows the statement as it was checked.
+    assert!(
+        reported.contains(&format!("{application}:5:21")),
+        "{reported}"
+    );
+    assert!(
+        reported.contains("eval(counted(upto: (\"three\")), RunConfig(length: 10s))"),
+        "{reported}"
+    );
+    // The same for a field of the configuration.
+    let output = run(&["--config", "length=3"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stderr).contains("type.mismatch"),
+        "{}",
+        text(&output.stderr)
+    );
+    // A replacement is a constant: nothing of the application's file
+    // that is no constant is one.
+    let output = run(&["--arg", "upto=missing"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stderr).contains("name.unknown"),
+        "{}",
+        text(&output.stderr)
+    );
+}
+
+/// RUN-2: the replaced argument and the replaced field are what the
+/// application runs with, "and what the application writes is the
+/// default". The interpreter is the one `HGL_HGRAPH_PYTHON` names
+/// where `--python` is not given. Needs hgraph, as below.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn an_application_runs_with_what_starts_it_replaces() {
+    std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let root = scratch("replaced");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "backtest.hgl", BACKTEST);
+    // As written: `counted(upto: 3)` under `RunConfig(length: 10s)`.
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--arg",
+        "upto=5",
+        "--arg",
+        "every=500ms",
+        "--config",
+        "length=2s",
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:00.500001Z  1\n",
+            "1970-01-01T00:00:01.000001Z  2\n",
+            "1970-01-01T00:00:01.500001Z  3\n",
+            "ran demo.ticks.backtest on hgraph: 3 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0));
+    // With nothing replaced it runs as it is written.
+    let output = hgl(&["run", &argument(&root)]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  1\n",
+            "1970-01-01T00:00:02.000001Z  2\n",
+            "1970-01-01T00:00:03.000001Z  3\n",
+            "ran demo.ticks.backtest on hgraph: 3 publications\n",
+        )
+    );
+}
+
 /// An application that needs a form the target does not write yet is
 /// not run, and says what it needs and where: status 2.
 #[test]
