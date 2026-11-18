@@ -40,6 +40,7 @@ pub(crate) fn can_start_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Float
             | SyntaxKind::Str
             | SyntaxKind::Duration
+            | SyntaxKind::Tenor
             | SyntaxKind::Temporal
             | SyntaxKind::KwTrue
             | SyntaxKind::KwFalse
@@ -123,6 +124,7 @@ pub(crate) fn is_scalar_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwTime
             | SyntaxKind::KwDatetime
             | SyntaxKind::KwDuration
+            | SyntaxKind::KwTenor
             | SyntaxKind::KwCivilDatetime
             | SyntaxKind::KwTimezone
             | SyntaxKind::KwZonedDatetime

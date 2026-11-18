@@ -23,7 +23,7 @@
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_source::{FileId, SourceMap};
 
-use crate::shape::{self, DURATION_UNITS, NumberForm, is_zone_character};
+use crate::shape::{self, DURATION_UNITS, NumberForm, TENOR_UNITS, is_zone_character};
 use crate::token::{Token, TokenKind};
 
 /// The diagnostic codes for literal values. Like the lexer's codes, each
@@ -37,6 +37,8 @@ pub mod codes {
     pub const NUMBER_FLOAT_RANGE: &str = "number.float_range";
     /// A duration that breaks LEX-13.
     pub const DURATION_INVALID: &str = "duration.invalid";
+    /// A tenor that breaks LEX-28.
+    pub const TENOR_INVALID: &str = "tenor.invalid";
     /// A date, time or offset whose fields do not exist (LEX-11, LEX-19).
     pub const DATE_TIME_INVALID_FIELD: &str = "date_time.invalid_field";
     /// A zone name that breaks LEX-12.
@@ -224,7 +226,9 @@ pub fn decode_integer(text: &str) -> Result<u64, LiteralError> {
         // Skip the two-character prefix.
         NumberForm::Hexadecimal => (&text[2..], 16, "LEX-23"),
         NumberForm::Binary => (&text[2..], 2, "LEX-23"),
-        NumberForm::Float { .. } | NumberForm::Duration => return Err(LiteralError::Malformed),
+        NumberForm::Float { .. } | NumberForm::Duration | NumberForm::Tenor => {
+            return Err(LiteralError::Malformed);
+        }
     };
     // LEX-22: the separators do not change the value.
     let digits = digits.replace('_', "");
@@ -335,6 +339,116 @@ pub fn decode_duration(text: &str) -> Result<i64, LiteralError> {
         Ok(microseconds) => Ok(microseconds),
         Err(_) => reject(format!("duration `{text}` is outside the duration domain")),
     }
+}
+
+// ---- Tenors ---------------------------------------------------------------
+
+/// What a tenor literal denotes (LEX-28, TYPE-17): "a count of months and
+/// a count of days, or a count of business days".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tenor {
+    /// `1Y6M`, `2W`: a count of months and a count of days. "A year is
+    /// twelve months and a week seven days."
+    Moves {
+        /// The months, the years among them.
+        months: i64,
+        /// The days, the weeks among them.
+        days: i64,
+    },
+    /// `2B`: a count of business days.
+    BusinessDays(i64),
+}
+
+/// The value of a tenor literal (LEX-28).
+///
+/// Checks that `Y`, `M`, `W` and `D` appear once each in that order, that
+/// `B` is written alone, that each part is a whole number, and that each
+/// count fits the signed 64-bit domain. No count is negative: a sign is a
+/// separate operator (LEX-7).
+///
+/// ```
+/// use hgl_lexer::literal::{Tenor, decode_tenor};
+///
+/// assert_eq!(decode_tenor("1Y6M"), Ok(Tenor::Moves { months: 18, days: 0 }));
+/// assert_eq!(decode_tenor("2W1D"), Ok(Tenor::Moves { months: 0, days: 15 }));
+/// assert_eq!(decode_tenor("2B"), Ok(Tenor::BusinessDays(2)));
+/// ```
+pub fn decode_tenor(text: &str) -> Result<Tenor, LiteralError> {
+    if number_form(text)? != NumberForm::Tenor {
+        return Err(LiteralError::Malformed);
+    }
+    let reject = |message: String| invalid(codes::TENOR_INVALID, "LEX-28", message);
+    // LEX-22: the separators do not change the value.
+    let plain = text.replace('_', "");
+    // How many of the smaller unit each unit is, in the order of
+    // `TENOR_UNITS`: a year is twelve months, a week seven days.
+    const SCALE: [i128; 5] = [12, 1, 7, 1, 1];
+    const BUSINESS: usize = 4;
+    let (mut months, mut days, mut business): (i128, i128, Option<i128>) = (0, 0, None);
+    let mut previous: Option<usize> = None;
+    let mut rest = plain.as_str();
+    while !rest.is_empty() {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let (whole, after) = rest.split_at(digits);
+        if after.starts_with('.') {
+            return reject(format!(
+                "tenor `{text}` has a fraction: each part is a whole number"
+            ));
+        }
+        let letters = after.bytes().take_while(u8::is_ascii_alphabetic).count();
+        let (unit_text, after) = after.split_at(letters);
+        // The shape check has found a number and a unit in every part.
+        let Some(unit) = TENOR_UNITS.iter().position(|&unit| unit == unit_text) else {
+            return Err(LiteralError::Malformed);
+        };
+        if let Some(previous) = previous {
+            let (earlier, later) = (TENOR_UNITS[previous], TENOR_UNITS[unit]);
+            if unit == BUSINESS || previous == BUSINESS {
+                return reject(format!(
+                    "tenor `{text}` writes `B` with another unit: business days are written alone"
+                ));
+            }
+            if unit == previous {
+                return reject(format!(
+                    "tenor `{text}` uses the unit `{later}` more than once"
+                ));
+            }
+            if unit < previous {
+                return reject(format!(
+                    "tenor `{text}` is out of order: `{later}` cannot follow `{earlier}`; \
+                     units go from largest to smallest"
+                ));
+            }
+        }
+        previous = Some(unit);
+        let count: i128 = match whole.parse::<u64>() {
+            Ok(count) => i128::from(count) * SCALE[unit],
+            Err(_) => return reject(format!("tenor `{text}` has a count outside the i64 domain")),
+        };
+        match unit {
+            0 | 1 => months += count,
+            2 | 3 => days += count,
+            _ => business = Some(count),
+        }
+        rest = after;
+    }
+    let within = |count: i128| -> Result<i64, LiteralError> {
+        match i64::try_from(count) {
+            Ok(count) => Ok(count),
+            Err(_) => invalid(
+                codes::TENOR_INVALID,
+                "LEX-28",
+                format!("tenor `{text}` has a count outside the i64 domain"),
+            ),
+        }
+    };
+    Ok(match business {
+        Some(count) => Tenor::BusinessDays(within(count)?),
+        None => Tenor::Moves {
+            months: within(months)?,
+            days: within(days)?,
+        },
+    })
 }
 
 /// One `number unit` part of a duration, still as text.
@@ -776,6 +890,7 @@ pub fn validate_literals(
             TokenKind::Float => decode_float(text).err(),
             TokenKind::Str => decode_string(text).err(),
             TokenKind::Duration => decode_duration(text).err(),
+            TokenKind::Tenor => decode_tenor(text).err(),
             TokenKind::Temporal => decode_temporal(text).err(),
             _ => None,
         };
@@ -1060,6 +1175,62 @@ mod tests {
         assert_eq!(decode_float("1e-400"), Ok(0.0));
         assert_eq!(decode_float("5e-324"), Ok(f64::from_bits(1)));
         assert_eq!(decode_float("0.0"), Ok(0.0));
+    }
+
+    #[test]
+    fn a_tenor_is_its_months_and_days_or_its_business_days() {
+        // LEX-28: "A year is twelve months and a week seven days, so the
+        // literal denotes a count of months and a count of days, or a
+        // count of business days".
+        let moves = |months, days| Ok(Tenor::Moves { months, days });
+        assert_eq!(decode_tenor("1D"), moves(0, 1));
+        assert_eq!(decode_tenor("1W"), moves(0, 7));
+        assert_eq!(decode_tenor("1M"), moves(1, 0));
+        assert_eq!(decode_tenor("1Y"), moves(12, 0));
+        assert_eq!(decode_tenor("1Y6M2W3D"), moves(18, 17));
+        assert_eq!(decode_tenor("0D"), moves(0, 0));
+        assert_eq!(decode_tenor("18M"), moves(18, 0));
+        assert_eq!(decode_tenor("2B"), Ok(Tenor::BusinessDays(2)));
+        assert_eq!(decode_tenor("0B"), Ok(Tenor::BusinessDays(0)));
+        // LEX-22: a separator does not change the value.
+        assert_eq!(decode_tenor("1_0Y"), moves(120, 0));
+        // TYPE-17: "`1Y` is `12M` and `1W` is `7D`".
+        assert_eq!(decode_tenor("1Y"), decode_tenor("12M"));
+        assert_eq!(decode_tenor("1W"), decode_tenor("7D"));
+    }
+
+    #[test]
+    fn a_tenor_that_breaks_its_rule_is_rejected() {
+        // LEX-28: units "occur once each, in that order; `B` is written
+        // alone. Each part is a whole number ... each in the i64 domain."
+        for text in [
+            "6M1Y",
+            "1D1W",
+            "1M1M",
+            "1M2B",
+            "2B1D",
+            "1B2B",
+            "1.5M",
+            "9223372036854775807Y",
+            "9223372036854775808D",
+        ] {
+            assert_eq!(
+                invalid_code(decode_tenor(text)),
+                codes::TENOR_INVALID,
+                "{text}"
+            );
+        }
+        // The largest counts that fit.
+        assert_eq!(
+            decode_tenor("9223372036854775807D"),
+            Ok(Tenor::Moves {
+                months: 0,
+                days: i64::MAX
+            })
+        );
+        // No tenor at all: a duration, and letters that are no unit.
+        assert_eq!(decode_tenor("3m"), Err(LiteralError::Malformed));
+        assert_eq!(decode_tenor("1Q"), Err(LiteralError::Malformed));
     }
 
     #[test]

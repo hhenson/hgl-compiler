@@ -2729,6 +2729,30 @@ fn a_var_parameter_is_a_mark_a_name_and_a_type() {
     assert!(!rejected(Entry::Declarations, "const fn f(const var count: i64) {}").is_empty());
 }
 
+// ---- LEX-28, TYPE-17 ----
+
+/// LEX-28: a tenor literal is one token, and an expression of its own.
+/// TYPE-17: `tenor` is a scalar type, and a reserved word: it names the
+/// type and nothing a program declares.
+#[test]
+fn a_tenor_is_a_literal_and_a_scalar_type() {
+    assert_eq!(
+        declarations("const fn quarter(lag: tenor = 2B) -> tenor => 3M"),
+        "FnDecl[\"const\" \"fn\" \"quarter\" ParamList[\"(\" \
+         Param[\"lag\" \":\" ScalarType[\"tenor\"] \"=\" Literal[\"2B\"]] \")\"] \
+         ReturnType[\"->\" ScalarType[\"tenor\"]] ArrowBody[\"=>\" Literal[\"3M\"]]]"
+    );
+    // A list may begin with one.
+    declarations("const fn rules() -> list<tenor> => [1W, 1Y6M]");
+    assert!(
+        !rejected(
+            Entry::Declarations,
+            "const fn f() -> i64 { let tenor = 1\n return 1 }"
+        )
+        .is_empty()
+    );
+}
+
 // ---- TST-13 ----
 
 /// TST-13: "Use the primary range's first character and the EOF

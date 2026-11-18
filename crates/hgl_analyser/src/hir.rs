@@ -12,6 +12,7 @@
 //! not known, and nothing is reported of it (ERR-9).
 
 use hgl_diagnostics::Location;
+use hgl_lexer::literal::Tenor;
 
 use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
@@ -744,6 +745,9 @@ pub enum Value {
     Null,
     /// A duration, in microseconds.
     Duration(i64),
+    /// A tenor (LEX-28, TYPE-17): its count of months and of days, or
+    /// its count of business days.
+    Tenor(Tenor),
     /// A date, a time or another temporal literal: the parts it writes.
     /// Its type says which it is.
     Temporal(Temporal),

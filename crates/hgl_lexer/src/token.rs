@@ -63,6 +63,8 @@ macro_rules! define_token_kinds {
             Str,
             /// A duration literal such as `1h30m` (LEX-8, LEX-13).
             Duration,
+            /// A tenor literal such as `1Y6M` or `2B` (LEX-28).
+            Tenor,
             /// A temporal literal introduced by `@`: a date, time, date-time
             /// or time zone (LEX-11, LEX-12).
             Temporal,
@@ -158,6 +160,7 @@ define_token_kinds! {
         KwTime => "time",
         KwDatetime => "datetime",
         KwDuration => "duration",
+        KwTenor => "tenor",
         KwCivilDatetime => "civil_datetime",
         KwZonedDatetime => "zoned_datetime",
         KwZonedTime => "zoned_time",
@@ -252,6 +255,7 @@ impl TokenKind {
                 | TokenKind::Float
                 | TokenKind::Str
                 | TokenKind::Duration
+                | TokenKind::Tenor
                 | TokenKind::Temporal
         )
     }

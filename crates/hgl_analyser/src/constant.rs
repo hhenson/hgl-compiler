@@ -97,6 +97,7 @@ fn literal(node: &SyntaxNode) -> ConstantValue {
         SyntaxKind::KwTrue | SyntaxKind::KwFalse => ConstantValue::Other("a bool"),
         SyntaxKind::KwNull => ConstantValue::Other("null"),
         SyntaxKind::Temporal => ConstantValue::Other("a date or time"),
+        SyntaxKind::Tenor => ConstantValue::Other("a tenor"),
         _ => ConstantValue::Unevaluated,
     }
 }

@@ -534,6 +534,7 @@ impl<'a> Lexer<'a> {
                 }
                 NumberForm::Float { .. } => TokenKind::Float,
                 NumberForm::Duration => TokenKind::Duration,
+                NumberForm::Tenor => TokenKind::Tenor,
             };
         }
         let literal_end = self.pos;
@@ -596,6 +597,7 @@ impl<'a> Lexer<'a> {
         } else if rest.starts_with('_') {
             let (kind, what) = match form {
                 NumberForm::Duration => (TokenKind::Duration, "a duration"),
+                NumberForm::Tenor => (TokenKind::Tenor, "a tenor"),
                 NumberForm::Float { .. } => (TokenKind::Float, "a number"),
                 _ => (TokenKind::Int, "a number"),
             };
@@ -626,6 +628,21 @@ impl<'a> Lexer<'a> {
                 format!("`{run}` is not a duration: {fault}"),
                 "each part of a duration is a number followed by one of d, h, m, s, ms, us",
             )
+        } else if form == NumberForm::Tenor {
+            // After the last unit comes another number, or letters that
+            // are no unit of a tenor.
+            let number = shape::digit_run_length(rest.as_bytes(), |byte| byte.is_ascii_digit());
+            let unit = leading_letters(&rest[number..]);
+            let fault = if unit.is_empty() {
+                "its last number has no unit".to_string()
+            } else {
+                format!("`{unit}` is not a tenor unit")
+            };
+            (
+                TokenKind::Tenor,
+                format!("`{run}` is not a tenor: {fault}"),
+                "each part of a tenor is a whole number followed by one of Y, M, W, D, or by B alone",
+            )
         } else {
             // A decimal integer or plain float with letters after it.
             let letters = leading_letters(rest);
@@ -641,7 +658,7 @@ impl<'a> Lexer<'a> {
                     format!(
                         "`{run}` is not a number or a duration: `{letters}` is not a duration unit"
                     ),
-                    "digits followed by letters are read as a duration; the units are d, h, m, s, ms, us",
+                    "digits followed by letters are read as a duration, whose units are d, h, m, s, ms, us, or as a tenor, whose units are Y, M, W, D, B",
                 )
             }
         };

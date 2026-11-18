@@ -417,6 +417,7 @@ fn report(sources: &SourceMap, mut diagnostics: Diagnostics) -> ExitCode {
 /// 1:5    Ident      "window"
 /// 1:12   Eq         "="
 /// 1:14   Duration   "1h30m"     5400000000 us
+/// 2:12   Tenor      "1Y6M"      18 months, 0 days
 /// ```
 ///
 /// The columns are the token's `line:column`, its kind, its text, and, for
@@ -1081,6 +1082,11 @@ fn literal_value(token: &Token, text: &str) -> Option<String> {
         TokenKind::Float => Some(format!("{:?}", literal::decode_float(text).ok()?)),
         TokenKind::Str => Some(format!("{:?}", literal::decode_string(text).ok()?)),
         TokenKind::Duration => Some(format!("{} us", literal::decode_duration(text).ok()?)),
+        // LEX-28: the counts a tenor denotes.
+        TokenKind::Tenor => Some(match literal::decode_tenor(text).ok()? {
+            literal::Tenor::Moves { months, days } => format!("{months} months, {days} days"),
+            literal::Tenor::BusinessDays(count) => format!("{count} business days"),
+        }),
         TokenKind::Temporal => Some(temporal_value(&literal::decode_temporal(text).ok()?)),
         _ => None,
     }

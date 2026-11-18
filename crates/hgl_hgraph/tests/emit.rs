@@ -4315,6 +4315,32 @@ fn a_nullable_is_a_value_that_may_be_unset() {
     }
 }
 
+/// TYPE-17: "The core contract gives a tenor's operators, how each
+/// form moves a date, and what a business day is." Until the target
+/// has those a tenor is reported as not written, where it is a value
+/// and where it is a type of a temporal function.
+#[test]
+fn a_tenor_is_not_written_yet() {
+    let emitted = emit(&[(
+        "tenor.hgl",
+        concat!(
+            "module demo.moves\n",
+            "const fn quarter() -> tenor => 3M\n",
+            "fn passed(lag: tenor) -> tenor {\n",
+            "    when { return lag }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "tenor.hgl:2:32 target.unsupported",
+            "tenor.hgl:3:11 target.unsupported",
+            "tenor.hgl:3:4 target.unsupported",
+        ]
+    );
+}
+
 /// TYPE-14: a temporal `T?` is written for a scalar and an enum, which
 /// publish whole. A nullable set is not: a set publishes its changes,
 /// which hgraph's value that may be unset would not gather. It is
