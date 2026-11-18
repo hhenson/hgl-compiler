@@ -206,3 +206,22 @@ test a_read_after_an_assignment_is_no_capture {
     assert eval(assigned_first(flag: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
         [1, 20, 3]
 }
+
+# A nested `if` that may leave the `var` unassigned reads the binding
+# it had before: the outer branch's graph takes it, though the other
+# branch assigns it before it reads it.
+fn fallback_inside(outer: bool, inner: bool, left: i64, right: i64) -> i64 {
+    var chosen = left
+    if outer {
+        chosen = right
+        return chosen
+    } else {
+        if inner { chosen = right }
+        return left
+    }
+}
+
+test a_nested_fallback_is_a_capture {
+    assert eval(fallback_inside(outer: [true, false, _, true], inner: [false, false, true, false], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+        [10, 2, 3, 40]
+}

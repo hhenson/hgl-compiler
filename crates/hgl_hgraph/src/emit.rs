@@ -594,11 +594,25 @@ fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &
                 candidates.push(*local);
             }
         });
+        let branches = matches!(
+            statement,
+            Stmt::Switch { .. }
+                | Stmt::Expr(Expr {
+                    kind: ExprKind::If { .. },
+                    ..
+                })
+        );
         for local in candidates {
-            if !assigned.contains(&local)
-                && assigns_on_every_path(std::slice::from_ref(statement), local)
-            {
+            if assigned.contains(&local) {
+                continue;
+            }
+            if assigns_on_every_path(std::slice::from_ref(statement), local) {
                 assigned.push(local);
+            } else if branches {
+                // An `if` or a `switch` that may leave the local
+                // unassigned gives, on that path, the binding it had
+                // before (CTRL-14): a read of it.
+                read.push(local);
             }
         }
     }
