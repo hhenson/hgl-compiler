@@ -1402,7 +1402,6 @@ fn a_form_not_written_yet_is_reported() {
         emitted.reported,
         [
             "m.hgl:6:12 target.unsupported",
-            "m.hgl:9:10 target.unsupported",
             "m.hgl:17:12 target.unsupported",
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
@@ -4046,6 +4045,132 @@ fn a_place_call_inside_an_expression_is_reported() {
     );
 }
 
+/// TYPE-14: a temporal `T?`. TIME-7: "`return null` for an `i64?`
+/// result [publishes] a null". TYPE-16: a nullable's delta "holds what
+/// was published, a null among them".
+const NULLABLE: &str = concat!(
+    "module demo.nullable\n",
+    "\n",
+    "fn publish_nullable(command: i64) -> i64? {\n",
+    "    when {\n",
+    "        if command == 0 { return null }\n",
+    "        return command\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn read_back(value: i64?) -> i64 {\n",
+    "    when {\n",
+    "        if value == null { return -1 }\n",
+    "        return value + 100\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn recorded(value: i64?) -> i64? {\n",
+    "    when valid(value) && modified(value) { return delta_value(value) }\n",
+    "}\n",
+    "\n",
+    "fn unwrapped(value: i64?) -> i64 {\n",
+    "    when {\n",
+    "        let change: delta<i64?> = delta_value(value)\n",
+    "        if change.value == null { return 0 }\n",
+    "        return 1\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn made(command: i64) -> i64? {\n",
+    "    when {\n",
+    "        if command == 0 { return delta<i64?>() }\n",
+    "        return delta<i64?>(value: command)\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn through_out(command: i64) -> i64? {\n",
+    "    inject out\n",
+    "    when {\n",
+    "        if command == 0 { out = null } else { out = command }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn nothing_then_null() -> i64? {\n",
+    "    yield 1us: null\n",
+    "    yield 1us: 3\n",
+    "}\n",
+    "\n",
+    "const fn or_zero(value: i64?) -> i64 => if value == null { 0 } else { value }\n",
+    "const fn none_of(value: i64) -> i64? => if value == 0 { null } else { value }\n",
+    "fn lifted_in(value: i64?) -> i64 => or_zero(value)\n",
+    "fn lifted_out(value: i64) -> i64? => none_of(value)\n",
+    "fn wired(command: i64) -> i64 => read_back(publish_nullable(command))\n",
+    "\n",
+    "const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 {\n",
+    "    var count: i64 = 0\n",
+    "    for entry in seen {\n",
+    "        if entry[1].value == null { count += 1 }\n",
+    "    }\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "test nullable {\n",
+    // A published null is a publication, and `_` is silence.
+    "    assert eval(publish_nullable(command: [7, 0, _, 0, 9])) == [7, null, _, null, 9]\n",
+    "    assert eval(read_back(value: [null, _, 7, null, _])) == [-1, _, 107, -1]\n",
+    "    assert eval(recorded(value: [null, _, 7, null, _])) == [null, _, 7, null]\n",
+    "    assert eval(unwrapped(value: [null, 7])) == [0, 1]\n",
+    "    assert eval(made(command: [0, 5])) == [null, 5]\n",
+    "    assert eval(through_out(command: [0, 5, 0])) == [null, 5, null]\n",
+    "    assert eval(nothing_then_null()) == [_, null, 3]\n",
+    "    assert eval(lifted_in(value: [null, 3])) == [0, 3]\n",
+    "    assert eval(lifted_out(value: [0, 3])) == [null, 3]\n",
+    "    assert eval(wired(command: [0, 4])) == [-1, 104]\n",
+    "    assert nulls(eval(publish_nullable(command: [7, 0, _, 0]))) == 2\n",
+    "}\n",
+);
+
+/// TYPE-14: a temporal `T?` is hgraph's value that holds one `T` or is
+/// unset, `TS[T | None]`. A null is `None` as a value, and hgraph's
+/// `Null` where it is published: to hgraph a node that returns `None`
+/// publishes nothing. TYPE-16: a nullable's delta is hgraph's own.
+#[test]
+fn a_nullable_is_a_value_that_may_be_unset() {
+    let emitted = emit(&[("nullable.hgl", NULLABLE)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_nullable/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.compute_node\n",
+            "def publish_nullable(command: _hg.TS[_py.int]) -> _hg.TS[_py.int | None]:\n",
+            "    if _core.eq__i64_i64_f64_f64(lhs=command.value, rhs=0, abs=0.0, rel=0.0):\n",
+            "        return _core.published(None)\n",
+            "    return _core.published(command.value)\n",
+        ),
+        "def read_back(value: _hg.TS[_py.int | None]) -> _hg.TS[_py.int]:\n",
+        // TYPE-16: `delta_value` of a nullable is hgraph's own delta.
+        "def recorded(value: _hg.TS[_py.int | None]) -> _hg.TS[_py.int | None]:\n    return value.delta_value\n",
+        "    change = value.delta_value\n",
+        "_core.unpublished(change)",
+        // `delta<i64?>()` is a published null.
+        "        return _hg.Null\n",
+        "    return _core.published(command.value)\n",
+        // TIME-7: an assignment to `out` publishes.
+        "        _output.value = _core.published(None)\n",
+        // A source's `yield`.
+        "    yield (_dt.timedelta(microseconds=1), _core.published(None))\n",
+        // A lifted value function that gives a nullable.
+        "-> _hg.TS[_py.int | None]:\n    return _core.published(none_of(value=value.value))\n",
+        // TST-6: `null` in a trace is a published null, and `_` silence.
+        concat!(
+            "_harness.evaluate(read_back, {\"value\": _hg.TS[_py.int | None]}, _hg.TS[_py.int], ",
+            "value=[_hg.Null, None, 7, _hg.Null, None])",
+        ),
+        "[7, _hg.Null, None, _hg.Null, 9]",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -4519,6 +4644,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("caps.hgl", CAPABILITIES));
     files.push(("sources.hgl", SOURCES));
     files.push(("places.hgl", PLACES));
+    files.push(("nullable.hgl", NULLABLE));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4541,13 +4667,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        61,
+        62,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, and one of each demo's"
     );
 }
 

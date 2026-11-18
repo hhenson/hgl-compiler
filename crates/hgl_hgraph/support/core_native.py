@@ -32,6 +32,8 @@ import functools as _functools
 import math as _math
 from fractions import Fraction as _Fraction
 
+from hgraph import Null as _Null
+
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
 # parameter below: Python's own is kept under another name.
 _magnitude = abs
@@ -278,6 +280,24 @@ def entry(dictionary, key):
         return dictionary[key]
     except KeyError:
         raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
+
+
+def published(value):
+    """What publishes `value`, of a nullable type (the language's
+    TIME-7): the value, or hgraph's `Null` where it is null.
+
+    To hgraph a node that returns `None` publishes nothing, and one
+    that returns `Null` publishes a value that is unset: valid,
+    modified, and with no payload. That is HGL's published null.
+    """
+    return _Null if value is None else value
+
+
+def unpublished(delta):
+    """The `value` of a nullable's delta (the language's TYPE-16): what
+    was published, "null for a published null". hgraph's delta of a
+    published null is `Null`."""
+    return None if delta is _Null else delta
 
 
 class Source:
