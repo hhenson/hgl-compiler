@@ -2013,7 +2013,7 @@ impl Emitter<'_> {
     fn kept(&mut self, function: &Function, local: usize, value: &Expr, written: String) -> String {
         fn fresh(function: &Function, value: &Expr) -> bool {
             match &value.kind {
-                ExprKind::Sequence(_) => true,
+                ExprKind::Sequence(_) | ExprKind::Pairs(_) => true,
                 ExprKind::Local(local) => owns(function, *local),
                 ExprKind::Widen(inner) => fresh(function, inner),
                 _ => false,
@@ -2025,6 +2025,28 @@ impl Emitter<'_> {
         } else {
             written
         }
+    }
+
+    /// True where `base` is a list or a dictionary that a `var`, a
+    /// `state` or a `cache` of this function holds itself ([`owns`]): an
+    /// element or an entry of it is assigned where the collection is,
+    /// and no entry of it is copied for the change.
+    ///
+    /// A `var` parameter is no such place. What it is given is the
+    /// caller's own list, which a call that fails must leave as it was
+    /// (FN-15): an element of it is assigned by making a new list, and
+    /// the caller's is not touched.
+    fn changed_where_it_is(&self, function: &Function, base: &Expr) -> bool {
+        let ExprKind::Local(local) = &base.kind else {
+            return false;
+        };
+        let declared = &function.locals[*local];
+        // In a graph an assignment into a `var` makes a new connection
+        // (EXPR-15), and is written as one.
+        function.mode != Mode::Graph
+            && owns(function, *local)
+            && !self.given_back.contains(&name(&declared.name))
+            && matches!(declared.ty, Type::List { .. } | Type::Dict { .. })
     }
 
     /// What a `var` parameter is given for the place `value` (FN-15).
@@ -2056,14 +2078,12 @@ impl Emitter<'_> {
         }
     }
 
-    /// True where a call of `callee` keeps nothing of what it is
-    /// given past its return, so that a list is lent to it as it is:
-    /// a `const fn`, or a native one, with no result or a scalar one
-    /// and no `var` parameter, which is given data alone. Such a
-    /// function has nowhere to keep an argument: its result holds no
-    /// list, it assigns no place of the caller, and it is handed
-    /// nothing that outlives the call, a run's store say, to put one
-    /// in.
+    /// True where a call of `callee` has nowhere but its result to keep
+    /// what it is given: a `const fn`, or a native one, with no `var`
+    /// parameter, which is given data alone. It assigns no place of
+    /// the caller, and is handed nothing that outlives the call, a
+    /// run's store say, to put an argument in. Whether its result may
+    /// keep an argument is asked of each one ([`may_keep`]).
     fn lends(
         &self,
         function: &Function,
@@ -2080,16 +2100,6 @@ impl Emitter<'_> {
             && arguments
                 .iter()
                 .all(|argument| data_alone(self.program, &argument.value.ty, 0))
-            && signature.result.as_ref().is_none_or(|result| {
-                scalar(result).is_some()
-                    || matches!(
-                        result,
-                        Type::Named {
-                            kind: NamedKind::Enum,
-                            ..
-                        }
-                    )
-            })
     }
 
     /// What a local is written as where it is assigned or read as it
@@ -3103,6 +3113,14 @@ impl Emitter<'_> {
                 self.natives = true;
                 let held = self.borrowed(function, base);
                 let index = self.expression(function, index);
+                // The collection a `var`, a `state` or a `cache` holds
+                // itself is changed where it is; one inside another
+                // value is given a new one.
+                let with = match with {
+                    _ if !self.changed_where_it_is(function, base) => with,
+                    "with_item" => "set_item",
+                    _ => "set_entry",
+                };
                 let value = format!("_core.{with}({held}, {index}, {value})");
                 self.assigned(function, base, value)
             }
@@ -3196,6 +3214,7 @@ impl Emitter<'_> {
         generics: &[GenericArgument],
         signature: &Signature,
         arguments: &[Argument],
+        result: Option<&Type>,
     ) -> String {
         // A node keeps its configuration: a list, a tuple or a
         // dictionary is given to it inside an object hgraph keeps as
@@ -3245,7 +3264,12 @@ impl Emitter<'_> {
                     // grow its list where it is.
                     let in_place = given_in_place(function, signature, arguments, argument);
                     self.given_place(function, &argument.value, in_place)
-                } else if lends {
+                } else if lends
+                    && !(signature.result.is_some()
+                        && result.is_none_or(|result| may_keep(result, &argument.value.ty)))
+                {
+                    // Lent: the function has nowhere to keep it, in a
+                    // result it has none of or in the one it gives.
                     self.borrowed(function, &argument.value)
                 } else {
                     self.expression(function, &argument.value)
@@ -3805,6 +3829,7 @@ impl Emitter<'_> {
                 generics,
                 signature,
                 arguments,
+                Some(&whole.ty),
             );
             let called = format!("_core.{native}({arguments})");
             return self.native_result(signature.result.as_ref(), called);
@@ -3851,6 +3876,7 @@ impl Emitter<'_> {
                 generics,
                 signature,
                 arguments,
+                Some(&whole.ty),
             );
             let arguments: Vec<String> = [arguments]
                 .into_iter()
@@ -3871,6 +3897,7 @@ impl Emitter<'_> {
             generics,
             signature,
             arguments,
+            Some(&whole.ty),
         );
         format!("{python}({arguments})")
     }
@@ -3961,6 +3988,7 @@ impl Emitter<'_> {
             generics,
             signature,
             arguments,
+            None,
         );
         let mut given = vec![target, run];
         if !arguments.is_empty() {
@@ -4262,14 +4290,56 @@ fn held(ty: &Type) -> bool {
     }
 }
 
-/// True for a type whose value core's `append` and `extend` grow
-/// (LIST-1, LIST-2): a list, nullable or not.
+/// True for a type whose value is changed where it is: a list, which
+/// core's `append` and `extend` grow (LIST-1, LIST-2) and an element
+/// of which is assigned, and a dictionary, an entry of which is
+/// assigned (EXPR-3); nullable or not. A struct and a tuple are small,
+/// and a change to one makes a new one.
 fn grows(ty: &Type) -> bool {
     match ty {
         Type::Nullable(inner) => grows(inner),
-        Type::List { .. } => true,
+        Type::List { .. } | Type::Dict { .. } => true,
         _ => false,
     }
+}
+
+/// True where a function's result, of type `result`, may be or may
+/// hold the list or the dictionary it was given, of type `given`: the
+/// result has a collection of that kind somewhere in it, or a part
+/// whose type does not say what it holds. A function that gives an
+/// `i64`, or an entry of the dictionary it is given, cannot keep the
+/// dictionary; one that gives a list may be giving the list it was
+/// given.
+fn may_keep(result: &Type, given: &Type) -> bool {
+    /// True for a list, and false for a dictionary, nullable or not.
+    fn is_list(ty: &Type) -> Option<bool> {
+        match ty {
+            Type::Nullable(inner) => is_list(inner),
+            Type::List { .. } => Some(true),
+            Type::Dict { .. } => Some(false),
+            _ => None,
+        }
+    }
+    fn holds(ty: &Type, list: bool) -> bool {
+        match ty {
+            Type::Scalar(scalar) => *scalar == Scalar::Any,
+            Type::Named {
+                kind: NamedKind::Enum,
+                ..
+            }
+            | Type::Error => false,
+            Type::Nullable(inner) | Type::Set(inner) => holds(inner, list),
+            Type::List { element, .. } => list || holds(element, list),
+            Type::Dict { key, value } => !list || holds(key, list) || holds(value, list),
+            Type::Tuple(elements) => elements.iter().any(|element| holds(element, list)),
+            Type::Result { value, error } => holds(value, list) || holds(error, list),
+            // A struct, a native value, a generic parameter and any
+            // other type may hold anything.
+            _ => true,
+        }
+    }
+    // What is given is no collection a place changes: nothing to keep.
+    is_list(given).is_some_and(|list| holds(result, list))
 }
 
 /// True for a type whose values are data alone: a scalar, an enum, and
@@ -4358,9 +4428,9 @@ fn given_in_place(
             == 1
 }
 
-/// True for a local that holds a list of its own: a `var`, a `var`
-/// parameter, a `state` or a `cache` of a list type, which is no
-/// connection.
+/// True for a local that holds a list or a dictionary of its own: a
+/// `var`, a `var` parameter, a `state` or a `cache` of such a type,
+/// which is no connection.
 ///
 /// LIST-3: "a value taken from the place before the call is as it
 /// was". Python's list is one object that every name of it sees

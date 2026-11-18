@@ -3400,18 +3400,23 @@ fn an_element_is_read_and_assigned_through_the_provider() {
         "def last(pair):\n    return _core.item(pair, 1)\n",
         "def size(sizes, name):\n    return _core.entry(sizes, name)\n",
         "    return _core.get_dict_K__T__K(store=sizes, key=name)\n",
-        // A compound assignment reads the place first.
+        // A compound assignment reads the place first. An element of
+        // the list a `var` holds itself is assigned where the list is.
         concat!(
-            "    next = _core.with_item(next, 1, ",
+            "    next = _core.set_item(next, 1, ",
             "_core.add__i64_i64(lhs=_core.item(next, 1), rhs=1))\n",
         ),
+        // A tuple is small: a new one is made.
         "    next = _core.with_item(next, 1, \"b\")\n",
-        "            seen = _core.with_entry(seen, name, 1)\n",
+        // An entry of the dictionary a `var` holds itself, read by a
+        // function that is lent it and then assigned where it is.
+        "        before = _core.get_dict_K__T__K(store=seen, key=name)\n",
+        "            seen = _core.set_entry(seen, name, 1)\n",
         // An element of a field, and an element of an element.
         "    next = _core.with_field(next, sizes=_core.with_entry(next.sizes, \"top\", 1))\n",
-        "    rows = _core.with_item(rows, 1, _core.with_item(_core.item(rows, 1), 0, 9))\n",
+        "    rows = _core.set_item(rows, 1, _core.with_item(_core.item(rows, 1), 0, 9))\n",
         // A `state` that is a dictionary.
-        "        _state.seen = _core.with_entry(_state.seen, name.value, 1)\n",
+        "        _state.seen = _core.set_entry(_state.seen, name.value, 1)\n",
         // `[]` where a dictionary is expected.
         "    seen = {}\n",
     ] {
@@ -4129,7 +4134,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _arg_2 = _core.item(items, _at_1)\n",
             "    _given = change(index=_arg_1, item=_arg_2)\n",
             "    i = _given[1]\n",
-            "    items = _core.with_item(items, _at_1, _given[2])\n",
+            "    items = _core.set_item(items, _at_1, _given[2])\n",
         ),
         concat!(
             "    _arg_1 = _core.floordiv__i64_i64(lhs=1, rhs=zero, zero=\"fail\")\n",
@@ -4146,7 +4151,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _arg_1 = _core.item(_in_1, _at_2)\n",
             "    _arg_2 = 1\n",
             "    _given = bump(count=_arg_1, by=_arg_2)\n",
-            "    rows = _core.with_entry(rows, _at_1, _core.with_item(_core.entry(rows, _at_1), _at_2, _given[1]))\n",
+            "    rows = _core.set_entry(rows, _at_1, _core.with_item(_core.entry(rows, _at_1), _at_2, _given[1]))\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(
@@ -4307,6 +4312,117 @@ fn a_nullable_is_a_value_that_may_be_unset() {
             "value=[_hg.Null, None, 7, _hg.Null, None])",
         ),
         "[7, _hg.Null, None, _hg.Null, 9]",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// EXPR-3 on hgraph, for a dictionary and for an element of a list: a
+/// `var`, a `state` or a `cache` is changed where it is, and what took
+/// its value before is as it was (LIST-3's rule, for every collection).
+const ENTRIES: &str = concat!(
+    "module demo.entries\n",
+    "\n",
+    // A function whose result cannot be the dictionary: it is lent it.
+    "const fn count_of(counts: dict<str, i64>, name: str) -> i64 {\n",
+    "    let found = get(counts, name)\n",
+    "    if found != null { return found }\n",
+    "    return 0\n",
+    "}\n",
+    "\n",
+    // A dictionary built an entry at a time, each read and then assigned.
+    "const fn counted(names: list<str>) -> dict<str, i64> {\n",
+    "    var counts: dict<str, i64> = []\n",
+    "    for name in names {\n",
+    "        counts[name] = count_of(counts, name) + 1\n",
+    "    }\n",
+    "    return counts\n",
+    "}\n",
+    "\n",
+    "const fn same<T>(value: T) -> T { return value }\n",
+    "\n",
+    // A `var` parameter's element is assigned by making a new list:
+    // where the call fails the caller's list is as it was (FN-15).
+    "const fn replaced(var items: list<i64>, value: i64) { items[0] = value }\n",
+    "\n",
+    "const fn failing(var items: list<i64>, zero: i64) {\n",
+    "    items[0] = 9\n",
+    "    let quotient = 1 //{zero: .fail} zero\n",
+    "}\n",
+    "\n",
+    "test entries {\n",
+    // A `let` is the dictionary as it was, however the place changes.
+    "    var book: dict<str, i64> = [\"a\": 1]\n",
+    "    let before = book\n",
+    "    book[\"b\"] = 2\n",
+    "    assert before == [\"a\": 1]\n",
+    "    assert book == [\"a\": 1, \"b\": 2]\n",
+    "    assert count_of(book, \"b\") == 2\n",
+    "    let through = same(book)\n",
+    "    book[\"a\"] = 5\n",
+    "    assert through == [\"a\": 1, \"b\": 2]\n",
+    "    assert book == [\"a\": 5, \"b\": 2]\n",
+    "    assert counted([\"x\", \"y\", \"x\"]) == [\"x\": 2, \"y\": 1]\n",
+    // An element of a list.
+    "    var items: list<i64> = [1, 2, 3]\n",
+    "    let was = items\n",
+    "    items[1] = 9\n",
+    "    items[1] += 1\n",
+    "    assert was == [1, 2, 3]\n",
+    "    assert items == [1, 10, 3]\n",
+    "    replaced(items, 7)\n",
+    "    assert items == [7, 10, 3]\n",
+    "    assert raises(\"numeric.division_by_zero\") { failing(items, 0) }\n",
+    "    assert items == [7, 10, 3]\n",
+    // A collection inside another is given a new value, and what
+    // took it before is as it was.
+    "    var rows: dict<str, list<i64>> = [\"a\": [1]]\n",
+    "    let row = rows[\"a\"]\n",
+    "    rows[\"a\"][0] = 2\n",
+    "    rows[\"b\"] = items\n",
+    "    items[0] = 0\n",
+    "    assert row == [1]\n",
+    "    assert rows == [\"a\": [2], \"b\": [7, 10, 3]]\n",
+    "}\n",
+);
+
+/// EXPR-3: "An assignment may name a place inside a value". An entry
+/// of the dictionary, and an element of the list, that a `var` of the
+/// function holds itself is assigned where the collection is,
+/// `_core.set_entry` and `_core.set_item`: no entry is copied for it.
+/// The collection is shared and copied as a list that grows is: a
+/// `let` takes it marked, and a function whose result cannot be the
+/// collection is lent it unmarked.
+#[test]
+fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
+    let emitted = emit(&[("entries.hgl", ENTRIES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_entries/__init__.py");
+    for expected in [
+        // Read by a function that gives an entry, and so is lent the
+        // dictionary; then assigned where it is.
+        "        counts = _core.set_entry(counts, name, _core.add__i64_i64(lhs=count_of(counts=counts, name=name), rhs=1))\n",
+        "    found = _core.get_dict_K__T__K(store=counts, key=name)\n",
+        // A `let` takes the dictionary itself, marked.
+        concat!(
+            "    before = _core.shared(book)\n",
+            "    book = _core.set_entry(book, \"b\", 2)\n",
+        ),
+        // A function that may give back what it is given.
+        "    through = same(value=_core.shared(book))\n",
+        // An element of a list, and a compound assignment of one.
+        "    items = _core.set_item(items, 1, 9)\n",
+        "    items = _core.set_item(items, 1, _core.add__i64_i64(lhs=_core.item(items, 1), rhs=1))\n",
+        // A `var` parameter's element: a new list.
+        "    items = _core.with_item(items, 0, value)\n",
+        // An entry that is a list: the dictionary is changed where it
+        // is, and the list inside it is given a new value.
+        "    rows = _core.set_entry(rows, \"a\", _core.with_item(_core.entry(rows, \"a\"), 0, 2))\n",
+        // What a dictionary keeps is marked.
+        "    rows = _core.set_entry(rows, \"b\", _core.shared(items))\n",
     ] {
         assert!(
             python.contains(expected),
@@ -4745,7 +4861,7 @@ fn a_list_is_shared_and_copied_only_where_it_then_grows() {
         // A place inside a value is held by that value too.
         concat!(
             "    _given = _core.fn_append(values=_core.shared(_core.item(rows, 0)), item=2)\n",
-            "    rows = _core.with_item(rows, 0, _given[1])\n",
+            "    rows = _core.set_item(rows, 0, _given[1])\n",
         ),
         // What a list and a struct keep.
         "    _given = _core.fn_append(values=rows, item=_core.shared(entries))\n",
@@ -5254,6 +5370,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("lists.hgl", LISTS));
     files.push(("shared.hgl", SHARED));
     files.push(("moves.hgl", MOVES));
+    files.push(("entries.hgl", ENTRIES));
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
@@ -5277,13 +5394,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        66,
+        67,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on configuration of a generic type, and one of each demo's"
     );
 }
 
