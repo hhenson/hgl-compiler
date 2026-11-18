@@ -6353,7 +6353,7 @@ fn a_graph_if_and_switch_are_child_graphs() {
             "    chosen = _hg.switch_(rising, {True: _case_6_0, False: _case_6_1}, price=price, chosen=chosen)\n",
         ),
         // A `switch` with a `default` (CTRL-6).
-        "    selected = _hg.switch_(route, {\"left\": _case_8_0, \"right\": _case_8_1, _hg.DEFAULT: _case_8_2}, left=left, right=right, fallback=fallback)\n",
+        "    selected = _hg.switch_(route, {\"left\": _case_8_0, \"right\": _case_8_1, _hg.DEFAULT: _case_8_2}, left=left, right=right, fallback=fallback, selected=selected)\n",
         "    return _hg.switch_(route, {1: _case_9_0, 2: _case_9_1, _hg.DEFAULT: _case_9_2}, left=left, right=right)\n",
         // A `const` condition is decided where the graph is built.
         concat!(

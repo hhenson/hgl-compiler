@@ -241,3 +241,26 @@ fn wired_inside(outer: bool, left: i64, right: i64, const wide: bool) -> i64 {
 test a_wiring_time_fallback_is_no_capture {
     assert eval(wired_inside(outer: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
 }
+
+# An assignment under a temporal `if` inside a `let`'s wiring-time `if`
+# value: the outer branch's graph is given the `var`'s binding.
+fn assigned_in_a_value(outer: bool, inner: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen = left
+    if outer {
+        chosen = right
+        return chosen
+    } else {
+        let taken = if wide {
+            if inner { chosen = right }
+            left
+        } else {
+            right
+        }
+        return taken
+    }
+}
+
+test an_assignment_in_a_lets_value_is_captured {
+    assert eval(assigned_in_a_value(outer: [true, false], inner: [false, true], left: [1, 2], right: [10, 20], wide: true)) ==
+        [10, 2]
+}

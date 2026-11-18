@@ -113,6 +113,7 @@ pub(crate) fn module(
         lifts: Vec::new(),
         lifted: 0,
         switched: 0,
+        bound: Vec::new(),
         candidates: BTreeSet::new(),
         propagates: false,
         given_back: Vec::new(),
@@ -522,145 +523,6 @@ fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
     }
 }
 
-/// Pushes onto `read` the locals `value` reads that are not in
-/// `assigned`.
-fn reads_of(value: &Expr, assigned: &[usize], read: &mut Vec<usize>) {
-    value.walk_nodes(&mut |node| {
-        if let hgl_analyser::hir::Node::Expression(Expr {
-            kind: ExprKind::Local(local),
-            ..
-        }) = node
-            && !assigned.contains(local)
-        {
-            read.push(*local);
-        }
-    });
-}
-
-/// Pushes onto `read` the locals `statements` read where a read can
-/// come before an assignment of the local in them: the locals a child
-/// graph takes from outside. `assigned` holds the locals assigned on
-/// every path so far, and is grown with those the statements assign.
-/// Each branch of an `if` or a `switch` is scanned with its own copy.
-/// `connects` says whether a condition or a selector is a connection.
-fn reads_before_assigned(
-    statements: &[Stmt],
-    assigned: &mut Vec<usize>,
-    read: &mut Vec<usize>,
-    connects: &dyn Fn(&Expr) -> bool,
-) {
-    use hgl_analyser::hir::{Node, walk_statement_nodes};
-    for statement in statements {
-        match statement {
-            Stmt::Expr(Expr {
-                kind:
-                    ExprKind::If {
-                        condition,
-                        then,
-                        otherwise,
-                    },
-                ..
-            }) => {
-                reads_of(condition, assigned, read);
-                for branch in [Some(&**then), otherwise.as_deref()].into_iter().flatten() {
-                    let statements = alternative_statements(Some(branch));
-                    reads_before_assigned(&statements, &mut assigned.clone(), read, connects);
-                }
-            }
-            Stmt::Switch {
-                selector,
-                cases,
-                default,
-                ..
-            } => {
-                reads_of(selector, assigned, read);
-                for body in cases
-                    .iter()
-                    .map(|case| case.body.as_slice())
-                    .chain(default.as_deref())
-                {
-                    reads_before_assigned(body, &mut assigned.clone(), read, connects);
-                }
-            }
-            _ => walk_statement_nodes(std::slice::from_ref(statement), &mut |node| {
-                if let Node::Expression(Expr {
-                    kind: ExprKind::Local(local),
-                    ..
-                }) = node
-                    && !assigned.contains(local)
-                {
-                    read.push(*local);
-                }
-            }),
-        }
-        // The locals the statement assigns on every path through it.
-        let mut candidates = Vec::new();
-        walk_statement_nodes(std::slice::from_ref(statement), &mut |node| {
-            if let Node::Statement(Stmt::Assign { local, .. }) = node {
-                candidates.push(*local);
-            }
-        });
-        // An `if` or a `switch` over a connection: one the emitter
-        // writes as `switch_`. One over an ordinary value is Python's
-        // `if`, which keeps no binding by reading it.
-        let temporal = match statement {
-            Stmt::Switch { selector, .. } => connects(selector),
-            Stmt::Expr(Expr {
-                kind: ExprKind::If { condition, .. },
-                ..
-            }) => connects(condition),
-            _ => false,
-        };
-        for local in candidates {
-            if assigned.contains(&local) {
-                continue;
-            }
-            if assigns_on_every_path(std::slice::from_ref(statement), local) {
-                assigned.push(local);
-            } else if temporal {
-                // An `if` or a `switch` over a connection that may leave
-                // the local unassigned gives, on that path, the binding
-                // it had before (CTRL-14): a read of it.
-                read.push(local);
-            }
-        }
-    }
-}
-
-/// True where every path through `statements` assigns the `var` at
-/// `var`: an assignment of it at the top, or an `if` with an `else`, or
-/// a `switch` with a `default`, each branch of which assigns it on
-/// every path. A branch where this is false keeps, on some path, the
-/// binding the `var` had before (CTRL-14).
-fn assigns_on_every_path(statements: &[Stmt], var: usize) -> bool {
-    statements.iter().any(|statement| match statement {
-        Stmt::Assign { local, .. } => *local == var,
-        Stmt::Expr(Expr {
-            kind:
-                ExprKind::If {
-                    then,
-                    otherwise: Some(otherwise),
-                    ..
-                },
-            ..
-        }) => {
-            assigns_on_every_path(&alternative_statements(Some(then)), var)
-                && assigns_on_every_path(&alternative_statements(Some(otherwise)), var)
-        }
-        Stmt::Switch {
-            cases,
-            default: Some(default),
-            ..
-        } => {
-            cases
-                .iter()
-                .all(|case| assigns_on_every_path(&case.body, var))
-                && assigns_on_every_path(default, var)
-        }
-        _ => false,
-    })
-}
-
 /// One `when` of a node: what its header asks, and its body.
 struct Handler<'a> {
     /// The inputs whose tick wakes it (TIME-3), as local positions.
@@ -814,6 +676,10 @@ struct Emitter<'a> {
     /// How many `if`s and `switch`es over a connection have been
     /// written: each names its branches' graphs with its number.
     switched: usize,
+    /// The locals of the graph being written that have a value so far:
+    /// its parameters, a `let` or `var` declared with one, a `var` once
+    /// assigned. A branch's graph is given only these (CTRL-14).
+    bound: Vec<usize>,
     /// The Python names of the candidates the module has written.
     candidates: BTreeSet<String>,
     /// True once the value function being written has a `?`: a
@@ -2469,6 +2335,9 @@ impl Emitter<'_> {
             0,
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
+        self.bound = (0..body.locals.len())
+            .filter(|&local| body.locals[local].kind == LocalKind::Parameter)
+            .collect();
         self.block(&function, &body.statements, 1);
     }
 
@@ -2793,10 +2662,11 @@ impl Emitter<'_> {
             } => {
                 // What the value is given to: the graph's result, or a
                 // name.
-                let target = match statement {
-                    Stmt::Declare { local, .. } => Some(self.place(function, *local)),
+                let declared = match statement {
+                    Stmt::Declare { local, .. } => Some(*local),
                     _ => None,
                 };
+                let target = declared.map(|local| self.place(function, local));
                 let given = |value: String| match &target {
                     Some(target) => format!("{target} = {value}"),
                     None => format!("return {value}"),
@@ -2826,6 +2696,9 @@ impl Emitter<'_> {
                     ];
                     let call = self.switched(function, condition, &branches, &whole.ty, *at, depth);
                     self.line(depth, &given(call));
+                    if let Some(local) = declared {
+                        self.bind(function, local);
+                    }
                     return Branched::Written;
                 }
                 // A wiring-time condition: the one branch is composed.
@@ -2846,12 +2719,14 @@ impl Emitter<'_> {
                 };
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("if {condition}:"));
+                let before = self.bound.clone();
                 self.statements(function, then_statements, depth + 1);
                 let value = match then_value {
                     Some(value) => self.expression(function, value),
                     None => absent.clone(),
                 };
                 self.line(depth + 1, &given(value));
+                let after_then = std::mem::replace(&mut self.bound, before);
                 self.line(depth, "else:");
                 let value = match other {
                     Some((statements, value)) => {
@@ -2864,6 +2739,11 @@ impl Emitter<'_> {
                     None => absent,
                 };
                 self.line(depth + 1, &given(value));
+                // Python's `if`: what both branches bind is bound after.
+                self.bound.retain(|local| after_then.contains(local));
+                if let Some(local) = declared {
+                    self.bind(function, local);
+                }
                 Branched::Written
             }
             // A `switch` over a connection.
@@ -2962,6 +2842,7 @@ impl Emitter<'_> {
         let call = self.switched(function, key, &branches, &result, at, depth);
         let target = self.place(function, *var);
         self.line(depth, &format!("{target} = {call}"));
+        self.bind(function, *var);
     }
 
     /// hgraph's `switch_` over the connection `key`, with a graph for
@@ -2988,40 +2869,36 @@ impl Emitter<'_> {
         self.hgraph = true;
         let number = self.switched;
         self.switched += 1;
-        // The connections the branches read, less the names a branch
-        // declares itself.
+        // What each branch's graph takes: every connection any branch
+        // names, read or assigned, at any depth, that has a value where
+        // the `switch_` is written (`Emitter::bound`), less the names a
+        // branch declares itself. One a branch does not need is
+        // harmless; one with no value yet is never given.
         let mut read: Vec<usize> = Vec::new();
         let mut declared: Vec<usize> = Vec::new();
         for branch in branches {
             let mut visit = |node: Node| match node {
                 Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
                 Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
+                Node::Statement(Stmt::Assign { local, .. }) => read.push(*local),
+                Node::Expression(Expr {
+                    kind: ExprKind::Local(local),
+                    ..
+                }) => read.push(*local),
                 _ => {}
             };
             walk_statement_nodes(&branch.statements, &mut visit);
-            // A read after the branch has assigned the local on every
-            // path reads the branch's own binding: no capture.
-            let mut assigned = Vec::new();
-            reads_before_assigned(&branch.statements, &mut assigned, &mut read, &|value| {
-                self.connects(function, value)
-            });
             match &branch.tail {
-                Tail::Value(value) => {
-                    value.walk_nodes(&mut visit);
-                    reads_of(value, &assigned, &mut read);
-                }
-                // A branch that may leave the `var` unassigned, on any
-                // path through it, gives the binding it had before.
-                Tail::Local(var) => {
-                    if !assigns_on_every_path(&branch.statements, *var) {
-                        read.push(*var);
-                    }
-                }
+                Tail::Value(value) => value.walk_nodes(&mut visit),
+                // A branch that does not assign the `var` gives the
+                // binding it had before.
+                Tail::Local(var) => read.push(*var),
                 Tail::Nothing | Tail::Returns => {}
             }
         }
         read.retain(|local| {
             !declared.contains(local)
+                && self.bound.contains(local)
                 && function.locals[*local].category == ValueCategory::Connection
         });
         read.sort_unstable();
@@ -3040,7 +2917,11 @@ impl Emitter<'_> {
             })
             .collect();
         let mut cases = Vec::new();
+        let outside = std::mem::replace(&mut self.bound, read.clone());
         for (position, branch) in branches.iter().enumerate() {
+            // A child graph has its parameters bound, and what its own
+            // statements bind.
+            self.bound = read.clone();
             let graph = format!("_case_{number}_{position}");
             self.line(depth, "@_hg.graph");
             self.line(
@@ -3077,6 +2958,7 @@ impl Emitter<'_> {
             cases.push(format!("{}: {graph}", branch.key));
         }
         let key = self.expression(function, key);
+        self.bound = outside;
         let mut given = vec![key, format!("{{{}}}", cases.join(", "))];
         given.extend(read.iter().map(|&local| {
             let python = name(&function.locals[local].name);
@@ -3246,12 +3128,14 @@ impl Emitter<'_> {
                     let value = self.kept(function, *local, value, written);
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
+                    self.bind(function, *local);
                 } else if matches!(function.locals[*local].ty, Type::Nullable(_)) {
                     // CTRL-11: a `var` whose type is written `T?` "is
                     // null instead, and is assigned from its
                     // declaration".
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = None"));
+                    self.bind(function, *local);
                 }
                 // Any other `var` declared with no value has none to
                 // write: the analyser has held every read of it to an
@@ -3286,6 +3170,7 @@ impl Emitter<'_> {
                 };
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
+                self.bind(function, *local);
             }
             // EXPR-3: "An assignment may name a place inside a value, at
             // any depth". A compound assignment's value is already the
@@ -3466,7 +3351,10 @@ impl Emitter<'_> {
             } if function.mode.runs() => {
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("while {condition}:"));
+                // A body may not run: what it binds is not bound after.
+                let before = self.bound.clone();
                 self.block(function, body, depth + 1);
+                self.bound = before;
             }
             Stmt::While {
                 condition: None,
@@ -3482,7 +3370,12 @@ impl Emitter<'_> {
                 body,
                 at,
             } if function.mode.runs() => {
+                let before = self.bound.clone();
+                for &name in names.iter() {
+                    self.bind(function, name);
+                }
                 self.for_loop(function, (names, sequence), body, *at, depth);
+                self.bound = before;
             }
             Stmt::Switch {
                 selector,
@@ -3490,7 +3383,11 @@ impl Emitter<'_> {
                 default,
                 ..
             } if function.mode.runs() => {
+                // Only the case selected runs: what a case binds is not
+                // bound after.
+                let before = self.bound.clone();
                 self.switch(function, selector, cases, default.as_deref(), depth);
+                self.bound = before;
             }
             // FN-9: "A graph injects `global_state` and no other, and
             // uses it where the graph is built: each call on it is
@@ -3612,10 +3509,35 @@ impl Emitter<'_> {
     ) {
         let condition = self.expression(function, condition);
         self.line(depth, &format!("if {condition}:"));
+        let before = self.bound.clone();
         self.branch(function, then, depth + 1);
+        let after_then = std::mem::replace(&mut self.bound, before);
         if let Some(otherwise) = otherwise {
             self.line(depth, "else:");
             self.branch(function, otherwise, depth + 1);
+        }
+        // What is bound after: what both branches bind, less a branch
+        // that returns, which does not reach the next statement.
+        let ends = |branch: &Expr| {
+            matches!(
+                alternative_statements(Some(branch)).last(),
+                Some(Stmt::Return { .. })
+            )
+        };
+        if ends(then) {
+            // The `else`'s bindings stand.
+        } else if otherwise.is_some_and(ends) {
+            self.bound = after_then;
+        } else {
+            self.bound.retain(|local| after_then.contains(local));
+        }
+    }
+
+    /// Marks `local` as having a value in the graph being written
+    /// (`Emitter::bound`).
+    fn bind(&mut self, function: &Function, local: usize) {
+        if function.mode == Mode::Graph && !self.bound.contains(&local) {
+            self.bound.push(local);
         }
     }
 
