@@ -5354,8 +5354,9 @@ const SHARED: &str = concat!(
     // One that does not know its place holds a list.
     "const fn keep<T>(var slot: T, value: T) { slot = value }\n",
     "const fn push(var items: list<i64>, item: i64) { append(items, item) }\n",
-    // FN-15: a function that fails assigns nothing, though it grew the
-    // place's list before it failed.
+    // What the target does: a function that fails leaves the place as
+    // it was, though it grew the place's list before it failed. FN-15
+    // now has the place keep what was grown (#151).
     "const fn failing(var items: list<i64>, zero: i64) {\n",
     "    append(items, 2)\n",
     "    let quotient = 1 //{zero: .fail} zero\n",
@@ -6419,6 +6420,13 @@ const CONVERSIONS: &str = concat!(
     "    assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1\n",
     // OPS-8: `nan` is "the value a NaN converts to".
     "    assert convert<i64>(0.0 /{zero: .nan} 0.0, nan: -1, invalid: .fail) == -1\n",
+    // OPS-8: under `.fail` "a failure is an escaping HGL error with
+    // that code".
+    "    assert raises(\"convert.invalid\") { as_whole(1e19) }\n",
+    "    assert raises(\"convert.invalid\") { as_whole(0.0 /{zero: .nan} 0.0) }\n",
+    "    assert raises(\"convert.invalid\") { convert<bool>(\"yes\", invalid: .fail) }\n",
+    "    assert raises(\"convert.invalid\") { convert<i64>(\"three\", invalid: .fail) }\n",
+    "    assert raises(\"convert.invalid\") { convert<f64>(\"two\", invalid: .fail) }\n",
     // "The value of the literal the text is", and a failure for "text
     // that is no literal of the type asked for".
     "    assert flag_of(\"true\") && is_ok(flag(\"false\")) && !flag_of(\"false\")\n",

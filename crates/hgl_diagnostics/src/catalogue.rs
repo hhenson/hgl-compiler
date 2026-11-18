@@ -197,6 +197,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "numeric.division_by_zero",
     "numeric.out_of_range",
     "tenor.mixed_units",
+    "convert.invalid",
     "yield.negative_duration",
     "yield.non_increasing_time",
     "eval.input_delta_profile",

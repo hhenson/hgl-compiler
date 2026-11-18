@@ -1191,7 +1191,8 @@ impl Emitter<'_> {
     /// A function with `var` parameters returns its result and then
     /// what each holds, so the call is bound to `_given`: `_given[0]`
     /// is the result, and `_given[1]` the first place's new value. A
-    /// function that fails raises, and assigns nothing.
+    /// function that fails raises, and the target leaves each place as
+    /// it was (see where the call is written).
     fn place_call(&mut self, function: &Function, value: &Expr, depth: usize) -> Option<String> {
         let places = self.places_of(value);
         if places.is_empty() {
@@ -1279,7 +1280,11 @@ impl Emitter<'_> {
                 self.held.push((argument.value.at, held));
             }
         }
-        // FN-15: "A function that fails raises, and assigns nothing."
+        // What the target does where such a function fails: it
+        // raises, and each place is left as it was before the call.
+        // FN-15 has the place hold "what its parameter held when it
+        // failed", which the target is brought to with the rule for
+        // copies (#151).
         // A function of the program that is given a place's own list
         // may have grown it where it is before it failed: the list is
         // then put back to the length it had. The provider's own
