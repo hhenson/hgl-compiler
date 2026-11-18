@@ -4105,7 +4105,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
         ),
         // A place inside a value: its root is given a new value.
         concat!(
-            "    _given = set_first(items=book.orders, value=5)\n",
+            "    _given = set_first(items=_core.shared(book.orders), value=5)\n",
             "    book = _core.with_field(book, orders=_given[1])\n",
             "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
             "    book = _core.with_field(book, orders=_core.with_item(book.orders, 1, _given[1]))\n",
@@ -4491,6 +4491,194 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
         "value=[7], tag=_core.Held({\"a\": 1}))",
         "_harness.evaluate(_inst_tagged__i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=1)",
         "_harness.evaluate(_inst_optional__tuple_i64__str_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=_core.Held(None))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// LIST-3: "a value taken from the place before the call is as it
+/// was". A `let`, a parameter and whatever else is given a place's
+/// list is given the list itself; the place copies it before it grows
+/// where something else may hold it, and grows it where it is
+/// otherwise.
+const SHARED: &str = concat!(
+    "module demo.shared\n",
+    "\n",
+    "struct Holder {\n",
+    "    items: list<i64>\n",
+    "}\n",
+    "\n",
+    // A function that keeps nothing: its result is a scalar.
+    "const fn total(values: list<i64>) -> i64 {\n",
+    "    var sum: i64 = 0\n",
+    "    for value in values { sum += value }\n",
+    "    return sum\n",
+    "}\n",
+    // One that may keep what it is given: its result may hold it.
+    "const fn same<T>(value: T) -> T { return value }\n",
+    // One that does not know its place holds a list.
+    "const fn keep<T>(var slot: T, value: T) { slot = value }\n",
+    "const fn push(var items: list<i64>, item: i64) { append(items, item) }\n",
+    // FN-15: a function that fails assigns nothing, though it grew the
+    // place's list before it failed.
+    "const fn failing(var items: list<i64>, zero: i64) {\n",
+    "    append(items, 2)\n",
+    "    let quotient = 1 //{zero: .fail} zero\n",
+    "}\n",
+    // A function handed a run's store may keep there what it is given.
+    "const fn save(store: GlobalState, values: list<i64>) {\n",
+    "    put(store, \"saved\", [values])\n",
+    "}\n",
+    "fn saving(value: i64) -> i64 {\n",
+    "    cache seen: list<i64> = []\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        append(seen, value)\n",
+    "        save(global_state, seen)\n",
+    "        append(seen, value)\n",
+    "        let saved: list<list<i64>> = get(global_state, \"saved\")\n",
+    "        if saved[0] == [value] { return 1 }\n",
+    "        return 0\n",
+    "    }\n",
+    "}\n",
+    // A `var` of the function's own, written from what it was lent.
+    "const fn longer(values: list<i64>) -> i64 {\n",
+    "    var mine: list<i64> = values\n",
+    "    append(mine, 0)\n",
+    "    return total(mine)\n",
+    "}\n",
+    "const fn built(count: i64) -> list<i64> {\n",
+    "    var out: list<i64> = []\n",
+    "    var i: i64 = 0\n",
+    "    while i < count {\n",
+    "        append(out, i)\n",
+    "        i += 1\n",
+    "    }\n",
+    "    return out\n",
+    "}\n",
+    "const fn doubled() -> list<i64> {\n",
+    "    var values: list<i64> = [1, 2]\n",
+    "    for item in values { append(values, item) }\n",
+    "    return values\n",
+    "}\n",
+    "\n",
+    "test shared {\n",
+    // A `let` is the list as it was, however the place grows after.
+    "    var entries: list<i64> = [1, 2]\n",
+    "    let before = entries\n",
+    "    append(entries, 3)\n",
+    "    assert before == [1, 2]\n",
+    "    assert entries == [1, 2, 3]\n",
+    "    assert total(entries) == 6\n",
+    "    assert longer(entries) == 6\n",
+    "    assert entries == [1, 2, 3]\n",
+    // What a function gave back is as it was.
+    "    let through = same(entries)\n",
+    "    append(entries, 4)\n",
+    "    assert through == [1, 2, 3]\n",
+    // A `var` written from a `let` leaves the `let` as it was.
+    "    let source = [7, 8]\n",
+    "    var copy: list<i64> = source\n",
+    "    push(copy, 9)\n",
+    "    assert source == [7, 8]\n",
+    "    assert copy == [7, 8, 9]\n",
+    "    var slot: list<i64> = [0]\n",
+    "    keep(slot, source)\n",
+    "    append(slot, 1)\n",
+    "    assert source == [7, 8]\n",
+    "    assert slot == [7, 8, 1]\n",
+    // A list inside another value, and one a list or a struct keeps.
+    "    var rows: list<list<i64>> = [[1]]\n",
+    "    let row = rows[0]\n",
+    "    append(rows[0], 2)\n",
+    "    append(rows, entries)\n",
+    "    append(entries, 5)\n",
+    "    assert row == [1]\n",
+    "    assert rows == [[1, 2], [1, 2, 3, 4]]\n",
+    "    let held = Holder(items: entries)\n",
+    "    append(entries, 6)\n",
+    "    assert held.items == [1, 2, 3, 4, 5]\n",
+    "    assert doubled() == [1, 2, 1, 2]\n",
+    // A place given to `extend` as both of its lists.
+    "    var twice: list<i64> = [1, 2]\n",
+    "    extend(twice, twice)\n",
+    "    assert twice == [1, 2, 1, 2]\n",
+    "    var grown: list<i64> = built(2)\n",
+    "    append(grown, 9)\n",
+    "    assert grown == [0, 1, 9]\n",
+    "    assert built(4) == [0, 1, 2, 3]\n",
+    "    var kept: list<i64> = [0]\n",
+    "    append(kept, 1)\n",
+    "    assert raises(\"numeric.division_by_zero\") { failing(kept, 0) }\n",
+    "    assert kept == [0, 1]\n",
+    "    failing(kept, 1)\n",
+    "    assert kept == [0, 1, 2]\n",
+    "    assert eval(saving(value: [7])) == [1]\n",
+    "}\n",
+);
+
+/// LIST-3 on hgraph. A list is read from a `var` as it is, with no
+/// copy. What may keep it marks it as shared, `_core.shared`: a
+/// `let`, a function whose result may hold it, a value that is made
+/// of it. What can keep nothing is lent it unmarked: the read of an
+/// element, and a `const fn` with a scalar result and no `var`
+/// parameter. `append` grows a list where it is while it is unmarked.
+#[test]
+fn a_list_is_shared_and_copied_only_where_it_then_grows() {
+    let emitted = emit(&[("shared.hgl", SHARED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_shared/__init__.py");
+    for expected in [
+        // A `let` takes the list itself, marked.
+        concat!(
+            "    before = _core.shared(entries)\n",
+            "    _given = _core.fn_append(values=entries, item=3)\n",
+            "    entries = _given[1]\n",
+        ),
+        // Lent: a scalar result, and no `var` parameter.
+        "total(values=entries)",
+        "longer(values=entries)",
+        "_core.eq__T_T(lhs=entries, rhs=[1, 2, 3])",
+        // A `var` written from what the function was lent.
+        "    mine = _core.shared(values)\n",
+        // A result that may hold what it is given.
+        "    through = same(value=_core.shared(entries))\n",
+        // A place whose parameter is not declared a list: marked
+        // where it is given, and where it is given back.
+        concat!(
+            "    _given = keep(slot=_core.shared(slot), value=source)\n",
+            "    slot = _core.shared(_given[1])\n",
+        ),
+        // A place inside a value is held by that value too.
+        concat!(
+            "    _given = _core.fn_append(values=_core.shared(_core.item(rows, 0)), item=2)\n",
+            "    rows = _core.with_item(rows, 0, _given[1])\n",
+        ),
+        // What a list and a struct keep.
+        "    _given = _core.fn_append(values=rows, item=_core.shared(entries))\n",
+        "    held = Holder(items=_core.shared(entries))\n",
+        // A loop runs over the list as it was.
+        "    for item in _core.shared(values):\n",
+        "    _given = _core.fn_extend(values=twice, items=_core.shared(twice))\n",
+        // A result is the function's own list, which the caller may
+        // keep.
+        "    return _core.shared(out)\n",
+        // FN-15: a function of the program that is given the place's
+        // own list may grow it and then fail: the list is put back.
+        concat!(
+            "    _was_1 = _py.len(kept)\n",
+            "    try:\n",
+            "        _given = failing(items=kept, zero=1)\n",
+            "    except _py.BaseException:\n",
+            "        kept = _core.restored(kept, _was_1)\n",
+            "        raise\n",
+            "    kept = _given[1]\n",
+        ),
+        // A function handed a run's store is not lent the list.
+        "save(store=_store, values=_core.shared(_state.seen))",
     ] {
         assert!(
             python.contains(expected),
@@ -4974,6 +5162,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("places.hgl", PLACES));
     files.push(("nullable.hgl", NULLABLE));
     files.push(("lists.hgl", LISTS));
+    files.push(("shared.hgl", SHARED));
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
@@ -4997,13 +5186,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        64,
+        65,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on configuration of a generic type, and one of each demo's"
     );
 }
 
