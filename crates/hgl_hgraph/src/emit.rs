@@ -1528,7 +1528,7 @@ impl Emitter<'_> {
     ///   (SOURCE-2: "The first evaluation begins the body"), and its
     ///   own scheduler wakes it after;
     /// - its `start`, which gives each `cache` and `state` its value,
-    ///   runs the source's `start` and makes the generator, and its
+    ///   makes the generator and runs the source's `start`, and its
     ///   `stop`, the source's `stop`: "`stop`, where present, always
     ///   runs when the node ends, whatever state the generator is in".
     ///
@@ -1662,9 +1662,11 @@ impl Emitter<'_> {
             };
             self.line(1, &format!("_state.{field} = {value}"));
         }
-        if let Some(start) = start {
-            self.statements(&lifecycle_hook, start, 1);
-        }
+        // The generator is made before the source's `start` runs: a
+        // `return` there ends the hook, and must not leave the node
+        // with nothing to resume. Making it runs none of the source's
+        // statements: Python begins a generator where it is first
+        // resumed.
         self.line(
             1,
             &format!(
@@ -1672,6 +1674,9 @@ impl Emitter<'_> {
                 given.join(", ")
             ),
         );
+        if let Some(start) = start {
+            self.statements(&lifecycle_hook, start, 1);
+        }
         if let Some(stop) = stop {
             let stop_hook = Function {
                 locals: &body.locals,
@@ -1931,16 +1936,18 @@ impl Emitter<'_> {
                 ..
             }) => self.if_statement(function, condition, then, otherwise.as_deref(), depth),
             // SOURCE-1: the one block that holds every `yield` may be
-            // `{ ... }`: its statements, one after another.
+            // `{ ... }`: its statements, one after another, and then
+            // the expression it ends with, where it ends with one. A
+            // source's block gives no value, so that is a statement
+            // too.
             Stmt::Expr(Expr {
-                kind:
-                    ExprKind::Block {
-                        statements,
-                        value: None,
-                    },
+                kind: ExprKind::Block { statements, value },
                 ..
             }) if function.mode == Mode::Source => {
                 self.statements(function, statements, depth);
+                if let Some(value) = value {
+                    self.statement(function, &Stmt::Expr((**value).clone()), depth);
+                }
             }
             Stmt::Expr(value) => {
                 // FN-15: a call that assigns places is written with
@@ -3684,7 +3691,11 @@ fn is_null(value: &Expr) -> bool {
 fn yields(statements: &[Stmt]) -> bool {
     fn within(value: &Expr) -> bool {
         match &value.kind {
-            ExprKind::Block { statements, .. } => yields(statements),
+            // A block ends with an expression where its last statement
+            // is one: an `if` that yields, say.
+            ExprKind::Block { statements, value } => {
+                yields(statements) || value.as_deref().is_some_and(within)
+            }
             ExprKind::If {
                 then, otherwise, ..
             } => within(then) || otherwise.as_deref().is_some_and(within),
