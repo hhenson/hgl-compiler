@@ -1571,9 +1571,9 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
                 "fn one() -> i64 {\n",
                 "    yield 1s: 1\n",
                 "}\n",
-                // An `if` in a graph is not written yet.
-                "export fn waits(const flag: bool = true) -> i64 {\n",
-                "    if flag { return one() }\n",
+                // A loop in a graph is not written yet.
+                "export fn waits() -> i64 {\n",
+                "    for item in [1, 2] { let seen = one() }\n",
                 "    return one()\n",
                 "}\n",
             ),
@@ -1719,9 +1719,9 @@ fn a_form_not_written_yet_is_reported() {
             // `stop` reads `out`, are written (TIME-9, TIME-7).
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
-            // A graph's `if`, the three of a struct, then what the test
-            // holds.
-            "m.hgl:32:5 target.unsupported",
+            // `chosen`, a graph with an `if` over a connection, is
+            // written (CTRL-13). The three of a struct, then what the
+            // test holds.
             "m.hgl:37:11 target.unsupported",
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
@@ -6033,6 +6033,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
     files.push(("copies.hgl", COPIES));
+    files.push(("conditionals.hgl", CONDITIONALS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6294,6 +6295,99 @@ fn a_timer_wakes_its_own_handlers() {
             "def beats(every: _dt.timedelta, times: _py.int) -> _hg.TS[_py.int]:\n",
             "    return _node_beats(_begin=_hg.const(True), every=every, times=times)\n",
         ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection
+/// and over a `const` parameter.
+const CONDITIONALS: &str = include_str!("fixtures/conditionals.hgl");
+
+/// CTRL-15: over a connection "each case is a child graph selected at
+/// runtime", hgraph's `switch_` with a graph for each branch. CTRL-13:
+/// "an ordinary value in a branch is then wired as a constant", and with
+/// no `else` the `if` "never ticks while the condition is false".
+/// CTRL-14: a returning branch has the rest of the block as the other,
+/// and "the `var` is one connection: the branch's binding while that
+/// branch is selected, and the binding it had before for a branch that
+/// does not assign it". Over an ordinary value the one branch is
+/// composed: Python's own `if`.
+#[test]
+fn a_graph_if_and_switch_are_child_graphs() {
+    let emitted = emit(&[("conditionals.hgl", CONDITIONALS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_conditionals/__init__.py");
+    for expected in [
+        // No `else`: the false branch is a graph that never ticks.
+        concat!(
+            "    @_hg.graph\n",
+            "    def _case_0_1(price: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return _hg.nothing(_hg.TS[_py.int])\n",
+            "    return _hg.switch_(open, {True: _case_0_0, False: _case_0_1}, price=price)\n",
+        ),
+        // An `else if` is a `switch_` in the `else`'s graph, and an
+        // ordinary value a constant.
+        concat!(
+            "    def _case_2_1(score: _hg.TS[_py.int]) -> _hg.TS[_py.str]:\n",
+            "        @_hg.graph\n",
+            "        def _case_3_0() -> _hg.TS[_py.str]:\n",
+            "            return _hg.const(\"mid\")\n",
+        ),
+        "        return _hg.switch_(_lift_0_gt__T_T(lhs=score, rhs=5), {True: _case_3_0, False: _case_3_1})\n",
+        "        return _hg.const(0)\n",
+        // A returning branch: the rest of the block is the other graph.
+        concat!(
+            "    def _case_5_1(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        doubled = _lift_1_mul__i64_i64(lhs=value, rhs=2)\n",
+            "        return doubled\n",
+            "    return _hg.switch_(skip, {True: _case_5_0, False: _case_5_1}, value=value)\n",
+        ),
+        // A branch that does not assign the `var` gives what it had.
+        concat!(
+            "    def _case_6_1(price: _hg.TS[_py.int], chosen: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return chosen\n",
+            "    chosen = _hg.switch_(rising, {True: _case_6_0, False: _case_6_1}, price=price, chosen=chosen)\n",
+        ),
+        // A `switch` with a `default` (CTRL-6).
+        "    selected = _hg.switch_(route, {\"left\": _case_8_0, \"right\": _case_8_1, _hg.DEFAULT: _case_8_2}, left=left, right=right, fallback=fallback, selected=selected)\n",
+        "    return _hg.switch_(route, {1: _case_9_0, 2: _case_9_1, _hg.DEFAULT: _case_9_2}, left=left, right=right)\n",
+        // A `const` condition is decided where the graph is built.
+        concat!(
+            "def sized(price: _hg.TS[_py.int], wide: _py.bool) -> _hg.TS[_py.int]:\n",
+            "    if wide:\n",
+            "        return _lift_6_mul__i64_i64(lhs=price, rhs=2)\n",
+            "    return price\n",
+        ),
+        concat!(
+            "    if wide:\n",
+            "        value = _lift_7_mul__i64_i64(lhs=price, rhs=3)\n",
+            "    else:\n",
+            "        value = price\n",
+        ),
+        // A nested `if` is a `switch_` inside the branch's graph.
+        "        return _hg.switch_(high, {True: _case_11_0, False: _case_11_1}, price=price)\n",
+        // A statement `else if` is the `else`'s one statement: its
+        // graph tests the second condition.
+        "        chosen = _hg.switch_(second, {True: _case_13_0, False: _case_13_1}, price=price, chosen=chosen)\n",
+        // A branch that assigns the `var` on one path only is given the
+        // binding it had before, for the other.
+        concat!(
+            "    def _case_14_0(inner: _hg.TS[_py.bool], price: _hg.TS[_py.int], chosen: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        @_hg.graph\n",
+        ),
+        // An `if` over a connection in a wiring-time branch is a
+        // `switch_` there, not Python's `if` on the port.
+        concat!(
+            "    if wide:\n",
+            "        @_hg.graph\n",
+            "        def _case_16_0(price: _hg.TS[_py.int], chosen: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+        ),
+        // A read after the branch assigns the `var` is no input.
+        "    return _hg.switch_(flag, {True: _case_17_0, False: _case_17_1}, left=left, right=right)\n",
     ] {
         assert!(
             python.contains(expected),
