@@ -1,14 +1,12 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
 "this expression in a graph" = [
-    "conformance::a_captured_failure_keeps_the_child_live",
-    "conformance::a_captured_error_ticks_again_then_stays_valid",
-    "conformance::a_returned_error_is_a_value_at_a_capture_boundary",
-    "conformance::stop_failures_cross_a_capture_boundary",
     "conformance::fixed_list_children_become_readable_independently",
-    "conformance::propagating_a_retained_error_preserves_its_origin",
-    "conformance::a_start_failure_escapes_without_an_input_tick",
     "conformance::switching_keys_follows_the_new_child",
+]
+# The analyser does not read an error's `.context` yet (ERR-4).
+"this expression" = [
+    "conformance::propagating_a_retained_error_preserves_its_origin",
 ]
 "the type `list<i64>`" = [
     "conformance::lifting_observes_the_complete_list_including_empty",
