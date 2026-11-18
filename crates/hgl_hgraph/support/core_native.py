@@ -1270,9 +1270,22 @@ _EXPONENT = f"[eE][+-]?{_DIGITS}"
 _FLOAT_TEXT = _re.compile(f"{_DIGITS}(?:\\.{_DIGITS}(?:{_EXPONENT})?|{_EXPONENT})")
 
 
+# A number beyond every `i64` and every `f64`, which a decimal of more
+# digits than this has is taken to be.
+_BEYOND_DIGITS = 400
+_BEYOND = 10**_BEYOND_DIGITS
+
+
 def _integer_written(text):
     """The integer the integer literal `text` writes, or None where the
-    text is no such literal."""
+    text is no such literal.
+
+    Python reads no decimal text of more than a few thousand digits.
+    Zeros before a number change nothing and are left out, and a number
+    of more digits than any `i64` or `f64` has is given as one beyond
+    them all: what converts it fails as it does for any number too
+    large.
+    """
     if _INTEGER_TEXT.fullmatch(text) is None:
         return None
     digits = text.replace("_", "")
@@ -1280,6 +1293,9 @@ def _integer_written(text):
         return int(digits[2:], 16)
     if digits.startswith("0b"):
         return int(digits[2:], 2)
+    digits = digits.lstrip("0") or "0"
+    if len(digits) > _BEYOND_DIGITS:
+        return _BEYOND
     return int(digits, 10)
 
 

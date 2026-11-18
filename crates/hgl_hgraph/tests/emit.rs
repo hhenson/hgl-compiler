@@ -6414,6 +6414,16 @@ const CONVERSIONS: &str = concat!(
     // `-`; an `f64` the shortest text that reads back, with a `.` or an
     // exponent, the exponent from 1e16 up and below 1e-4.
     "const fn again(text: str) -> str => convert<str>(convert<f64>(text, invalid: .fail))\n",
+    // `text` written twice over, `times` times: text of many digits.
+    "const fn repeated(text: str, times: i64) -> str {\n",
+    "    var written: str = text\n",
+    "    var left: i64 = times\n",
+    "    while left > 0 {\n",
+    "        written = written + written\n",
+    "        left -= 1\n",
+    "    }\n",
+    "    return written\n",
+    "}\n",
     "fn shown(value: f64) -> str => convert<str>(value)\n",
     "test numbers_as_text {\n",
     "    assert convert<str>(42) == \"42\" && convert<str>(-3) == \"-3\"\n",
@@ -6462,6 +6472,15 @@ const CONVERSIONS: &str = concat!(
     "    assert is_err(convert<f64>(\"NaN\")) && is_err(convert<f64>(\"+inf\"))\n",
     "    assert is_err(convert<f64>(\"2.5 \")) && is_err(convert<f64>(\"1e\"))\n",
     "    assert is_err(convert<f64>(\"5.\")) && is_err(convert<f64>(\"-nan\"))\n",
+    // Text of 8192 digits: zeros before a number change nothing, and a
+    // number of that many digits is outside `i64` and rounds to an
+    // infinity. Neither is more than the conversion's own failure.
+    "    assert convert<i64>(repeated(\"0\", 13) + \"3\", invalid: .fail) == 3\n",
+    "    assert convert<f64>(repeated(\"0\", 13) + \"3\", invalid: .fail) == 3.0\n",
+    "    assert is_err(convert<i64>(repeated(\"9\", 13)))\n",
+    "    assert is_err(convert<f64>(repeated(\"9\", 13)))\n",
+    "    assert is_err(convert<f64>(repeated(\"9\", 13) + \".5\"))\n",
+    "    assert convert<f64>(\"0.\" + repeated(\"0\", 13) + \"1\", invalid: .fail) == 0.0\n",
     "}\n",
 );
 
