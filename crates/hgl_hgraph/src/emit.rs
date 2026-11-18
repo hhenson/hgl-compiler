@@ -4876,13 +4876,16 @@ impl Emitter<'_> {
             return written;
         };
         let nested = match self.program.modules[*module].details.get(*declaration) {
+            // A struct's bundle takes a field's update as that field's
+            // own: a struct field's as its fields, and a set field's,
+            // a `TSS`, as members added, so neither is replaced whole.
             Some(Detail::Struct(read)) => read.members.iter().any(|member| {
                 matches!(
                     member.ty,
                     Type::Named {
                         kind: NamedKind::Struct,
                         ..
-                    }
+                    } | Type::Set(_)
                 )
             }),
             _ => true,
@@ -4890,7 +4893,7 @@ impl Emitter<'_> {
         if nested {
             self.unsupported(
                 at,
-                "a whole struct published where a field is a temporal struct",
+                "a whole struct published where a field is a temporal struct or set",
             );
             return written;
         }

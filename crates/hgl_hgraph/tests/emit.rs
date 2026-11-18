@@ -7389,3 +7389,26 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
         );
     }
 }
+
+/// TYPE-9: a set field of a temporal struct is a `TSS`, which takes an
+/// update as members added. A whole struct published with such a field
+/// would not replace the set, so it is reported, and its delta is not.
+#[test]
+fn a_whole_struct_with_a_set_field_is_not_published_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Tagged {\n",
+            "    tags: set<i64>\n",
+            "}\n",
+            "fn whole(tag: i64) -> Tagged {\n",
+            "    when { return Tagged(tags: [tag]) }\n",
+            "}\n",
+            "fn changed(tag: i64) -> Tagged {\n",
+            "    when { return delta<Tagged>(tags: delta<set<i64>>(added: [tag])) }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
+}
