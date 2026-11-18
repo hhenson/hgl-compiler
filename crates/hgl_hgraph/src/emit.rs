@@ -503,6 +503,59 @@ enum Tail {
     Returns,
 }
 
+/// The statements of a branch of an `if` that stands as a statement:
+/// none with no `else`, a block's, with the block's last expression (a
+/// nested `if`, say) as a statement of its own, and for an `else if`
+/// the nested `if` as its one statement.
+fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
+    match otherwise {
+        None => Vec::new(),
+        Some(Expr {
+            kind: ExprKind::Block { statements, value },
+            ..
+        }) => {
+            let mut all = statements.clone();
+            all.extend(value.iter().map(|value| Stmt::Expr((**value).clone())));
+            all
+        }
+        Some(alternative) => vec![Stmt::Expr(alternative.clone())],
+    }
+}
+
+/// True where every path through `statements` assigns the `var` at
+/// `var`: an assignment of it at the top, or an `if` with an `else`, or
+/// a `switch` with a `default`, each branch of which assigns it on
+/// every path. A branch where this is false keeps, on some path, the
+/// binding the `var` had before (CTRL-14).
+fn assigns_on_every_path(statements: &[Stmt], var: usize) -> bool {
+    statements.iter().any(|statement| match statement {
+        Stmt::Assign { local, .. } => *local == var,
+        Stmt::Expr(Expr {
+            kind:
+                ExprKind::If {
+                    then,
+                    otherwise: Some(otherwise),
+                    ..
+                },
+            ..
+        }) => {
+            assigns_on_every_path(&alternative_statements(Some(then)), var)
+                && assigns_on_every_path(&alternative_statements(Some(otherwise)), var)
+        }
+        Stmt::Switch {
+            cases,
+            default: Some(default),
+            ..
+        } => {
+            cases
+                .iter()
+                .all(|case| assigns_on_every_path(&case.body, var))
+                && assigns_on_every_path(default, var)
+        }
+        _ => false,
+    })
+}
+
 /// One `when` of a node: what its header asks, and its body.
 struct Handler<'a> {
     /// The inputs whose tick wakes it (TIME-3), as local positions.
@@ -2542,8 +2595,12 @@ impl Emitter<'_> {
                 at,
                 ..
             }) if self.connects(function, condition) => {
-                let (then_statements, _) = parts(then);
-                let (other_statements, _) = otherwise.as_deref().map_or((&[][..], None), parts);
+                // Each branch's statements; an `else if` is the one
+                // statement of the `else`.
+                let then_owned = alternative_statements(Some(then));
+                let then_statements = then_owned.as_slice();
+                let other_owned = alternative_statements(otherwise.as_deref());
+                let other_statements = other_owned.as_slice();
                 if returns(then_statements) || returns(other_statements) {
                     // A branch that does not return goes on into the
                     // rest of the block.
@@ -2829,14 +2886,10 @@ impl Emitter<'_> {
             walk_statement_nodes(&branch.statements, &mut visit);
             match &branch.tail {
                 Tail::Value(value) => value.walk_nodes(&mut visit),
-                // A branch that does not assign the `var` gives the
-                // binding it had before.
+                // A branch that may leave the `var` unassigned, on any
+                // path through it, gives the binding it had before.
                 Tail::Local(var) => {
-                    let mut assigns = false;
-                    walk_statement_nodes(&branch.statements, &mut |node| {
-                        assigns |= matches!(node, Node::Statement(Stmt::Assign { local, .. }) if local == var);
-                    });
-                    if !assigns {
+                    if !assigns_on_every_path(&branch.statements, *var) {
                         read.push(*var);
                     }
                 }
