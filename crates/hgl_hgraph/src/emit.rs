@@ -2766,8 +2766,17 @@ impl Emitter<'_> {
                     None => absent,
                 };
                 self.line(depth + 1, &given(value));
-                // Python's `if`: what both branches bind is bound after.
-                self.bound.retain(|local| after_then.contains(local));
+                // Python's `if`: what both branches bind is bound after,
+                // less a branch that returns, which does not reach the
+                // next statement.
+                let other_returns = other.is_some_and(|(statements, _)| always_returns(statements));
+                if always_returns(then_statements) {
+                    // The `else`'s bindings stand.
+                } else if other_returns {
+                    self.bound = after_then;
+                } else {
+                    self.bound.retain(|local| after_then.contains(local));
+                }
                 if let Some(local) = declared {
                     self.bind(function, local);
                 }

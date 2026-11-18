@@ -282,3 +282,19 @@ test a_nested_return_leaves_the_other_binding {
     assert eval(returned_inside(flag: [true, false], left: [1, 2], right: [10, 20], wide: false, other_wide: false)) ==
         [11, 2]
 }
+
+# The same for a `let`'s wiring-time `if` value whose branch returns.
+fn returned_in_a_value(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen: i64
+    let taken = if wide { return right } else {
+        chosen = left
+        right
+    }
+    if flag { chosen = chosen + taken }
+    return chosen
+}
+
+test a_returning_value_branch_leaves_the_other_binding {
+    assert eval(returned_in_a_value(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) ==
+        [11, 2]
+}
