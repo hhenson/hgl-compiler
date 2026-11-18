@@ -58,6 +58,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Name, "default.formal_argument"),
     (Category::Name, "alias.unqualified"),
     (Category::Name, "alias.unknown"),
+    (Category::Name, "name.unknown"),
     (Category::Name, "test.duplicate_name"),
     (Category::Module, "test.export"),
     (Category::Operator, "test.implementation"),

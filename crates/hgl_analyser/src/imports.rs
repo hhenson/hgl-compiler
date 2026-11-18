@@ -433,6 +433,17 @@ fn bind_implementations(program: &mut Program, index: usize, diagnostics: &mut D
             name: name.to_string(),
             at: implementation.at,
         });
+        // GEN-4: "No matching operator is a declaration error." With
+        // core in the program every operator there is is known.
+        if program.core().is_some() {
+            diagnostics.emit(error(
+                Category::Operator,
+                codes::IMPL_UNKNOWN_OPERATOR,
+                implementation.at,
+                format!("nothing declares an operator `{name}`, so nothing can implement it"),
+                "GEN-4",
+            ));
+        }
     }
 
     let module = &mut program.modules[index];

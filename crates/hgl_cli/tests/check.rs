@@ -235,29 +235,41 @@ fn a_warning_is_reported_and_does_not_reject() {
     assert!(!stderr.contains("error["), "{stderr}");
 }
 
-/// UNIT-11: a name nothing in the program binds is left for the prelude
-/// and listed, not reported.
+/// UNIT-10: "A name that none of these binds rejects (`name.unknown`)":
+/// a parameter's name spelled wrongly is no name. GEN-4: an `impl` of
+/// an operator nothing declares is `impl.unknown_operator`. The program
+/// is rejected: status 1.
 #[test]
-fn a_name_left_for_the_prelude_is_listed() {
-    let root = scratch("prelude");
-    let file = write(
+fn a_name_nothing_binds_is_rejected() {
+    let root = scratch("unknown");
+    write(
         &root,
         "m.hgl",
-        "module m\nimpl fn add(left: i64, right: i64) -> i64 => left\n",
+        concat!(
+            "module m\n",
+            "const fn doubled(value: i64) -> i64 => vaule\n",
+            "impl fn add(left: i64, right: i64) -> i64 => left\n",
+        ),
     );
     let output = hgl(&["check", &argument(&root)]);
-    assert_eq!(output.status.code(), Some(0));
-    assert_eq!(text(&output.stderr), "");
+    assert_eq!(output.status.code(), Some(1));
+    let said = text(&output.stderr);
+    assert!(
+        said.contains("error[name/name.unknown]: nothing binds `vaule` here"),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "error[operator/impl.unknown_operator]: nothing declares an operator `add`, so \
+             nothing can implement it"
+        ),
+        "{said}"
+    );
     assert_eq!(
         text(&output.stdout),
-        format!(
-            concat!(
-                "checked 1 file in 1 module: no errors\n",
-                "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
-                "left for the prelude (UNIT-11), which does not bind them yet:\n",
-                "  {file}:2:9 add\n",
-            ),
-            file = file
+        concat!(
+            "checked 1 file in 1 module: 2 errors\n",
+            "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run\n",
         )
     );
 }
@@ -396,7 +408,6 @@ fn core_is_supplied_when_the_roots_hold_none() {
     );
     assert!(stdout.contains("module examples.core_use\n"), "{stdout}");
     assert!(!stdout.contains("module core\n"), "{stdout}");
-    assert!(!stdout.contains("left for the prelude"), "{stdout}");
 
     // A program that brings its own `module core` is checked with that
     // one, which is then counted and listed with the rest.

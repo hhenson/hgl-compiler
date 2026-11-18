@@ -339,6 +339,7 @@ fn an_applications_path_is_no_other_files() {
         checked.summary(),
         [
             "a.hgl:1:13 module/application.duplicate_path UNIT-14",
+            "b.hgl:3:5 name/name.unknown UNIT-10",
             "c.hgl:1:13 module/application.duplicate_path UNIT-14",
         ],
         "{}",

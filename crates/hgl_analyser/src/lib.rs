@@ -53,10 +53,10 @@
 //! Every module sees the public declarations of core's mandatory module,
 //! `core`, without importing them (UNIT-11). When the program has that
 //! module, a name nothing nearer binds is bound to its public
-//! declaration of the name. Core declares only part of its module so
-//! far, so a name it does not have, and any name in a program given
-//! without it, is not reported: it is listed in
-//! [`Module::prelude_names`], as a name the prelude is expected to bind.
+//! declaration of the name, and a name nothing binds is rejected
+//! (UNIT-10, `name.unknown`). In a program given without core's module
+//! no prelude is known, and such a name is not reported: it is listed
+//! in [`Module::prelude_names`].
 //!
 //! # Like every stage
 //!
@@ -154,6 +154,8 @@ pub mod codes {
     pub const ALIAS_UNQUALIFIED: &str = "alias.unqualified";
     /// The name before `::` is not a module alias of its file (UNIT-2).
     pub const ALIAS_UNKNOWN: &str = "alias.unknown";
+    /// A name that nothing in scope binds (UNIT-10).
+    pub const NAME_UNKNOWN: &str = "name.unknown";
     /// A generic type's name stands before a `<` that does not open its
     /// arguments (GEN-14).
     pub const GENERIC_INVALID_APPLICATION: &str = "generic.invalid_application";

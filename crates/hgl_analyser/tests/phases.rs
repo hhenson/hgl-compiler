@@ -173,6 +173,7 @@ fn a_nodes_body_is_its_declarations_and_then_its_hooks() {
             "m.hgl:18:5 phase/node.duplicate_hook TIME-5",
             "m.hgl:20:5 phase/node.duplicate_hook TIME-5",
             "m.hgl:23:5 phase/node.statement FN-2",
+            "m.hgl:25:5 name/name.unknown UNIT-10",
             "m.hgl:25:5 phase/node.statement FN-2",
             "m.hgl:29:9 phase/node.nested TIME-5",
             "m.hgl:33:9 phase/node.nested TIME-3",

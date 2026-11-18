@@ -676,7 +676,6 @@ fn check(arguments: &CheckArgs) -> ExitCode {
     println!(
         "modules, declarations, imports, names, written types and the bodies of value functions, nodes, sources, graphs and tests are checked; no test is run"
     );
-    print!("{}", list_prelude_names(&sources, &program));
     report(&sources, diagnostics)
 }
 
@@ -1239,33 +1238,6 @@ fn list_modules(sources: &SourceMap, program: &Program, core_supplied: bool) -> 
         for test in &module.tests {
             out.push_str(&format!("  test {}\n", test.name));
         }
-    }
-    out
-}
-
-/// The names left for the prelude, as text; empty when there are none.
-///
-/// Every module sees the public declarations of core's mandatory module,
-/// `core`, without importing them (UNIT-11). Core declares part of that
-/// module so far, and a program may be given without it. A name nothing
-/// binds is therefore listed here, not reported.
-fn list_prelude_names(sources: &SourceMap, program: &Program) -> String {
-    let mut out = String::new();
-    for name in program
-        .modules
-        .iter()
-        .flat_map(|module| &module.prelude_names)
-    {
-        if out.is_empty() {
-            out.push_str("left for the prelude (UNIT-11), which does not bind them yet:\n");
-        }
-        let source = sources.file(name.at.file);
-        out.push_str(&format!(
-            "  {}:{} {}\n",
-            source.name(),
-            source.line_col(name.at.span.start),
-            name.name
-        ));
     }
     out
 }

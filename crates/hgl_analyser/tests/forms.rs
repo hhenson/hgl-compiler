@@ -88,6 +88,7 @@ fn a_named_pack_names_a_type_pack_of_its_declaration() {
             "m.hgl:3:26 type/pack.undeclared FN-8",
             "m.hgl:4:25 type/pack.undeclared FN-8",
             "m.hgl:5:24 type/pack.undeclared FN-8",
+            "m.hgl:6:33 name/name.unknown UNIT-10",
             "m.hgl:6:33 type/pack.undeclared FN-8",
             "m.hgl:7:35 type/pack.undeclared FN-8",
         ]

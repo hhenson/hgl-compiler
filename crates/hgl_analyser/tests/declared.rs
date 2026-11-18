@@ -71,7 +71,7 @@ fn a_parent_is_an_abstract_struct() {
         "struct FromNative : Handle { }\n",
         "struct FromParameter<T> : T { value: T }\n",
         "struct Two : Base, Quote { }\n",
-        // UNIT-11: left for the prelude, and not known.
+        // UNIT-10: nothing binds it, and it is not known.
         "struct FromPrelude : Missing { }\n",
     ));
     assert_eq!(
@@ -82,6 +82,7 @@ fn a_parent_is_an_abstract_struct() {
             "m.hgl:11:21 type/struct.parent TYPE-3",
             "m.hgl:12:27 type/struct.parent TYPE-3",
             "m.hgl:13:20 type/struct.parent TYPE-3",
+            "m.hgl:14:22 name/name.unknown UNIT-10",
         ]
     );
     assert_eq!(
@@ -92,6 +93,7 @@ fn a_parent_is_an_abstract_struct() {
             "`Handle` is a native type and cannot be a parent: only an abstract struct may be",
             "`T` cannot be a parent: only an abstract struct may be",
             "`Quote` is a concrete struct and cannot be a parent: only an abstract struct may be",
+            "nothing binds `Missing` here",
         ]
     );
     assert_eq!(checked.prelude_names("m"), ["Missing"]);
@@ -388,7 +390,7 @@ fn only_an_optional_fields_default_is_null() {
         "struct Nullable : Generic<i64?> { value = null }\n",
         "struct Required : Generic<i64> { value = null }\n",
         "struct Open<T> { value: T = null }\n",
-        // UNIT-11: left for the prelude, and not known.
+        // UNIT-10: nothing binds it, and it is not known.
         "struct Later { value: Missing = null }\n",
     ));
     assert_eq!(
@@ -401,6 +403,7 @@ fn only_an_optional_fields_default_is_null() {
             "m.hgl:20:30 type/field.null_default TYPE-4",
             "m.hgl:23:42 type/field.null_default TYPE-4",
             "m.hgl:24:29 type/field.null_default TYPE-4",
+            "m.hgl:25:23 name/name.unknown UNIT-10",
         ]
     );
     assert_eq!(
@@ -559,9 +562,16 @@ fn a_field_is_compared_with_every_parents() {
         "struct Child : Open, Known { value: str }\n",
         "struct Fine : Open, Known { value: i64 }\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:4:30 type/field.conflict TYPE-4"]);
     assert_eq!(
-        checked.findings[0].message,
+        checked.summary(),
+        [
+            // UNIT-10: nothing binds `Missing`.
+            "m.hgl:2:31 name/name.unknown UNIT-10",
+            "m.hgl:4:30 type/field.conflict TYPE-4",
+        ]
+    );
+    assert_eq!(
+        checked.findings[1].message,
         "`value` is `str` here and `i64` in `Known`"
     );
 }
@@ -635,6 +645,7 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             "m.hgl:18:16 type/field.recursive TYPE-6",
             "m.hgl:22:19 type/field.recursive TYPE-6",
             "m.hgl:23:17 type/field.recursive TYPE-6",
+            "m.hgl:23:40 name/name.unknown UNIT-10",
             "m.hgl:24:15 type/field.recursive TYPE-6",
         ]
     );
@@ -649,6 +660,8 @@ fn a_struct_holds_itself_through_an_optional_atomic_field() {
             format!("`inner` makes `InBox` hold itself: {recursive}"),
             format!("`next` makes `Required` hold itself: {recursive}"),
             format!("`next` makes `Filled` hold itself: {recursive}"),
+            // UNIT-10: the default is a call of a name nothing binds.
+            "nothing binds `make` here".to_string(),
             format!("`right` makes `Left` hold itself: {recursive}"),
         ]
     );
@@ -1046,23 +1059,35 @@ fn a_descendant_keeps_a_recursive_fields_null() {
         checked.summary(),
         [
             "m.hgl:5:27 type/field.recursive TYPE-6",
+            "m.hgl:5:34 name/name.unknown UNIT-10",
             "m.hgl:6:24 type/field.recursive TYPE-6",
             "m.hgl:9:24 type/field.recursive TYPE-6",
+            "m.hgl:9:31 name/name.unknown UNIT-10",
             "m.hgl:13:28 type/field.recursive TYPE-6",
+            "m.hgl:13:35 name/name.unknown UNIT-10",
+            "m.hgl:14:46 name/name.unknown UNIT-10",
             "m.hgl:15:16 type/field.recursive TYPE-6",
             "m.hgl:17:30 type/field.recursive TYPE-6",
+            "m.hgl:17:54 name/name.unknown UNIT-10",
         ]
     );
     assert_eq!(
         messages(&checked),
         [
+            // UNIT-10: each default here is a call of `make`, a name
+            // nothing binds, which is reported where it is written.
             "`next` is a recursive field, and its default stays null",
+            "nothing binds `make` here",
             "`inner` makes `Holder` hold itself: a recursive field is optional, its type nullable or an `atomic<...>` of a nullable type, or holds its struct only as elements of a collection that may be empty",
             "`next` is a recursive field, and its default is `null` or the empty collection `[]`",
+            "nothing binds `make` here",
             "`next` is a recursive field, and its default stays null",
+            "nothing binds `make` here",
+            "nothing binds `make` here",
             "`Below` holds itself through `next`, a field of `Base`: a struct between has \
              removed its null default",
             "`next` is a recursive field, and its default stays null",
+            "nothing binds `make` here",
         ]
     );
 }
@@ -1237,10 +1262,13 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
             "m.hgl:7:15 type/field.recursive TYPE-6",
             "m.hgl:8:16 type/field.recursive TYPE-6",
             "m.hgl:9:15 type/field.recursive TYPE-6",
+            "m.hgl:9:47 name/name.unknown UNIT-10",
             "m.hgl:10:16 type/field.recursive TYPE-6",
             "m.hgl:13:23 type/field.recursive TYPE-6",
+            "m.hgl:13:34 name/name.unknown UNIT-10",
             "m.hgl:15:27 type/field.recursive TYPE-6",
             "m.hgl:16:24 type/field.recursive TYPE-6",
+            "m.hgl:16:54 name/name.unknown UNIT-10",
         ]
     );
     let ends = "a recursive field is optional, its type nullable or an `atomic<...>` of a \
@@ -1252,19 +1280,24 @@ fn a_recursive_field_may_end_in_an_empty_collection() {
             format!("`both` makes `Pair` hold itself: {ends}"),
             format!("`pair` makes `Twin` hold itself: {ends}"),
             format!("`both` makes `Mixed` hold itself: {ends}"),
+            // UNIT-10: each default here is a call of `make`, a name
+            // nothing binds, which is reported where it is written.
             "`children` is a recursive field, and its default is `null` or the empty \
              collection `[]`"
                 .to_string(),
+            "nothing binds `make` here".to_string(),
             "`children` makes `Loose` hold itself through the elements of a collection \
              outside an `atomic<...>`"
                 .to_string(),
             "`children` is a recursive field, and its default is `null` or the empty \
              collection `[]`"
                 .to_string(),
+            "nothing binds `make` here".to_string(),
             "`children` is a recursive field, and its default stays null".to_string(),
             "`leaves` is a recursive field, and its default is `null` or the empty \
              collection `[]`"
                 .to_string(),
+            "nothing binds `make` here".to_string(),
         ]
     );
 }

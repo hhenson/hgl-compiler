@@ -206,6 +206,7 @@ fn a_parameter_that_is_only_handed_on_is_unresolved() {
             "m.hgl:2:13 type/generic.kind_unresolved GEN-13",
             "m.hgl:3:13 type/generic.kind_unresolved GEN-13",
             "m.hgl:4:13 type/generic.kind_unresolved GEN-13",
+            "m.hgl:10:24 name/name.unknown UNIT-10",
         ]
     );
     assert_eq!(kinds(&checked, "Tree"), ["T:type"]);
@@ -260,12 +261,14 @@ fn an_argument_is_of_its_parameters_kind() {
             "m.hgl:10:43 type/generic.argument_kind GEN-14",
             "m.hgl:10:59 type/generic.argument_kind GEN-14",
             "m.hgl:11:36 type/generic.argument_kind GEN-14",
+            "m.hgl:12:18 name/name.unknown UNIT-10",
             "m.hgl:13:38 type/generic.argument_kind GEN-14",
             "m.hgl:15:46 type/generic.argument_kind GEN-14",
             "m.hgl:15:81 type/generic.argument_kind GEN-14",
             "m.hgl:16:70 type/generic.argument_kind GEN-14",
             "m.hgl:16:84 type/generic.argument_kind GEN-14",
             "m.hgl:19:22 type/generic.argument_kind GEN-14",
+            "m.hgl:19:27 name/name.unknown UNIT-10",
             "m.hgl:22:69 type/generic.argument_kind GEN-14",
         ]
     );
@@ -279,12 +282,14 @@ fn an_argument_is_of_its_parameters_kind() {
             "`Sized` takes a value for `N`, and `Side` is a type",
             "`Count` takes a value for `N`, and `list<i64>` is a type",
             "`Box` takes a type for `T`, and `7` is a value",
+            "nothing binds `Missing` here",
             "`Sized` takes a value for `N`, and `One` is a type",
             "`Pair` takes a value for `N`, and `i64` is a type",
             "`Row` takes a type for `Ts`, and `7` is a value",
             "`Pair` takes a value for `N`, and `Two` passes on types",
             "`Pair` takes a value for `N`, and `Some` passes on types",
             "`Sized` takes a value for `N`, and `T` is a type",
+            "nothing binds `make` here",
             "`Sized` takes a value for `N`, and `U` is a type",
         ]
     );

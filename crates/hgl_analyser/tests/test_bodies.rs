@@ -86,10 +86,11 @@ fn an_assert_takes_a_wiring_time_bool() {
             "m.hgl:23:12 type/type.mismatch TST-4",
             "m.hgl:24:12 type/type.mismatch TST-4",
             "m.hgl:25:12 phase/connection.as_constant TST-4",
+            "m.hgl:26:12 name/name.unknown UNIT-10",
             "m.hgl:27:22 type/type.mismatch EXPR-5",
         ]
     );
-    // `missing` is a name nothing binds, left for the prelude.
+    // `missing` is a name nothing binds (UNIT-10), reported above.
     assert_eq!(checked.prelude_names("m"), ["missing"]);
     assert_eq!(
         outline(&checked, "asserted"),
