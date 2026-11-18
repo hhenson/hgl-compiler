@@ -75,6 +75,13 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             .iter()
             .map(|call| ((call.at.file, call.at.span.start), call))
             .collect();
+        // The signature of what has none: a test, a run statement, a
+        // constant.
+        let empty = Signature {
+            generics: Vec::new(),
+            parameters: Vec::new(),
+            result: None,
+        };
         let mut bodies = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
             let body = match (&declaration.kind, module.details.get(position)) {
@@ -143,7 +150,40 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     diagnostics,
                 )
                 .graph(),
-                _ => None,
+                // A declaration with no body to read writes types too:
+                // a struct's fields, an operator's parameters, a
+                // constant's type. Each is held to the `requires` of
+                // the structs it applies (GEN-3), which reading the
+                // declaration does. A struct's own generic parameters
+                // and its `requires` stand as a function's do (GEN-7).
+                (_, detail) => {
+                    let of_struct;
+                    let signature = match detail {
+                        Some(Detail::Callable(signature)) => signature,
+                        Some(Detail::Struct(read)) => {
+                            of_struct = Signature {
+                                generics: read.generics.clone(),
+                                parameters: Vec::new(),
+                                result: None,
+                            };
+                            &of_struct
+                        }
+                        _ => &empty,
+                    };
+                    Typer::new(
+                        program,
+                        module,
+                        declaration,
+                        signature,
+                        Tables {
+                            bindings: &bindings,
+                            written: &written,
+                            calls: &calls,
+                        },
+                        diagnostics,
+                    );
+                    None
+                }
             };
             bodies.push(body);
         }
@@ -151,11 +191,6 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // It is no declaration: it has a name, and neither a parameter
         // nor a result, so it is read as a graph of that name with an
         // empty signature.
-        let empty = Signature {
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result: None,
-        };
         let mut test_bodies = Vec::with_capacity(module.tests.len());
         for test in &module.tests {
             let stand_in = Declaration {
@@ -515,7 +550,31 @@ impl<'a> Typer<'a> {
                 true,
             );
         }
+        typer.applications();
         typer
+    }
+
+    /// GEN-3: each type written in the declaration being read is held
+    /// to the `requires` of the structs it applies. [`applications`]
+    /// has told what needs no body; here a named operator requirement
+    /// is told too (GEN-16), and one of a generic parameter of this
+    /// declaration by what it states (GEN-7).
+    fn applications(&mut self) {
+        let within = self.declaration.syntax.span();
+        let module = self.module;
+        let file = self.file;
+        let written = module.written.iter().filter(|written| {
+            written.at.file == file
+                && written.at.span.start >= within.start
+                && written.at.span.end <= within.end
+        });
+        for written in written {
+            let mut found = Vec::new();
+            struct_applications(&written.ty, &mut found);
+            for (struct_, arguments) in found {
+                self.requires_met(written.at, struct_, &arguments, (&[], &[]));
+            }
+        }
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {
@@ -6541,13 +6600,28 @@ impl<'a> Typer<'a> {
                     listed,
                 })
                 .collect();
+            let reported = self.diagnostics.len();
             let arguments = self.bind(name, list, &slots, Takes::Parameters);
             let ty = signature.result.as_ref().map_or(Type::Unknown, known);
+            // GEN-3: a function with no generic parameter may state a
+            // `requires` too, of types it names itself, and a call of
+            // it is held to that. Not where something else was
+            // reported of the call (ERR-9), nor where the function has
+            // generic parameters this pass does not resolve.
+            if generics.is_empty() && self.diagnostics.len() == reported {
+                let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+                self.requires_met(at, (module, declaration), &[], (&[], &[]));
+            }
+            let requirements = if generics.is_empty() {
+                self.answers(module, declaration, &[])
+            } else {
+                Vec::new()
+            };
             let callee = Callee::Function {
                 module,
                 declaration,
                 generics: Vec::new(),
-                requirements: Vec::new(),
+                requirements,
             };
             let kind = ExprKind::Call {
                 callee,
@@ -11825,6 +11899,50 @@ fn unmet(
     )
 }
 
+/// Every struct a type applies, at any depth, with the generic
+/// arguments it gives it: none for a struct that takes none.
+fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>)>) {
+    match ty {
+        Type::Named {
+            module,
+            declaration,
+            arguments,
+            kind,
+            ..
+        } => {
+            if *kind == NamedKind::Struct {
+                found.push(((*module, *declaration), arguments.clone()));
+            }
+            for argument in arguments {
+                if let Argument::Type(argument) = argument {
+                    struct_applications(argument, found);
+                }
+            }
+        }
+        Type::Tuple(elements) => elements
+            .iter()
+            .for_each(|element| struct_applications(element, found)),
+        Type::List { element, .. } => struct_applications(element, found),
+        Type::Set(inner)
+        | Type::Ref(inner)
+        | Type::Endpoint(inner)
+        | Type::Atomic(inner)
+        | Type::Delta(inner)
+        | Type::Trace { cell: inner, .. }
+        | Type::Nullable(inner) => struct_applications(inner, found),
+        Type::Dict { key, value } => {
+            struct_applications(key, found);
+            struct_applications(value, found);
+        }
+        Type::Rolling { value, .. } => struct_applications(value, found),
+        Type::Result { value, error } => {
+            struct_applications(value, found);
+            struct_applications(error, found);
+        }
+        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {}
+    }
+}
+
 /// GEN-3: "an application of a struct whose `requires` does not hold
 /// with its arguments" is rejected. Each type the program writes is
 /// read for the structs it applies, at any depth, and reported where
@@ -11834,54 +11952,11 @@ fn unmet(
 /// A named operator requirement of a struct is not told here, where no
 /// body is being read: it is told where the struct is constructed.
 pub(crate) fn applications(program: &Program, diagnostics: &mut Diagnostics) {
-    fn applied(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>)>) {
-        match ty {
-            Type::Named {
-                module,
-                declaration,
-                arguments,
-                kind,
-                ..
-            } => {
-                if *kind == NamedKind::Struct && !arguments.is_empty() {
-                    found.push(((*module, *declaration), arguments.clone()));
-                }
-                for argument in arguments {
-                    if let Argument::Type(argument) = argument {
-                        applied(argument, found);
-                    }
-                }
-            }
-            Type::Tuple(elements) => elements.iter().for_each(|element| applied(element, found)),
-            Type::List { element, .. } => applied(element, found),
-            Type::Set(inner)
-            | Type::Ref(inner)
-            | Type::Endpoint(inner)
-            | Type::Atomic(inner)
-            | Type::Delta(inner)
-            | Type::Trace { cell: inner, .. }
-            | Type::Nullable(inner) => applied(inner, found),
-            Type::Dict { key, value } => {
-                applied(key, found);
-                applied(value, found);
-            }
-            Type::Rolling { value, .. } => applied(value, found),
-            Type::Result { value, error } => {
-                applied(value, found);
-                applied(error, found);
-            }
-            Type::Scalar(_)
-            | Type::Parameter { .. }
-            | Type::Signal
-            | Type::Error
-            | Type::Unknown => {}
-        }
-    }
     let values = crate::read::ConstantValues::default();
     for module in &program.modules {
         for written in &module.written {
             let mut found = Vec::new();
-            applied(&written.ty, &mut found);
+            struct_applications(&written.ty, &mut found);
             for (struct_, arguments) in found {
                 let Some((_, condition)) = required(program, struct_) else {
                     continue;
