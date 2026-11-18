@@ -1637,8 +1637,8 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:37:11 target.unsupported",
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
-            "m.hgl:27:29 target.unsupported",
-            "m.hgl:27:42 target.unsupported",
+            // A node called in a test, outside an eval. The timed
+            // traces of the line before it are written.
             "m.hgl:28:17 target.unsupported",
         ]
     );
@@ -5633,7 +5633,7 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
 }
 
 /// A program with forms that are not written: a pack parameter of two
-/// of its functions, and timed traces in one of its tests.
+/// of its functions, and a zoned datetime in one of its tests.
 const REACH: [(&str, &str); 3] = [
     (
         "reach.hgl",
@@ -5655,7 +5655,7 @@ const REACH: [(&str, &str); 3] = [
             "    assert fine(2) == 3\n",
             "}\n",
             "test reaches { assert outer(1) == 2 }\n",
-            "test own { assert eval(lone(value: [0s: 1])) == [0s: 1] }\n",
+            "test own { let at = @2026-09-03T09:30:00+01:00[Europe/London] }\n",
             "test across { assert far::relay(1) == 2 }\n",
             "test wrong {\n",
             "    assert fine(1) == 2\n",
@@ -5710,8 +5710,7 @@ fn a_test_runs_when_all_it_reaches_is_written() {
         emitted.reported,
         [
             "reach.hgl:5:29 target.unsupported",
-            "reach.hgl:18:36 target.unsupported",
-            "reach.hgl:18:49 target.unsupported",
+            "reach.hgl:18:21 target.unsupported",
             "deep.hgl:2:37 target.unsupported",
         ]
     );
@@ -5729,7 +5728,10 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     );
     assert_eq!(
         emitted.blocked("own"),
-        Some("reach.hgl:18:36 the hgraph target does not write a timed trace yet".to_string())
+        Some(
+            "reach.hgl:18:21 the hgraph target does not write a zoned datetime, a zoned time or a time zone yet"
+                .to_string()
+        )
     );
     let (_, direct) = emitted.test("direct");
     assert_eq!(direct.identity(), "reach::direct");
@@ -5868,6 +5870,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("given.hgl", GIVEN));
     files.push(("notified.hgl", NOTIFIED));
     files.push(("compound.hgl", COMPOUND));
+    files.push(("timed.hgl", TIMED));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -5888,13 +5891,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        71,
+        72,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, and one of each demo's"
     );
 }
 
@@ -6148,6 +6151,65 @@ fn a_compound_assignment_evaluates_its_place_once() {
         .and_then(|rest| rest.split("\n\n\n").next())
         .expect("the node is written");
     assert_eq!(nested.matches("next_slot(").count(), 2, "{nested}");
+}
+
+/// TST-5: "A trace written out is dense, `[7, _, 9]`, or timed, `[0s: 7,
+/// 2s: 9]`." TST-7: "Timed entries use duration offsets from run start
+/// or absolute datetime keys ... Sparse expectations enumerate exactly
+/// the actual output ticks and times."
+const TIMED: &str = concat!(
+    "module demo.timed\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn beats(const every: duration) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+    "const later: datetime = earliest_start + 5us\n",
+    "const fn first(seen: list<tuple<datetime, i64>>) -> datetime => seen[0][0]\n",
+    "test timed_traces {\n",
+    // A duration from the run's start: an input, and what is expected.
+    "    assert eval(pass(value: [0s: 1, 2s: 2])) == [0s: 1, 2s: 2]\n",
+    "    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1, 3s: 2]\n",
+    "    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1]\n",
+    // What a source publishes each second, for four seconds.
+    "    assert eval(beats(every: 1s), RunConfig(length: 4s)) == [1s: 1, 2s: 2, 3s: 3]\n",
+    // An instant: it is replayed then, wherever the run starts.
+    "    assert eval(pass(value: [later: 7])) == [later: 7]\n",
+    "    assert first(eval(pass(value: [later: 7]))) == later\n",
+    // A duration is counted from the start the run has.
+    "    assert eval(pass(value: [1us: 7]), RunConfig(start: later)) == [1us: 7]\n",
+    "    assert first(eval(pass(value: [1us: 7]), RunConfig(start: later))) == later + 1us\n",
+    "}\n",
+);
+
+/// A timed trace is given to the harness as its entries, each a key and
+/// a publication, in the order written (TST-7).
+#[test]
+fn a_timed_trace_is_its_entries() {
+    let emitted = emit(&[("timed.hgl", TIMED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_timed/__init__.py");
+    for expected in [
+        concat!(
+            "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, ",
+            "_hgl_4core._inst_record__i64, ",
+            "value=_harness.timed([(_dt.timedelta(microseconds=0), 1), ",
+            "(_dt.timedelta(microseconds=2000000), 2)])), ",
+            "_harness.timed([(_dt.timedelta(microseconds=0), 1), ",
+            "(_dt.timedelta(microseconds=2000000), 2)]))",
+        ),
+        "_harness.timed([(later(), 7)])",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 /// TST-17: "An integration test ... is a named test that may run in
