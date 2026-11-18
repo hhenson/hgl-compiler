@@ -5,17 +5,8 @@
     "conformance::a_captured_error_ticks_again_then_stays_valid",
     "conformance::a_returned_error_is_a_value_at_a_capture_boundary",
     "conformance::stop_failures_cross_a_capture_boundary",
-    "conformance::fixed_list_children_become_readable_independently",
     "conformance::propagating_a_retained_error_preserves_its_origin",
     "conformance::a_start_failure_escapes_without_an_input_tick",
-    "conformance::switching_keys_follows_the_new_child",
-]
-"the type `list<i64>`" = [
-    "conformance::lifting_observes_the_complete_list_including_empty",
-    "conformance::a_retained_list_is_independent_of_later_input_changes",
-]
-"the type `dict<str, i64>`" = [
-    "conformance::a_removed_key_is_absent_until_added_again",
 ]
 "a zoned datetime, a zoned time or a time zone" = [
     "core_implementation::reverse_instant_addition",

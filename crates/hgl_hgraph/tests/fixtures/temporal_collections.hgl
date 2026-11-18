@@ -1,0 +1,114 @@
+module demo.collections
+
+# TYPE-10: an unsized list grows; here it publishes whole.
+fn readings(reading: i64) -> list<i64> {
+    when {
+        if reading < 0 { return [] }
+        return [1, reading]
+    }
+}
+
+# An unsized list input read whole and by an index in a hook.
+fn second(values: list<i64>) -> i64 {
+    when { return values[1] }
+}
+
+# A value helper lifted over an unsized list, taking and giving one (FN-6).
+const fn total(values: list<i64>) -> i64 {
+    var sum: i64 = 0
+    for value in values { sum += value }
+    return sum
+}
+
+const fn doubled(values: list<i64>) -> list<i64> {
+    var made: list<i64> = []
+    for value in values { append(made, value * 2) }
+    return made
+}
+
+# TYPE-9: a fixed list maps to child positions. TYPE-16: its delta is a
+# `dict<i64, delta<V>>`, and a whole value sets each position.
+fn one_position(slot: i64, reading: i64) -> list<i64, 2> {
+    when {
+        let change: delta<list<i64, 2>> = [slot: reading]
+        return change
+    }
+}
+
+fn both_positions(low: i64) -> list<i64, 2> {
+    when { return [low, low + 1] }
+}
+
+# A fixed list read whole, once each position is valid, and its delta, in a hook.
+fn pair_span(pair: list<i64, 2>) -> i64 {
+    when { return pair[1] - pair[0] }
+}
+
+fn changed_high(pair: list<i64, 2>) -> i64? {
+    when { return get(delta_value(pair), 1) }
+}
+
+# A lifted helper over a fixed list waits for every position.
+const fn pair_total(pair: list<i64, 2>) -> i64 => pair[0] + pair[1]
+
+# TYPE-9: a dictionary maps to keyed children. TYPE-16: its delta has
+# `updated` and `removed`.
+fn priced(key: str, price: i64) -> dict<str, i64> {
+    when {
+        if price < 0 { return delta<dict<str, i64>>(removed: [key]) }
+        return delta<dict<str, i64>>(updated: [key: price])
+    }
+}
+
+# A dictionary input read whole, and its delta by its properties.
+fn b_in_hook(prices: dict<str, i64>) -> i64? {
+    when { return get(prices, "B") }
+}
+
+fn removals(prices: dict<str, i64>) -> i64 {
+    when {
+        let change = delta_value(prices)
+        var count: i64 = 0
+        for key in change.removed { count += 10 }
+        if get(change.updated, "A") != null { count += 1 }
+        return count
+    }
+}
+
+const fn price_of_a(prices: dict<str, i64>) -> i64? => get(prices, "A")
+
+fn total_of(reading: i64) -> i64 => total(readings(reading))
+fn doubled_total_of(reading: i64) -> i64 => total(doubled(readings(reading)))
+fn second_of(reading: i64) -> i64 => second(readings(reading))
+fn low_of(slot: i64, reading: i64) -> i64 => one_position(slot, reading)[0]
+fn high_of(low: i64) -> i64 => both_positions(low)[1]
+fn span_of(low: i64) -> i64 => pair_span(both_positions(low))
+fn partial_span_of(slot: i64, reading: i64) -> i64 => pair_span(one_position(slot, reading))
+fn changes_of(slot: i64, reading: i64) -> i64? => changed_high(one_position(slot, reading))
+fn pair_total_of(slot: i64, reading: i64) -> i64 => pair_total(one_position(slot, reading))
+fn keys_of(key: str, price: i64) -> i64? => b_in_hook(priced(key, price))
+fn removals_of(key: str, price: i64) -> i64 => removals(priced(key, price))
+fn a_of(key: str, price: i64) -> i64? => price_of_a(priced(key, price))
+fn b_of(key: str, price: i64) -> i64 => priced(key, price)["B"]
+fn chosen_of(chosen: str, key: str, price: i64) -> i64 => priced(key, price)[chosen]
+
+test lists_tick_whole_or_by_position {
+    assert eval(total_of(reading: [-1, 2, 5])) == [0, 3, 6]
+    assert eval(doubled_total_of(reading: [2, -1])) == [6, 0]
+    assert eval(second_of(reading: [2, 4])) == [2, 4]
+    assert eval(low_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [3, _, 4]
+    assert eval(high_of(low: [1, 5])) == [2, 6]
+    assert eval(span_of(low: [1, 5])) == [1, 1]
+    assert eval(partial_span_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, 5, 4]
+    assert eval(changes_of(slot: [0, 1], reading: [3, 8])) == [_, 8]
+    assert eval(pair_total_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, 11, 12]
+}
+
+test dictionaries_tick_by_key {
+    assert eval(keys_of(key: ["A", "B", "A"], price: [1, 2, -1])) == [null, 2, 2]
+    assert eval(removals_of(key: ["A", "A"], price: [1, -1])) == [1, 10]
+    assert eval(a_of(key: ["B", "A", "A"], price: [2, 7, -1])) == [null, 7, null]
+    assert eval(b_of(key: ["A", "B", "B"], price: [1, 2, 3])) == [_, 2, 3]
+    assert eval(chosen_of(chosen: ["A", "B", _], key: ["A", "B", "A"], price: [1, 2, 3])) ==
+        [1, 2, _]
+}

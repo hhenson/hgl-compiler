@@ -41,6 +41,7 @@ import math as _math
 import re as _re
 from fractions import Fraction as _Fraction
 
+from hgraph import REMOVE as _REMOVE, REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS
 from hgraph import Null as _Null, TimeSeriesSchema as _TimeSeriesSchema
 
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
@@ -312,6 +313,36 @@ def changed(delta, field):
     """The property `field` of a struct's delta (TYPE-16): the field's
     delta, or null "where the field did not change"."""
     return delta.get(field)
+
+
+def dict_delta(updated=None, removed=()):
+    """A dictionary's delta made from its properties (the language's
+    TYPE-16: "`updated`, a `dict<K, delta<V>>` of each key added or
+    changed with its delta, and `removed`, a `set<K>`"), as hgraph's
+    delta of a `TSD`: one `dict` of each key updated with its delta, and
+    of each removed with `REMOVE`. A property left out is empty. What is
+    updated is copied: the program may go on changing the dictionary it
+    was given in."""
+    made = {} if updated is None else copied(updated)
+    for key in removed:
+        made[key] = _REMOVE
+    return made
+
+
+def _removes(change):
+    return change is _REMOVE or change is _REMOVE_IF_EXISTS
+
+
+def updated(delta):
+    """The property `updated` of a dictionary's delta (TYPE-16): each
+    key added or changed, with its delta."""
+    return {key: change for key, change in delta.items() if not _removes(change)}
+
+
+def removed(delta):
+    """The property `removed` of a dictionary's delta (TYPE-16): the set
+    of each key removed."""
+    return frozenset(key for key, change in delta.items() if _removes(change))
 
 
 def bundled(value):
