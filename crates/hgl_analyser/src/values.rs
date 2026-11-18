@@ -7807,29 +7807,7 @@ impl<'a> Typer<'a> {
         declaration: usize,
         argument: &SyntaxNode,
     ) -> Option<Result<usize, String>> {
-        let Some(Detail::Enum(read)) = self.program.modules[module].details.get(declaration) else {
-            return None;
-        };
-        let members = &read.members;
-        match constant_of(argument)? {
-            OptionValue::Literal(Value::Int(given))
-                if members.iter().all(|member| member.value.is_some()) =>
-            {
-                Some(
-                    members
-                        .iter()
-                        .position(|member| member.value == Some(given))
-                        .ok_or_else(|| format!("no member numbered {given}")),
-                )
-            }
-            OptionValue::Literal(Value::Str(given)) => Some(
-                members
-                    .iter()
-                    .position(|member| member.name == given)
-                    .ok_or_else(|| format!("no member named `{given}`")),
-            ),
-            _ => None,
-        }
+        member_constructed(self.program, (module, declaration), argument)
     }
 
     /// The constant an option is given, for a candidate's condition to
@@ -11814,16 +11792,71 @@ fn required(
     Some((parameters, clause.children().next()?))
 }
 
+/// The member an enum's construction from `argument` names: see
+/// [`Typer::member_constructed`].
+fn member_constructed(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    argument: &SyntaxNode,
+) -> Option<Result<usize, String>> {
+    let Some(Detail::Enum(read)) = program.modules[module].details.get(declaration) else {
+        return None;
+    };
+    let members = &read.members;
+    match constant_of(argument)? {
+        OptionValue::Literal(Value::Int(given))
+            if members.iter().all(|member| member.value.is_some()) =>
+        {
+            Some(
+                members
+                    .iter()
+                    .position(|member| member.value == Some(given))
+                    .ok_or_else(|| format!("no member numbered {given}")),
+            )
+        }
+        OptionValue::Literal(Value::Str(given)) => Some(
+            members
+                .iter()
+                .position(|member| member.name == given)
+                .ok_or_else(|| format!("no member named `{given}`")),
+        ),
+        _ => None,
+    }
+}
+
+/// How many constants a constant's value is followed through, one
+/// naming the next.
+const NAMED_DEPTH: usize = 32;
+
 /// The value of `declaration` of `module`, where it is a constant
 /// (UNIT-13), for a condition to compare: see
 /// [`Typer::constant_option`]. `None` for what is no constant, and for
 /// one whose value is not known here.
+///
+/// An `i64` or a `duration` is followed to its value, as a size is. Any
+/// other is what its expression is, read where the constant is
+/// declared: a literal; a member of the enum it is of, however that is
+/// written (TYPE-7), `.slow`, `Mode.slow`, `Mode("slow")`, `Mode(1)`;
+/// or another constant's name, which is followed in turn.
 fn constant_declared(
+    program: &Program,
+    target: (usize, usize),
+    values: &crate::read::ConstantValues,
+) -> Option<OptionValue> {
+    constant_declared_at(program, target, values, 0)
+}
+
+fn constant_declared_at(
     program: &Program,
     (module, declaration): (usize, usize),
     values: &crate::read::ConstantValues,
+    depth: usize,
 ) -> Option<OptionValue> {
-    let declared = &program.modules[module].declarations[declaration];
+    if depth > NAMED_DEPTH {
+        return None;
+    }
+    let declared_in = &program.modules[module];
+    let declared = &declared_in.declarations[declaration];
     if declared.kind != DeclarationKind::Constant {
         return None;
     }
@@ -11839,7 +11872,77 @@ fn constant_declared(
         .syntax
         .children()
         .find(|child| Some(child) != ty.as_ref())?;
-    constant_of(&written)
+    let written = ungrouped(written);
+    // What a name of the expression is bound to, in the file the
+    // constant is declared in.
+    let file = declared_in.files[declared.file].file;
+    let bound = |name: &SyntaxNode| -> Option<&Binding> {
+        let start = name_token(name)?.span().start;
+        declared_in
+            .uses
+            .iter()
+            .find(|used| used.at.file == file && used.at.span.start == start)
+            .map(|used| &used.binding)
+    };
+    // The enum the constant is of, where it is of one.
+    let of_enum = match declared_in.details.get(declaration) {
+        Some(Detail::Constant(ty)) => match not_null(Some(ty)) {
+            Some(Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Enum,
+                ..
+            }) => Some((*module, *declaration)),
+            _ => None,
+        },
+        _ => None,
+    };
+    match (written.kind(), of_enum) {
+        (SyntaxKind::NameExpr, _) => match bound(&written)? {
+            Binding::Declarations {
+                module,
+                declarations,
+            } => match declarations.as_slice() {
+                [declaration] => {
+                    constant_declared_at(program, (*module, *declaration), values, depth + 1)
+                }
+                _ => None,
+            },
+            Binding::Local { .. } => None,
+        },
+        // `Mode.slow`: the member's name is the last token, any word
+        // (LEX-9). A member of any other enum would be no value of the
+        // constant's type.
+        (SyntaxKind::MemberExpr, Some(_)) => tokens(&written)
+            .last()
+            .map(|name| OptionValue::Member(name.text().to_string())),
+        // `Mode("slow")`, `Mode(1)`: a construction of the constant's
+        // enum is the member it names.
+        (SyntaxKind::CallExpr, Some((enum_module, enum_declaration))) => {
+            let callee = written
+                .children()
+                .next()
+                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)?;
+            let constructs = matches!(
+                bound(&callee),
+                Some(Binding::Declarations { module, declarations })
+                    if *module == enum_module && declarations.contains(&enum_declaration)
+            );
+            if !constructs {
+                return None;
+            }
+            let argument = one_by_position(&written)?;
+            let member =
+                member_constructed(program, (enum_module, enum_declaration), &argument)?.ok()?;
+            match program.modules[enum_module].details.get(enum_declaration) {
+                Some(Detail::Enum(read)) => {
+                    Some(OptionValue::Member(read.members[member].name.clone()))
+                }
+                _ => None,
+            }
+        }
+        _ => constant_of(&written),
+    }
 }
 
 /// What a call, a construction or a written type says of the generic
