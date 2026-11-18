@@ -9177,6 +9177,14 @@ impl<'a> Typer<'a> {
                     .candidate(),
                 Some((Role::Value, _))
             )
+            // GEN-16: "A candidate that marks a parameter `var`
+            // (FN-15) answers no requirement: a requirement supplies
+            // types, and no place."
+            && !matches!(
+                program.modules[module].details.get(declaration),
+                Some(Detail::Callable(signature))
+                    if signature.parameters.iter().any(|parameter| parameter.var)
+            )
         });
         if unreadable(public, &candidates) {
             return None;

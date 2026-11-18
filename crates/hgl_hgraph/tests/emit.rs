@@ -4620,6 +4620,88 @@ fn a_collection_inside_a_value_is_changed_where_it_is() {
     }
 }
 
+/// FN-15, GEN-6: an operator whose value candidates each take a place.
+/// The operator's declaration marks none; the candidate a call
+/// resolves to says which of its arguments are places.
+const PUSHES: &str = concat!(
+    "module demo.pushes\n",
+    "\n",
+    "operator push<C, V>(values: C, item: V)\n",
+    "\n",
+    "impl const fn push(var values: list<i64>, item: i64) {\n",
+    "    append(values, item)\n",
+    "}\n",
+    "\n",
+    "impl const fn push(var values: dict<str, i64>, item: str) {\n",
+    "    values[item] = 1\n",
+    "}\n",
+    "\n",
+    "struct Book {\n",
+    "    orders: list<i64>\n",
+    "}\n",
+    "\n",
+    "test pushes {\n",
+    "    var entries: list<i64> = [1]\n",
+    "    let before = entries\n",
+    "    push(entries, 2)\n",
+    "    assert before == [1]\n",
+    "    assert entries == [1, 2]\n",
+    "    var seen: dict<str, i64> = []\n",
+    "    push(seen, \"a\")\n",
+    "    assert seen == [\"a\": 1]\n",
+    "    var book: Book = Book(orders: [1])\n",
+    "    push(book.orders, 2)\n",
+    "    assert book == Book(orders: [1, 2])\n",
+    "}\n",
+);
+
+/// FN-15: "So may a value candidate of an operator (GEN-6) ... a call of
+/// an operator is resolved as any other, and the candidate it resolves
+/// to says which of its arguments are places." A candidate with a `var`
+/// parameter is written as a function with one is: it returns its
+/// result and then what each holds, and the call assigns the places. A
+/// place's own list is given as it is, and put back where the call
+/// fails.
+#[test]
+fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
+    let emitted = emit(&[("pushes.hgl", PUSHES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_pushes/__init__.py");
+    for expected in [
+        concat!(
+            "def _impl_push_list_i64__i64(values, item):\n",
+            "    _given = _core.fn_append(values=values, item=item)\n",
+            "    values = _given[1]\n",
+            "    return (None, values)\n",
+        ),
+        // The list's candidate is given the place's own list.
+        concat!(
+            "    _was_1 = _py.len(entries)\n",
+            "    try:\n",
+            "        _given = _impl_push_list_i64__i64(values=entries, item=2)\n",
+            "    except _py.BaseException:\n",
+            "        entries = _core.restored(entries, _was_1)\n",
+            "        raise\n",
+            "    entries = _given[1]\n",
+        ),
+        // The dictionary's candidate, selected by the argument's type.
+        concat!(
+            "    _given = _impl_push_dict_str__i64__str(values=_core.shared(seen), item=\"a\")\n",
+            "    seen = _core.shared(_given[1])\n",
+        ),
+        // A place inside a value.
+        concat!(
+            "    _given = _impl_push_list_i64__i64(values=_core.shared(book.orders), item=2)\n",
+            "    book = _core.with_field(book, orders=_given[1])\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A tenor on hgraph (core's TEN-1 to TEN-9): its literal, its own
 /// arithmetic, order and text, and a date moved by one, on a calendar
 /// and under a rolling rule.
@@ -5561,6 +5643,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("moves.hgl", MOVES));
     files.push(("entries.hgl", ENTRIES));
     files.push(("inside.hgl", INSIDE));
+    files.push(("pushes.hgl", PUSHES));
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
@@ -5584,13 +5667,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        68,
+        69,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, and one of each demo's"
     );
 }
 
