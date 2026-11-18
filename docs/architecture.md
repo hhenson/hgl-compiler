@@ -1604,7 +1604,10 @@ parts that HGL is written with are the provider's too: `fn_moved`,
 `fn_business_days`, `fn_weekend` and `fn_same_month`. A tenor as the type
 of a temporal input or result is not written yet.
 
-FN-15: a function that fails "assigns nothing". A function of the
+Where a function with a `var` parameter fails, the target leaves each
+place as it was before the call. FN-15 now has the place hold "what its
+parameter held when it failed"; the target is brought to that with the
+owner's rule for copies (#151). Until then, a function of the
 program that is given a place's own list may have grown it where it is
 before it failed, so such a call is written inside a `try`: where it
 fails the place is given `_core.restored(entries, _was_1)`, the list
