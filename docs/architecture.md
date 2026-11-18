@@ -1737,7 +1737,9 @@ what is expected, check that core's dense scalar eval cases are written
 whole, and check which tests of a program with unwritten forms are
 blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
-`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
+`cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The `hgraph` job of
+the CI workflow runs them on Linux for every pull request, and then the
+pinned core's conformance cases. The baseline is
 hgraph 0.9.1, the first with a value that may be unset (its RFC 0050),
 which a published null needs. With it,
 `hgl test spec/hgl_core/tests/conformance --target hgraph` passes all 28

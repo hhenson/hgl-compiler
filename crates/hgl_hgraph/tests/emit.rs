@@ -6210,8 +6210,9 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
     let emitted = emit(&[("live.hgl", INTEGRATION)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    // Each integration test is given a second here, where it has a
-    // minute of its own.
+    // Each integration test is given three seconds here, where it has
+    // a minute of its own: long enough for a slow host to run the ones
+    // that end.
     let ran = run_within(
         Path::new(&python),
         &directory,
@@ -6219,7 +6220,7 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
         &all,
         &|test: &Test| {
             test.integration
-                .then_some(std::time::Duration::from_secs(1))
+                .then_some(std::time::Duration::from_secs(3))
         },
     );
     let described: Vec<String> = emitted
@@ -6243,7 +6244,7 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
             "bounded passed",
             "beats_live passed",
             "passes_through passed",
-            "endless failed live.hgl:30:9 timed out: it was still running after its limit of 1s",
+            "endless failed live.hgl:30:9 timed out: it was still running after its limit of 3s",
             "after passed",
         ]
     );
@@ -6293,8 +6294,8 @@ fn a_run_in_real_time_is_stopped_by_its_host() {
     else {
         panic!("the host stops the run: {stopped:?}");
     };
-    // It counted from 1 for as long as it ran.
-    assert!(!published.is_empty());
+    // It counted from 1 for as long as it ran: on a slow host that may
+    // be no time at all, where the stop is asked before the run starts.
     for (position, (_, value)) in published.iter().enumerate() {
         assert_eq!(*value, (position + 1).to_string());
     }

@@ -38,3 +38,24 @@ jobs:
           submodules: recursive
       - run: cargo --version
       - run: cargo test --workspace --locked
+
+  hgraph:
+    # The tests that run a generated program on hgraph, which the jobs
+    # above leave out, and the pinned core's conformance cases. hgraph
+    # has a wheel for Linux.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # The hgraph the target is written against (docs/architecture.md).
+      - run: python -m pip install hgraph==0.9.1
+      - run: echo "HGL_HGRAPH_PYTHON=$(which python)" >> "$GITHUB_ENV"
+      - run: cargo --version
+      - run: cargo test -p hgl_hgraph -p hgl_cli --locked -- --ignored
+      - run: >
+          cargo run --locked -- test spec/hgl_core/tests/conformance
+          --target hgraph --python "$HGL_HGRAPH_PYTHON"
