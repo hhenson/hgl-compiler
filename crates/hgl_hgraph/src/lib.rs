@@ -26,6 +26,7 @@
 //! | A `state` and a `cache` | Fields of the node's `STATE`, given their values in its `start` |
 //! | A source, a `fn` with a `yield` | A Python generator, a node that resumes it, and a graph that wakes the node as it starts |
 //! | `inject clock`, `logger`, `global_state` | hgraph's `EvaluationClock`, `LOGGER` and `GlobalState`, given to the node, its `start` and its `stop` |
+//! | `inject global_state` in a graph | `_store = _hg.GlobalState.instance()`, the run's store where the graph is built |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |
 //! | A temporal function or candidate with generic parameters | A node or a graph for each set of generic arguments it is called with, `_inst_identity_sum__f64` |

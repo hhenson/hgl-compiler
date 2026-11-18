@@ -5918,6 +5918,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("notified.hgl", NOTIFIED));
     files.push(("compound.hgl", COMPOUND));
     files.push(("timed.hgl", TIMED));
+    files.push(("wrapped.hgl", WRAPPED));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -5938,13 +5939,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        72,
+        73,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, one on a graph that sets the store, and one of each demo's"
     );
 }
 
@@ -6210,6 +6211,74 @@ fn a_compound_assignment_evaluates_its_place_once() {
         .and_then(|rest| rest.split("\n\n\n").next())
         .expect("the node is written");
     assert_eq!(nested.matches("next_slot(").count(), 2, "{nested}");
+}
+
+/// FN-9: "A graph injects `global_state` and no other, and uses it where
+/// the graph is built: each call on it is evaluated once then, in the
+/// order written, before any node of that graph starts". So a graph
+/// that wraps another sets the store for it, and a test evaluates the
+/// wrapper. RUN-4: each eval is a run with a store of its own.
+const WRAPPED: &str = concat!(
+    "module demo.wrapped\n",
+    "fn counted(const every: duration = 1s) -> i64 {\n",
+    "    inject global_state\n",
+    "    cache count: i64 = 0\n",
+    "    while count < get<i64>(global_state, \"limit\") {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+    "fn scaled(value: i64, const factor: i64) -> i64 {\n",
+    "    when { return value * factor }\n",
+    "}\n",
+    "fn seeded(const limit: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    put(global_state, \"limit\", limit)\n",
+    "    return counted()\n",
+    "}\n",
+    // What the graph reads back is a value where it is built: a node's
+    // configuration.
+    "fn factored(value: i64, const first: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    put(global_state, \"factor\", first)\n",
+    "    let factor = get<i64>(global_state, \"factor\")\n",
+    "    return scaled(value, factor)\n",
+    "}\n",
+    "test the_store_is_set_where_the_graph_is_built {\n",
+    "    assert eval(seeded(limit: 2)) == [1s: 1, 2s: 2]\n",
+    // A run of its own: it reads 3, and nothing of the run before.
+    "    assert eval(seeded(limit: 3)) == [1s: 1, 2s: 2, 3s: 3]\n",
+    "    assert eval(factored(value: [1, 2], first: 10)) == [10, 20]\n",
+    "}\n",
+);
+
+/// A graph's `inject global_state` is the run's store where the graph's
+/// function runs, and a call on it there is run then (FN-9).
+#[test]
+fn a_graph_sets_the_store_where_it_is_built() {
+    let emitted = emit(&[("wrapped.hgl", WRAPPED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_wrapped/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.graph\n",
+            "def seeded(limit: _py.int) -> _hg.TS[_py.int]:\n",
+            "    _store = _hg.GlobalState.instance()\n",
+            "    _core.put_GlobalState_str_V(store=_store, key=\"limit\", value=limit)\n",
+            "    return counted(every=_dt.timedelta(microseconds=1000000))\n",
+        ),
+        concat!(
+            "    _store = _hg.GlobalState.instance()\n",
+            "    _core.put_GlobalState_str_V(store=_store, key=\"factor\", value=first)\n",
+            "    factor = _core.get_GlobalState_str(store=_store, key=\"factor\")\n",
+            "    return scaled(value=value, factor=factor)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 /// TST-5: "A trace written out is dense, `[7, _, 9]`, or timed, `[0s: 7,

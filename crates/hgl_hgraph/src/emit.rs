@@ -2669,6 +2669,20 @@ impl Emitter<'_> {
             } if function.mode.runs() => {
                 self.switch(function, selector, cases, default.as_deref(), depth);
             }
+            // FN-9: "A graph injects `global_state` and no other, and
+            // uses it where the graph is built: each call on it is
+            // evaluated once then, in the order written, before any
+            // node of that graph starts". hgraph builds a graph with
+            // the run's store current, so the store is the current one
+            // where the graph's function runs, and a call on it there
+            // is run then.
+            Stmt::Inject { local, .. }
+                if function.mode == Mode::Graph
+                    && function.locals[*local].name == "global_state" =>
+            {
+                self.hgraph = true;
+                self.line(depth, "_store = _hg.GlobalState.instance()");
+            }
             other => self.unsupported(at_of(other, function.locals), "this statement"),
         }
     }
