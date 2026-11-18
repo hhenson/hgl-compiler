@@ -280,7 +280,7 @@ fn other_commands_treat_an_annotation_as_a_comment() {
 }
 
 /// The specification's own rejection illustration (tests-and-eval.md):
-/// TYPE-11's mixed window sizes, expected as `rolling.size_kind`. The
+/// TYPE-11's mixed window sizes, expected as `rolling_window.size_kind`. The
 /// declaration is rejected with that code on that line, so the case
 /// passes; the test beside it cannot be run yet.
 #[test]
@@ -292,8 +292,8 @@ fn the_specifications_rejection_illustration_passes() {
         concat!(
             "module examples.rejection\n",
             "\n",
-            "# expect-error(type, \"rolling.size_kind\")\n",
-            "fn invalid(value: rolling<f64, 5m, 3>) { when {} }\n",
+            "# expect-error(type, \"rolling_window.size_kind\")\n",
+            "fn invalid(value: rolling_window<f64, 5m, 3>) { when {} }\n",
             "\n",
             "test survives { assert true }\n",
         ),

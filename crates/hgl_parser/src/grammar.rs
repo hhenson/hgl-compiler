@@ -142,7 +142,7 @@ pub(crate) fn is_built_in_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::KwList
             | SyntaxKind::KwSet
             | SyntaxKind::KwDict
-            | SyntaxKind::KwRolling
+            | SyntaxKind::KwRollingWindow
             | SyntaxKind::KwResult
             | SyntaxKind::KwRef
             | SyntaxKind::KwSignal

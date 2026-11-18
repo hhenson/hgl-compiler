@@ -686,7 +686,7 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
 /// ```text
 /// passed   rejection   cases/rolling.hgl:4 fn invalid
 /// FAILED   rejection   examples.rejection::bad_default
-///     expected type/rolling.size_kind on line 9 of cases/rolling.hgl: not reported
+///     expected type/rolling_window.size_kind on line 9 of cases/rolling.hgl: not reported
 /// passed   executable  examples.rejection::survives
 /// FAILED   executable  examples.rejection::wrong
 ///     cases/rolling.hgl:31:5: the assertion does not hold

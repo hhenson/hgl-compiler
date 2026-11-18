@@ -653,7 +653,7 @@ fn a_contextual_name_is_an_ordinary_name_elsewhere() {
 #[test]
 fn the_name_of_a_built_in_type_is_reserved() {
     // The hard reserved words include the names of the built-in types:
-    // `atomic tuple list set dict rolling result ref signal delta error`.
+    // `atomic tuple list set dict rolling_window result ref signal delta error`.
     // Each is the type and nothing else.
     assert_eq!(
         statements("let x: list<i64> = values"),
@@ -689,7 +689,10 @@ fn the_name_of_a_built_in_type_is_reserved() {
     // type (LEX-9).
     statements("let x = quote.set");
     statements("let x = Ranges(dict: 1)");
-    declarations("struct S {\n    rolling: i64\n    signal: signal\n}");
+    declarations("struct S {\n    rolling_window: i64\n    signal: signal\n}");
+    // `rolling` alone is no reserved word: it names what a program
+    // declares, a parameter among them.
+    declarations("const fn rolled(rolling: i64) -> i64 => rolling");
     // Without its arguments a built-in type is incomplete.
     assert_eq!(
         rejected(Entry::Statements, "let x: list = values"),

@@ -244,7 +244,7 @@ fn body(
     b: list<f64, unbounded>,
     c: set<str>,
     d: dict<str, f64>,
-    e: rolling<f64, 5m, 3>,
+    e: rolling_window<f64, 5m, 3>,
     f: ref<f64>,
     g: signal,
     h: atomic<Quote<f64>>,

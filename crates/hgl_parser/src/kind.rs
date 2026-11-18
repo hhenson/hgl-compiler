@@ -78,7 +78,7 @@ define_syntax_kinds! {
         KwEval, KwTrue, KwFalse, KwNull, KwBool, KwI64, KwF64, KwStr,
         KwBytes, KwAny, KwDate, KwTime, KwDatetime, KwDuration, KwTenor,
         KwCivilDatetime, KwZonedDatetime, KwZonedTime, KwTimezone,
-        KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRolling, KwResult, KwRef,
+        KwAtomic, KwTuple, KwList, KwSet, KwDict, KwRollingWindow, KwResult, KwRef,
         KwSignal, KwEndpoint, KwDelta, KwError,
         LParen, RParen, LBracket, RBracket, LBrace, RBrace, Comma,
         Semicolon, Colon, ColonColon, Dot, Ellipsis, At, Question, Bang,
@@ -220,8 +220,8 @@ define_syntax_kinds! {
         SetType,
         /// `dict<str, f64>`
         DictType,
-        /// `rolling<f64, 5m>` or `rolling<f64, 5, 2>`
-        RollingType,
+        /// `rolling_window<f64, 5m>` or `rolling_window<f64, 5, 2>`
+        RollingWindowType,
         /// `ref<f64>`
         RefType,
         /// `signal`

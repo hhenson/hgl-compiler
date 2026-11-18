@@ -365,7 +365,7 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
         | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => names_parameter(inner),
         Type::Dict { key, value } => names_parameter(key) || names_parameter(value),
-        Type::Rolling { value, .. } => names_parameter(value),
+        Type::RollingWindow { value, .. } => names_parameter(value),
         Type::Result { value, error } => names_parameter(value) || names_parameter(error),
         Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => false,
     }
@@ -429,7 +429,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             key: part(key),
             value: part(value),
         },
-        Type::Rolling {
+        Type::RollingWindow {
             value,
             maximum,
             minimum,
@@ -442,7 +442,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
                 .as_ref()
                 .map(constant)
                 .filter(|minimum| *minimum != maximum);
-            Type::Rolling {
+            Type::RollingWindow {
                 value: part(value),
                 maximum,
                 minimum,
@@ -497,7 +497,7 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => inside(inner),
         Type::Dict { key, value } => inside(key) || inside(value),
-        Type::Rolling { value, .. } => inside(value),
+        Type::RollingWindow { value, .. } => inside(value),
         Type::Result { value, error } => inside(value) || inside(error),
         Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => false,
     }
@@ -527,7 +527,7 @@ fn weight(ty: &Type) -> usize {
         | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => weight(inner),
         Type::Dict { key, value } => weight(key) + weight(value),
-        Type::Rolling { value, .. } => weight(value),
+        Type::RollingWindow { value, .. } => weight(value),
         Type::Result { value, error } => weight(value) + weight(error),
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => 0,
     }
@@ -1317,7 +1317,7 @@ impl Structs<'_> {
                 self.walk(key, true, true, found, path, budget);
                 self.walk(value, true, true, found, path, budget);
             }
-            Type::Rolling { value, .. } => {
+            Type::RollingWindow { value, .. } => {
                 self.walk(value, true, may_be_empty, found, path, budget);
             }
             // Inside an `atomic<...>` a collection is part of one
@@ -1831,12 +1831,12 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
             },
         ) => type_may_be(key, other_key, found) && type_may_be(value, other_value, found),
         (
-            Type::Rolling {
+            Type::RollingWindow {
                 value,
                 maximum,
                 minimum,
             },
-            Type::Rolling {
+            Type::RollingWindow {
                 value: other_value,
                 maximum: other_maximum,
                 minimum: other_minimum,
@@ -1992,7 +1992,7 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => grown(inner, in_group),
         Type::Dict { key, value } => grown(key, in_group).or_else(|| grown(value, in_group)),
-        Type::Rolling { value, .. } => grown(value, in_group),
+        Type::RollingWindow { value, .. } => grown(value, in_group),
         Type::Result { value, error } => grown(value, in_group).or_else(|| grown(error, in_group)),
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
             None
@@ -2083,12 +2083,12 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
             },
         ) => agree(key, other_key) && agree(value, other_value),
         (
-            Type::Rolling {
+            Type::RollingWindow {
                 value,
                 maximum,
                 minimum,
             },
-            Type::Rolling {
+            Type::RollingWindow {
                 value: other_value,
                 maximum: other_maximum,
                 minimum: other_minimum,

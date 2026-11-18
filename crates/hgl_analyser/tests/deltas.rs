@@ -47,7 +47,7 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
         "const fn kinds(\n",
         // T itself; V of an atomic and of a window.
         "    a: delta<f64>, b: delta<Side>, c: delta<result<f64, error>>,\n",
-        "    d: delta<atomic<Quote>>, e: delta<rolling<f64, 5>>,\n",
+        "    d: delta<atomic<Quote>>, e: delta<rolling_window<f64, 5>>,\n",
         // A list, of either kind; a tuple; a nullable.
         "    f: delta<list<f64>>, g: delta<list<Quote, 3>>, h: delta<tuple<f64, str>>,\n",
         "    i: delta<f64?>, j: delta<list<f64?>>,\n",
@@ -370,7 +370,7 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         // A scalar's delta is the scalar; a list's a dictionary.
         // Under a `?` that marks an input that may be left out, the
         // delta is the shape's.
-        "fn scalars(price: f64, rows: list<f64>, window: rolling<f64, 5>? = null) -> f64 {\n",
+        "fn scalars(price: f64, rows: list<f64>, window: rolling_window<f64, 5>? = null) -> f64 {\n",
         "    when {\n",
         "        let moved: dict<i64, f64> = delta_value(rows)\n",
         "        let latest: f64 = delta_value(window)\n",

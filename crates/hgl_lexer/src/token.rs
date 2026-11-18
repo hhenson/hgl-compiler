@@ -170,7 +170,7 @@ define_token_kinds! {
         KwList => "list",
         KwSet => "set",
         KwDict => "dict",
-        KwRolling => "rolling",
+        KwRollingWindow => "rolling_window",
         KwResult => "result",
         KwRef => "ref",
         KwSignal => "signal",

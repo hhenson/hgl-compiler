@@ -417,18 +417,18 @@ fn only_an_optional_fields_default_is_null() {
 #[test]
 fn a_field_is_compared_by_what_its_type_means() {
     let checked = module(concat!(
-        "abstract struct Base {\n    window: rolling<i64, 5>\n    sized: list<f64, 6>\n}\n",
-        "struct Same : Base {\n    window: rolling<i64, 5, 5>\n    sized: list<f64, 2 * 3>\n}\n",
-        "struct Other : Base { window: rolling<i64, 5, 2> }\n",
+        "abstract struct Base {\n    window: rolling_window<i64, 5>\n    sized: list<f64, 6>\n}\n",
+        "struct Same : Base {\n    window: rolling_window<i64, 5, 5>\n    sized: list<f64, 2 * 3>\n}\n",
+        "struct Other : Base { window: rolling_window<i64, 5, 2> }\n",
         // A size this pass cannot evaluate is no difference: `N + 1`
         // with 2 for `N` is left for the pass that evaluates constants.
         "abstract struct Grown<const N: i64> { items: list<i64, N + 1> }\n",
         "struct Three : Grown<2> { items: list<i64, 3> }\n",
         // And so is a minimum that a parent's argument makes its
         // maximum.
-        "abstract struct Bounded<const N: i64> { window: rolling<i64, 5, N> }\n",
-        "struct Equal : Bounded<5> { window: rolling<i64, 5> }\n",
-        "struct Unequal : Bounded<2> { window: rolling<i64, 5> }\n",
+        "abstract struct Bounded<const N: i64> { window: rolling_window<i64, 5, N> }\n",
+        "struct Equal : Bounded<5> { window: rolling_window<i64, 5> }\n",
+        "struct Unequal : Bounded<2> { window: rolling_window<i64, 5> }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -440,9 +440,9 @@ fn a_field_is_compared_by_what_its_type_means() {
     assert_eq!(
         messages(&checked),
         [
-            "`window` is `rolling<i64, 5, 2>` here and `rolling<i64, 5>` in \
+            "`window` is `rolling_window<i64, 5, 2>` here and `rolling_window<i64, 5>` in \
              `Base`",
-            "`window` is `rolling<i64, 5>` here and `rolling<i64, 5, 2>` in \
+            "`window` is `rolling_window<i64, 5>` here and `rolling_window<i64, 5, 2>` in \
              `Bounded`",
         ]
     );
@@ -847,8 +847,8 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         "struct Apart : Rows<i64> { apart: Base<list<str>> }\n",
         "struct Close : Rows<i64> { close: Base<list<i64>> }\n",
         // TYPE-11: "Omitted minimum equals maximum."
-        "struct Windowed : Base<rolling<i64, 5, 2>> { next: Base<rolling<i64, 5>> }\n",
-        "struct Whole : Base<rolling<i64, 5>> { whole: Base<rolling<i64, 5, 5>> }\n",
+        "struct Windowed : Base<rolling_window<i64, 5, 2>> { next: Base<rolling_window<i64, 5>> }\n",
+        "struct Whole : Base<rolling_window<i64, 5>> { whole: Base<rolling_window<i64, 5, 5>> }\n",
         // LEX-20: a float is the number it denotes, however written.
         "struct Mark<const N: f64> { width: i64 }\n",
         "struct Marked : Base<Mark<1.0>> { marked: Base<Mark<1.00>> }\n",
@@ -876,8 +876,8 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
         // What a parameter given twice stands for is compared in the
         // same way: by what the types come to (TYPE-11), a parameter
         // of the struct that has the field being anything.
-        "struct Twice<U> : Pair<U, U> { twice: Pair<rolling<i64, 5>, rolling<i64, 5, 5>> }\n",
-        "struct Apiece<U> : Pair<U, U> { other: Pair<rolling<i64, 5>, rolling<i64, 5, 2>> }\n",
+        "struct Twice<U> : Pair<U, U> { twice: Pair<rolling_window<i64, 5>, rolling_window<i64, 5, 5>> }\n",
+        "struct Apiece<U> : Pair<U, U> { other: Pair<rolling_window<i64, 5>, rolling_window<i64, 5, 2>> }\n",
         "abstract struct Duo<A, B> { both: tuple<A, B> }\n",
         "struct Loose<U, V> : Duo<U, U> { loose: Duo<list<V>, list<i64>> }\n",
         "struct Shut<U, V> : Duo<U, U> { other: Duo<list<V>, set<i64>> }\n",
@@ -892,7 +892,7 @@ fn a_descendant_is_held_by_the_application_it_inherits_from() {
             "m.hgl:13:35 type/field.recursive TYPE-6",
             "m.hgl:16:31 type/field.recursive TYPE-6",
             "m.hgl:19:28 type/field.recursive TYPE-6",
-            "m.hgl:21:40 type/field.recursive TYPE-6",
+            "m.hgl:21:47 type/field.recursive TYPE-6",
             "m.hgl:23:35 type/field.recursive TYPE-6",
             "m.hgl:26:35 type/field.recursive TYPE-6",
             "m.hgl:29:45 type/field.recursive TYPE-6",

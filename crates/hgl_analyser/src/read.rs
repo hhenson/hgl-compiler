@@ -399,7 +399,7 @@ pub(crate) fn is_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::ListType
             | SyntaxKind::SetType
             | SyntaxKind::DictType
-            | SyntaxKind::RollingType
+            | SyntaxKind::RollingWindowType
             | SyntaxKind::RefType
             | SyntaxKind::EndpointType
             | SyntaxKind::SignalType
@@ -1235,7 +1235,7 @@ impl Reader<'_> {
                 ))
             }
             SyntaxKind::DictType => self.dict(node, position),
-            SyntaxKind::RollingType => self.rolling(node, position),
+            SyntaxKind::RollingWindowType => self.rolling_window(node, position),
             SyntaxKind::RefType => {
                 self.ordinary(node, position, true);
                 Type::Ref(Box::new(self.inner(node, Position::PLAIN)))
@@ -1287,7 +1287,9 @@ impl Reader<'_> {
                 ),
                 rule,
             )
-            .with_note("`rolling`, `ref`, `atomic` and `signal` are not ordinary value types"),
+            .with_note(
+                "`rolling_window`, `ref`, `atomic` and `signal` are not ordinary value types",
+            ),
         );
     }
 
@@ -1558,8 +1560,8 @@ impl Reader<'_> {
 
     // ---- Windows (TYPE-11) ----
 
-    /// `rolling<V, maximum>` or `rolling<V, maximum, minimum>`.
-    fn rolling(&mut self, node: &SyntaxNode, position: Position) -> Type {
+    /// `rolling_window<V, maximum>` or `rolling_window<V, maximum, minimum>`.
+    fn rolling_window(&mut self, node: &SyntaxNode, position: Position) -> Type {
         self.ordinary(node, position, false);
         let value = self.inner(node, Position::value("a window's value", "TYPE-11"));
         let mut sizes = node
@@ -1581,17 +1583,17 @@ impl Reader<'_> {
         // "Omitted minimum equals maximum": a minimum written as the
         // maximum is the same window as one with none.
         let minimum = minimum.filter(|minimum| *minimum != maximum);
-        Type::Rolling {
+        Type::RollingWindow {
             value: Box::new(value),
             maximum,
             minimum,
         }
     }
 
-    /// TYPE-11: "A rolling maximum/minimum has one constant kind: tick
-    /// count or duration. Omitted minimum equals maximum. Tick sizes are
-    /// positive; duration maximum is positive and minimum may be zero.
-    /// Minimum cannot exceed maximum."
+    /// TYPE-11: "Its maximum and minimum have one constant kind: tick
+    /// count or duration ... Omitted minimum equals maximum ... Tick sizes
+    /// are positive; duration maximum is positive and minimum may be
+    /// zero ... Minimum cannot exceed maximum."
     fn window_sizes(
         &mut self,
         maximum_node: &SyntaxNode,
@@ -1617,7 +1619,7 @@ impl Reader<'_> {
                 self.diagnostics.emit(
                     error(
                         Category::Type,
-                        codes::ROLLING_SIZE_KIND,
+                        codes::ROLLING_WINDOW_SIZE_KIND,
                         self.at(node.span()),
                         format!(
                             "a window's sizes are of one kind: the maximum is {} and the \
@@ -1666,7 +1668,7 @@ impl Reader<'_> {
     fn bounds(&mut self, node: &SyntaxNode, message: &str) {
         self.diagnostics.emit(error(
             Category::Type,
-            codes::ROLLING_SIZE_BOUNDS,
+            codes::ROLLING_WINDOW_SIZE_BOUNDS,
             self.at(node.span()),
             message.to_string(),
             "TYPE-11",
@@ -1694,7 +1696,7 @@ impl Reader<'_> {
         };
         self.diagnostics.emit(error(
             Category::Type,
-            codes::ROLLING_SIZE_KIND,
+            codes::ROLLING_WINDOW_SIZE_KIND,
             self.at(node.span()),
             format!("a window's size is a tick count or a duration, and {wrong}"),
             "TYPE-11",
