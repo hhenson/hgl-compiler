@@ -139,6 +139,8 @@ fn a_statement_that_sets_no_store_is_rejected() {
                 "has(global_state, \"limit\")\n",
                 "log_info(logger, \"set\")\n",
                 "put(global_state, \"limit\", 3)\n",
+                // A value that reads the store: no constant's.
+                "put(global_state, \"next\", get<i64>(global_state, \"limit\") + 1)\n",
                 "eval(counted())\n",
             ),
         ),
@@ -150,6 +152,7 @@ fn a_statement_that_sets_no_store_is_rejected() {
             "calls.hgl:4:22 phase/application.statement UNIT-14",
             "calls.hgl:5:1 phase/application.statement UNIT-14",
             "calls.hgl:6:1 phase/application.statement UNIT-14",
+            "calls.hgl:8:36 phase/application.statement UNIT-14",
             "module.hgl:2:1 phase/application.statement UNIT-14",
             "module.hgl:3:1 phase/application.statement UNIT-14",
             "wrong.hgl:3:1 phase/application.statement UNIT-14",

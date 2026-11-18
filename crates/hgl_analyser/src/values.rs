@@ -991,6 +991,28 @@ impl<'a> Typer<'a> {
                     )
                     .with_note("`inject global_state`, and then `put(global_state, key, value)`"),
                 );
+            } else if self.diagnostics.len() == reported {
+                // "its value is read as a constant's is (UNIT-13)": the
+                // store is `put`'s own argument, and is read by nothing
+                // the call is given. A value that reads the store,
+                // `get<i64>(global_state, "limit") + 1`, is no
+                // constant's.
+                for at in self.reads_of_the_store(&statement) {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Phase,
+                            codes::APPLICATION_STATEMENT,
+                            at,
+                            "what a store statement puts is read as a constant's value is, \
+                             and reads no capability: the store is `put`'s own argument"
+                                .to_string(),
+                            "UNIT-14",
+                        )
+                        .with_note(
+                            "a constant, or a call of a `const fn` on constants, is such a value",
+                        ),
+                    );
+                }
             }
             statements.push(statement);
         }
@@ -998,6 +1020,34 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// Where a `put` on the store reads the store again, in what it is
+    /// given beside the store itself: each use of the injected
+    /// capability inside its key or its value.
+    fn reads_of_the_store(&self, statement: &Stmt) -> Vec<Location> {
+        let Stmt::Expr(Expr {
+            kind: ExprKind::Call { arguments, .. },
+            ..
+        }) = statement
+        else {
+            return Vec::new();
+        };
+        let mut reads = Vec::new();
+        for argument in arguments {
+            // The store itself: `put`'s first parameter.
+            if argument.parameter == Some(0) {
+                continue;
+            }
+            argument.value.walk(&mut |part| {
+                if let ExprKind::Local(local) = &part.kind
+                    && self.locals[*local].kind == LocalKind::Inject
+                {
+                    reads.push(part.at);
+                }
+            });
+        }
+        reads
     }
 
     /// True for a statement that is a call of core's `put` on the
