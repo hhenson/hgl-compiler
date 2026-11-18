@@ -105,6 +105,18 @@ pub(crate) struct Wiring {
     pub(crate) result: Option<Type>,
 }
 
+/// The endpoint payload for a trace of publications (TST-5, TYPE-16).
+/// Replays and the lifted node receiving those replays use the same type.
+pub(crate) fn trace_payload(trace: &Type) -> Option<Type> {
+    let Type::Trace { cell, .. } = trace else {
+        return None;
+    };
+    Some(match cell.as_ref() {
+        Type::Delta(payload) => payload.as_ref().clone(),
+        scalar => scalar.clone(),
+    })
+}
+
 /// What the run of the eval that takes `call` is wired with; `eval` is
 /// the eval's own type, a trace of what the target publishes. `None`
 /// where `call` is no call of a function.
@@ -131,23 +143,16 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
-    let published = |trace: &Type| match trace {
-        Type::Trace { cell, .. } => Some(match &**cell {
-            Type::Delta(of) => (**of).clone(),
-            other => other.clone(),
-        }),
-        _ => None,
-    };
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
             let parameter = signature.parameters.get(argument.parameter?)?;
-            Some((parameter.name.clone(), published(&argument.value.ty)?))
+            Some((parameter.name.clone(), trace_payload(&argument.value.ty)?))
         })
         .collect();
     Some(Wiring {
         inputs,
-        result: published(eval),
+        result: trace_payload(eval),
     })
 }
 

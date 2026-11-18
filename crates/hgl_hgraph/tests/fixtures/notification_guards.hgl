@@ -1,0 +1,60 @@
+module demo.notified
+
+fn produced(command: i64) -> i64 {
+    inject out
+    when {
+        if command == 0 { invalidate(out) }
+        else { return command }
+    }
+}
+
+fn on_publication(watched: i64) -> bool {
+    when modified(watched) && valid([]) { return true }
+}
+
+fn on_notification(watched: i64) -> bool {
+    inject clock
+    when valid([]) { return modified(watched) }
+}
+
+fn watch_both(watched: i64, probe: bool) -> str {
+    when modified(watched) && valid([]) { return "watched" }
+    when modified(probe) && valid([]) { return "probe" }
+}
+
+fn single(command: i64) -> bool => on_publication(produced(command))
+fn notice(command: i64) -> bool => on_notification(produced(command))
+fn pair(command: i64, probe: bool) -> str => watch_both(produced(command), probe)
+
+# END-4 and TIME-3. Zero invalidates a valid endpoint once. Its subscriber
+# can inspect that wake under valid([]). It cannot enter a modified guard.
+test notification_and_publication_are_distinct {
+    assert eval(notice(command: [7, 0, 0, 7])) == [true, false, _, true]
+    assert eval(single(command: [7, 0, 0, 7])) == [true, _, _, true]
+}
+
+# The first invalidation coincides with a probe tick. The second invalidation
+# likewise removes a valid value, this time with no probe to publish.
+test another_publication_can_match_its_own_guard {
+    assert eval(pair(
+        command: [7,         0,       9,         0,  8],
+        probe:   [_,         true,    true,      _,  _])) ==
+                 ["watched", "probe", "watched", _,  "watched"]
+}
+
+fn on_pair_and_probe(left: i64, right: i64, probe: bool) -> bool {
+    when modified(left, right) && modified(probe) && valid([]) { return true }
+}
+
+fn grouped(left: i64, right: i64, probe: bool) -> bool =>
+    on_pair_and_probe(produced(left), produced(right), probe)
+
+# One publishing member satisfies the first selector. The second selector
+# independently needs its probe. Two invalidations satisfy neither member.
+test each_modified_selector_needs_a_publication {
+    assert eval(grouped(
+        left:  [7, _,    0,    _,    8,    9, 0,    _],
+        right: [_, _,    _,    3,    _,    5, 0,    4],
+        probe: [_, true, true, true, true, _, true, true])) ==
+               [_, _,    _,    true, true, _, _,    true]
+}

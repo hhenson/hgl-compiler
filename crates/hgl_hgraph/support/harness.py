@@ -74,13 +74,28 @@ def _relative(trace, start=None):
     if isinstance(trace, _Recording):
         return [(at - trace.start, published) for at, published in trace.output]
     if isinstance(trace, _Timed):
-        return [
-            (at - start if start is not None and isinstance(at, _datetime.datetime) else at, published)
-            for at, published in trace.entries
-        ]
+        entries = []
+        for at, published in trace.entries:
+            after = at - start if start is not None and isinstance(at, _datetime.datetime) else at
+            # TST-7 also holds for keys computed at run time.
+            # The catalogue's trace.key_order is a source diagnostic.
+            if entries and after <= entries[-1][0]:
+                raise _core.HglError("the keys of a timed trace must strictly increase")
+            entries.append((after, published))
+        return entries
     return [
         (position * _SMALLEST_STEP, cell) for position, cell in enumerate(trace) if cell is not None
     ]
+
+
+def _replay_entries(trace, start):
+    """CEVAL-2: an input replay cannot publish before its run starts."""
+    entries = []
+    for after, published in _relative(trace, start):
+        if after < _datetime.timedelta(0):
+            raise _core.HglError("a timed trace has a key before the run's start")
+        entries.append((_core.add__datetime_duration(start, after), published))
+    return entries
 
 
 def _bounds(config, unstated):
@@ -102,6 +117,9 @@ def _bounds(config, unstated):
             code="run.end_and_length",
         )
     start = unstated if start is None else start
+    # CRUN-3 reserves the epoch itself for `never`, even for an empty run.
+    if start < _EARLIEST_START:
+        raise _core.HglError("the run's start is before the earliest evaluation time")
     if length is not None:
         end = _core.add__datetime_duration(start, length)
     return start, end
@@ -268,21 +286,19 @@ def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arg
     start.
     """
     start, end = _bounds(_config, _present() if _real_time else _EARLIEST_START)
-    if end is not None and end <= start:
-        # No cycle runs. hgraph has no run that ends where it starts, so
-        # none is made: the graph is not built, started or stopped.
-        return _Recording(start, [])
     # CEVAL-2: "Each tuple holds the absolute evaluation time and the
     # publication's delta ... dense position i is the start plus i
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
-        name: [
-            (start + after, published) for after, published in _relative(arguments[name], start)
-        ]
+        name: _replay_entries(arguments[name], start)
         for name in _replays
         if name in arguments
     }
+    if end is not None and end <= start:
+        # Validate replay before graph start, including an empty run
+        # (TST-9). hgraph has no run that ends where it starts.
+        return _Recording(start, [])
     output = _ran(target, _replays, _record, replayed, arguments, start, end, _real_time)
     return _Recording(start, [] if output is None else output)
 
@@ -298,12 +314,14 @@ def publications(trace):
     """
     if isinstance(trace, _Recording):
         return list(trace.output)
-    # A trace written out: an offset is from the earliest start, and an
-    # instant is itself.
-    return [
-        (_EARLIEST_START + after, published)
-        for after, published in _relative(trace, _EARLIEST_START)
-    ]
+    # A written trace has no run to admit its keys against. Preserve
+    # its absolute instants and anchor only offsets to the earliest start.
+    entries = []
+    for key, published in _relative(trace):
+        if isinstance(key, _datetime.timedelta):
+            key = _core.add__datetime_duration(_EARLIEST_START, key)
+        entries.append((key, published))
+    return entries
 
 
 def same(left, right):

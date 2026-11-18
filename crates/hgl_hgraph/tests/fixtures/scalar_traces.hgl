@@ -1,0 +1,41 @@
+module demo.scalar_traces
+
+fn pass_i64(value: i64) -> i64 { when { return delta_value(value) } }
+fn pass_bool(value: bool) -> bool { when { return delta_value(value) } }
+fn pass_str(value: str) -> str { when { return delta_value(value) } }
+
+fn forward_a(a: i64, b: i64) -> i64 {
+    when {
+        if valid(a) && modified(a) { return delta_value(a) }
+    }
+}
+
+fn count_publications(value: i64) -> i64 {
+    state count: i64 = 0
+    when {
+        count += 1
+        return count
+    }
+}
+
+# TST-6 and TST-9: leading and trailing silence, empty inputs and falsy publications.
+test dense_scalar_traces {
+    assert eval(pass_i64(value: [_, 7, _, _])) == [_, 7]
+    assert eval(pass_i64(value: [_, _])) == []
+    assert eval(pass_i64(value: [])) == []
+    assert eval(pass_i64(value: [0, _, 0])) == [0, _, 0]
+    assert eval(pass_bool(value: [false, _, false, true])) == [false, _, false, true]
+    assert eval(pass_str(value: ["", _, "", "a"])) == ["", _, "", "a"]
+}
+
+# FN-7 and END-3: the other input can wake the node without a return.
+test conditional_return {
+    assert eval(forward_a(a: [7], b: [1, _, 2])) == [7]
+    assert eval(forward_a(a: [], b: [1, _, 2])) == []
+}
+
+# TIME-6 and CEVAL-5: the state counts equal ticks and starts over with each run.
+test state_across_evaluations {
+    assert eval(count_publications(value: [7, _, 7])) == [1, _, 2]
+    assert eval(count_publications(value: [7])) == [1]
+}

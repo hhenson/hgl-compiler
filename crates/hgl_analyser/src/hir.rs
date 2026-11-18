@@ -72,8 +72,8 @@ impl Hook {
     }
 }
 
-/// An operation on an endpoint: an intrinsic of the language (TIME-9).
-/// Core's endpoint contract says what each returns.
+/// An operation on an endpoint (TIME-9). Core defines the observations
+/// and mutations, and the language defines the handler selectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointOperation {
     /// `valid(input)`: whether the endpoint holds a value.
@@ -92,11 +92,13 @@ pub enum EndpointOperation {
     Activate,
     /// `passivate(input)`: stops subscribing to it.
     Passivate,
+    /// `is_active(input)`: reads whether the direct input is active.
+    IsActive,
 }
 
 impl EndpointOperation {
     /// Every operation, with the name it is written by.
-    pub const ALL: [(&'static str, EndpointOperation); 8] = [
+    pub const ALL: [(&'static str, EndpointOperation); 9] = [
         ("valid", EndpointOperation::Valid),
         ("modified", EndpointOperation::Modified),
         ("delta_value", EndpointOperation::DeltaValue),
@@ -105,6 +107,7 @@ impl EndpointOperation {
         ("scheduled", EndpointOperation::Scheduled),
         ("activate", EndpointOperation::Activate),
         ("passivate", EndpointOperation::Passivate),
+        ("is_active", EndpointOperation::IsActive),
     ];
 
     /// The operation written `name`, when it is one.
@@ -113,6 +116,12 @@ impl EndpointOperation {
             .iter()
             .find(|(written, _)| *written == name)
             .map(|(_, operation)| *operation)
+    }
+
+    /// Operations the language recognises directly in a hook. Core's
+    /// `is_active` uses ordinary function resolution and argument binding.
+    pub(crate) fn language_form(name: &str) -> Option<EndpointOperation> {
+        Self::named(name).filter(|operation| *operation != Self::IsActive)
     }
 
     /// The name the operation is written by.
