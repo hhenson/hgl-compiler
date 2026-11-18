@@ -1287,7 +1287,21 @@ impl Emitter<'_> {
             self.line(1, "try:");
             self.text.push_str(&body);
             self.line(1, "except _core.Propagated as _left:");
-            let given = self.returned("_left.failure");
+            // What `?` passes on may hold what the function was given.
+            // A result is the caller's to keep, so it is a copy, as
+            // any result that is not the function's own is
+            // (`given_out`).
+            let failure = if signature
+                .result
+                .as_ref()
+                .is_some_and(|result| holds_collection(self.program, result, 0))
+            {
+                self.natives = true;
+                "_core.copied(_left.failure)"
+            } else {
+                "_left.failure"
+            };
+            let given = self.returned(failure);
             self.line(2, &format!("return {given}"));
         }
         self.given_back.clear();
