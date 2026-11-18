@@ -95,6 +95,16 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
     );
     let before = diagnostics.len();
     let output = transpile(&program, &mut diagnostics);
+    let declared_tests: usize = program
+        .modules
+        .iter()
+        .map(|module| module.tests.len())
+        .sum();
+    assert_eq!(
+        output.tests.len(),
+        declared_tests,
+        "every analysed test has a target entry, including blocked tests"
+    );
     let reported = diagnostics.as_slice()[before..]
         .iter()
         .map(|diagnostic| {
@@ -114,16 +124,6 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
         output,
         reported,
     }
-}
-
-/// A file of the pinned core, by its path under `spec/hgl_core`.
-fn core_file(path: &str) -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core");
-    fs::read_to_string(root.join(path))
-        .unwrap_or_else(|error| {
-            panic!("cannot read {path}: {error}; run `git submodule update --init`")
-        })
-        .replace("\r\n", "\n")
 }
 
 /// A module with each form the target writes: a value function, a node
@@ -235,16 +235,19 @@ fn a_module_is_written_as_python() {
     );
 }
 
-/// Core's dense scalar eval cases are written whole: every node and
-/// every test of `scalar_eval.hgl`. They use a bare `when` (TIME-3), a
-/// `state` (TIME-6), `delta_value` (END-3), a `return` on one path only
-/// (FN-7), `i64` addition (NUM-2) and dense traces (TST-6).
+/// The target fixture for temporal scalar inputs, state and dense traces.
+const SCALAR_TRACES: (&str, &str) = (
+    "scalar_traces.hgl",
+    include_str!("fixtures/scalar_traces.hgl"),
+);
+
+/// A bare `when` (TIME-3), state initialization and updates (TIME-6),
+/// a guarded scalar delta (END-3, FN-7) and dense traces (TST-6).
 #[test]
-fn cores_scalar_eval_cases_are_written_whole() {
-    let text = core_file("tests/conformance/scalar_eval.hgl");
-    let emitted = emit(&[("scalar_eval.hgl", &text)]);
+fn dense_scalar_traces_are_written_as_hgraph_tests() {
+    let emitted = emit(&[SCALAR_TRACES]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_conformance/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_scalar_traces/__init__.py");
     for expected in [
         "def pass_i64(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n",
         "    if (a.valid and (a.modified and a.valid)):\n        return a.delta_value\n",
@@ -259,7 +262,7 @@ fn cores_scalar_eval_cases_are_written_whole() {
     }
     assert_eq!(
         python.matches("\ndef test_").count(),
-        8,
+        emitted.output.tests.len(),
         "one function a test"
     );
 }
@@ -393,6 +396,46 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// END-6 and TIME-7: both an input and the node's own output keep a
+/// timestamp only while valid. The stop hook receives the output it reads.
+#[test]
+fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
+    let emitted = emit(&[(
+        "timestamps.hgl",
+        concat!(
+            "module timestamps\n",
+            "fn sample(value: i64?) -> datetime? {\n",
+            "    inject out\n",
+            "    when valid([]) {\n",
+            "        let previous = last_modified(out)\n",
+            "        return last_modified(value)\n",
+            "    }\n",
+            "    stop {\n",
+            "        let final_input = last_modified(value)\n",
+            "        let final_output = last_modified(out)\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let python = emitted.text("_hgl/_m_timestamps/__init__.py");
+    for expected in [
+        "    previous = (_output.last_modified_time if _output.valid else None)\n",
+        "    return _core.published((value.last_modified_time if value.valid else None))\n",
+        concat!(
+            "@sample.stop\n",
+            "def _stop_sample(value: _hg.TS[_py.int | None], _output: _hg.TS_OUT[_dt.datetime | None] = None):\n",
+            "    final_input = (value.last_modified_time if value.valid else None)\n",
+            "    final_output = (_output.last_modified_time if _output.valid else None)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "expected:\n{expected}\nin:\n{python}"
         );
     }
 }
@@ -5632,6 +5675,37 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
     }
 }
 
+/// TST-7 and CEVAL-2: accept offsets and instants, compare each actual
+/// publication, and reject unordered or out-of-range keys before replay.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn timed_traces_replay_and_compare_at_the_runs_start() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_timed_traces");
+    let emitted = emit(&[("timed_keys.hgl", include_str!("fixtures/timed_traces.hgl"))]);
+    let cases = [
+        ("computed_nullable_and_mixed_keys", None),
+        ("equal_computed_keys", Some("must strictly increase")),
+        ("backward_computed_keys", Some("must strictly increase")),
+        ("before_start", Some("before the run's start")),
+        ("negative_offset", Some("before the run's start")),
+        ("offset_outside_datetime", Some("numeric.out_of_range")),
+        ("invalid_expectation", Some("must strictly increase")),
+    ];
+    let tests: Vec<_> = cases.iter().map(|(name, _)| emitted.test(name).0).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    for ((name, error), outcome) in cases.iter().zip(&ran) {
+        match error {
+            None => assert_eq!(outcome, &Ran::Passed, "{name}"),
+            Some(error) => assert!(
+                matches!(outcome, Ran::Failed { message, .. } if message.contains(error)),
+                "{name}: {outcome:?}"
+            ),
+        }
+    }
+    assert_eq!(ran.len(), cases.len());
+}
+
 /// A program with forms that are not written: a pack parameter of two
 /// of its functions, and a zoned datetime in one of its tests.
 const REACH: [(&str, &str); 3] = [
@@ -5809,9 +5883,8 @@ fn python_with_hgraph() -> String {
         .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph")
 }
 
-/// Runs the tests the target writes for core's scalar eval cases and
-/// for the programs of this file, on hgraph. It needs a Python that
-/// has hgraph, named by the environment variable `HGL_HGRAPH_PYTHON`,
+/// Runs the tests the target writes for its fixtures on hgraph. It needs
+/// a Python that has hgraph, named by the environment variable `HGL_HGRAPH_PYTHON`,
 /// so it is not among the tests run by default:
 /// `cargo test -p hgl_hgraph -- --ignored` runs it.
 #[test]
@@ -5820,9 +5893,8 @@ fn the_generated_tests_pass_on_hgraph() {
     let python = python_with_hgraph();
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
     fs::remove_dir_all(&directory).ok();
-    let core = core_file("tests/conformance/scalar_eval.hgl");
     let mut files = vec![
-        ("scalar_eval.hgl", core.as_str()),
+        SCALAR_TRACES,
         ("demo.hgl", DEMO),
         ("endpoints.hgl", ENDPOINTS),
         ("selectors.hgl", SELECTORS),
@@ -5879,6 +5951,7 @@ fn the_generated_tests_pass_on_hgraph() {
     let emitted = emit(&files);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    assert!(!all.is_empty(), "the fixtures contain named HGL tests");
     let ran = run(Path::new(&python), &directory, &emitted.output, &all);
     let not_passed: Vec<String> = emitted
         .output
@@ -5891,13 +5964,8 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        72,
-        "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
-         on enums of one name, two on constants, one on durations, one on raises, one on \
-         instants, one on a duration divided, one on a bounded run, one on temporal \
-         candidates, one on generic temporal functions, one on value functions that \
-         require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, and one of each demo's"
+        all.len(),
+        "one outcome per selected test in the hgraph emitter fixtures"
     );
 }
 
@@ -6561,4 +6629,84 @@ fn a_failure_names_the_statement_that_failed() {
         message.contains("HglError: the global store holds nothing under 'nothing'"),
         "{message}"
     );
+}
+
+/// TIME-2, TIME-3, TIME-9: the target changes the subscription on the
+/// input itself. Once a node is running, a publication can satisfy the
+/// data handler even if another input woke the node.
+#[test]
+fn changing_activity_preserves_each_handlers_subscription() {
+    let emitted = emit(&[(
+        "activity.hgl",
+        concat!(
+            "module activity\n",
+            "fn toggle(control: bool, data: i64) -> i64 {\n",
+            "    when modified(control) && valid(control) {\n",
+            "        if control { activate(data) } else { passivate(data) }\n",
+            "    }\n",
+            "    when modified(data) && valid(data) { return data }\n",
+            "}\n",
+        ),
+    )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let python = emitted.text("_hgl/_m_activity/__init__.py");
+    for expected in [
+        "data.make_active()",
+        "data.make_passive()",
+        "if data.modified and data.valid:",
+    ] {
+        assert!(python.contains(expected), "{python}");
+    }
+}
+
+/// END-5, TIME-3: querying activity reads the input at that point in the
+/// handler or in stop. A query in a header adds no subscription or validity
+/// requirement and stays in the executable condition.
+#[test]
+fn an_activity_query_in_a_guard_reads_the_direct_input() {
+    let emitted = emit(&[(
+        "observed.hgl",
+        concat!(
+            "module observed\n",
+            "use core as c\n",
+            "fn sample(probe: bool, data: i64) -> bool {\n",
+            "    when modified(probe) && valid([]) && is_active(input: data) {\n",
+            "        passivate(data)\n",
+            "        return c::is_active<i64>(data)\n",
+            "    }\n",
+            "    stop { let final_activity = is_active(data) }\n",
+            "}\n",
+        ),
+    )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let python = emitted.text("_hgl/_m_observed/__init__.py");
+    for expected in [
+        "@_hg.compute_node(active=(\"probe\",), valid=())\ndef sample(",
+        "data.active:\n        data.make_passive()\n        return data.active\n",
+        "    final_activity = data.active\n",
+    ] {
+        assert!(python.contains(expected), "{python}");
+    }
+}
+
+/// TST-5, FN-6, TYPE-16: the replay publishes a nullable or a set to
+/// the lifted function. Its wire carries the payload, not the trace delta.
+#[test]
+fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
+    let emitted = emit(&[(
+        "payload.hgl",
+        concat!(
+            "module payload\n",
+            "const fn keep(value: i64?) -> i64? => value\n",
+            "const fn from_members(values: set<i64>) -> i64 => 7\n",
+            "test lifted {\n",
+            "    assert eval(keep(value: [null, 7])) == [null, 7]\n",
+            "    assert eval(from_members(values: [delta<set<i64>>(added: [1])])) == [7]\n",
+            "}\n",
+        ),
+    )]);
+    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
+    let python = emitted.text("_hgl/_m_payload/__init__.py");
+    assert!(python.contains("def _lift_0_keep(value: _hg.TS[_py.int | None])"));
+    assert!(python.contains("def _lift_1_from_members(values: _hg.TSS[_py.int])"));
 }

@@ -74,10 +74,17 @@ def _relative(trace, start=None):
     if isinstance(trace, _Recording):
         return [(at - trace.start, published) for at, published in trace.output]
     if isinstance(trace, _Timed):
-        return [
-            (at - start if start is not None and isinstance(at, _datetime.datetime) else at, published)
-            for at, published in trace.entries
-        ]
+        entries = []
+        for at, published in trace.entries:
+            after = at - start if start is not None and isinstance(at, _datetime.datetime) else at
+            # CEVAL-2 and TST-7 also hold for keys computed at run time.
+            # The catalogue's trace.key_order is a source diagnostic.
+            if isinstance(after, _datetime.timedelta) and after < _datetime.timedelta(0):
+                raise _core.HglError("a timed trace has a key before the run's start")
+            if entries and after <= entries[-1][0]:
+                raise _core.HglError("the keys of a timed trace must strictly increase")
+            entries.append((after, published))
+        return entries
     return [
         (position * _SMALLEST_STEP, cell) for position, cell in enumerate(trace) if cell is not None
     ]
@@ -258,21 +265,22 @@ def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arg
     start.
     """
     start, end = _bounds(_config, _present() if _real_time else _EARLIEST_START)
-    if end is not None and end <= start:
-        # No cycle runs. hgraph has no run that ends where it starts, so
-        # none is made: the graph is not built, started or stopped.
-        return _Recording(start, [])
     # CEVAL-2: "Each tuple holds the absolute evaluation time and the
     # publication's delta ... dense position i is the start plus i
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
         name: [
-            (start + after, published) for after, published in _relative(arguments[name], start)
+            (_core.add__datetime_duration(start, after), published)
+            for after, published in _relative(arguments[name], start)
         ]
         for name in _replays
         if name in arguments
     }
+    if end is not None and end <= start:
+        # Validate replay before graph start, including an empty run
+        # (TST-9). hgraph has no run that ends where it starts.
+        return _Recording(start, [])
     output = _ran(target, _replays, _record, replayed, arguments, start, end, _real_time)
     return _Recording(start, [] if output is None else output)
 
@@ -291,7 +299,7 @@ def publications(trace):
     # A trace written out: an offset is from the earliest start, and an
     # instant is itself.
     return [
-        (_EARLIEST_START + after, published)
+        (_core.add__datetime_duration(_EARLIEST_START, after), published)
         for after, published in _relative(trace, _EARLIEST_START)
     ]
 

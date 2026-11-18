@@ -563,3 +563,16 @@ fn a_trace_goes_to_a_const_fn_and_nowhere_else() {
         ]
     );
 }
+
+/// TST-7: distinct timed traces may use relative or absolute keys.
+/// Both are timed, including the expectation of an eval with a relative input.
+#[test]
+fn timed_traces_can_name_instants_in_different_ways() {
+    let checked = module(concat!(
+        "test times {\n",
+        "    let at = @2026-01-05T09:30:00Z\n",
+        "    assert eval(scaled(left: [0s: 2], right: [at: 3], factor: 1)) == [at: 5]\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+}

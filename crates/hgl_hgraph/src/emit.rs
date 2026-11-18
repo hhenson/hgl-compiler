@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
     ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator, Value,
-    ValueCategory,
+    ValueCategory, walk_statements,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
@@ -190,8 +190,7 @@ enum Mode {
     /// nor its output.
     Lifecycle,
     /// A node's `stop`: a function of its own to hgraph, which is given
-    /// the node's configuration, its state and its inputs, and not its
-    /// output.
+    /// the node's configuration, state, inputs and any injected output.
     Stop,
     /// A source's statements (SOURCE-1): the body of a Python
     /// generator, which is resumed in an evaluation of the source's
@@ -1593,6 +1592,24 @@ impl Emitter<'_> {
                     .any(|handler| handler.subscribed.contains(input))
             })
             .collect();
+        // TIME-2, TIME-3: changing input activity changes which input can
+        // notify the node. A handler still listens to the inputs it names.
+        let mut switchable = BTreeSet::new();
+        walk_statements(&body.statements, &mut |value| {
+            if let ExprKind::Endpoint {
+                operation: EndpointOperation::Activate | EndpointOperation::Passivate,
+                inputs: Some(named),
+            } = &value.kind
+            {
+                switchable.extend(named.iter().copied());
+            }
+        });
+        let possible_wakes: BTreeSet<_> = active.iter().chain(&switchable).copied().collect();
+        let needs_wake_guard = |handler: &Handler<'_>| {
+            possible_wakes
+                .iter()
+                .any(|input| !handler.subscribed.contains(input))
+        };
         // The inputs whose invalidation a handler is to be woken by,
         // and told apart from another input's notification: those a
         // handler subscribes to and does not require valid, where the
@@ -1616,9 +1633,7 @@ impl Emitter<'_> {
                 handlers.iter().any(|handler| {
                     handler.subscribed.contains(input)
                         && !handler.required.contains(input)
-                        && active
-                            .iter()
-                            .any(|other| !handler.subscribed.contains(other))
+                        && needs_wake_guard(handler)
                 })
             })
             .collect();
@@ -1643,8 +1658,8 @@ impl Emitter<'_> {
         }
         // TIME-5: "`stop` reads a temporal input under manual
         // admission". hgraph gives a `stop` each input it names, as the
-        // node has it: the configuration, then the inputs, then the
-        // state.
+        // node has it: the configuration, then the inputs. Its injected
+        // output and state are available at stop too.
         let mut stopping: Vec<String> = signature
             .parameters
             .iter()
@@ -1660,9 +1675,7 @@ impl Emitter<'_> {
                 .filter(|(parameter, _)| !parameter.constant)
                 .map(|(_, written)| written.clone()),
         );
-        if has_state {
-            stopping.push("_state: _hg.STATE = None".to_string());
-        }
+        stopping.extend_from_slice(&parameters[signature.parameters.len()..]);
         // A capability is given to the node, to its `start` and to its
         // `stop`, each for that one call.
         for (parameter, annotation) in &capabilities {
@@ -1726,12 +1739,16 @@ impl Emitter<'_> {
         // then what the node keeps of it for the next.
         for &local in &watched {
             let input = name(&body.locals[local].name);
-            self.line(
-                1,
-                &format!(
-                    "_woke_{input} = {input}.modified or (_state._valid_{input} and not {input}.valid)"
-                ),
-            );
+            // A current publication can match even when this input is passive.
+            // An old invalidation noticed on a later wake is not a notification.
+            let changed = if switchable.contains(&local) {
+                format!(
+                    "({input}.valid and {input}.modified) or ({input}.active and _state._valid_{input} and not {input}.valid)"
+                )
+            } else {
+                format!("{input}.modified or (_state._valid_{input} and not {input}.valid)")
+            };
+            self.line(1, &format!("_woke_{input} = {changed}"));
             self.line(1, &format!("_state._valid_{input} = {input}.valid"));
         }
         for handler in &handlers {
@@ -1743,10 +1760,7 @@ impl Emitter<'_> {
                 self.unsupported(declaration.at, "a handler that no input wakes");
                 continue;
             }
-            let narrower = active
-                .iter()
-                .any(|input| !handler.subscribed.contains(input));
-            if narrower {
+            if needs_wake_guard(handler) {
                 let ticked: Vec<String> = handler
                     .subscribed
                     .iter()
@@ -1754,10 +1768,11 @@ impl Emitter<'_> {
                         // An input the handler requires valid woke it
                         // where it published; one it does not, where
                         // it published or became invalid.
+                        let input = endpoint(local);
                         if watched.contains(&local) && !handler.required.contains(&local) {
-                            format!("_woke_{}", name(&body.locals[local].name))
+                            format!("_woke_{input}")
                         } else {
-                            format!("{}.modified", endpoint(local))
+                            format!("{input}.modified")
                         }
                     })
                     .collect();
@@ -2339,8 +2354,8 @@ impl Emitter<'_> {
             // TIME-7: "`inject out` exposes that same result for reads,
             // assignment".
             LocalKind::Inject if declared.name == "out" => {
-                // hgraph gives a lifecycle hook no output: TIME-7's read
-                // of `out` in `stop` has nothing to be written as.
+                // Bare payload reads of `out` in lifecycle hooks are
+                // not lowered here.
                 if matches!(function.mode, Mode::Lifecycle | Mode::Stop) {
                     self.unsupported(declared.at, "`out` in `stop`");
                 }
@@ -2862,13 +2877,21 @@ impl Emitter<'_> {
                 inputs: Some(inputs),
             } if inputs.len() == 1 => {
                 let endpoint = &function.locals[inputs[0]];
-                // hgraph gives `start` no endpoint, and `stop` its
-                // inputs and not its output: there `valid(input)` is the
-                // guard a read stands under (TIME-5).
+                // TIME-5 and TIME-7: start reads no endpoint. At stop
+                // an input can guard a payload read, and both the inputs
+                // and the read-only output expose their timestamp.
                 let given = match function.mode {
                     Mode::Lifecycle => false,
                     Mode::Stop => {
-                        endpoint.kind != LocalKind::Inject && *operation == EndpointOperation::Valid
+                        *operation == EndpointOperation::LastModified
+                            || (endpoint.kind != LocalKind::Inject
+                                && matches!(
+                                    operation,
+                                    EndpointOperation::Valid
+                                        | EndpointOperation::IsActive
+                                        | EndpointOperation::Activate
+                                        | EndpointOperation::Passivate
+                                ))
                     }
                     _ => true,
                 };
@@ -2895,8 +2918,17 @@ impl Emitter<'_> {
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
                     EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                    // TIME-9: input activity controls delivery of notifications.
+                    EndpointOperation::Activate => format!("{input}.make_active()"),
+                    EndpointOperation::Passivate => format!("{input}.make_passive()"),
+                    EndpointOperation::IsActive => format!("{input}.active"),
                     // END-3: what the input published this cycle.
                     EndpointOperation::DeltaValue => format!("{input}.delta_value"),
+                    // END-6: an invalid endpoint has no timestamp, even
+                    // if it held a value before being invalidated.
+                    EndpointOperation::LastModified => {
+                        format!("({input}.last_modified_time if {input}.valid else None)")
+                    }
                     other => {
                         self.unsupported(value.at, &format!("`{}`", other.name()));
                         "None".to_string()
@@ -4404,11 +4436,9 @@ impl Emitter<'_> {
             let signature = instances
                 .find(self.program, (*module, *declaration), generics)
                 .map_or(signature, |instance| &instance.signature);
-            let (written, bound) =
-                self.bound(function, signature, arguments, |_, value| match &value.ty {
-                    Type::Trace { cell, .. } => Some((**cell).clone()),
-                    _ => None,
-                });
+            let (written, bound) = self.bound(function, signature, arguments, |_, value| {
+                crate::instances::trace_payload(&value.ty)
+            });
             let node = self.lifted(
                 (*module, *declaration),
                 Lifts::Function(generics),

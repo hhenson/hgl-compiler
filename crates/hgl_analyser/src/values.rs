@@ -1475,7 +1475,8 @@ impl<'a> Typer<'a> {
         let ty = match operation {
             EndpointOperation::Valid
             | EndpointOperation::Modified
-            | EndpointOperation::Scheduled => BOOL,
+            | EndpointOperation::Scheduled
+            | EndpointOperation::IsActive => BOOL,
             // END-3: "`delta_value(x)` returns what `x` published this
             // cycle, a `delta<T>` for an endpoint of T (the language's
             // TYPE-16). For a scalar it is the value published".
@@ -1657,23 +1658,27 @@ impl<'a> Typer<'a> {
             SyntaxKind::NameExpr => self.local_of(node),
             _ => None,
         };
-        let temporal = |local: LocalId| {
-            self.signature
-                .parameters
-                .get(local)
-                .is_some_and(|parameter| !parameter.constant)
-        };
+        // TIME-9: only direct inputs have a subscription to change.
+        let input_only = matches!(
+            operation,
+            EndpointOperation::Activate | EndpointOperation::Passivate
+        );
         match local {
-            Some(local) if temporal(local) || Some(local) == self.out => Some(local),
+            Some(local)
+                if self.is_temporal_input(local) || (!input_only && Some(local) == self.out) =>
+            {
+                Some(local)
+            }
             _ => {
                 self.diagnostics.emit(error(
                     Category::Phase,
                     codes::ENDPOINT_ARGUMENT,
                     self.at(node),
                     format!(
-                        "`{}` takes a temporal input of `{}` by its name, or `out`",
+                        "`{}` takes a temporal input of `{}` by its name{}",
                         operation.name(),
-                        self.declaration.name
+                        self.declaration.name,
+                        if input_only { "" } else { ", or `out`" }
                     ),
                     "TIME-9",
                 ));
@@ -4160,7 +4165,7 @@ impl<'a> Typer<'a> {
                 style: Some(later), ..
             },
         ) = (&left.ty, &right.ty)
-            && first != later
+            && !first.same_notation(*later)
         {
             self.trace_style(right.at, *first, *later);
         }
@@ -5252,7 +5257,7 @@ impl<'a> Typer<'a> {
                 && callee.kind() == SyntaxKind::NameExpr
                 && let Some(name) = name_token(&callee)
                 && !self.bindings.contains_key(&(self.file, name.span().start))
-                && let Some(operation) = EndpointOperation::named(name.text())
+                && let Some(operation) = EndpointOperation::language_form(name.text())
             {
                 return self.endpoint(operation, &name, &list);
             }
@@ -5268,7 +5273,7 @@ impl<'a> Typer<'a> {
         if self.hook.is_some()
             && Some(module) == self.program.core()
             && child(&callee, SyntaxKind::QualifiedName).is_none()
-            && let Some(operation) = EndpointOperation::named(name.text())
+            && let Some(operation) = EndpointOperation::language_form(name.text())
         {
             return self.endpoint(operation, &name, &list);
         }
@@ -5983,7 +5988,7 @@ impl<'a> Typer<'a> {
                 };
                 match style {
                     None => style = Some(*given),
-                    Some(first) if first != *given => {
+                    Some(first) if !first.same_notation(*given) => {
                         self.trace_style(argument.value.at, first, *given);
                     }
                     Some(_) => {}
@@ -6826,14 +6831,48 @@ impl<'a> Typer<'a> {
         // The call an `eval` stands for is this one, and not one among
         // its arguments.
         let evaluating = std::mem::take(&mut self.evaluating);
-        self.call_function_with(
+        let target = &self.program.modules[module].declarations[declaration];
+        let reads_activity = Some(module) == self.program.core()
+            && target.kind == DeclarationKind::NativeFunction(Role::Value)
+            && target.name == "is_active";
+        let (kind, ty) = self.call_function_with(
             name,
             list,
             (module, declaration),
             expected,
             given,
-            evaluating,
-        )
+            // An endpoint is never a replayable payload. Even an empty
+            // trace cannot supply the receiving node's input (TIME-9).
+            evaluating && !reads_activity,
+        );
+        // END-5, TIME-9: only the bound core function queries activity.
+        // Its ordinary signature has already checked the arguments and T.
+        if reads_activity
+            && let ExprKind::Call { arguments, .. } = &kind
+            && let [argument] = arguments.as_slice()
+            && let ExprKind::EndpointOf(input) = argument.value.kind
+        {
+            if Some(input) == self.out {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::ENDPOINT_ARGUMENT,
+                    argument.value.at,
+                    "`is_active` takes a direct temporal input of the node".to_string(),
+                    "TIME-9",
+                ));
+            } else if self.hook == Some(Hook::Start) {
+                let input_name = self.locals[input].name.clone();
+                self.input_lifecycle(Location::new(self.file, name.span()), &input_name);
+            }
+            return (
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::IsActive,
+                    inputs: Some(vec![input]),
+                },
+                ty,
+            );
+        }
+        (kind, ty)
     }
 
     /// [`Typer::call_function`], with `evaluating` true where the call
@@ -10010,7 +10049,7 @@ impl<'a> Typer<'a> {
                 // without one, and is held to the same rules.
                 if self.hook.is_some()
                     && child(node, SyntaxKind::QualifiedName).is_none()
-                    && let Some(operation) = EndpointOperation::named(name.text())
+                    && let Some(operation) = EndpointOperation::language_form(name.text())
                     && self.is_the_languages(&name)
                 {
                     let read = self.endpoint(operation, &name, &list);
