@@ -468,6 +468,17 @@ fn a_value_candidate_says_which_of_its_arguments_are_places() {
         // Line 23: a requirement supplies types, and no place.
         "const fn filled<C>(values: C) -> i64 requires push(C, i64) { return 1 }\n",
         "const fn asks() -> i64 => filled([1])\n",
+        // Line 25: a `var` parameter is always given, though its type
+        // is written `T?`: the candidate is selected, and then asks for
+        // it.
+        "operator clear(value: i64?)\n",
+        "impl const fn clear(var value: i64?) { value = null }\n",
+        "const fn cleared() -> i64 {\n",
+        "    var count: i64? = 1\n",
+        "    clear(count)\n",
+        "    clear()\n",
+        "    return 1\n",
+        "}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -477,6 +488,7 @@ fn a_value_candidate_says_which_of_its_arguments_are_places() {
             "m.hgl:18:18 function-kind/parameter.var FN-15",
             "m.hgl:20:14 function-kind/parameter.var FN-15",
             "m.hgl:24:27 constraint/requires.unmet GEN-3",
+            "m.hgl:30:5 type/argument.missing FN-15",
         ]
     );
 }
