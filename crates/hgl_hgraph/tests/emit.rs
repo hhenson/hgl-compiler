@@ -2417,7 +2417,7 @@ fn an_instance_that_is_not_written_is_reported() {
             "    assert eval(again(value: [1])) == [1]\n",
             "}\n",
             "test listed {\n",
-            "    let seen = eval(again(value: [[1]]))\n",
+            "    let seen = eval(again(value: [[[1]]]))\n",
             "}\n",
         ),
     )]);
@@ -2445,7 +2445,7 @@ fn an_instance_that_is_not_written_is_reported() {
     assert_eq!(emitted.blocked("whole"), None);
     let blocked = emitted.blocked("listed").expect("the test is not run");
     assert!(
-        blocked.ends_with("the hgraph target does not write the type `list<i64>` yet"),
+        blocked.ends_with("the hgraph target does not write the type `list<list<i64>>` yet"),
         "{blocked}"
     );
     let python = emitted.text("_hgl/_m_demo/_m_held/__init__.py");
@@ -6039,6 +6039,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("timers.hgl", TIMERS));
     files.push(("copies.hgl", COPIES));
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
+    files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("captures.hgl", CAPTURES));
     files.extend(MODULES);
@@ -7504,4 +7505,103 @@ fn an_ordinary_struct_branch_of_a_graph_is_not_written_yet() {
         ),
     )]);
     assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+}
+
+/// TYPE-9: temporalization maps "lists to child positions, dictionaries
+/// to keyed children". TYPE-10: "`list<T>` denotes a growing shape".
+/// TYPE-16: a list's delta is a `dict<i64, delta<V>>`, a dictionary's
+/// has `updated` and `removed`.
+const TEMPORAL_COLLECTIONS: &str = include_str!("fixtures/temporal_collections.hgl");
+
+/// A fixed list is hgraph's `TSL`, a dictionary its `TSD`, and an
+/// unsized list a `TS` of a whole tuple. An element is the child's port
+/// in a graph; a whole value is read in a hook and given to a lifted
+/// helper as a Python list or dict.
+#[test]
+fn a_temporal_list_or_dictionary_is_written_by_its_children() {
+    let emitted = emit(&[("temporal_collections.hgl", TEMPORAL_COLLECTIONS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_collections/__init__.py");
+    let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
+    let prices = "_hg.TSD[_py.str, _hg.TS[_py.int]]";
+    for expected in [
+        "-> _hg.TS[_py.tuple[_py.int, ...]]:".to_string(),
+        "        return _py.tuple([])".to_string(),
+        "    return _core.item(_py.list(values.value), 1)".to_string(),
+        "    return _py.tuple(doubled(values=_py.list(values.value)))".to_string(),
+        format!("-> {pair}:"),
+        "    change = {slot.value: reading.value}\n    return change".to_string(),
+        "    return _py.tuple([low.value, _core.add__i64_i64(lhs=low.value, rhs=1)])".to_string(),
+        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef pair_span(pair: {pair})"),
+        "store=pair.delta_value, key=1".to_string(),
+        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef _lift_3_pair_total(pair: {pair})"),
+        "    return one_position(slot=slot, reading=reading)[0]".to_string(),
+        format!("-> {prices}:"),
+        "        return _core.dict_delta(removed=_py.frozenset((key.value,)))".to_string(),
+        "    return _core.dict_delta(updated={key.value: price.value})".to_string(),
+        "store=_py.dict(prices.value), key=\"B\"".to_string(),
+        "    for key in _core.removed(change):".to_string(),
+        "store=_core.updated(change), key=\"A\"".to_string(),
+        "    return _core.entry_of(priced(key=key, price=price), _hg.const(\"B\", tp=_hg.TS[_py.str]))".to_string(),
+        "    return _core.entry_of(priced(key=key, price=price), chosen)".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// What this target does not write of a temporal list or dictionary
+/// is reported: an unsized list's delta, published or read (it ticks
+/// whole here), an unsized list of composite elements, a whole
+/// dictionary published, a nullable element of a fixed list published
+/// whole, a list's element at a position that ticks, and an unsized
+/// list as the child of a temporal composite.
+#[test]
+fn a_temporal_collection_form_not_written_yet_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote { bid: i64 }\n",
+            "fn grown(slot: i64) -> list<i64> {\n",
+            "    when {\n",
+            "        let change: delta<list<i64>> = [slot: 1]\n",
+            "        return change\n",
+            "    }\n",
+            "}\n",
+            "fn grown_delta(values: list<i64>) -> i64? {\n",
+            "    when { return get(delta_value(values), 0) }\n",
+            "}\n",
+            "fn quotes(values: list<Quote>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn whole(key: str) -> dict<str, i64> {\n",
+            "    when { return [key: 1] }\n",
+            "}\n",
+            "fn maybe(value: i64) -> list<i64?, 2> {\n",
+            "    when { return [value, null] }\n",
+            "}\n",
+            "fn fixed(value: i64) -> list<i64, 2> {\n",
+            "    when { return [value, value] }\n",
+            "}\n",
+            "fn moving(slot: i64, value: i64) -> i64 => fixed(value)[slot]\n",
+            "fn nested(key: str) -> dict<str, list<i64>> {\n",
+            "    when { return delta<dict<str, list<i64>>>(removed: [key]) }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:16 target.unsupported",
+            "m.hgl:10:23 target.unsupported",
+            "m.hgl:12:11 target.unsupported",
+            "m.hgl:16:19 target.unsupported",
+            "m.hgl:19:19 target.unsupported",
+            "m.hgl:24:44 target.unsupported",
+            "m.hgl:25:4 target.unsupported",
+        ]
+    );
 }

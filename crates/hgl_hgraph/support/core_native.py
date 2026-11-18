@@ -46,7 +46,12 @@ from hgraph import (
     EvaluationClock as _EvaluationClock,
     NodeError as _NodeError,
     Null as _Null,
+    REMOVE as _REMOVE,
+    REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS,
+    K as _K,
+    SCALAR as _SCALAR,
     TS as _TS,
+    TSD as _TSD,
     TimeSeriesSchema as _TimeSeriesSchema,
     compute_node as _compute_node,
 )
@@ -400,6 +405,53 @@ def changed(delta, field):
     """The property `field` of a struct's delta (TYPE-16): the field's
     delta, or null "where the field did not change"."""
     return delta.get(field)
+
+
+def dict_delta(updated=None, removed=()):
+    """A dictionary's delta made from its properties (the language's
+    TYPE-16: "`updated`, a `dict<K, delta<V>>` of each key added or
+    changed with its delta, and `removed`, a `set<K>`"), as hgraph's
+    delta of a `TSD`: one `dict` of each key updated with its delta, and
+    of each removed with `REMOVE`. A property left out is empty. What is
+    updated is copied: the program may go on changing the dictionary it
+    was given in."""
+    made = {} if updated is None else copied(updated)
+    for key in removed:
+        made[key] = _REMOVE
+    return made
+
+
+def _removes(change):
+    return change is _REMOVE or change is _REMOVE_IF_EXISTS
+
+
+@_compute_node
+def entry_of(dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K]) -> _TS[_SCALAR]:
+    """`dictionary[key]` in a graph: the child of a temporal dictionary
+    that `key` selects (the language's TYPE-9, "dictionaries to keyed
+    children"). The read is strict (ERR-6: "absence fails"), with the
+    code `value.missing_key`, where hgraph's own selection would be
+    silent. It publishes where the key ticks or the selected child
+    does, so another child's tick is silent."""
+    selected = key.value
+    child = dictionary[selected] if selected in dictionary.keys() else None
+    if child is None or not child.valid:
+        raise HglError(f"the dictionary has no key {selected!r}", code="value.missing_key")
+    if key.modified or child.modified:
+        # A child that holds a null publishes it (see `published`).
+        return published(child.value)
+
+
+def updated(delta):
+    """The property `updated` of a dictionary's delta (TYPE-16): each
+    key added or changed, with its delta."""
+    return {key: change for key, change in delta.items() if not _removes(change)}
+
+
+def removed(delta):
+    """The property `removed` of a dictionary's delta (TYPE-16): the set
+    of each key removed."""
+    return frozenset(key for key, change in delta.items() if _removes(change))
 
 
 def bundled(value):
