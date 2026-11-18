@@ -1451,6 +1451,9 @@ only where the program reaches it, at core's source.
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
 | `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
+| `inject scheduler`, `inject alarm` (TIME-9, CAP-4, CAP-5) | `_scheduler: _hg.SCHEDULER = None` for either: hgraph has one scheduler for a node, and no cheaper one. `schedule`, `un_schedule` and `reset` are the provider's functions on it, and an alarm's one wake is kept under a tag of its own, the earlier of the one pending and the one asked for |
+| `when scheduled() { ... }`, `when modified([]) { ... }` (TIME-3) | One `if` over the handler: `if _scheduler.is_scheduled_now:` with a scheduler, and `if _scheduler.is_scheduled_now and not (price.modified or price.invalidated):` with an alarm, which is told from the inputs. A header that is `scheduled()` alone requires no input valid, so the node is `valid=()` and every other handler is under its own guard. One with no `modified` selector is run by an input's wake: `if (price.modified or price.invalidated) and price.valid:` |
+| A node with no temporal input that a scheduler or an alarm wakes | hgraph takes no node without an input. The node is `_node_name`, with an input `_begin` that never wakes it, `active=()`, and `name` is a graph that gives it `_hg.const(True)` |
 | A source, a `fn` with a `yield` (SOURCE-1) | Three functions and a graph. `_yields_name(config, _state)` is a Python generator that holds the source's statements, each `yield time: value` a `yield (time, value)`. `_source_name` is a `@_hg.compute_node` that resumes it, `_core.resume(_state._source, _clock.evaluation_time, _scheduler)`, and returns what is due. Its `start` gives each `cache` and `state` its value, runs the source's `start` and makes the generator; its `stop` is the source's. `name`, a `@_hg.graph`, is what a call names: the node, given `_hg.const(True)`. hgraph takes no node without an input, so the constant is its one input, and wakes it once as the graph starts; its own scheduler wakes it after |
 | `const fn bump(var count: i64, by: i64)`, and `bump(sum, value)` (FN-15) | `def bump(count, by): ...; return (None, count)`: Python has no place to give a value to, so a function with `var` parameters returns its result and then what each holds, at every way out. The call is the whole of a statement: `_given = bump(count=sum, by=value)` and then `sum = _given[1]`, each place in the order of the parameters; a place inside a value is assigned as any is, `book = _core.with_field(book, orders=_given[1])`. A call's own result is `_given[0]`. A function that fails raises, and assigns nothing |
 | `clock.evaluation_time`, `logger.level` (CAP-1) | `_core.Clock_evaluation_time(_clock)`, and `_core.member(LogLevel, _core.Logger_level(_logger))`: a property of a native type is the provider's to read, named for the type and the property |
@@ -1646,7 +1649,7 @@ candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 a bare payload read of `out` in `stop`;
-the `inject` of `scheduler` or `alarm`; in a graph, an `if`
+in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
@@ -1793,7 +1796,8 @@ blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The `hgraph` job of
 the CI workflow runs them on Linux for every pull request. Its backend is
-hgraph 0.9.1. The harness preserves a published null and omits silence
+hgraph 0.9.3, the first whose inputs say `invalidated` in the cycle they
+lose their value, where `modified` is of a publication alone. The harness preserves a published null and omits silence
 (TST-6).
 
 The job also builds `hgl` and runs every test in the pinned core's

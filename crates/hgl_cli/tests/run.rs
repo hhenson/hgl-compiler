@@ -513,9 +513,13 @@ fn an_application_the_target_cannot_write_is_not_run() {
         "app.hgl",
         concat!(
             "application demo.app\n",
-            "fn waits() -> i64 {\n",
-            "    inject scheduler\n",
-            "    when { return 1 }\n",
+            "fn one() -> i64 {\n",
+            "    yield 1s: 1\n",
+            "}\n",
+            // An `if` in a graph is not written yet.
+            "fn waits(const flag: bool = true) -> i64 {\n",
+            "    if flag { return one() }\n",
+            "    return one()\n",
             "}\n",
             "eval(waits())\n",
         ),
@@ -524,7 +528,7 @@ fn an_application_the_target_cannot_write_is_not_run() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         text(&output.stderr),
-        format!("{file}:3:12: the hgraph target does not write an `inject` of `scheduler` yet\n")
+        format!("{file}:6:5: the hgraph target does not write an `if` in a graph yet\n")
     );
     assert_eq!(
         text(&output.stdout),

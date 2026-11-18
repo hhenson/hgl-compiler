@@ -1,0 +1,119 @@
+module demo.timers
+
+# TIME-9's illustration: a wake of the scheduler is due "whether or not a
+# temporal input has ticked".
+fn sampled(price: f64, const every: duration = 1s) -> f64 {
+    state last: f64 = 0.0
+    inject scheduler
+    start { schedule(scheduler, every) }
+    when modified(price) && valid(price) {
+        last = price
+    }
+    when scheduled() {
+        schedule(scheduler, every)
+        return last
+    }
+}
+
+# The same with an alarm, whose `scheduled()` "holds where the node is
+# evaluated and no temporal input has ticked".
+fn alarmed(price: f64, const every: duration = 1s) -> f64 {
+    state last: f64 = 0.0
+    inject alarm
+    start { schedule(alarm, every) }
+    when modified(price) && valid(price) {
+        last = price
+    }
+    when scheduled() {
+        schedule(alarm, every)
+        return last
+    }
+}
+
+# TIME-3: a wake of the scheduler alone runs no handler but those with
+# `scheduled()`: one with no `modified` selector "is run by an input's wake".
+fn counted(value: i64) -> i64 {
+    state seen: i64 = 0
+    inject scheduler
+    start { schedule(scheduler, 1s) }
+    when { seen += 1 }
+    when scheduled() { return seen }
+}
+
+# Core's CAP-4: the scheduler's properties, and `un_schedule`.
+fn pending(value: i64) -> bool {
+    inject scheduler
+    when modified(value) {
+        if value == 1 { schedule(scheduler, 5s) }
+        if value == 3 { un_schedule(scheduler) }
+        return scheduler.is_scheduled && scheduler.next_scheduled_time != null
+    }
+}
+
+# TIME-3: `modified([])` "subscribes to no input and selects a wake from the
+# node's scheduler or alarm". A node with no temporal input.
+fn beats(const every: duration, const times: i64) -> i64 {
+    state count: i64 = 0
+    inject scheduler
+    start { schedule(scheduler, every) }
+    when modified([]) {
+        count += 1
+        if count < times { schedule(scheduler, every) }
+        return count
+    }
+}
+
+# CAP-4: "A wake asked for under a tag replaces the pending wake of that
+# tag".
+fn retagged() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1s, tag: "one")
+        schedule(scheduler, 2s, tag: "one")
+    }
+    when modified([]) { return true }
+}
+
+# CAP-4: "with a `datetime`, a wake then".
+fn at_instant(const at: datetime) -> bool {
+    inject scheduler
+    start { schedule(scheduler, at) }
+    when modified([]) { return true }
+}
+
+# CAP-5: "asking again keeps the earliest".
+fn earliest() -> bool {
+    inject alarm
+    start {
+        schedule(alarm, 3s)
+        schedule(alarm, 1s)
+        schedule(alarm, 2s)
+    }
+    when modified([]) { return true }
+}
+
+test a_scheduler_samples {
+    assert eval(sampled(price: [400ms: 10.0, 1s: 11.0]), RunConfig(length: 2500ms)) == [1s: 11.0, 2s: 11.0]
+    # TIME-3: a header that is `scheduled()` alone "requires no input to be
+    # valid": the wake at 1s runs it though `price` has published nothing.
+    assert eval(sampled(price: [1500ms: 5.0]), RunConfig(length: 2500ms)) == [1s: 0.0, 2s: 5.0]
+}
+
+test an_alarm_is_told_from_the_inputs {
+    # `price` ticks where the alarm is due: nothing is published, and no
+    # further wake is asked for.
+    assert eval(alarmed(price: [400ms: 10.0, 1s: 11.0]), RunConfig(length: 3500ms)) == []
+    assert eval(alarmed(price: [400ms: 10.0]), RunConfig(length: 2500ms)) == [1s: 10.0, 2s: 10.0]
+    assert eval(earliest()) == [1s: true]
+}
+
+test a_wake_alone_runs_only_its_handlers {
+    assert eval(counted(value: [0s: 1, 500ms: 2]), RunConfig(length: 1500ms)) == [1s: 2]
+}
+
+test a_scheduler_says_what_is_pending {
+    assert eval(pending(value: [0, 1, 2, 3, 4]), RunConfig(length: 1s)) == [false, true, true, false, false]
+    assert eval(beats(every: 1s, times: 3)) == [1s: 1, 2s: 2, 3s: 3]
+    assert eval(retagged()) == [2s: true]
+    assert eval(at_instant(at: @2026-01-05T09:30:02Z), RunConfig(start: @2026-01-05T09:30:00Z)) == [2s: true]
+}
