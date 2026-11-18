@@ -7421,3 +7421,27 @@ fn a_whole_struct_with_a_set_field_is_not_published_yet() {
     )]);
     assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
 }
+
+/// CTRL-13 and TYPE-9: an ordinary struct in a branch of a graph's `if`
+/// would be a constant of the class, which is no bundle: reported.
+#[test]
+fn an_ordinary_struct_branch_of_a_graph_is_not_written_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote {\n",
+            "    bid: i64\n",
+            "}\n",
+            "fn quoted(bid: i64) -> Quote {\n",
+            "    when { return Quote(bid: bid) }\n",
+            "}\n",
+            "const fn fixed() -> Quote => Quote(bid: 0)\n",
+            "fn chosen(take: bool, bid: i64) -> Quote {\n",
+            "    if take { return quoted(bid) }\n",
+            "    return fixed()\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+}

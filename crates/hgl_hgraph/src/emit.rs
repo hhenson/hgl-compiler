@@ -3542,6 +3542,20 @@ impl Emitter<'_> {
                     && self.in_case > 0
                     && !self.connects(function, returned)
                 {
+                    // A struct's connection is a bundle (TYPE-9), and a
+                    // constant of the class is no bundle.
+                    if matches!(
+                        returned.ty,
+                        Type::Named {
+                            kind: NamedKind::Struct,
+                            ..
+                        }
+                    ) {
+                        self.unsupported(
+                            returned.at,
+                            "an ordinary struct as a branch's connection",
+                        );
+                    }
                     format!("_hg.const({value})")
                 } else {
                     value
