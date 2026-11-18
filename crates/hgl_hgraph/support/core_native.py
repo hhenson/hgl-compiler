@@ -41,7 +41,7 @@ import math as _math
 import re as _re
 from fractions import Fraction as _Fraction
 
-from hgraph import Null as _Null
+from hgraph import Null as _Null, TimeSeriesSchema as _TimeSeriesSchema
 
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
 # parameter below: Python's own is kept under another name.
@@ -274,6 +274,53 @@ def with_field(value, /, **field):
     as a copy where something else holds it.
     """
     return _dataclasses.replace(value, **field)
+
+
+# The bundle schema of each struct's class, made once (see `schema`).
+_schemas = {}
+
+
+def schema(struct, fields):
+    """The schema of hgraph's bundle, `TSB`, that a temporal value of the
+    struct `struct` is (the language's TYPE-9: "Temporalization
+    recursively maps tuples/structs to child fields").
+
+    `fields` is each field's name and its temporal type, in the
+    struct's order. The schema is made once for a class, so that every
+    annotation of the struct names one type to hgraph.
+    """
+    made = _schemas.get(struct)
+    if made is None:
+        made = type(
+            f"{struct.__name__}_ts",
+            (_TimeSeriesSchema,),
+            {"__annotations__": dict(fields), "__module__": struct.__module__},
+        )
+        _schemas[struct] = made
+    return made
+
+
+def struct_delta(**fields):
+    """A struct's delta made from its properties (the language's
+    TYPE-16), as hgraph's delta of a bundle: a `dict` of each field that
+    changed with its delta. A property that is null, "where the field
+    did not change", is left out; a published null, `Null`, is kept."""
+    return {field: delta for field, delta in fields.items() if delta is not None}
+
+
+def changed(delta, field):
+    """The property `field` of a struct's delta (TYPE-16): the field's
+    delta, or null "where the field did not change"."""
+    return delta.get(field)
+
+
+def bundled(value):
+    """What a temporal struct publishes for a whole value of it (TYPE-9):
+    each field, as hgraph's bundle takes it. The compiler gives it only
+    a struct whose fields each publish whole. A field that is null is
+    published as a null, hgraph's `Null` (see `published`): `None` would
+    leave the field as it was."""
+    return {field: published(getattr(value, field)) for field in value._hgl_fields}
 
 
 def item(sequence, index):

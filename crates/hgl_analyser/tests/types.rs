@@ -99,6 +99,29 @@ fn an_atomic_of_what_is_no_composite_is_that_type() {
     );
 }
 
+/// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V". A
+/// field of an atomic struct is that field of each whole value: an
+/// atomic of the field's type, which is the type itself where it is no
+/// composite. A field the struct does not have is reported.
+#[test]
+fn a_field_of_an_atomic_struct_is_an_atomic_of_its_type() {
+    let checked = module(concat!(
+        "struct Quote { bid: f64 }\n",
+        "struct Order { quote: Quote }\n",
+        "fn bid(order: atomic<Order>) -> f64 => order.quote.bid\n",
+        "fn whole(order: atomic<Order>) -> atomic<Quote> => order.quote\n",
+        "fn open(order: atomic<Order>) -> Quote => order.quote\n",
+        "fn missing(order: atomic<Order>) -> f64 => order.ask\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:43 type/type.mismatch EXPR-5",
+            "m.hgl:7:50 name/member.unknown EXPR-7",
+        ]
+    );
+}
+
 // ---- What a written type means ----
 
 /// The grammar's `type`, TYPE-1 and TYPE-2: every form of type is read,
