@@ -1136,3 +1136,54 @@ fn a_written_argument_of_a_type_is_not_taken_for_the_default() {
         ]
     );
 }
+
+/// UNIT-13: a constant "names one ordinary value". TYPE-7: an enum's
+/// member is one "however it is written". A constant of an enum is the
+/// member its expression names, read where the constant is declared:
+/// `Mode.slow`, `Mode("slow")`, `Mode(1)`, or another constant, which
+/// is followed. GEN-3: a `requires` is held to it wherever the constant
+/// is given.
+#[test]
+fn a_requires_is_held_to_a_constant_however_its_value_is_written() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const A: Mode = Mode.slow\n",
+        "const B: Mode = Mode(\"slow\")\n",
+        "const C: Mode = Mode(1)\n",
+        "const D: Mode = A\n",
+        "const E: Mode = (Mode.slow)\n",
+        "const OFF: bool = false\n",
+        "const STILL_OFF: bool = OFF\n",
+        "const F1: Mode = Mode.fast\n",
+        "const F2: Mode = Mode(\"fast\")\n",
+        "const F3: Mode = F1\n",
+        "const fn pick<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn flag<const on: bool>(value: i64) -> i64 requires on == true => value\n",
+        "struct Pick<const mode: Mode = A> requires mode == .fast { value: i64 }\n",
+        // Line 17: each of these does not hold.
+        "const fn a() -> i64 => pick<A>(1)\n",
+        "const fn b() -> i64 => pick<B>(1)\n",
+        "const fn c() -> i64 => pick<C>(1)\n",
+        "const fn d() -> i64 => pick<D>(1)\n",
+        "const fn e() -> i64 => pick(1, mode: E)\n",
+        "const fn f() -> i64 => flag<STILL_OFF>(1)\n",
+        "const fn g(held: Pick<B>) -> i64 => 1\n",
+        "const fn h(held: Pick) -> i64 => 1\n",
+        // Each of these holds.
+        "const fn fine(held: Pick<F2>) -> i64 => pick<F1>(1) + pick<F2>(1) + pick(1, mode: F3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:24 constraint/requires.unmet GEN-3",
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:18 constraint/requires.unmet GEN-3",
+            "m.hgl:24:18 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
