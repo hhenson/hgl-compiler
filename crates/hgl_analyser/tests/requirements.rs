@@ -868,3 +868,82 @@ fn a_call_in_a_generic_body_meets_what_the_body_states() {
         ["m.hgl:5:40 constraint/requires.unmet GEN-3"]
     );
 }
+
+/// GEN-8: "A call may supply its generic arguments as a generic
+/// constructor does ... The value a call gives a generic value
+/// parameter is a compile-time constant: a literal, an enum member
+/// however it is written (TYPE-7), `Zero.nan` or `.nan`, a constant
+/// (UNIT-13) ... or a constant expression of those". GEN-3: a
+/// `requires` is held to the value however it is written and wherever
+/// it is given: after the callee's name or by name, in a call, a
+/// construction and a type.
+#[test]
+fn a_requires_is_held_to_a_generic_value_however_it_is_written() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const OFF: bool = false\n",
+        "const fn pick<const enabled: bool>(value: i64) -> i64 requires enabled == true => value\n",
+        "const fn moded<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn sized<const size: i64>(value: i64) -> i64 requires size in {2, 3} => value\n",
+        "const fn named<const label: str>(value: i64) -> i64 requires label == \"a\" => value\n",
+        "const fn real<const scale: f64>(value: i64) -> i64 requires scale == 1.5 => value\n",
+        "struct Flag<const on: bool> requires on == true { value: i64 }\n",
+        "struct Moded<const mode: Mode> requires mode == .fast { value: i64 }\n",
+        // Line 13: each of these does not hold.
+        "const fn a() -> i64 => pick<false>(1)\n",
+        "const fn b() -> i64 => pick(1, enabled: false)\n",
+        "const fn c() -> i64 => moded<.slow>(1)\n",
+        "const fn d() -> i64 => moded<Mode.slow>(1)\n",
+        "const fn e() -> i64 => moded<SLOW>(1)\n",
+        "const fn f() -> i64 => moded(1, mode: SLOW)\n",
+        "const fn g() -> i64 => sized<4>(1)\n",
+        "const fn h() -> i64 => sized<1 + 3>(1)\n",
+        "const fn i() -> i64 => named<\"b\">(1)\n",
+        "const fn j() -> i64 => real<2.5>(1)\n",
+        "const fn k() -> i64 => real(1, scale: 2.5)\n",
+        "const fn l() -> i64 => pick<OFF>(1)\n",
+        "const fn m(held: Flag<false>) -> i64 => 1\n",
+        "const fn n(held: Moded<.slow>) -> i64 => 1\n",
+        "const fn o(held: Moded<Mode.slow>) -> i64 => 1\n",
+        "const fn p(held: list<Flag<false>>) -> i64 => 1\n",
+        "const fn q(held: Moded<SLOW>) -> i64 => 1\n",
+        "const fn r() -> i64 {\n",
+        "    let held = Flag<false>(value: 1)\n",
+        "    return 1\n",
+        "}\n",
+        "const fn s() -> i64 {\n",
+        "    let held = Moded<SLOW>(value: 1)\n",
+        "    return 1\n",
+        "}\n",
+        // Each of these holds.
+        "const fn fine(x: Flag<true>, y: Moded<.fast>, z: Moded<Mode.fast>) -> i64 =>\n",
+        "    pick<true>(1) + moded<.fast>(1) + moded<Mode.fast>(1) + moded(1) + sized<2>(1)\n",
+        "    + named<\"a\">(1) + real<1.5>(1) + Flag<true>(value: 1).value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:24 constraint/requires.unmet GEN-3",
+            "m.hgl:14:24 constraint/requires.unmet GEN-3",
+            "m.hgl:15:24 constraint/requires.unmet GEN-3",
+            "m.hgl:16:24 constraint/requires.unmet GEN-3",
+            "m.hgl:17:24 constraint/requires.unmet GEN-3",
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:24 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
+            "m.hgl:25:18 constraint/requires.unmet GEN-3",
+            "m.hgl:26:18 constraint/requires.unmet GEN-3",
+            "m.hgl:27:18 constraint/requires.unmet GEN-3",
+            "m.hgl:28:18 constraint/requires.unmet GEN-3",
+            "m.hgl:29:18 constraint/requires.unmet GEN-3",
+            "m.hgl:31:16 constraint/requires.unmet GEN-3",
+            "m.hgl:35:16 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
