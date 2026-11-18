@@ -1,0 +1,175 @@
+module demo.conditionals
+
+# CTRL-13 to CTRL-15: a graph's `if` and `switch`. Over a connection
+# "each case is a child graph selected at runtime"; over an ordinary
+# value the one branch is composed where the graph is built.
+
+# CTRL-13: "With no `else`, under a temporal condition it is a
+# connection of `T` that never ticks while the condition is false".
+fn gated(open: bool, price: i64) -> i64 {
+    if open { price }
+}
+
+test an_if_with_no_else_is_silent_while_false {
+    assert eval(gated(open: [true, false, _, true], price: [1, 2, 3, 4])) == [1, _, _, 4]
+}
+
+fn picked(open: bool, left: i64, right: i64) -> i64 {
+    if open { left } else { right }
+}
+
+test an_if_with_else_forwards_the_selected_branch {
+    assert eval(picked(open: [true, false, _, true], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+        [1, 20, 30, 4]
+}
+
+# An `else if` is the value of its `else`; CTRL-13: "an ordinary value in
+# a branch is then wired as a constant".
+fn graded(score: i64) -> str {
+    if score > 10 { "high" } else if score > 5 { "mid" } else { "low" }
+}
+
+test an_else_if_chain_selects_one_constant {
+    assert eval(graded(score: [12, 7, 2, 15])) == ["high", "mid", "low", "high"]
+}
+
+fn floored(open: bool, price: i64) -> i64 {
+    if open { price } else { 0 }
+}
+
+test an_ordinary_value_in_a_branch_is_a_constant {
+    assert eval(floored(open: [true, false, _, true], price: [1, 2, 3, 4])) == [1, 0, _, 4]
+}
+
+# CTRL-14: "A `return value` in a branch of a temporal `if` makes the
+# graph's result that value while the branch is selected and the
+# continuation's otherwise".
+fn bypassed(skip: bool, value: i64) -> i64 {
+    if skip { return value }
+    let doubled = value * 2
+    return doubled
+}
+
+test a_returning_branch_takes_the_rest_as_the_other {
+    assert eval(bypassed(skip: [true, false, _, true], value: [1, 2, 3, 4])) == [1, 4, 6, 4]
+}
+
+# CTRL-14: "After the `if` the `var` is one connection: the branch's
+# binding while that branch is selected, and the binding it had before
+# for a branch that does not assign it".
+fn adjusted(rising: bool, price: i64) -> i64 {
+    var chosen = price
+    if rising { chosen = price * 10 }
+    return chosen
+}
+
+test a_branch_that_does_not_assign_keeps_the_binding {
+    assert eval(adjusted(rising: [true, false, _, true], price: [1, 2, 3, 4])) == [10, 2, 3, 40]
+}
+
+fn shifted(rising: bool, price: i64) -> i64 {
+    var chosen = price
+    if rising { chosen = price * 10 } else { chosen = price + 1 }
+    return chosen
+}
+
+test both_branches_assign_one_var {
+    assert eval(shifted(rising: [true, false, _, true], price: [1, 2, 3, 4])) == [10, 3, 4, 40]
+}
+
+# CTRL-15: "a case's assignments and returns follow CTRL-14".
+fn routed(route: str, left: i64, right: i64, fallback: i64) -> i64 {
+    var selected = fallback
+    switch route {
+        case "left": selected = left
+        case "right": selected = right
+        default: selected = fallback + 1
+    }
+    return selected
+}
+
+test a_switch_with_a_default_assigns_a_var {
+    assert eval(routed(
+        route:    ["left", "right", "other", _, "left"],
+        left:     [1,      2,       3,       4, 5],
+        right:    [10,     20,      30,      40, 50],
+        fallback: [100,    200,     300,     400, 500])) ==
+                  [1,      20,      301,     401, 5]
+}
+
+fn chosen_by(route: i64, left: i64, right: i64) -> i64 {
+    switch route {
+        case 1: return left
+        case 2: return right
+        default: return 0
+    }
+}
+
+test a_switch_whose_cases_all_return {
+    assert eval(chosen_by(route: [1, 2, 3, _, 1], left: [1, 2, 3, 4, 5], right: [10, 20, 30, 40, 50])) ==
+        [1, 20, 0, _, 5]
+}
+
+# CTRL-13: a `const` parameter is a wiring-time condition: the one
+# branch is composed.
+fn sized(price: i64, const wide: bool) -> i64 {
+    if wide { return price * 2 }
+    return price
+}
+
+test a_wiring_time_if_returns_from_one_branch {
+    assert eval(sized(price: [1, 2], wide: true)) == [2, 4]
+    assert eval(sized(price: [1, 2], wide: false)) == [1, 2]
+}
+
+fn scaled(price: i64, const wide: bool) -> i64 {
+    let value = if wide { price * 3 } else { price }
+    return value
+}
+
+test a_wiring_time_if_gives_a_let_its_value {
+    assert eval(scaled(price: [1, 2], wide: true)) == [3, 6]
+    assert eval(scaled(price: [1, 2], wide: false)) == [1, 2]
+}
+
+# An `if` in a branch is its own child graph, inside the branch's.
+fn nested(open: bool, high: bool, price: i64) -> i64 {
+    if open {
+        if high { price * 10 } else { price }
+    }
+}
+
+test an_if_nested_in_a_branch {
+    assert eval(nested(open: [true, _, false, true], high: [true, false, _, _], price: [1, 2, 3, 4])) ==
+        [10, 2, _, 4]
+}
+
+# An `else if` that stands as a statement is the one statement of its
+# `else`: the false branch tests the second condition.
+fn stepped(first: bool, second: bool, price: i64) -> i64 {
+    var chosen = price
+    if first { chosen = price * 10 } else if second { chosen = price * 100 }
+    return chosen
+}
+
+test a_statement_else_if_tests_its_condition {
+    assert eval(stepped(first: [true, false, _, false], second: [false, true, _, false], price: [1, 2, 3, 4])) ==
+        [10, 200, 300, 4]
+}
+
+# A branch that assigns the `var` on one path only keeps the binding it
+# had before on the other.
+fn partly(outer: bool, inner: bool, price: i64) -> i64 {
+    var chosen = price
+    if outer {
+        if inner { chosen = price * 10 }
+    } else {
+        chosen = price + 1
+    }
+    return chosen
+}
+
+test a_nested_branch_that_may_not_assign_keeps_the_binding {
+    assert eval(partly(outer: [true, _, false, true], inner: [true, false, _, _], price: [1, 2, 3, 4])) ==
+        [10, 2, 4, 4]
+}
