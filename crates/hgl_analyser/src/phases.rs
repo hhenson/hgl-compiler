@@ -47,17 +47,24 @@ fn phase_of(declaration: &Declaration) -> Option<Phase> {
     // They do not alone classify a body as runtime." Only these do, in
     // any position: `descendants` walks every node under the
     // declaration.
-    let runtime = own_nodes(&declaration.syntax).iter().any(|node| {
-        matches!(
-            node.kind(),
+    //
+    // FN-2: "`state`, `cache`, `start`, `when`, `stop`, `yield`, or an
+    // `inject` of any capability but `global_state` classifies that
+    // complete body as runtime ... A graph may inject `global_state`
+    // (FN-9)."
+    let runtime = own_nodes(&declaration.syntax)
+        .iter()
+        .any(|node| match node.kind() {
             SyntaxKind::StateDecl
-                | SyntaxKind::CacheDecl
-                | SyntaxKind::InjectDecl
-                | SyntaxKind::LifecycleBlock
-                | SyntaxKind::WhenStmt
-                | SyntaxKind::YieldStmt
-        )
-    });
+            | SyntaxKind::CacheDecl
+            | SyntaxKind::LifecycleBlock
+            | SyntaxKind::WhenStmt
+            | SyntaxKind::YieldStmt => true,
+            SyntaxKind::InjectDecl => tokens(node)
+                .filter(|token| token.kind() == SyntaxKind::Ident)
+                .any(|name| name.text() != "global_state"),
+            _ => false,
+        });
     Some(if runtime { Phase::Node } else { Phase::Graph })
 }
 

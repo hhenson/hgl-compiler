@@ -5,10 +5,85 @@ mod common;
 
 use common::check;
 
+/// FN-2: "`state`, `cache`, `start`, `when`, `stop`, `yield`, or an
+/// `inject` of any capability but `global_state` classifies that
+/// complete body as runtime ... A graph may inject `global_state`
+/// (FN-9)." FN-9: "A graph injects `global_state` and no other, and
+/// uses it where the graph is built: each call on it is evaluated once
+/// then ... and is given no connection (`connection.as_constant`)."
+#[test]
+fn a_graph_injects_the_store_and_sets_it_where_it_is_built() {
+    let checked = check(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn pass(value: i64) -> i64 {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn scaled(value: i64, const factor: i64) -> i64 {\n",
+            "    when { return value * factor }\n",
+            "}\n",
+            // A graph: it puts a value and reads one back, each where
+            // it is built.
+            "fn seeded(value: i64, const first: i64) -> i64 {\n",
+            "    inject global_state\n",
+            "    put(global_state, \"factor\", first)\n",
+            "    let factor = get<i64>(global_state, \"factor\")\n",
+            "    return scaled(value, factor)\n",
+            "}\n",
+            // A connection has no value where the graph is built.
+            "fn connected(value: i64) -> i64 {\n",
+            "    inject global_state\n",
+            "    put(global_state, \"limit\", value)\n",
+            "    return pass(value)\n",
+            "}\n",
+            // Any other capability makes the body a node's.
+            "fn clocked(value: i64) -> i64 {\n",
+            "    inject clock\n",
+            "    return pass(value)\n",
+            "}\n",
+            // So does the store beside one.
+            "fn both(value: i64) -> i64 {\n",
+            "    inject global_state, logger\n",
+            "    return pass(value)\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:32 phase/connection.as_constant FN-9",
+            "m.hgl:21:5 phase/node.statement FN-2",
+            "m.hgl:25:5 phase/node.statement FN-2",
+        ],
+        "{}",
+        checked.report
+    );
+    let module = checked.program.module("m").unwrap();
+    let phases: Vec<String> = module
+        .declarations
+        .iter()
+        .zip(&module.phases)
+        .map(|(declaration, phase)| format!("{}: {phase:?}", declaration.name))
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            "pass: Some(Node)",
+            "scaled: Some(Node)",
+            "seeded: Some(Graph)",
+            "connected: Some(Graph)",
+            "clocked: Some(Node)",
+            "both: Some(Node)",
+        ]
+    );
+}
+
 /// FN-2: "An ordinary temporal body with no node-only construct
 /// describes composition: the function is a graph. `state`, `cache`,
-/// `inject`, `start`, `when`, `stop`, or `yield` classifies that
-/// complete body as runtime: the function is a node. Classification
+/// `start`, `when`, `stop`, `yield`, or an `inject` of any capability
+/// but `global_state` classifies that complete body as runtime: the
+/// function is a node ... Classification
 /// precedes phase checking, even if the trigger occurs in an invalid
 /// nested position." FN-3: "Iteration and conditionals follow the
 /// containing phase. They do not alone classify a body as runtime."

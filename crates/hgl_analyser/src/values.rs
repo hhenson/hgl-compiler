@@ -1964,6 +1964,17 @@ impl<'a> Typer<'a> {
     fn statement(&mut self, node: &SyntaxNode) -> Stmt {
         match node.kind() {
             SyntaxKind::LocalDecl => self.local(node),
+            // FN-9: "A graph injects `global_state` and no other, and
+            // uses it where the graph is built". An `inject` of any
+            // other capability has made the body a node's (FN-2).
+            SyntaxKind::InjectDecl if self.graph && !self.testing => {
+                let mut bound = self.inject(node);
+                if bound.is_empty() {
+                    self.unread(node)
+                } else {
+                    bound.swap_remove(0)
+                }
+            }
             SyntaxKind::AssignStmt => self.assignment(node),
             // An `assert` is a statement of a test's own (TST-3).
             SyntaxKind::AssertStmt if self.testing => self.assertion(node),
@@ -4863,10 +4874,53 @@ impl<'a> Typer<'a> {
     /// of a chain `a + b + c`, or by a compound assignment.
     fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
         self.places_given(kind);
+        self.store_call(kind);
         self.capabilities_given(kind);
         self.fixed_arguments(kind);
         self.traces_given(kind, evaluating);
         self.store_keys(kind);
+    }
+
+    /// FN-9: "A graph injects `global_state` and no other, and uses it
+    /// where the graph is built: each call on it is evaluated once
+    /// then ... and is given no connection (`connection.as_constant`)."
+    /// A call on the store is one given the capability the graph
+    /// injects: it is run where the graph is built, when a connection
+    /// has no value.
+    fn store_call(&mut self, kind: &ExprKind) {
+        if !self.graph || self.testing {
+            return;
+        }
+        let ExprKind::Call { arguments, .. } = kind else {
+            return;
+        };
+        let on_store = arguments.iter().any(|argument| {
+            matches!(
+                &argument.value.kind,
+                ExprKind::Local(local) if self.locals[*local].kind == LocalKind::Inject
+            )
+        });
+        if !on_store {
+            return;
+        }
+        for argument in arguments {
+            if self.category(&argument.value) == ValueCategory::Connection {
+                self.diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::CONNECTION_AS_CONSTANT,
+                        argument.value.at,
+                        "a call on the store a graph injects is run where the graph is built: \
+                         this is a connection, and it takes a value known then"
+                            .to_string(),
+                        "FN-9",
+                    )
+                    .with_note(
+                        "a constant or a `const` parameter is known where the graph is built",
+                    ),
+                );
+            }
+        }
     }
 
     /// FN-15: "A call gives a `var` parameter a place, as the left of an
