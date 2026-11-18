@@ -352,6 +352,9 @@ pub mod codes {
     /// A call gives a generic value parameter of its callee no
     /// compile-time constant (GEN-8).
     pub const GENERIC_ARGUMENT_CONSTANT: &str = "generic.argument_constant";
+    /// A function is called, or a struct applied, with generic
+    /// arguments its `requires` does not hold for (GEN-3, GEN-16).
+    pub const REQUIRES_UNMET: &str = "requires.unmet";
 
     /// A value's type is not the type its place requires (EXPR-5),
     /// or `null` stands where the type is not nullable (TYPE-14).
@@ -506,6 +509,7 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     phases::check(&program, diagnostics);
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
+    values::applications(&program, diagnostics);
     values::check(&mut program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.

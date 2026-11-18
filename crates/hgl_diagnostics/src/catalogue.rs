@@ -103,6 +103,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "generic.argument_kind"),
     (Category::Type, "generic.unresolved"),
     (Category::Type, "generic.argument_constant"),
+    (Category::Constraint, "requires.unmet"),
     (Category::Type, "struct.parent"),
     (Category::Type, "struct.duplicate_parent"),
     (Category::Type, "struct.inheritance_cycle"),
@@ -192,6 +193,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "yield.negative_duration",
     "yield.non_increasing_time",
     "eval.input_delta_profile",
+    "run.end_and_length",
 ];
 
 /// True when the catalogue lists `code` as an execution code.

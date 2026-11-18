@@ -797,8 +797,8 @@ fn a_duration_divided_takes_its_zero_policy() {
 
 /// TYPE-2: a `date`, a `time`, a `datetime` and a `civil_datetime` are
 /// Python's own, and an instant is a `datetime` in UTC that names no zone,
-/// as hgraph has them. OPS-1: an instant and a duration, two instants, and
-/// a date and a time.
+/// as hgraph has them. OPS-1: an instant and a duration, two instants, a
+/// date and a time, and a date and a duration.
 const INSTANTS: &str = concat!(
     "module demo.instants\n",
     "const opened: datetime = @2026-09-03T09:30:00Z\n",
@@ -807,6 +807,8 @@ const INSTANTS: &str = concat!(
     "const fn between(first: datetime, second: datetime) -> duration => second - first\n",
     "const fn on(day: date, at: time) -> civil_datetime => day + at\n",
     "const fn days(first: date, second: date) -> duration => second - first\n",
+    "const fn after(day: date, by: duration) -> civil_datetime => day + by\n",
+    "const fn before(day: date, by: duration) -> civil_datetime => day - by\n",
     "fn shifted(at: datetime, by: duration) -> datetime => at + by\n",
     "test instants_are_values_and_ticks {\n",
     "    assert later(opened, 30m) == @2026-09-03T10:00:00Z\n",
@@ -817,6 +819,13 @@ const INSTANTS: &str = concat!(
     "    assert @2026-09-03T10:30:00+01:00 == opened\n",
     "    assert on(@2026-09-03, @09:30) == @2026-09-03T09:30\n",
     "    assert days(@2026-09-01, @2026-09-03) == 2d\n",
+    // OPS-10: a date and a duration give the civil datetime that far
+    // from the start of the date, in either order.
+    "    assert after(@2026-09-03, 2d) == @2026-09-05T00:00\n",
+    "    assert after(@2026-09-03, 36h) == @2026-09-04T12:00\n",
+    "    assert 36h + @2026-09-03 == @2026-09-04T12:00\n",
+    "    assert before(@2026-09-03, 1h) == @2026-09-02T23:00\n",
+    "    assert raises(\"numeric.out_of_range\") { after(@9999-12-31, 1d) }\n",
     // Core's named times (its CRUN-3) are constants of these types.
     "    assert earliest_start == never + smallest_step\n",
     "    assert latest_end == forever - smallest_step\n",
@@ -839,6 +848,8 @@ fn a_date_a_time_and_an_instant_are_pythons_own() {
         "return _core.sub__datetime_datetime(lhs=second, rhs=first)",
         "return _core.add__date_time(lhs=day, rhs=at)",
         "return _core.sub__date_date(lhs=second, rhs=first)",
+        "return _core.add__date_duration(lhs=day, rhs=by)",
+        "return _core.sub__date_duration(lhs=day, rhs=by)",
         // An offset other than UTC is the provider's to apply.
         "_core.instant(_dt.datetime(2026, 9, 3, 10, 30, 0, 0), 60)",
         "_dt.date(2026, 9, 3)",
@@ -2106,45 +2117,6 @@ fn an_instance_that_is_not_written_is_reported() {
     assert!(python.contains("def _inst_again__i64("), "{python}");
     assert!(!python.contains("def _inst_held__list"), "{python}");
     assert!(!python.contains("def _inst_again__list"), "{python}");
-}
-
-/// GEN-16: an operation a declaration requires is, in an instance, the
-/// call of the candidate that answers the requirement. Where no one
-/// candidate does, the instance is not written, which is reported where
-/// the operation is called, in core here, and the test that reaches it
-/// is not run. The instance for a type that has a candidate is written.
-#[test]
-fn an_instance_nothing_answers_is_reported() {
-    let emitted = emit(&[(
-        "sums.hgl",
-        concat!(
-            "module demo.sums\n",
-            "fn identity_sum<T>(lhs: T, rhs: T) -> T\n",
-            "    requires add_(T, T) -> T => lhs +{invalid: .identity} rhs\n",
-            "test numbers {\n",
-            "    assert eval(identity_sum(lhs: [1], rhs: [2])) == [3]\n",
-            "}\n",
-            // No value `add_(bool, bool)`.
-            "test flags {\n",
-            "    let seen = eval(identity_sum(lhs: [true], rhs: [false]))\n",
-            "}\n",
-        ),
-    )]);
-    assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
-    assert!(
-        emitted.reported[0].ends_with(" target.unsupported"),
-        "{:?}",
-        emitted.reported
-    );
-    assert_eq!(emitted.blocked("numbers"), None);
-    let blocked = emitted.blocked("flags").expect("the test is not run");
-    assert!(
-        blocked.ends_with(
-            "the hgraph target does not write an operation a generic declaration requires, \
-             with no candidate selected for it yet"
-        ),
-        "{blocked}"
-    );
 }
 
 /// GEN-4: an `impl const fn` is a value candidate of its operator. One

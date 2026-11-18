@@ -669,8 +669,6 @@ fn a_call_records_what_answers_each_requirement() {
         "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
         "const fn whole() -> i64 => twice(1)\n",
         "const fn text() -> str => twice(\"a\")\n",
-        // No candidate takes two `bool`: nothing answers.
-        "const fn neither() -> bool => twice(true)\n",
         // Two requirements, and the body's calls of each.
         "const fn both<T>(value: T) -> T requires neg_(T) -> T && (join(T, T) -> T) =>\n",
         "    join(neg_(value), value)\n",
@@ -683,7 +681,6 @@ fn a_call_records_what_answers_each_requirement() {
     assert_eq!(answers(&checked, "twice"), ["requirement 0"]);
     assert_eq!(answers(&checked, "whole"), ["join(i64, i64)"]);
     assert_eq!(answers(&checked, "text"), ["join(str, str)"]);
-    assert_eq!(answers(&checked, "neither"), ["unread"]);
     // The call of `join` is met before its argument's call of `neg_`.
     assert_eq!(
         answers(&checked, "both"),
@@ -767,4 +764,107 @@ fn a_graph_answers_a_temporal_candidates_requirement() {
     assert_eq!(answers(&checked, "identity_sum"), ["stated 0"]);
     assert_eq!(answers(&checked, "wired"), ["add_(f64, f64)"]);
     assert_eq!(answers(&checked, "texts"), ["add_(str, str)"]);
+}
+
+/// GEN-3: "A call of a function whose `requires` does not hold with
+/// the generic arguments the call resolves is rejected". The condition
+/// is a membership of a type, a comparison of a generic value
+/// parameter, given or left to its default, or a named operator
+/// requirement (GEN-16), and it is reported at the call. Nothing
+/// answers the requirement of such a call.
+#[test]
+fn a_call_that_does_not_meet_its_callees_requires_is_rejected() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const fn twice<T>(value: T) -> T requires add_(T, T) -> T => value + value\n",
+        "const fn numeric<T>(value: T) -> T requires T in {i64, f64} => value\n",
+        "const fn exact<T>(value: T) -> T requires T == i64 => value\n",
+        "const fn pick<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn eager<const mode: Mode = .slow>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        // Each holds.
+        "const fn fine() -> i64 =>\n",
+        "    twice(2) + numeric(3) + exact(4) + pick(5) + pick(6, mode: .fast) + eager(7, mode: .fast)\n",
+        "const fn real() -> f64 => numeric(1.5)\n",
+        // No value `add_` takes two `bool`.
+        "const fn neither() -> bool => twice(true)\n",
+        "const fn text() -> str => numeric(\"x\")\n",
+        "const fn inexact() -> f64 => exact(1.5)\n",
+        "const fn slow() -> i64 => pick(1, mode: .slow)\n",
+        // The default is the value where the call gives none.
+        "const fn defaulted() -> i64 => eager(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:31 constraint/requires.unmet GEN-3",
+            "m.hgl:14:27 constraint/requires.unmet GEN-3",
+            "m.hgl:15:30 constraint/requires.unmet GEN-3",
+            "m.hgl:16:27 constraint/requires.unmet GEN-3",
+            "m.hgl:17:32 constraint/requires.unmet GEN-3",
+        ]
+    );
+    assert_eq!(answers(&checked, "neither"), ["unread"]);
+}
+
+/// GEN-3: "and so is an application of a struct whose `requires` does
+/// not hold with its arguments": where the struct is constructed, its
+/// arguments written or found from its fields (GEN-2), and where a type
+/// that applies it is written, at any depth.
+#[test]
+fn an_application_that_does_not_meet_a_structs_requires_is_rejected() {
+    let checked = module(concat!(
+        "struct Sized<T> requires T in {i64, f64} { value: T }\n",
+        "struct Summed<T> requires add_(T, T) -> T { value: T }\n",
+        "const fn made() -> Sized<i64> => Sized(value: 1)\n",
+        "const fn written() -> Sized<f64> => Sized<f64>(value: 1.5)\n",
+        "const fn summed() -> Summed<i64> => Summed(value: 1)\n",
+        "const fn found() -> bool {\n",
+        "    let held = Sized(value: \"x\")\n",
+        "    return true\n",
+        "}\n",
+        "const fn given() -> bool {\n",
+        "    let held = Sized<str>(value: \"x\")\n",
+        "    return true\n",
+        "}\n",
+        "const fn taken(held: Sized<str>) -> bool => true\n",
+        "const fn nested(held: list<Sized<bool>>) -> bool => true\n",
+        // A named operator requirement is told where the struct is
+        // constructed.
+        "const fn unsummed() -> bool {\n",
+        "    let held = Summed(value: true)\n",
+        "    return true\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:16 constraint/requires.unmet GEN-3",
+            "m.hgl:12:16 constraint/requires.unmet GEN-3",
+            "m.hgl:15:22 constraint/requires.unmet GEN-3",
+            "m.hgl:16:23 constraint/requires.unmet GEN-3",
+            "m.hgl:18:16 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-7: "A generic body is checked under its stated requirements". A
+/// call there whose types name the body's own generic parameter meets a
+/// named operator requirement where the body states it, and does not
+/// where it states none. A membership of such a parameter is not told:
+/// it is no one type.
+#[test]
+fn a_call_in_a_generic_body_meets_what_the_body_states() {
+    let checked = module(concat!(
+        "const fn twice<T>(value: T) -> T requires add_(T, T) -> T => value + value\n",
+        "const fn numeric<T>(value: T) -> T requires T in {i64, f64} => value\n",
+        "const fn stated<U>(value: U) -> U requires add_(U, U) -> U => twice(value)\n",
+        "const fn unstated<U>(value: U) -> U => twice(value)\n",
+        "const fn member<U>(value: U) -> U => numeric(value)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:40 constraint/requires.unmet GEN-3"]
+    );
 }

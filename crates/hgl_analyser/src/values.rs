@@ -28,12 +28,12 @@
 
 use std::collections::HashMap;
 
-use hgl_diagnostics::{Category, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_lexer::literal::{
     decode_duration, decode_float, decode_integer, decode_string, decode_temporal,
 };
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
-use hgl_source::FileId;
+use hgl_source::{FileId, Span};
 
 use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
@@ -6681,6 +6681,12 @@ impl<'a> Typer<'a> {
         let ty = signature.result.as_ref().map_or(Type::Unknown, |result| {
             placed(substitute_within(result, &map), &own)
         });
+        // GEN-3: the callee's `requires` holds with what was resolved.
+        // Not where something else was reported of the call (ERR-9).
+        if judged && unresolved.is_empty() {
+            let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+            self.requires_met(at, (module, declaration), &resolved, (&named, &defaulted));
+        }
         let requirements = self.answers(module, declaration, &resolved);
         let callee = Callee::Function {
             module,
@@ -8408,7 +8414,7 @@ impl<'a> Typer<'a> {
     fn requirements_hold(
         &mut self,
         candidate: &Declaration,
-        signature: &Signature,
+        parameters: &[GenericParameter],
         (module, generics): (usize, &[Argument]),
         condition: &SyntaxNode,
     ) -> Vec<(u32, Option<bool>)> {
@@ -8420,7 +8426,7 @@ impl<'a> Typer<'a> {
             return Vec::new();
         }
         let file = self.program.modules[module].files[candidate.file].file;
-        let read = self.requirements_read(candidate, signature, (module, generics), &calls);
+        let read = self.requirements_read(candidate, parameters, (module, generics), &calls);
         let mut verdicts = Vec::new();
         for (call, read) in calls.iter().zip(read) {
             let verdict = match read {
@@ -8434,6 +8440,83 @@ impl<'a> Typer<'a> {
         verdicts
     }
 
+    /// Reports a `requires` that does not hold where a function is
+    /// called, or a struct constructed, with `generics` for its generic
+    /// parameters. `at` is the call. `named` is the generic value
+    /// parameters it gives by name, and `defaulted` those that took
+    /// their defaults, each by its position among the declaration's.
+    ///
+    /// GEN-3: "A call of a function whose `requires` does not hold with
+    /// the generic arguments the call resolves is rejected, and so is
+    /// an application of a struct whose `requires` does not hold with
+    /// its arguments." Nothing is reported where it cannot be told
+    /// ([`requires_holds`]). A named operator requirement is told for a
+    /// generic parameter of the declaration being read too: it holds
+    /// where that declaration states it (GEN-7).
+    fn requires_met(
+        &mut self,
+        at: Location,
+        (module, declaration): (usize, usize),
+        generics: &[Argument],
+        (named, defaulted): (&[(usize, SyntaxNode)], &[usize]),
+    ) {
+        let program = self.program;
+        let Some((parameters, condition)) = required(program, (module, declaration)) else {
+            return;
+        };
+        let declared = &program.modules[module].declarations[declaration];
+        // GEN-16: "a named operator requirement tests callability with
+        // the supplied types."
+        let verdicts = self.requirements_hold(declared, parameters, (module, generics), &condition);
+        let callable = |node: &SyntaxNode| -> Option<bool> {
+            let start = node.span().start;
+            verdicts
+                .iter()
+                .find(|(at, _)| *at == start)
+                .and_then(|(_, verdict)| *verdict)
+        };
+        // The value a generic value parameter has here, where the call
+        // says it by name or leaves it to its default.
+        let this = &*self;
+        let value_of = |index: usize| -> Option<OptionValue> {
+            if let Some((_, node)) = named.iter().find(|(position, _)| *position == index) {
+                return this.option_value(node);
+            }
+            if !defaulted.contains(&index) {
+                return None;
+            }
+            let generic = &parameters[index];
+            let default = generic_default(&declared.syntax, generic)?;
+            let ty = match &generic.kind {
+                GenericKind::Value(ty) => Some(ty),
+                _ => None,
+            };
+            this.default_value(declared.at.file, &default, ty)
+        };
+        let held = requires_holds(
+            program,
+            (module, declaration),
+            generics,
+            &condition,
+            &Told {
+                value_of: &value_of,
+                callable: &callable,
+            },
+        );
+        // A construction that writes its generic arguments,
+        // `Sized<str>(value: "x")`, writes a type, of which the same
+        // has been reported ([`applications`]).
+        let reported = self.diagnostics.as_slice().iter().any(|earlier| {
+            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+                && earlier.primary.file == at.file
+                && earlier.primary.span.start == at.span.start
+        });
+        if held == Some(false) && !reported {
+            self.diagnostics
+                .emit(unmet(program, (module, declaration), at, &condition));
+        }
+    }
+
     /// Each of the constraint calls `calls`, written in the `requires`
     /// of `declared` of `module`, read with `generics` for the
     /// declaration's generic parameters: the operator it names, the
@@ -8444,18 +8527,14 @@ impl<'a> Typer<'a> {
     fn requirements_read(
         &self,
         declared: &Declaration,
-        signature: &Signature,
+        parameters: &[GenericParameter],
         (module, generics): (usize, &[Argument]),
         calls: &[SyntaxNode],
     ) -> Vec<Option<Read>> {
         let program = self.program;
         let declared_in = &program.modules[module];
         let file = declared_in.files[declared.file].file;
-        let own: Vec<Location> = signature
-            .generics
-            .iter()
-            .map(|generic| generic.at)
-            .collect();
+        let own: Vec<Location> = parameters.iter().map(|generic| generic.at).collect();
         let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
         // What a type written in the condition means, the declaration's
         // generic parameters in place.
@@ -8558,7 +8637,8 @@ impl<'a> Typer<'a> {
             return vec![hir::Answer::Unread; calls.len()];
         }
         let file = declared_in.files[declared.file].file;
-        let read = self.requirements_read(declared, signature, (module, generics), &calls);
+        let read =
+            self.requirements_read(declared, &signature.generics, (module, generics), &calls);
         read.into_iter()
             .map(|read| {
                 let Some((operator, operands, result)) = read else {
@@ -9208,7 +9288,12 @@ impl<'a> Typer<'a> {
         // GEN-16: "a named operator requirement tests callability with
         // the supplied types." Each one the condition states is tested
         // here, before the rest of the condition is read.
-        let callable = self.requirements_hold(candidate, signature, (module, generics), &condition);
+        let callable = self.requirements_hold(
+            candidate,
+            &signature.generics,
+            (module, generics),
+            &condition,
+        );
         let callable = |node: &SyntaxNode| -> Option<bool> {
             let start = node.span().start;
             callable
@@ -9511,6 +9596,7 @@ impl<'a> Typer<'a> {
         let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
             return self.unread_call(list);
         };
+        let before = self.diagnostics.len();
         if has_token(&declared.syntax, SyntaxKind::KwAbstract) {
             self.diagnostics.emit(
                 error(
@@ -9568,6 +9654,8 @@ impl<'a> Typer<'a> {
             .collect();
         // With the arguments given, each field's type is known and the
         // values are read against it.
+        // The generic value parameters that took their defaults.
+        let mut defaulted_values = Vec::new();
         let (arguments, arguments_of_type) = match given {
             Some(given) => (self.bind(name, list, &slots, Takes::Fields), given),
             None if !inferring => (self.bind(name, list, &slots, Takes::Fields), Vec::new()),
@@ -9613,6 +9701,7 @@ impl<'a> Typer<'a> {
                     .into_iter()
                     .map(|found| found.unwrap_or(Argument::Type(Type::Unknown)))
                     .collect();
+                defaulted_values = defaulted;
                 (arguments, found)
             }
         };
@@ -9627,6 +9716,17 @@ impl<'a> Typer<'a> {
                 kind: NamedKind::Struct,
             }
         };
+        // GEN-3: the struct's `requires` holds with its arguments. Not
+        // where something else was reported of the construction
+        // (ERR-9).
+        if let Type::Named {
+            arguments: applied, ..
+        } = &ty
+            && self.diagnostics.len() == before
+        {
+            let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
+            self.requires_met(at, (module, declaration), applied, (&[], &defaulted_values));
+        }
         // TST-3: a trace "is stored in no field", bare or inside a
         // value given to one.
         let stored: Vec<Location> = arguments
@@ -11506,6 +11606,208 @@ fn most_specific(selected: &mut Vec<Chosen>, own: usize) {
         position += 1;
         !outranked[position - 1]
     });
+}
+
+/// The generic parameters of a function or a struct that states a
+/// `requires`, and the condition it states. `None` for one that states
+/// none.
+fn required(
+    program: &Program,
+    (module, declaration): (usize, usize),
+) -> Option<(&[GenericParameter], SyntaxNode)> {
+    let declared_in = &program.modules[module];
+    let parameters: &[GenericParameter] = match declared_in.details.get(declaration)? {
+        Detail::Callable(signature) => &signature.generics,
+        Detail::Struct(read) => &read.generics,
+        _ => return None,
+    };
+    let declared = &declared_in.declarations[declaration];
+    let clause = child(&declared.syntax, SyntaxKind::RequiresClause)?;
+    Some((parameters, clause.children().next()?))
+}
+
+/// What the place a `requires` is tested at says of it, beyond the
+/// generic arguments ([`requires_holds`]).
+struct Told<'t> {
+    /// What a generic value parameter is where the generic arguments do
+    /// not hold it as a constant, by its position among the
+    /// declaration's. `None` when the place does not say.
+    value_of: &'t dyn Fn(usize) -> Option<OptionValue>,
+    /// Whether a named operator requirement holds (GEN-16). `None`
+    /// when it cannot be told.
+    callable: &'t dyn Fn(&SyntaxNode) -> Option<bool>,
+}
+
+/// Whether `condition`, the `requires` of `declaration` of `module`,
+/// holds with `generics` for the declaration's generic parameters
+/// (GEN-3). `None` when it cannot be told: a generic argument is not
+/// known, or names a generic parameter of the declaration it is
+/// written in, which is no one type.
+///
+fn requires_holds(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+    condition: &SyntaxNode,
+    place: &Told,
+) -> Option<bool> {
+    let (parameters, _) = required(program, (module, declaration))?;
+    let declared_in = &program.modules[module];
+    let declared = &declared_in.declarations[declaration];
+    let value_of = |name: &str| -> Option<OptionValue> {
+        let index = parameters.iter().position(|generic| {
+            matches!(generic.kind, GenericKind::Value(_)) && generic.name == name
+        })?;
+        if let Some(value) = (place.value_of)(index) {
+            return Some(value);
+        }
+        match generics.get(index)? {
+            Argument::Constant(constant) => match &constant.value {
+                ConstantValue::Int(_) | ConstantValue::Duration(_) | ConstantValue::Member(_) => {
+                    constant_value(&constant.value)
+                }
+                _ => None,
+            },
+            Argument::Type(_) => None,
+        }
+    };
+    let own: Vec<Location> = parameters.iter().map(|generic| generic.at).collect();
+    let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
+    let told = |ty: Type| (whole(&ty) && !names_parameter(&ty)).then_some(ty);
+    let type_of = |name: &str| -> Option<Type> {
+        let index = parameters.iter().position(|generic| generic.name == name)?;
+        match generics.get(index)? {
+            Argument::Type(ty) => told(ty.clone()),
+            Argument::Constant(_) => None,
+        }
+    };
+    let file = declared_in.files[declared.file].file;
+    let written = |node: &SyntaxNode| -> Option<Type> {
+        let start = node.span().start;
+        let read = declared_in
+            .written
+            .iter()
+            .find(|written| written.at.file == file && written.at.span.start == start)?;
+        told(placed(substitute_within(&read.ty, &map), &own))
+    };
+    holds(
+        condition,
+        &Condition {
+            value_of: &value_of,
+            type_of: &type_of,
+            written: &written,
+            callable: place.callable,
+        },
+    )
+}
+
+/// The rejection of a call of a function, or an application of a
+/// struct, at `at`, whose `requires`, `condition`, does not hold
+/// (GEN-3).
+fn unmet(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    at: Location,
+    condition: &SyntaxNode,
+) -> hgl_diagnostics::Diagnostic {
+    let declared_in = &program.modules[module];
+    let declared = &declared_in.declarations[declaration];
+    let what = match declared.kind {
+        DeclarationKind::Struct => "application",
+        _ => "call",
+    };
+    error(
+        Category::Constraint,
+        codes::REQUIRES_UNMET,
+        at,
+        format!(
+            "the `requires` of `{}` does not hold for this {what}",
+            declared.name
+        ),
+        "GEN-3",
+    )
+    .with_related(
+        Location::new(declared_in.files[declared.file].file, condition.span()),
+        "the condition that does not hold",
+    )
+}
+
+/// GEN-3: "an application of a struct whose `requires` does not hold
+/// with its arguments" is rejected. Each type the program writes is
+/// read for the structs it applies, at any depth, and reported where
+/// the type is written, the one a construction names included. A
+/// construction is checked where it is read too ([`Typer::construct`]).
+///
+/// A named operator requirement of a struct is not told here, where no
+/// body is being read: it is told where the struct is constructed.
+pub(crate) fn applications(program: &Program, diagnostics: &mut Diagnostics) {
+    fn applied(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>)>) {
+        match ty {
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                kind,
+                ..
+            } => {
+                if *kind == NamedKind::Struct && !arguments.is_empty() {
+                    found.push(((*module, *declaration), arguments.clone()));
+                }
+                for argument in arguments {
+                    if let Argument::Type(argument) = argument {
+                        applied(argument, found);
+                    }
+                }
+            }
+            Type::Tuple(elements) => elements.iter().for_each(|element| applied(element, found)),
+            Type::List { element, .. } => applied(element, found),
+            Type::Set(inner)
+            | Type::Ref(inner)
+            | Type::Endpoint(inner)
+            | Type::Atomic(inner)
+            | Type::Delta(inner)
+            | Type::Trace { cell: inner, .. }
+            | Type::Nullable(inner) => applied(inner, found),
+            Type::Dict { key, value } => {
+                applied(key, found);
+                applied(value, found);
+            }
+            Type::Rolling { value, .. } => applied(value, found),
+            Type::Result { value, error } => {
+                applied(value, found);
+                applied(error, found);
+            }
+            Type::Scalar(_)
+            | Type::Parameter { .. }
+            | Type::Signal
+            | Type::Error
+            | Type::Unknown => {}
+        }
+    }
+    for module in &program.modules {
+        for written in &module.written {
+            let mut found = Vec::new();
+            applied(&written.ty, &mut found);
+            for (struct_, arguments) in found {
+                let Some((_, condition)) = required(program, struct_) else {
+                    continue;
+                };
+                let held = requires_holds(
+                    program,
+                    struct_,
+                    &arguments,
+                    &condition,
+                    &Told {
+                        value_of: &|_| None,
+                        callable: &|_| None,
+                    },
+                );
+                if held == Some(false) {
+                    diagnostics.emit(unmet(program, struct_, written.at, &condition));
+                }
+            }
+        }
+    }
 }
 
 /// Whether a candidate's condition holds at a call. `None` when it
