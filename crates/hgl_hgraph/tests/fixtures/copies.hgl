@@ -111,6 +111,24 @@ test what_is_kept_is_a_copy {
     assert source == [7, 8] && books == ["a": [7, 8, 1]]
 }
 
+# A failure that `?` passes on is a result too: a copy of what the
+# function was given.
+const fn relay(outcome: result<i64, list<i64>>) -> result<i64, list<i64>> {
+    let value = outcome?
+    return ok(value + 1)
+}
+const fn failure_of(outcome: result<i64, list<i64>>) -> list<i64> {
+    if is_err(outcome) { return outcome.error }
+    return []
+}
+
+test a_failure_passed_on_is_a_copy {
+    var rows: list<i64> = [1]
+    var retained = relay(err(rows))
+    append(rows, 2)
+    assert failure_of(retained) == [1] && rows == [1, 2]
+}
+
 test a_default_is_not_the_constants_own_list {
     var basket = Basket(name: "a")
     append(basket.items, 3)
