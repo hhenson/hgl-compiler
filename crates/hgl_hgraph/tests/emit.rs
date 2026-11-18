@@ -7,7 +7,7 @@ use std::path::Path;
 
 use hgl_analyser::{ParsedFile, analyse};
 use hgl_diagnostics::{Diagnostics, Location, render};
-use hgl_hgraph::{Output, Ran, RanApplication, Test, run, run_application, transpile};
+use hgl_hgraph::{Output, Ran, RanApplication, Stop, Test, run, run_application, transpile};
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
 use hgl_source::SourceMap;
@@ -1306,7 +1306,7 @@ fn a_run_in_real_time_in_a_test_is_reported() {
 /// `run(call, config)` or `eval(call, config)`, where the call is of an
 /// entry ... giving the entry's const arguments, and the configuration
 /// is a value of core's `RunConfig`".
-const APPLICATIONS: [(&str, &str); 5] = [
+const APPLICATIONS: [(&str, &str); 6] = [
     (
         "ticks.hgl",
         concat!(
@@ -1361,6 +1361,15 @@ const APPLICATIONS: [(&str, &str); 5] = [
         ),
     ),
     (
+        "endless.hgl",
+        concat!(
+            "application demo.ticks.endless\n",
+            "use demo.ticks::{counted}\n",
+            // No end: it runs until its host stops it.
+            "run(counted(upto: 1000000, every: 20ms))\n",
+        ),
+    ),
+    (
         "silent.hgl",
         concat!(
             "application demo.ticks.silent\n",
@@ -1403,6 +1412,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
         [
             ("demo.ticks.backtest", false, false),
             ("demo.ticks.broken", false, false),
+            ("demo.ticks.endless", true, false),
             ("demo.ticks.live", true, false),
             ("demo.ticks.silent", false, false),
         ]
@@ -5896,7 +5906,13 @@ fn an_application_runs_on_hgraph() {
             .iter()
             .position(|application| application.path == path)
             .unwrap_or_else(|| panic!("no application `{path}` was written"));
-        run_application(Path::new(&python), &directory, &emitted.output, application)
+        run_application(
+            Path::new(&python),
+            &directory,
+            &emitted.output,
+            application,
+            &Stop::new(),
+        )
     };
 
     // A simulation: `doubled` publishes each second from the earliest
@@ -5949,6 +5965,77 @@ fn an_application_runs_on_hgraph() {
     let values: Vec<&str> = live.iter().map(|(_, value)| value.as_str()).collect();
     assert_eq!(values, ["1", "2", "3", "4"]);
     assert!(live.iter().all(|(at, _)| at.as_str() > "2000-"), "{live:?}");
+}
+
+/// RUN-3: a run in real time goes on "until the configuration's end or
+/// until its host stops it". A stop the host asks for ends the run as
+/// its end does: what it recorded is its output. One asked for before
+/// the run starts is kept for it, and a second ends the run as it is,
+/// with no output (core's CRUN-6). Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_run_in_real_time_is_stopped_by_its_host() {
+    let python = python_with_hgraph();
+    let emitted = emit(&APPLICATIONS);
+    let endless = emitted
+        .output
+        .applications
+        .iter()
+        .position(|application| application.path == "demo.ticks.endless")
+        .expect("the application is written");
+    let ran = |name: &str, stop: &Stop| {
+        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        fs::remove_dir_all(&directory).ok();
+        run_application(
+            Path::new(&python),
+            &directory,
+            &emitted.output,
+            endless,
+            stop,
+        )
+    };
+
+    // Asked while the run goes, from another thread.
+    let stop = Stop::new();
+    let asked = stop.clone();
+    let asking = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        asked.ask();
+    });
+    let stopped = ran("hgraph_stopped", &stop);
+    asking.join().expect("the stop is asked");
+    let RanApplication::Stopped {
+        output: Some(published),
+        by_host: true,
+    } = stopped
+    else {
+        panic!("the host stops the run: {stopped:?}");
+    };
+    // It counted from 1 for as long as it ran.
+    assert!(!published.is_empty());
+    for (position, (_, value)) in published.iter().enumerate() {
+        assert_eq!(*value, (position + 1).to_string());
+    }
+
+    // Asked before the run starts: it is stopped as soon as it can be.
+    let stop = Stop::new();
+    stop.ask();
+    assert!(matches!(
+        ran("hgraph_stopped_early", &stop),
+        RanApplication::Stopped {
+            output: Some(_),
+            by_host: true
+        }
+    ));
+
+    // Asked twice: the run is ended as it is, and has no output.
+    let stop = Stop::new();
+    stop.ask();
+    stop.ask();
+    assert!(matches!(
+        ran("hgraph_stopped_twice", &stop),
+        RanApplication::NotRun(_) | RanApplication::Failed(_)
+    ));
 }
 
 /// A test that fails on hgraph says which of its statements failed,

@@ -20,9 +20,12 @@
 //! nothing a program or hgraph prints can be taken for an outcome.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use hgl_diagnostics::Location;
 
@@ -73,6 +76,71 @@ pub enum RanApplication {
     NotRun(String),
 }
 
+/// What asks an application's run to stop, as its host (RUN-3: "until
+/// the configuration's end or until its host stops it"). It is given
+/// to [`run_application`], and may be asked from any thread while the
+/// run goes: by what handles an interrupt of the caller, say.
+///
+/// The request goes to the driver down a pipe, so that it reaches the
+/// run however the caller came to ask: a signal sent to the caller
+/// alone reaches no other process.
+#[derive(Clone, Default)]
+pub struct Stop {
+    /// How many times it was asked, and the driver's process while it
+    /// runs. A lock, since it is asked from one thread and the run is
+    /// waited for on another.
+    state: Arc<Mutex<StopState>>,
+}
+
+/// What a [`Stop`] holds.
+#[derive(Default)]
+struct StopState {
+    /// How many times a stop was asked for.
+    asked: u32,
+    /// The driver's process, from when it starts until it has ended.
+    driver: Option<Child>,
+}
+
+impl Stop {
+    /// A stop not yet asked for.
+    pub fn new() -> Stop {
+        Stop::default()
+    }
+
+    /// Asks the run to stop. The first request is passed to the
+    /// driver, which ends a run in real time as its end does: what it
+    /// recorded is its output. A second ends the driver as it is, and
+    /// the run then has no output. One made before the driver starts
+    /// is kept for it.
+    pub fn ask(&self) {
+        // A lock that another thread died holding is still the state.
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.asked += 1;
+        state.pass_on();
+    }
+}
+
+impl StopState {
+    /// Passes what was asked to the driver, where it has started.
+    fn pass_on(&mut self) {
+        let Some(driver) = &mut self.driver else {
+            return;
+        };
+        if self.asked > 1 {
+            // It may have ended by itself already.
+            let _ = driver.kill();
+        } else if self.asked == 1
+            && let Some(pipe) = &mut driver.stdin
+        {
+            // A driver that has ended reads nothing, and needs no stop.
+            let _ = pipe.write_all(b"stop\n").and_then(|()| pipe.flush());
+        }
+    }
+}
+
 /// Runs application `application` of a written program on hgraph, and
 /// says what became of it.
 ///
@@ -87,14 +155,17 @@ pub enum RanApplication {
 /// The run's outcome is read from a file the driver writes, so that
 /// nothing printed can be taken for it.
 ///
-/// An interrupt of a run in real time is the driver's to take: it
-/// asks the run to stop, and the run's output is then what it
-/// recorded up to there. The caller is to outlive the interrupt.
+/// The run is stopped by its host in one of two ways. An interrupt
+/// from a terminal reaches the driver as it reaches the caller, and
+/// the driver takes it. Any other request is the caller's to pass on,
+/// through `stop`. Either way the run's output is what it recorded up
+/// to there, and the caller is to outlive what asked.
 pub fn run_application(
     python: &Path,
     directory: &Path,
     output: &Output,
     application: usize,
+    stop: &Stop,
 ) -> RanApplication {
     let driver = directory.join(ROOT).join(APPLICATION_DRIVER_FILE);
     let results = directory.join(APPLICATION_RESULTS_FILE);
@@ -112,21 +183,68 @@ pub fn run_application(
             directory.display()
         ));
     }
+    let described = &output.applications[application];
     // `-B`: the interpreter writes no bytecode files, into the output
-    // directory or beside hgraph.
-    let finished = Command::new(python)
+    // directory or beside hgraph. Its standard input is a pipe a stop
+    // is passed down.
+    let started = Command::new(python)
         .arg("-B")
         .arg(&driver)
         .arg(directory)
-        .arg(python_module(&output.applications[application].path))
+        .arg(python_module(&described.path))
         .arg(APPLICATION)
         .arg(&results)
-        .status();
-    let status = match finished {
-        Ok(status) => status,
+        .arg(if described.real_time {
+            "real-time"
+        } else {
+            "simulation"
+        })
+        .stdin(Stdio::piped())
+        .spawn();
+    let child = match started {
+        Ok(child) => child,
         Err(error) => {
             return RanApplication::NotRun(format!(
                 "`{}` could not be started: {error}",
+                python.display()
+            ));
+        }
+    };
+    // The driver is where a stop can reach it, and one asked for
+    // before now is passed on.
+    {
+        let mut state = stop
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.driver = Some(child);
+        state.pass_on();
+    }
+    // Waits for the driver with the lock held only to look: a stop is
+    // asked from another thread while this one waits.
+    let status = loop {
+        let mut state = stop
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ended = match state.driver.as_mut().map(Child::try_wait) {
+            Some(Ok(None)) => None,
+            Some(Ok(Some(status))) => Some(Ok(status)),
+            Some(Err(error)) => Some(Err(error)),
+            None => Some(Err(io::Error::other("the driver was lost"))),
+        };
+        if let Some(ended) = ended {
+            state.driver = None;
+            break ended;
+        }
+        drop(state);
+        thread::sleep(Duration::from_millis(20));
+    };
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            return RanApplication::NotRun(format!(
+                "`{}` could not be waited for: {error}",
                 python.display()
             ));
         }
