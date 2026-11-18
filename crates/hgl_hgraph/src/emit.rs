@@ -523,6 +523,33 @@ fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
     }
 }
 
+/// True where every path through `statements` ends in a `return`: the
+/// last is one, or an `if` with an `else` or a `switch` with a
+/// `default` each branch of which always returns.
+fn always_returns(statements: &[Stmt]) -> bool {
+    match statements.last() {
+        Some(Stmt::Return { .. }) => true,
+        Some(Stmt::Expr(Expr {
+            kind:
+                ExprKind::If {
+                    then,
+                    otherwise: Some(otherwise),
+                    ..
+                },
+            ..
+        })) => {
+            always_returns(&alternative_statements(Some(then)))
+                && always_returns(&alternative_statements(Some(otherwise)))
+        }
+        Some(Stmt::Switch {
+            cases,
+            default: Some(default),
+            ..
+        }) => cases.iter().all(|case| always_returns(&case.body)) && always_returns(default),
+        _ => false,
+    }
+}
+
 /// One `when` of a node: what its header asks, and its body.
 struct Handler<'a> {
     /// The inputs whose tick wakes it (TIME-3), as local positions.
@@ -3518,12 +3545,7 @@ impl Emitter<'_> {
         }
         // What is bound after: what both branches bind, less a branch
         // that returns, which does not reach the next statement.
-        let ends = |branch: &Expr| {
-            matches!(
-                alternative_statements(Some(branch)).last(),
-                Some(Stmt::Return { .. })
-            )
-        };
+        let ends = |branch: &Expr| always_returns(&alternative_statements(Some(branch)));
         if ends(then) {
             // The `else`'s bindings stand.
         } else if otherwise.is_some_and(ends) {

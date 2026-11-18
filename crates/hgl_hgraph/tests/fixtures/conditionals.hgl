@@ -264,3 +264,21 @@ test an_assignment_in_a_lets_value_is_captured {
     assert eval(assigned_in_a_value(outer: [true, false], inner: [false, true], left: [1, 2], right: [10, 20], wide: true)) ==
         [10, 2]
 }
+
+# A wiring-time branch whose nested `if` returns on every path does not
+# reach what follows: the `var` the other branch assigns is bound there.
+fn returned_inside(flag: bool, left: i64, right: i64, const wide: bool, const other_wide: bool) -> i64 {
+    var chosen: i64
+    if wide {
+        if other_wide { return left } else { return right }
+    } else {
+        chosen = left
+    }
+    if flag { chosen = chosen + right }
+    return chosen
+}
+
+test a_nested_return_leaves_the_other_binding {
+    assert eval(returned_inside(flag: [true, false], left: [1, 2], right: [10, 20], wide: false, other_wide: false)) ==
+        [11, 2]
+}
