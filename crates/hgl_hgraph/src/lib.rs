@@ -42,6 +42,7 @@
 //! | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` |
 //! | `eval(target(input: [7]), RunConfig(length: 2us))` | `_harness.evaluate(target, input=[7], _config=...)` |
 //! | `run(target(input: [7]))` in an integration test | `_harness.evaluate(target, input=[7], _real_time=True)` |
+//! | A timed trace, `[0s: 7, 2s: 9]` | `_harness.timed([(_dt.timedelta(microseconds=0), 7), ...])` |
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |

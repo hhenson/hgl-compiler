@@ -1641,9 +1641,7 @@ the `inject` of `scheduler` or `alarm`; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
-an application's run statement;
-a run in real time;
-a zoned datetime, a zoned time and a time zone; timed traces; a `result` or an `error` as the type of an input or an output;
+a zoned datetime, a zoned time and a time zone; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 
 A module is written a piece at a time: each declaration, then each
@@ -1689,6 +1687,9 @@ would be a million cells on. A trace written out dense, `[7, _, 9]`, is
 read as cell i being i smallest steps after the start. Its publications
 are replayed at the run's start plus that, and a run's recording is
 compared with it by how long after the run's start each publication was.
+A timed trace, `[0s: 7, 2s: 9]`, is that form as written (TST-7): each
+entry's key is a duration from the run's start, or an instant, which is
+replayed then and compared as the run's start plus an offset.
 
 #### An application
 

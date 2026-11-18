@@ -43,7 +43,22 @@ class _Recording:
         self.output = output
 
 
-def _relative(trace):
+class _Timed:
+    """A trace written out timed, `[0s: 7, 2s: 9]` (the language's
+    TST-7): its publications in the order written, each with its key, a
+    duration from the run's start or an instant."""
+
+    def __init__(self, entries):
+        self.entries = entries
+
+
+def timed(entries):
+    """A trace written out timed: `entries` is each publication with its
+    key, `(key, publication)`."""
+    return _Timed(entries)
+
+
+def _relative(trace, start=None):
     """A trace as its publications, each with how long after its run's
     start it was published, in time order.
 
@@ -51,10 +66,18 @@ def _relative(trace):
     each smallest step: cell i is i steps after the start, and a `None`
     is no publication (the language's TST-6). An eval's trace has each
     publication's instant, which is cast to how long after the run's
-    start it is.
+    start it is. A timed trace's duration key is that already, and its
+    instant is cast by `start`, the start of the run it is read
+    against; with none it is left an instant, which another instant is
+    compared with.
     """
     if isinstance(trace, _Recording):
         return [(at - trace.start, published) for at, published in trace.output]
+    if isinstance(trace, _Timed):
+        return [
+            (at - start if start is not None and isinstance(at, _datetime.datetime) else at, published)
+            for at, published in trace.entries
+        ]
     return [
         (position * _SMALLEST_STEP, cell) for position, cell in enumerate(trace) if cell is not None
     ]
@@ -244,7 +267,9 @@ def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arg
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
-        name: [(start + after, published) for after, published in _relative(arguments[name])]
+        name: [
+            (start + after, published) for after, published in _relative(arguments[name], start)
+        ]
         for name in _replays
         if name in arguments
     }
@@ -263,7 +288,12 @@ def publications(trace):
     """
     if isinstance(trace, _Recording):
         return list(trace.output)
-    return [(_EARLIEST_START + after, published) for after, published in _relative(trace)]
+    # A trace written out: an offset is from the earliest start, and an
+    # instant is itself.
+    return [
+        (_EARLIEST_START + after, published)
+        for after, published in _relative(trace, _EARLIEST_START)
+    ]
 
 
 def same(left, right):
@@ -274,7 +304,10 @@ def same(left, right):
     out is no publication, and adds nothing: "Trailing placeholders have
     no effect" (TST-6).
     """
-    left, right = _relative(left), _relative(right)
+    # A timed trace's instants are read against the run the other trace
+    # is of, where it is one.
+    start = next((trace.start for trace in (left, right) if isinstance(trace, _Recording)), None)
+    left, right = _relative(left, start), _relative(right, start)
     return len(left) == len(right) and all(
         ours[0] == theirs[0] and _same_cell(ours[1], theirs[1])
         for ours, theirs in zip(left, right)

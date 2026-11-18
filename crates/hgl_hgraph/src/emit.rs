@@ -3030,7 +3030,7 @@ impl Emitter<'_> {
                 let trace = self.expression(function, trace);
                 format!("_harness.publications({trace})")
             }
-            ExprKind::Trace(cells) => self.trace(function, cells, &value.ty, value.at),
+            ExprKind::Trace(cells) => self.trace(function, cells, &value.ty),
             ExprKind::TraceCompare {
                 left,
                 right,
@@ -4554,11 +4554,7 @@ impl Emitter<'_> {
     /// A dense trace written out: a list with `None` where it has `_`
     /// (TST-6: "Dense position i denotes the simulation start plus i
     /// minimum engine steps").
-    fn trace(&mut self, function: &Function, cells: &[Cell], ty: &Type, at: Location) -> String {
-        if cells.iter().any(|cell| cell.time.is_some()) {
-            self.unsupported(at, "a timed trace");
-            return "None".to_string();
-        }
+    fn trace(&mut self, function: &Function, cells: &[Cell], ty: &Type) -> String {
         // A trace of a nullable: a cell may be a published null. A
         // cell is the delta of what is published (TST-5).
         let nullable = matches!(
@@ -4590,6 +4586,22 @@ impl Emitter<'_> {
                 Some(value) => self.expression(function, value),
             })
             .collect();
+        // TST-7: "Timed entries use duration offsets from run start or
+        // absolute datetime keys ... no `_` occurs in timed traces."
+        // The harness is given each entry as its key and its
+        // publication, in the order written.
+        if cells.iter().any(|cell| cell.time.is_some()) {
+            self.harness = true;
+            let entries: Vec<String> = cells
+                .iter()
+                .zip(written)
+                .filter_map(|(cell, value)| {
+                    let time = self.expression(function, cell.time.as_ref()?);
+                    Some(format!("({time}, {value})"))
+                })
+                .collect();
+            return format!("_harness.timed([{}])", entries.join(", "));
+        }
         format!("[{}]", written.join(", "))
     }
 

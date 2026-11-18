@@ -397,7 +397,8 @@ const RUNNING: &str = concat!(
     "    assert doubled(2) == 4\n",
     "    assert doubled(2) == 5\n",
     "}\n",
-    "test later { assert eval(lone(value: [0s: 1])) == [0s: 1] }\n",
+    // A form the hgraph target does not write: a zoned datetime.
+    "test later { let at = @2026-09-03T09:30:00+01:00[Europe/London] }\n",
 );
 
 /// TST-14: "crashes, and infrastructure failures cannot prove
@@ -431,7 +432,9 @@ fn a_host_that_does_not_start_runs_no_test() {
     assert_eq!(lines[4], "not run  executable  examples.running::later");
     assert_eq!(
         lines[5],
-        format!("    {file}:11:38: the hgraph target does not write a timed trace yet")
+        format!(
+            "    {file}:11:23: the hgraph target does not write a zoned datetime, a zoned time or a time zone yet"
+        )
     );
     assert_eq!(lines[6], "rejection cases: 0 passed, 0 failed");
     assert_eq!(lines[7], "executable cases: 0 passed, 0 failed, 3 not run");
@@ -491,7 +494,7 @@ fn tests_run_on_hgraph() {
                 "FAILED   executable  examples.running::wrong\n",
                 "    {file}:9:5: the assertion does not hold\n",
                 "not run  executable  examples.running::later\n",
-                "    {file}:11:38: the hgraph target does not write a timed trace yet\n",
+                "    {file}:11:23: the hgraph target does not write a zoned datetime, a zoned time or a time zone yet\n",
                 "rejection cases: 0 passed, 0 failed\n",
                 "executable cases: 1 passed, 1 failed, 1 not run\n",
             ),
