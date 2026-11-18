@@ -106,7 +106,7 @@ pub(crate) fn module(
         propagates: false,
         given_back: Vec::new(),
         place_call: false,
-        held_indices: Vec::new(),
+        held: Vec::new(),
         piece: Piece::default(),
         declared: Vec::new(),
         instanced: Vec::new(),
@@ -517,11 +517,13 @@ struct Emitter<'a> {
     /// True while the call that is the whole of a statement is
     /// written: one that assigns a place is written only there.
     place_call: bool,
-    /// The indices and keys of the places a call assigns, each by
+    /// What is evaluated before a call that assigns places, each by
     /// where its expression is written, with the name it is held
-    /// under: it is evaluated once, before the call, so that the place
-    /// read and the place assigned are one (FN-15).
-    held_indices: Vec<(Location, String)>,
+    /// under: an index or a key of a place, which is evaluated once so
+    /// that the place read and the place assigned are one (FN-15), and
+    /// then each argument, so that they are evaluated in the order
+    /// written (EXPR-2).
+    held: Vec<(Location, String)>,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -1128,13 +1130,12 @@ impl Emitter<'_> {
         // they are evaluated. An index or a key of it is evaluated
         // once, there, and held: an earlier place's assignment may
         // change what it would come to, `change(i, items[i])`.
-        for parameter in &places {
-            let Some(argument) = arguments
-                .iter()
-                .find(|argument| argument.parameter == Some(*parameter))
-            else {
-                continue;
-            };
+        //
+        // EXPR-2: "Evaluate ordinary call/constructor arguments once in
+        // written order". Holding an index evaluates it before the
+        // call, so where one is held every argument is: each in the
+        // order written, an index just before the argument it is of.
+        fn indices_of(argument: &Argument) -> Vec<&Expr> {
             let mut place = &argument.value;
             let mut indices = Vec::new();
             while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
@@ -1146,11 +1147,33 @@ impl Emitter<'_> {
                 place = base;
             }
             // From the root outward, as they are written.
-            for index in indices.into_iter().rev() {
-                let held = format!("_at_{}", self.held_indices.len() + 1);
-                let written = self.expression(function, index);
+            indices.reverse();
+            indices
+        }
+        let is_place = |argument: &Argument| {
+            argument
+                .parameter
+                .is_some_and(|parameter| places.contains(&parameter))
+        };
+        let holds = arguments
+            .iter()
+            .any(|argument| is_place(argument) && !indices_of(argument).is_empty());
+        if holds {
+            let mut indices = 0;
+            for (position, argument) in arguments.iter().enumerate() {
+                if is_place(argument) {
+                    for index in indices_of(argument) {
+                        indices += 1;
+                        let held = format!("_at_{indices}");
+                        let written = self.expression(function, index);
+                        self.line(depth, &format!("{held} = {written}"));
+                        self.held.push((index.at, held));
+                    }
+                }
+                let held = format!("_arg_{}", position + 1);
+                let written = self.expression(function, &argument.value);
                 self.line(depth, &format!("{held} = {written}"));
-                self.held_indices.push((index.at, held));
+                self.held.push((argument.value.at, held));
             }
         }
         self.place_call = true;
@@ -1169,7 +1192,7 @@ impl Emitter<'_> {
                 self.line(depth, &format!("{target} = {assigned}"));
             }
         }
-        self.held_indices.clear();
+        self.held.clear();
         Some("_given[0]".to_string())
     }
 
@@ -2251,9 +2274,9 @@ impl Emitter<'_> {
             self.unsupported(value.at, "this expression in a graph");
             return "None".to_string();
         }
-        // An index of a place a call assigns is held under a name of
-        // its own, and is not evaluated again (FN-15).
-        if let Some((_, held)) = self.held_indices.iter().find(|(at, _)| *at == value.at) {
+        // What a call that assigns places has evaluated already is held
+        // under a name of its own, and is not evaluated again (FN-15).
+        if let Some((_, held)) = self.held.iter().find(|(at, _)| *at == value.at) {
             return held.clone();
         }
         match &value.kind {
