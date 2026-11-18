@@ -509,7 +509,6 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     phases::check(&program, diagnostics);
     declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
-    values::applications(&program, diagnostics);
     values::check(&mut program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
