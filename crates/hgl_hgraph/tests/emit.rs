@@ -4263,6 +4263,37 @@ fn a_nullable_is_a_value_that_may_be_unset() {
     }
 }
 
+/// TYPE-14: a temporal `T?` is written for a scalar and an enum, which
+/// publish whole. A nullable set is not: a set publishes its changes,
+/// which hgraph's value that may be unset would not gather. It is
+/// reported where it is an input and where it is a result.
+#[test]
+fn a_nullable_set_is_not_written_as_a_temporal_type() {
+    let emitted = emit(&[(
+        "sets.hgl",
+        concat!(
+            "module demo.maybe\n",
+            "fn taken(members: set<i64>?) -> bool {\n",
+            "    when { return members == null }\n",
+            "}\n",
+            "fn given(command: i64) -> set<i64>? {\n",
+            "    when { return null }\n",
+            "}\n",
+            // A `const` one is an ordinary value.
+            "fn fixed(value: i64, const members: set<i64>?) -> bool {\n",
+            "    when { return members == null }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "sets.hgl:2:10 target.unsupported",
+            "sets.hgl:5:4 target.unsupported",
+        ]
+    );
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",

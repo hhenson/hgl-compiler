@@ -1217,6 +1217,22 @@ impl Emitter<'_> {
         // where the type under `TS[...]` is `T | None`, and a tick of
         // it may be the unset one: a published null.
         if let Type::Nullable(inner) = ty {
+            // As a temporal value only a scalar or an enum may be
+            // unset this way: it publishes whole. A set publishes its
+            // changes, which hgraph's `TS` of a set that may be unset
+            // would not gather, so a nullable set is not written.
+            let whole = scalar(inner).is_some()
+                || matches!(
+                    &**inner,
+                    Type::Named {
+                        kind: NamedKind::Enum,
+                        ..
+                    }
+                );
+            if temporal && !whole {
+                self.unsupported(at, &format!("the type `{ty}`"));
+                return None;
+            }
             let inner = self.annotation(inner, false, at)?;
             return Some(if temporal {
                 self.hgraph = true;
