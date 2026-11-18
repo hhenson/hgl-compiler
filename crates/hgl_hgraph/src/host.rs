@@ -1,10 +1,11 @@
-//! Running a written program's tests on hgraph.
+//! Running a written program on hgraph: its tests, and an application.
 //!
 //! hgraph is run from Python, so the host is a Python interpreter that
 //! has hgraph installed. [`run`] writes the program into a directory,
 //! starts the interpreter on a small driver the target carries
 //! (`support/run_tests.py`), and reads what the driver recorded of each
-//! test.
+//! test. [`run_application`] does the same for one application, with
+//! a driver of its own (`support/run_application.py`).
 //!
 //! The driver and this file agree on two files, both in the output
 //! directory:
@@ -25,6 +26,7 @@ use std::process::Command;
 
 use hgl_diagnostics::Location;
 
+use crate::emit::APPLICATION;
 use crate::{File, Output, ROOT, python_module, test_function};
 
 /// The driver that runs named tests, as Python.
@@ -39,6 +41,130 @@ const PLAN_FILE: &str = "_plan.txt";
 
 /// The file the driver records what happened in.
 const RESULTS_FILE: &str = "_results.txt";
+
+/// The driver that runs an application, as Python.
+const APPLICATION_DRIVER: &str = include_str!("../support/run_application.py");
+
+/// The file that driver is written to.
+const APPLICATION_DRIVER_FILE: &str = "_run_application.py";
+
+/// The file that driver records an application's run in.
+const APPLICATION_RESULTS_FILE: &str = "_run.txt";
+
+/// What became of an application given to [`run_application`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RanApplication {
+    /// The run ended, as core's CRUN-1 has one: built, started,
+    /// evaluated and stopped.
+    Stopped {
+        /// The run's output (RUN-1): each publication of the entry's
+        /// result in time order, as its instant and its value, both as
+        /// text. `None` for an entry with no result.
+        output: Option<Vec<(String, String)>>,
+        /// True where the run ended because its host asked it to
+        /// (RUN-3), and not at its end.
+        by_host: bool,
+    },
+    /// The run failed, with what the host said of it. Core's CRUN-6: "A
+    /// run that failed has no output."
+    Failed(String),
+    /// It was not run to an end, with the reason: the interpreter did
+    /// not start or stopped early, or the module did not load.
+    NotRun(String),
+}
+
+/// Runs application `application` of a written program on hgraph, and
+/// says what became of it.
+///
+/// `python` is the interpreter to start, one that has hgraph.
+/// `directory` is where the program is written; `output` is what
+/// [`crate::transpile`] gave, and `application` a position in its
+/// `applications`, of one that is not blocked.
+///
+/// What the program logs and hgraph prints goes to this process's
+/// standard error, as it is printed: a run in real time may be a long
+/// one. Standard output is left to the caller, for the run's output.
+/// The run's outcome is read from a file the driver writes, so that
+/// nothing printed can be taken for it.
+///
+/// An interrupt of a run in real time is the driver's to take: it
+/// asks the run to stop, and the run's output is then what it
+/// recorded up to there. The caller is to outlive the interrupt.
+pub fn run_application(
+    python: &Path,
+    directory: &Path,
+    output: &Output,
+    application: usize,
+) -> RanApplication {
+    let driver = directory.join(ROOT).join(APPLICATION_DRIVER_FILE);
+    let results = directory.join(APPLICATION_RESULTS_FILE);
+    let written = write(&output.files, directory)
+        .and_then(|()| fs::write(&driver, APPLICATION_DRIVER))
+        // What an earlier run recorded in a directory that was kept is
+        // not this run's.
+        .and_then(|()| match fs::remove_file(&results) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        });
+    if let Err(error) = written {
+        return RanApplication::NotRun(format!(
+            "the program could not be written to {}: {error}",
+            directory.display()
+        ));
+    }
+    // `-B`: the interpreter writes no bytecode files, into the output
+    // directory or beside hgraph.
+    let finished = Command::new(python)
+        .arg("-B")
+        .arg(&driver)
+        .arg(directory)
+        .arg(python_module(&output.applications[application].path))
+        .arg(APPLICATION)
+        .arg(&results)
+        .status();
+    let status = match finished {
+        Ok(status) => status,
+        Err(error) => {
+            return RanApplication::NotRun(format!(
+                "`{}` could not be started: {error}",
+                python.display()
+            ));
+        }
+    };
+    let recorded = fs::read_to_string(&results).unwrap_or_default();
+    let mut started = false;
+    let mut by_host = false;
+    let mut published: Vec<(String, String)> = Vec::new();
+    for line in recorded.lines() {
+        let (what, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match what {
+            "start" => started = true,
+            "host" => by_host = true,
+            "published" => {
+                let (at, value) = rest.split_once(' ').unwrap_or((rest, ""));
+                published.push((at.to_string(), unescaped(value)));
+            }
+            "stopped" => {
+                return RanApplication::Stopped {
+                    output: (rest != "none").then_some(published),
+                    by_host,
+                };
+            }
+            "failed" => return RanApplication::Failed(unescaped(rest)),
+            "unloaded" => {
+                return RanApplication::NotRun(format!(
+                    "its module could not be loaded: {}",
+                    unescaped(rest)
+                ));
+            }
+            _ => {}
+        }
+    }
+    let when = if started { "while running" } else { "before" };
+    RanApplication::NotRun(format!(
+        "the interpreter stopped ({status}) {when} the application"
+    ))
+}
 
 /// What became of a test given to [`run`].
 #[derive(Debug, Clone, PartialEq, Eq)]

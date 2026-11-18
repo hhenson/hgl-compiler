@@ -118,7 +118,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | UNIT-13 | transpiler | done | hgraph: a constant is a function of no parameter that the provider runs once, and a read is a call of it, in value code, in a graph and from another module |
 | UNIT-14 | parser | done | `application_decl`: a file is headed `module name` or `application name`. `run_statement`: `run(...)` or `eval(...)` where an item starts, with the arguments of an eval |
 | UNIT-14 | analyser | done | An application is a unit of its own, holding what a module holds. It exports nothing (`application.export`), no `use` names one (`application.import`), and it has one run statement (`application.run_count`), which follows its declarations and stands in no module (`run.position`). Its path is no other file's: the first file of the path is the unit and each later one is reported (`application.duplicate_path`) |
-| UNIT-14 | transpiler | planned | An application as a program of the target |
+| UNIT-14 | transpiler | done | hgraph: what an application declares is written as a module's is, and its run statement after it as a function, `_application`, that runs its entry. An application that needs a form not written yet is blocked by it, as a test is |
 
 ## Types and values
 
@@ -415,10 +415,11 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | --- | --- | --- | --- |
 | RUN-1 | parser | done | `run_expression`: `run`, a call, and then a run configuration |
 | RUN-1 | analyser | done | A run statement's first argument is a call of an entry, a temporal function with no temporal parameters (`run.entry`), read as a graph's call of it is, so the entry's `const` parameters take constants. Its second is a `RunConfig` of core's, and it takes no third. The typed statement is `Module::run_body` |
-| RUN-2 | driver | planned | Entry selection; arguments, interfaces and providers checked before start |
+| RUN-1 | transpiler | done | hgraph: a run statement gives the harness's `run` its entry, the entry's `const` arguments by name, and its configuration. The run's output is the recording of the entry's result, a tuple for each publication in time order, and an entry with no result has none |
+| RUN-2 | driver | partial | `hgl run` runs the program's one application, or the one `--application` names, once the program is accepted and the target writes all the application needs. Left: an argument or a field of the configuration replaced by what starts it; interfaces and providers |
 | RUN-3 | analyser | done | `run` is written in an application and in an integration test: in a test that is none it is `run.position`. A run statement in a module is UNIT-14's |
-| RUN-3 | transpiler | planned | The word of a run statement is its mode; start and end come from its configuration |
-| RUN-4 | transpiler | planned | Independent instantiations; lifecycle order; teardown after failure |
+| RUN-3 | transpiler | partial | hgraph: an application's `eval` is a simulation of hgraph's and its `run` a run in real time, each from the start and before the end its configuration gives. An interrupt of `hgl run` is the host's stop of a run in real time, which ends it as its end does. Left: `run` in an integration test; outside events |
+| RUN-4 | transpiler | partial | hgraph: an application's run and a test's eval are one run of the harness's, each with a graph, a store and a recording of its own; hgraph stops what started when a run fails. Left: the phase a failure is of is not reported |
 | RUN-5 | optimiser | planned | No pass changes an observable trace, effect, failure or cleanup |
 | RUN-5 | transpiler | planned | The generated program gives the same observations |
 
@@ -530,15 +531,19 @@ the same numeric rules the transpiler rows give.
 | CEVAL-5 | runner | planned | A fresh run, with its own node state and recording, for each eval; dense results built by TST-6 |
 | CEVAL-5 | transpiler | done | hgraph: each eval is a run of its own, with its own graph, store and recording; its value is the recording written dense from the run's start (TST-6) |
 | CRUN-1 | runner | planned | A run of one entry with its `const` arguments under one `RunConfig`: built, started, evaluated and stopped once |
-| CRUN-2 | transpiler | partial | hgraph: an eval's `RunConfig` is given to the harness, which runs the entry from its `start`, the earliest start where it gives none, and ends it before its `end`, or before `length` from that start; a configuration with both an `end` and a `length` is `run.end_and_length`, raised before anything is built. A run may start at any instant. Left: a run that ends where it starts builds no graph, since hgraph has no such run; a run in real time |
+| CRUN-1 | transpiler | done | hgraph: the harness wires the entry's graph, and hgraph builds it, starts it, evaluates it and stops it, once for each run: an application's, and each eval's. `eval` is a simulation and `run` in real time |
+| CRUN-2 | transpiler | partial | hgraph: a run's `RunConfig` is given to the harness, which runs the entry from its `start`, and where it gives none from the earliest start in simulation and the host clock's present time in real time, and ends it before its `end`, or before `length` from that start; a configuration with both an `end` and a `length` is `run.end_and_length`, raised before anything is built. A run may start at any instant. Left: a run that ends where it starts builds no graph, since hgraph has no such run |
 | CRUN-2 | runner | planned | `start` inclusive and `end` exclusive; what a null `start` and a null `end` mean in each mode |
 | CRUN-3 | runner | planned | Evaluation time constant in a cycle and later in each by a microsecond or more; the earliest start |
 | CRUN-4 | runner | planned | Simulation runs each cycle without waiting and ends when nothing is scheduled; the same run gives the same publications |
+| CRUN-4 | transpiler | done | hgraph: an eval, a test's and an application's, is hgraph's own simulation, which runs each cycle without waiting and ends when nothing is scheduled before the run's end |
 | CRUN-5 | runner | planned | Real time runs a cycle when the host clock reaches it |
+| CRUN-5 | transpiler | done | hgraph: an application's `run` is hgraph's own run in real time |
 | CRUN-6 | runner | planned | Every node that started is stopped, in reverse; a failure names its node and phase, and the run has no output |
+| CRUN-6 | transpiler | partial | hgraph: hgraph stops every node that started, however the run ends; an application's run that fails has no output, and `hgl run` says the HGL error it met. Left: the failure's node and phase are not reported apart from hgraph's own account |
 | CRUN-7 | runner | planned | One store for a run, empty when the graph is built; nothing outside the program puts a value there |
-| CRUN-7 | transpiler | partial | hgraph: each eval's run has a global state of its own, empty when its graph is built. Left: an application's run |
+| CRUN-7 | transpiler | done | hgraph: each run, an eval's and an application's, has a global state of its own, empty when its graph is built |
 | CRUN-8 | analyser | partial | The run's own key written out as a key of the global store is rejected (`store.reserved_key`). Left: a key that is a `const` parameter |
-| CRUN-8 | transpiler | partial | hgraph: a run's output is what is under `"run.output"` in its store once it has stopped, a tuple for each publication; an entry with no result has none. Left: an application's run |
+| CRUN-8 | transpiler | done | hgraph: a run's output, an eval's and an application's, is what is under `"run.output"` in its store once it has stopped, a tuple for each publication; an entry with no result has none |
 | CRUN-8 | runner | planned | The run's output, a `list<tuple<datetime, delta<T>>>` recorded under the run's own key |
 | CEVAL-6 | runner | planned | A failed run or a missing required recording fails the eval; neither is an empty result |

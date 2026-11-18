@@ -40,7 +40,7 @@ Rules for every stage:
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
 | `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
-| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit` |
+| `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
 | `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | first slice: scalar and set nodes, value functions, graphs that call nodes, tests with dense evals |
@@ -1671,6 +1671,49 @@ starts on, so the failure is reported at that statement in the source:
 such as an `i64` result out of range (NUM-2), is reported the same way
 with its text. There is no limit yet on how long a test may run.
 
+#### An application
+
+`hgl run ROOT... [--application PATH]` runs an application (UNIT-14) on
+hgraph: the program's one application, or the one named.
+
+| Step | What does it |
+| --- | --- |
+| The run statement is written as a function, `_application`, in the application's own Python module | The transpiler |
+| The function calls the harness's `run` with the entry, core's `record` for the entry's result, the mode, the entry's `const` arguments and the configuration | The generated code |
+| `run` wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
+| A driver loads the module, calls the function on a thread of its own, and writes each publication to a results file | `support/run_application.py` |
+| `hgl run` starts the driver, and prints the publications once the run has stopped | `hgl_hgraph::run_application`, `hgl_cli` |
+
+```text
+1970-01-01T00:00:01.000001Z  2
+1970-01-01T00:00:02.000001Z  4
+ran demo.ticks.backtest on hgraph: 2 publications
+```
+
+The run's output goes to standard output, a line for each publication:
+its instant and what was published, written as HGL writes a value where
+it has a way to. What the program logs and hgraph prints goes to standard
+error, as the run goes.
+
+`eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
+of `hgl run` is the host's stop of a run in real time. hgraph waits for
+a run's next cycle where no signal reaches Python, so the driver keeps
+its main thread for the signal, and asks the run to stop through a
+source hgraph wakes for: the run ends as it does at its end, every node
+is stopped, and what was recorded up to then is printed. `hgl` outlives
+the interrupt to print it. An interrupt of a simulation, and a second
+one, end the run at once with no output.
+
+| Exit status of `hgl run` | When |
+| --- | --- |
+| 0 | The run ended |
+| 1 | The program is rejected, or the run failed |
+| 2 | No application was chosen, the target does not write all it needs, or the host did not run it |
+
+Not written: what starts an application replacing an argument or a field
+of the configuration (RUN-2), outside events in real time, and a view of
+the output while the run goes.
+
 The crate's tests compare the Python written for a small module with
 what is expected, check that core's dense scalar eval cases are written
 whole, and check which tests of a program with unwritten forms are
@@ -1760,9 +1803,10 @@ the job the way the design needs is dropped.
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
+| `ctrlc` | `hgl_cli` | outliving an interrupt while an application runs, so that the run's output is still printed |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
-| `tempfile` | `hgl_cli` | the directory a program is written to for a test run, removed after it |
+| `tempfile` | `hgl_cli` | the directory a program is written to for a test run or an application's run, removed after it |
 | `walkdir` | `hgl_cli` | every file under a source root, linked directories included |
 
 Hand-written where no tool fits:

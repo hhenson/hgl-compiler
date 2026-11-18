@@ -43,6 +43,7 @@
 //! | `eval(target(input: [7]), RunConfig(length: 2us))` | `_harness.evaluate(target, input=[7], _config=...)` |
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
+//! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.
@@ -56,7 +57,7 @@ use std::collections::BTreeSet;
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
-pub use host::{Ran, run, write};
+pub use host::{Ran, RanApplication, run, run_application, write};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";
@@ -91,6 +92,26 @@ pub struct Output {
     /// The named tests of the program, in the order of its modules and
     /// then as declared.
     pub tests: Vec<Test>,
+    /// The applications of the program (UNIT-14), in the order its
+    /// units are in.
+    pub applications: Vec<Application>,
+}
+
+/// An application as the target wrote it: its declarations, as a
+/// module's are, and its run statement as a function that runs its
+/// entry.
+#[derive(Debug, Clone)]
+pub struct Application {
+    /// Its path.
+    pub path: String,
+    /// True where its run statement is `run`, a run in real time, and
+    /// false for `eval`, a simulation (RUN-3: "The word of a run
+    /// statement is its mode").
+    pub real_time: bool,
+    /// The first form the application needs that the target does not
+    /// write yet, in its run statement or in a function it reaches.
+    /// `None` for one that can be run.
+    pub blocked: Option<Diagnostic>,
 }
 
 /// A named test as the target wrote it.
@@ -261,6 +282,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             .iter()
             .chain(instances)
             .chain(&written.tests)
+            .chain(&written.application)
         {
             if piece.broken.is_some() {
                 continue;
@@ -288,6 +310,20 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             });
         }
     }
+    // UNIT-14: each application, with what stops it being run.
+    let applications = program
+        .modules
+        .iter()
+        .zip(&modules)
+        .filter_map(|(module, written)| {
+            let piece = written.as_ref()?.application.as_ref()?;
+            Some(Application {
+                path: module.path.clone(),
+                real_time: module.run_body.as_ref().is_some_and(|run| run.real_time),
+                blocked: blocked(&modules, piece),
+            })
+        })
+        .collect();
     // The harness imports the provider: it knows an HGL error by the
     // provider's class (TST-10). So the provider is written with it,
     // whether or not a module calls a function of the provider's.
@@ -303,7 +339,11 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             text: HARNESS.to_string(),
         });
     }
-    Output { files, tests }
+    Output {
+        files,
+        tests,
+        applications,
+    }
 }
 
 /// The first form `test` needs that the target did not write: one of
