@@ -46,6 +46,8 @@ pub enum Scalar {
     Datetime,
     /// `duration`: elapsed time.
     Duration,
+    /// `tenor`: a rule for moving a date (TYPE-17).
+    Tenor,
     /// `civil_datetime`: a local date and time.
     CivilDatetime,
     /// `timezone`: a named zone.
@@ -70,6 +72,7 @@ impl Scalar {
             SyntaxKind::KwTime => Scalar::Time,
             SyntaxKind::KwDatetime => Scalar::Datetime,
             SyntaxKind::KwDuration => Scalar::Duration,
+            SyntaxKind::KwTenor => Scalar::Tenor,
             SyntaxKind::KwCivilDatetime => Scalar::CivilDatetime,
             SyntaxKind::KwTimezone => Scalar::Timezone,
             SyntaxKind::KwZonedDatetime => Scalar::ZonedDatetime,
@@ -91,6 +94,7 @@ impl Scalar {
             Scalar::Time => "time",
             Scalar::Datetime => "datetime",
             Scalar::Duration => "duration",
+            Scalar::Tenor => "tenor",
             Scalar::CivilDatetime => "civil_datetime",
             Scalar::Timezone => "timezone",
             Scalar::ZonedDatetime => "zoned_datetime",

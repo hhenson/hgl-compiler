@@ -150,6 +150,47 @@ fn a_malformed_temporal_literal_is_reported_once() {
 }
 
 #[test]
+fn a_tenor_is_printed_with_the_counts_it_denotes() {
+    // LEX-28: "the literal denotes a count of months and a count of
+    // days, or a count of business days". A tenor that breaks the rule
+    // is one rejection, `tenor.invalid`.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("tenor");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("tenor.hgl");
+    fs::write(
+        &path,
+        "let a = 1Y6M\nlet b = 2W1D\nlet c = 2B\nlet d = 1M2B\n",
+    )
+    .unwrap();
+    let path = path.display().to_string();
+
+    let output = hgl(&["tokens", &path]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = text(&output.stdout);
+    for expected in [
+        "\"1Y6M\"",
+        "18 months, 0 days",
+        "0 months, 15 days",
+        "2 business days",
+    ] {
+        assert!(stdout.contains(expected), "{expected} in:\n{stdout}");
+    }
+    let stderr = text(&output.stderr);
+    let headers: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("error["))
+        .collect();
+    assert_eq!(headers.len(), 1, "{stderr}");
+    assert!(
+        headers[0].starts_with("error[parse/tenor.invalid]"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("tenor.hgl:4:9"), "{stderr}");
+    assert!(stderr.contains("rule LEX-28"), "{stderr}");
+}
+
+#[test]
 fn source_that_is_not_utf8_is_rejected_not_unreadable() {
     // LEX-16: the bytes are source the language rejects, so the exit
     // status is 1, with one diagnostic at the first offending byte.

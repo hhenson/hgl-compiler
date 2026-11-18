@@ -30,7 +30,7 @@ use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_lexer::literal::{
-    decode_duration, decode_float, decode_integer, decode_string, decode_temporal,
+    decode_duration, decode_float, decode_integer, decode_string, decode_temporal, decode_tenor,
 };
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
@@ -2994,6 +2994,10 @@ impl<'a> Typer<'a> {
             SyntaxKind::Duration => decode_duration(text)
                 .ok()
                 .map(|value| (Value::Duration(value), Scalar::Duration)),
+            // LEX-28, TYPE-17: a tenor literal is a `tenor`.
+            SyntaxKind::Tenor => decode_tenor(text)
+                .ok()
+                .map(|value| (Value::Tenor(value), Scalar::Tenor)),
             SyntaxKind::Temporal => {
                 temporal(text).map(|(parts, scalar)| (Value::Temporal(parts), scalar))
             }

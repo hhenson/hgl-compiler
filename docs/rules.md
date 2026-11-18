@@ -65,7 +65,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-6 | parser | done | Two statements on one line rejected; an inject list continues after a comma |
 | LEX-7 | lexer | done | Minus is its own token; integer and float literals checked against i64 and f64 |
 | LEX-7 | analyser | done | 2^63 is an integer only directly under a minus; an enum's numbers are held as `i64`, the least included |
-| LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration candidate; exponent forms |
+| LEX-8 | lexer | done | `>` never joined to `>`; digits then letters are one duration or tenor candidate; exponent forms |
 | LEX-9 | parser | done | Any word of identifier form, reserved words included, as member name and argument label; `const` as modifier or name by position |
 | LEX-10 | parser | done | Contextual names take their meaning by position; `str(value)` is a conversion and `error(...)` a constructor |
 | LEX-11 | lexer | done | Date, time and offset fields; civil and zoned forms |
@@ -90,6 +90,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | LEX-26 | lexer | done | `\` and the line break after it are one continuation token; any other `\` is rejected |
 | LEX-26 | parser | done | A continued line break is no line break |
 | LEX-27 | parser | done | The opening bracket of a call, parameter list, index, generic list or cardinality directly follows what it applies to |
+| LEX-28 | lexer | done | Tenor units, uppercase: `Y`, `M`, `W`, `D` once each in that order, or `B` alone; whole numbers; a year twelve months and a week seven days; each count in the i64 domain (`tenor.invalid`) |
+| LEX-28 | parser | done | A tenor literal is a literal expression, and may begin one |
 
 ## Units and names
 
@@ -155,6 +157,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 | TYPE-16 | analyser | partial | `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a `dict<i64, delta<V>>` for a list, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a set, a dictionary and a struct. A `ref` and a `signal` have none (`delta.unsupported_shape`). Each delta that is a type of its own has its properties: a set's `added` and `removed`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`). It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`). A `delta<V>` is a value where a `delta<V?>` is expected, and null is not. Left: a constructor written for a delta that is no type of its own, a list's or a tuple's, which is not judged |
 | TYPE-16 | transpiler | partial | hgraph: a set's delta, made from its properties, is hgraph's own set delta, in a node, in a trace and as a value. A nullable's is hgraph's own too: `Null` for a published null, and the value otherwise; `delta<i64?>()` and `delta<i64?>(value: v)` make one, and its `value` is read through the provider. Left: a dictionary's and a struct's delta |
+| TYPE-17 | analyser | partial | `tenor` is a scalar type of its own, and a tenor literal is one: its count of months and of days, or of business days, so `1Y` and `12M` are one value. Left: a tenor's operators, which core gives |
+| TYPE-17 | transpiler | planned | hgraph: a tenor and its literal are reported as not written |
 
 ## Expressions and bindings
 

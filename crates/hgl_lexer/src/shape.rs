@@ -13,6 +13,11 @@ use hgl_source::line_break_length;
 /// this list is its rank: a smaller index is a larger unit.
 pub(crate) const DURATION_UNITS: [&str; 6] = ["d", "h", "m", "s", "ms", "us"];
 
+/// The tenor units (LEX-28): years, months, weeks, days and business
+/// days. They are uppercase, which tells a tenor from a duration: `3M` is
+/// three months and `3m` three minutes.
+pub(crate) const TENOR_UNITS: [&str; 5] = ["Y", "M", "W", "D", "B"];
+
 // ---- Numbers and durations (LEX-8, LEX-22, LEX-23) -----------------------
 
 /// The form of a numeric or duration literal.
@@ -32,6 +37,8 @@ pub(crate) enum NumberForm {
     },
     /// A duration: `1h30m`, `1.5s`.
     Duration,
+    /// A tenor: `1Y6M`, `2B` (LEX-28).
+    Tenor,
 }
 
 /// A numeric or duration literal found at the start of some bytes.
@@ -52,6 +59,7 @@ pub(crate) struct Number {
 /// 12.5      Float         a `.` counts only when a digit follows it
 /// 1e5       Float         a complete exponent makes a float
 /// 1h30m     Duration      numbers each followed by a unit
+/// 1Y6M      Tenor         numbers each followed by an uppercase unit
 /// ```
 ///
 /// The caller decides what the bytes after the literal mean. Under LEX-18 a
@@ -83,10 +91,16 @@ pub(crate) fn scan_number(bytes: &[u8]) -> Number {
 
     let (mut length, has_fraction) = plain_number_length(bytes);
 
-    // LEX-8: a number directly followed by letters is a duration candidate.
-    // It is a duration when those letters are a unit; then more parts may
-    // follow, each a number and a unit.
-    if let Some(unit) = unit_length(&bytes[length..]) {
+    // LEX-8: a number directly followed by letters is a duration or a
+    // tenor candidate. It is one when those letters are a unit of it; then
+    // more parts may follow, each a number and a unit of the same kind.
+    for (units, form) in [
+        (&DURATION_UNITS[..], NumberForm::Duration),
+        (&TENOR_UNITS[..], NumberForm::Tenor),
+    ] {
+        let Some(unit) = unit_length(&bytes[length..], units) else {
+            continue;
+        };
         length += unit;
         loop {
             let rest = &bytes[length..];
@@ -94,15 +108,12 @@ pub(crate) fn scan_number(bytes: &[u8]) -> Number {
                 break;
             }
             let (number, _) = plain_number_length(rest);
-            let Some(unit) = unit_length(&rest[number..]) else {
+            let Some(unit) = unit_length(&rest[number..], units) else {
                 break;
             };
             length += number + unit;
         }
-        return Number {
-            form: NumberForm::Duration,
-            length,
-        };
+        return Number { form, length };
     }
 
     if let Some(exponent) = exponent_length(&bytes[length..]) {
@@ -154,16 +165,17 @@ fn plain_number_length(bytes: &[u8]) -> (usize, bool) {
     (whole, false)
 }
 
-/// The length of the duration unit at the start of `bytes`, or `None`.
+/// The length of the unit at the start of `bytes` that is one of `units`,
+/// or `None`.
 ///
 /// A unit is a maximal run of letters, so `ms` is one unit and `min` is one
 /// (unknown) unit, never `m` then `in`.
-fn unit_length(bytes: &[u8]) -> Option<usize> {
+fn unit_length(bytes: &[u8], units: &[&str]) -> Option<usize> {
     let letters = bytes
         .iter()
         .take_while(|byte| byte.is_ascii_alphabetic())
         .count();
-    DURATION_UNITS
+    units
         .iter()
         .any(|unit| unit.as_bytes() == &bytes[..letters])
         .then_some(letters)
@@ -324,9 +336,12 @@ mod tests {
     fn a_prefix_needs_a_digit_of_its_base() {
         // LEX-23. Without one, `0` is all that matches; the caller sees the
         // letter after it and rejects the run.
-        for text in ["0x", "0xG", "0X1F", "0b", "0b2", "0B1"] {
+        for text in ["0x", "0xG", "0X1F", "0b", "0b2"] {
             assert_eq!(scanned(text), (NumberForm::Decimal, "0"), "{text}");
         }
+        // The prefix letter is lowercase. `0B` is a tenor of no business
+        // days (LEX-28), and the caller rejects the digit after it.
+        assert_eq!(scanned("0B1"), (NumberForm::Tenor, "0B"));
         // The literal stops at the first digit outside the base.
         assert_eq!(scanned("0b102"), (NumberForm::Binary, "0b10"));
         assert_eq!(scanned("0xFFh"), (NumberForm::Hexadecimal, "0xFF"));
@@ -396,6 +411,31 @@ mod tests {
         // A number with no unit after it is not a part.
         assert_eq!(scanned("1h30"), (NumberForm::Duration, "1h"));
         assert_eq!(scanned("1h30x"), (NumberForm::Duration, "1h"));
+    }
+
+    #[test]
+    fn tenors_are_numbers_each_with_an_uppercase_unit() {
+        // The `tenor_literal` production. LEX-8: digits then letters are a
+        // duration or tenor candidate; LEX-28: a tenor's units are
+        // uppercase.
+        assert_eq!(scanned("1Y6M"), (NumberForm::Tenor, "1Y6M"));
+        assert_eq!(scanned("2W"), (NumberForm::Tenor, "2W"));
+        assert_eq!(scanned("2B"), (NumberForm::Tenor, "2B"));
+        assert_eq!(scanned("1_0D"), (NumberForm::Tenor, "1_0D"));
+        assert_eq!(scanned("3M+1"), (NumberForm::Tenor, "3M"));
+        // Case tells the two apart.
+        assert_eq!(scanned("3m"), (NumberForm::Duration, "3m"));
+        assert_eq!(scanned("3M"), (NumberForm::Tenor, "3M"));
+        // The shape takes what the value then rejects: units out of
+        // order, `B` with another unit, a fraction.
+        assert_eq!(scanned("6M1Y"), (NumberForm::Tenor, "6M1Y"));
+        assert_eq!(scanned("1M2B"), (NumberForm::Tenor, "1M2B"));
+        assert_eq!(scanned("1.5M"), (NumberForm::Tenor, "1.5M"));
+        // A unit is the whole run of letters, and of one kind: a tenor's
+        // part is not followed by a duration's.
+        assert_eq!(scanned("1MM"), (NumberForm::Decimal, "1"));
+        assert_eq!(scanned("1M30m"), (NumberForm::Tenor, "1M"));
+        assert_eq!(scanned("1h3M"), (NumberForm::Duration, "1h"));
     }
 
     #[test]

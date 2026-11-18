@@ -15,7 +15,7 @@ use std::path::Path;
 use hgl_lexer::{TokenKind, codes, literal};
 
 /// Every diagnostic code the lexer and the literal checks can report.
-const LEXICAL_CODES: [&str; 14] = [
+const LEXICAL_CODES: [&str; 15] = [
     codes::SYNTAX_INVALID_ENCODING,
     codes::SYNTAX_UNEXPECTED_CHARACTER,
     codes::STRING_UNCLOSED,
@@ -28,6 +28,7 @@ const LEXICAL_CODES: [&str; 14] = [
     literal::codes::NUMBER_INTEGER_RANGE,
     literal::codes::NUMBER_FLOAT_RANGE,
     literal::codes::DURATION_INVALID,
+    literal::codes::TENOR_INVALID,
     literal::codes::DATE_TIME_INVALID_FIELD,
     literal::codes::DATE_TIME_INVALID_ZONE,
 ];

@@ -2942,6 +2942,12 @@ impl Emitter<'_> {
                 format!("_dt.timedelta(microseconds={microseconds})")
             }
             Value::Temporal(parts) => self.temporal(parts, at),
+            // TYPE-17: "The core contract gives a tenor's operators".
+            // Until the target has them a tenor is not written.
+            Value::Tenor(_) => {
+                self.unsupported(at, "a tenor");
+                "None".to_string()
+            }
         }
     }
 

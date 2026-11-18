@@ -95,6 +95,42 @@ fn minus_followed_by_a_duration_token() {
 }
 
 #[test]
+fn one_tenor_token_eighteen_months() {
+    // LEX-28: "A year is twelve months".
+    accepted("1Y6M", &[(TokenKind::Tenor, "1Y6M")]);
+    assert_eq!(
+        literal::decode_tenor("1Y6M"),
+        Ok(literal::Tenor::Moves {
+            months: 18,
+            days: 0
+        })
+    );
+}
+
+#[test]
+fn one_tenor_token_fourteen_days() {
+    // LEX-28: "a week seven days".
+    accepted("2W", &[(TokenKind::Tenor, "2W")]);
+    assert_eq!(
+        literal::decode_tenor("2W"),
+        Ok(literal::Tenor::Moves {
+            months: 0,
+            days: 14
+        })
+    );
+}
+
+#[test]
+fn one_tenor_token_two_business_days() {
+    // LEX-28: "`B` is written alone".
+    accepted("2B", &[(TokenKind::Tenor, "2B")]);
+    assert_eq!(
+        literal::decode_tenor("2B"),
+        Ok(literal::Tenor::BusinessDays(2))
+    );
+}
+
+#[test]
 fn time_with_seconds_zero() {
     // LEX-11: seconds default to zero.
     accepted("@09:30", &[(TokenKind::Temporal, "@09:30")]);
@@ -149,6 +185,21 @@ fn duration_units_out_of_order_are_rejected() {
 #[test]
 fn a_fraction_of_a_microsecond_is_rejected() {
     rejected("0.5us", literal::codes::DURATION_INVALID, "LEX-13");
+}
+
+#[test]
+fn tenor_units_out_of_order_are_rejected() {
+    rejected("6M1Y", literal::codes::TENOR_INVALID, "LEX-28");
+}
+
+#[test]
+fn business_days_with_another_unit_are_rejected() {
+    rejected("1M2B", literal::codes::TENOR_INVALID, "LEX-28");
+}
+
+#[test]
+fn a_fraction_of_a_tenor_unit_is_rejected() {
+    rejected("1.5M", literal::codes::TENOR_INVALID, "LEX-28");
 }
 
 #[test]

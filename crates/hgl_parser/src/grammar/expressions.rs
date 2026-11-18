@@ -280,7 +280,7 @@ impl Parser<'_> {
     fn primary_expr(&mut self) -> bool {
         match self.current() {
             // A duration is one of the forms of `TEMPORAL_LITERAL`.
-            Int | Float | Str | Duration | Temporal | KwTrue | KwFalse | KwNull => {
+            Int | Float | Str | Duration | Tenor | Temporal | KwTrue | KwFalse | KwNull => {
                 self.leaf(Literal);
             }
             // TST-17: "In a test's block `run` as the callee of a call

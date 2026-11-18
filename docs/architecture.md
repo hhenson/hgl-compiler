@@ -70,8 +70,8 @@ it:
 The lexer settles a literal's shape. `hgl_lexer::literal` settles its value
 and the rules that need arithmetic: integer and float range (LEX-7, LEX-20,
 LEX-23), date, time and offset fields (LEX-11, LEX-19), zone names (LEX-12),
-durations (LEX-13), and the contents of strings and text blocks (LEX-24,
-LEX-25). Both read shapes through one private module, `shape`, so they agree
+durations (LEX-13), tenors (LEX-28), and the contents of strings and text
+blocks (LEX-24, LEX-25). Both read shapes through one private module, `shape`, so they agree
 on where a literal ends.
 
 ### Encoding
