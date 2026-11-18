@@ -7,7 +7,9 @@ use std::path::Path;
 
 use hgl_analyser::{ParsedFile, analyse};
 use hgl_diagnostics::{Diagnostics, Location, render};
-use hgl_hgraph::{Output, Ran, RanApplication, Stop, Test, run, run_application, transpile};
+use hgl_hgraph::{
+    Output, Ran, RanApplication, Stop, Test, run, run_application, run_within, transpile,
+};
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, parse};
 use hgl_source::SourceMap;
@@ -1243,12 +1245,12 @@ fn modules_nest_and_empty_forms_have_a_body() {
 /// A form the target does not write yet is reported where it is
 /// written, as a `build` diagnostic: no source category, since the
 /// language accepts the source.
-/// TST-17: a run in real time in an integration test is not written
-/// yet, and is reported where it is written. RUN-1: an eval's run
-/// configuration is written. UNIT-14: an application is written, what
-/// it declares as a module's is and its run statement after it.
+/// TST-17: `run(call, config)` in an integration test is the eval's
+/// run in real time. RUN-1: an eval's run configuration is written.
+/// UNIT-14: an application is written, what it declares as a module's
+/// is and its run statement after it.
 #[test]
-fn a_run_in_real_time_in_a_test_is_reported() {
+fn a_run_in_real_time_and_an_application_are_written() {
     let emitted = emit(&[
         (
             "m.hgl",
@@ -1277,9 +1279,34 @@ fn a_run_in_real_time_in_a_test_is_reported() {
             ),
         ),
     ]);
-    // The eval's configuration is written (RUN-1), and so is the
-    // application; a run in real time in a test is not.
-    assert_eq!(emitted.reported, ["m.hgl:10:12 target.unsupported"]);
+    // The eval's configuration is written (RUN-1), and so are the run
+    // in real time and the application.
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let module = emitted.text("_hgl/_m_m/__init__.py");
+    assert!(
+        module.contains(concat!(
+            "def test_live():\n",
+            "    if not (_harness.same(_harness.evaluate(pass_, ",
+            "{\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, ",
+            "value=[7], _real_time=True), [7])):\n",
+        )),
+        "{module}"
+    );
+    // TST-17: an integration test is one, and has a time limit; a test
+    // that is none has no limit.
+    let limits: Vec<(&str, bool, Option<u64>)> = emitted
+        .output
+        .tests
+        .iter()
+        .map(|test| {
+            (
+                test.name.as_str(),
+                test.integration,
+                test.limit().map(|limit| limit.as_secs()),
+            )
+        })
+        .collect();
+    assert_eq!(limits, [("bounded", false, None), ("live", true, Some(60))]);
     assert_eq!(
         emitted.text("_hgl/_m_m/_m_live/__init__.py"),
         concat!(
@@ -1499,6 +1526,12 @@ const BOUNDED: &str = concat!(
     "    let day: datetime = @2026-09-03T09:30:00Z\n",
     "    assert eval(pass(value: [1, _, 3]), RunConfig(start: day)) == [1, _, 3]\n",
     "    assert first(eval(pass(value: [7]), RunConfig(start: day))) == day\n",
+    // A trace that is only given to a `const fn` is not written dense:
+    // a publication a second after the start is a million cells on.
+    "    assert first(eval(slow())) == earliest_start + 1s\n",
+    "}\n",
+    "fn slow() -> i64 {\n",
+    "    yield 1s: 1\n",
     "}\n",
 );
 
@@ -1519,7 +1552,7 @@ const BOUNDED_FAILS: &str = concat!(
     "    eval(pass(value: [1]), RunConfig(end: earliest_start + 1us, length: 1us))\n",
     "}\n",
     "test too_dense {\n",
-    "    eval(slow())\n",
+    "    assert eval(slow()) == [1]\n",
     "}\n",
 );
 
@@ -5967,6 +6000,105 @@ fn an_application_runs_on_hgraph() {
     assert!(live.iter().all(|(at, _)| at.as_str() > "2000-"), "{live:?}");
 }
 
+/// TST-17: "An integration test ... is a named test that may run in
+/// real time: beside `eval` it writes `run(call, config)` (RUN-3),
+/// whose value is the run's output as an eval's is."
+const INTEGRATION: &str = concat!(
+    "module demo.live\n",
+    "fn pass(value: i64) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn beats(const every: duration) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+    "const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {\n",
+    "    var count = 0\n",
+    "    for item in seen {\n",
+    "        count += 1\n",
+    "    }\n",
+    "    return count\n",
+    "}\n",
+    // A simulation of four seconds, counted and not written dense.
+    "test bounded {\n",
+    "    assert ticks(eval(beats(every: 1s), RunConfig(length: 4s))) == 3\n",
+    "}\n",
+    // A third of a second of the host clock.
+    "integration_test beats_live {\n",
+    "    let seen = run(beats(every: 10ms), RunConfig(length: 300ms))\n",
+    "    assert ticks(seen) > 20\n",
+    "}\n",
+    // What is replayed is published in the cycle it is given in, in
+    // real time as in a simulation.
+    "integration_test passes_through {\n",
+    "    assert run(pass(value: [7, _, 9]), RunConfig(length: 100ms)) == [7, _, 9]\n",
+    "}\n",
+    // A run with no end goes on until its test's limit.
+    "integration_test endless {\n",
+    "    let seen = run(beats(every: 10ms))\n",
+    "    assert ticks(seen) > 0\n",
+    "}\n",
+    "integration_test after {\n",
+    "    assert run(pass(value: [1]), RunConfig(length: 50ms)) == [1]\n",
+    "}\n",
+);
+
+/// TST-17: an integration test runs on hgraph, its `run` in real time.
+/// It is held to a time limit (hhenson/hgl_spec#110): one still
+/// running when its limit passes is stopped, and has failed, with the
+/// statement it was at. The test after it runs as any does. Needs
+/// hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn an_integration_test_runs_in_real_time_within_its_limit() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_integration");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("live.hgl", INTEGRATION)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    // Each integration test is given a second here, where it has a
+    // minute of its own.
+    let ran = run_within(
+        Path::new(&python),
+        &directory,
+        &emitted.output,
+        &all,
+        &|test: &Test| {
+            test.integration
+                .then_some(std::time::Duration::from_secs(1))
+        },
+    );
+    let described: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .map(|(test, ran)| match ran {
+            Ran::Passed => format!("{} passed", test.name),
+            Ran::Failed { at, message } => format!(
+                "{} failed {} {message}",
+                test.name,
+                at.map_or("?".to_string(), |at| emitted.place(at))
+            ),
+            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
+        })
+        .collect();
+    assert_eq!(
+        described,
+        [
+            "bounded passed",
+            "beats_live passed",
+            "passes_through passed",
+            "endless failed live.hgl:30:9 timed out: it was still running after its limit of 1s",
+            "after passed",
+        ]
+    );
+}
+
 /// RUN-3: a run in real time goes on "until the configuration's end or
 /// until its host stops it". A stop the host asks for ends the run as
 /// its end does: what it recorded is its output. One asked for before
@@ -6163,10 +6295,10 @@ fn a_failure_names_the_statement_that_failed() {
             // match for the outer one though it has its code.
             "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
             "passed",
-            // CRUN-2: an `end` with a `length`. And a dense trace of a
-            // million cells and one.
+            // CRUN-2: an `end` with a `length`. TST-6: a publication a
+            // second after the start is not one at the start.
             "failed bounded.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
-            "failed bounded.hgl:12:5 RuntimeError: the dense trace of this run would have 1000001 cells: its last publication is that many smallest steps after its start",
+            "failed bounded.hgl:12:5 the assertion does not hold",
         ]
     );
 

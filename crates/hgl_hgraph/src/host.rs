@@ -11,7 +11,8 @@
 //! directory:
 //!
 //! - the plan, written here: one test on each line, as its Python
-//!   module, a space, and its function;
+//!   module, its function, and its time limit in seconds, `-` for one
+//!   with none;
 //! - the results, written by the driver as the tests run. Each line is
 //!   `start N`, `passed N`, `failed N LINE TEXT` or `unloaded N TEXT`,
 //!   where `N` is the test's position in the plan.
@@ -30,7 +31,7 @@ use std::time::Duration;
 use hgl_diagnostics::Location;
 
 use crate::emit::APPLICATION;
-use crate::{File, Output, ROOT, python_module, test_function};
+use crate::{File, Output, ROOT, Test, python_module, test_function};
 
 /// The driver that runs named tests, as Python.
 const DRIVER: &str = include_str!("../support/run_tests.py");
@@ -329,7 +330,22 @@ pub fn write(files: &[File], directory: &Path) -> io::Result<()> {
 /// [`crate::transpile`] gave, and `tests` are positions in its
 /// `tests`. A test that is blocked is not to be given: it, or a
 /// function it reaches, was not written.
+///
+/// An integration test is held to its time limit ([`Test::limit`]): one
+/// still running when it passes is stopped, and has failed.
 pub fn run(python: &Path, directory: &Path, output: &Output, tests: &[usize]) -> Vec<Ran> {
+    run_within(python, directory, output, tests, &Test::limit)
+}
+
+/// [`run`], with each test held to the time limit `limit` gives it,
+/// `None` for no limit.
+pub fn run_within(
+    python: &Path,
+    directory: &Path,
+    output: &Output,
+    tests: &[usize],
+    limit: &dyn Fn(&Test) -> Option<Duration>,
+) -> Vec<Ran> {
     let all = |reason: String| vec![Ran::NotRun(reason); tests.len()];
 
     let driver = directory.join(ROOT).join(DRIVER_FILE);
@@ -339,8 +355,10 @@ pub fn run(python: &Path, directory: &Path, output: &Output, tests: &[usize]) ->
         .iter()
         .map(|&test| {
             let test = &output.tests[test];
+            let limit =
+                limit(test).map_or("-".to_string(), |limit| limit.as_secs_f64().to_string());
             format!(
-                "{} {}\n",
+                "{} {} {limit}\n",
                 python_module(&test.module),
                 test_function(&test.name)
             )

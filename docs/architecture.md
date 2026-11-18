@@ -1669,7 +1669,23 @@ was running. The emitter recorded the line each statement of a test
 starts on, so the failure is reported at that statement in the source:
 `cases.hgl:9:5: the assertion does not hold`. An error that escapes,
 such as an `i64` result out of range (NUM-2), is reported the same way
-with its text. There is no limit yet on how long a test may run.
+with its text.
+
+An integration test (TST-17) is held to a time limit: a minute, where it
+gives none of its own, which the language has no way to write yet
+(hhenson/hgl_spec#110). The driver runs such a test on a thread of its
+own and waits for it no longer than its limit. One still running then
+has failed, at the statement it was at: its run in real time is asked to
+stop, which ends it as its end does, and the test goes on to its own
+end. One that does not end soon after is left, and the interpreter ends.
+A test that is no integration test has no limit yet.
+
+A trace is kept as its publications and when each was, and never as a
+cell for each microsecond: a publication a second after a run's start
+would be a million cells on. A trace written out dense, `[7, _, 9]`, is
+read as cell i being i smallest steps after the start. Its publications
+are replayed at the run's start plus that, and a run's recording is
+compared with it by how long after the run's start each publication was.
 
 #### An application
 

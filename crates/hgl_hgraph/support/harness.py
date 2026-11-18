@@ -26,20 +26,38 @@ _EARLIEST_START = _datetime.datetime(1970, 1, 1) + _SMALLEST_STEP
 # output is the value under that key once the run has stopped."
 _RUN_OUTPUT = "run.output"
 
-# The longest dense trace an eval gives. A dense trace has a cell for
-# each smallest step from the run's start to its last publication, so a
-# publication a second after the start is a million cells on.
-_DENSE_LIMIT = 1_000_000
 
+class _Recording:
+    """The trace an eval gives: its run's publications, each with its
+    instant, and the instant the run started at.
 
-class _Trace(list):
-    """The dense trace an eval gives, with the instant its run started at.
-
-    Position i of it is the run's start plus i smallest steps (the
-    language's TST-6), so what reads its instants needs the start.
+    A trace is kept as what was published and when, and never as a cell
+    for each smallest step: a publication a second after the start
+    would be a million cells on. Where two traces are compared each is
+    read as its publications and how long after its run's start each
+    is (`_relative`).
     """
 
-    start = _EARLIEST_START
+    def __init__(self, start, output):
+        self.start = start
+        self.output = output
+
+
+def _relative(trace):
+    """A trace as its publications, each with how long after its run's
+    start it was published, in time order.
+
+    A trace written out dense, `[7, _, 9]`, is a list with a cell for
+    each smallest step: cell i is i steps after the start, and a `None`
+    is no publication (the language's TST-6). An eval's trace has each
+    publication's instant, which is cast to how long after the run's
+    start it is.
+    """
+    if isinstance(trace, _Recording):
+        return [(at - trace.start, published) for at, published in trace.output]
+    return [
+        (position * _SMALLEST_STEP, cell) for position, cell in enumerate(trace) if cell is not None
+    ]
 
 
 def _bounds(config, unstated):
@@ -103,6 +121,12 @@ def stop():
     for sender in list(_senders):
         sender(True)
     return bool(_senders)
+
+
+def stop_withdrawn():
+    """Withdraws a stop that was asked for and met no run: the next run
+    in real time is then not stopped by it."""
+    _stop_wanted.clear()
 
 
 def _ran(target, replays, record, replayed, arguments, start, end, real_time):
@@ -188,7 +212,7 @@ def run(target, _record, _real_time, /, _config=None, **arguments):
     return _ran(target, {}, _record, {}, arguments, start, end, _real_time)
 
 
-def evaluate(target, _replays, _record, /, _config=None, **arguments):
+def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arguments):
     """Runs `target` with a dense trace for each temporal input.
 
     `_replays` has core's `replay` for each temporal input the eval
@@ -199,82 +223,62 @@ def evaluate(target, _replays, _record, /, _config=None, **arguments):
     any name, and the run's configuration as `_config`, a name no input
     has.
 
-    A trace is a list with one cell for each smallest step from the run's
-    start, and `None` where nothing is published. The result is the dense
-    trace of what the target published: it spans the run's start through
-    the last publication, and is empty when there was none (the language's
-    TST-6).
+    A trace given is a list with one cell for each smallest step from the
+    run's start, and `None` where nothing is published: each publication
+    of it is replayed at the run's start plus its position. The result
+    is the trace of what the target published (`_Recording`).
 
-    The run is a simulation under the configuration (`_ran`).
+    The run is a simulation under the configuration (`_ran`). With
+    `_real_time`, a name no input has, it is `run(...)` in an
+    integration test (the language's TST-17): a run in real time, from
+    the host clock's present time where the configuration gives no
+    start.
     """
-    start, end = _bounds(_config, _EARLIEST_START)
-    result = _Trace()
-    result.start = start
-    if end is not None and end <= result.start:
+    start, end = _bounds(_config, _present() if _real_time else _EARLIEST_START)
+    if end is not None and end <= start:
         # No cycle runs. hgraph has no run that ends where it starts, so
         # none is made: the graph is not built, started or stopped.
-        return result
+        return _Recording(start, [])
     # CEVAL-2: "Each tuple holds the absolute evaluation time and the
     # publication's delta ... dense position i is the start plus i
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
-        name: [
-            (result.start + position * _SMALLEST_STEP, cell)
-            for position, cell in enumerate(arguments[name])
-            if cell is not None
-        ]
+        name: [(start + after, published) for after, published in _relative(arguments[name])]
         for name in _replays
         if name in arguments
     }
-    output = _ran(target, _replays, _record, replayed, arguments, result.start, end, False)
-    if output is None:
-        return result
-    # TST-6: dense, from the run's start through the last publication.
-    for at, published in output:
-        position = (at - result.start) // _SMALLEST_STEP
-        if position >= _DENSE_LIMIT:
-            raise RuntimeError(
-                f"the dense trace of this run would have {position + 1} cells: its last "
-                "publication is that many smallest steps after its start"
-            )
-        result.extend([None] * (position + 1 - len(result)))
-        result[position] = published
-    return result
+    output = _ran(target, _replays, _record, replayed, arguments, start, end, _real_time)
+    return _Recording(start, [] if output is None else output)
 
 
 def publications(trace):
-    """What a `const fn` is given for a dense trace (the language's TST-16).
+    """What a `const fn` is given for a trace (the language's TST-16).
 
     A list with a tuple for each publication, in time order: its instant,
-    and what was published then. Position i of a dense trace is the run's
+    and what was published then. An eval's trace has them as they were
+    recorded. Position i of a trace written out dense is the earliest
     start plus i smallest steps (TST-6), and a position with no
     publication gives no tuple.
     """
-    start = getattr(trace, "start", _EARLIEST_START)
-    return [
-        (start + position * _SMALLEST_STEP, published)
-        for position, published in enumerate(trace)
-        if published is not None
-    ]
+    if isinstance(trace, _Recording):
+        return list(trace.output)
+    return [(_EARLIEST_START + after, published) for after, published in _relative(trace)]
 
 
 def same(left, right):
-    """Whether two dense traces are the same (the language's TST-4).
+    """Whether two traces are the same (the language's TST-4).
 
-    They are when each cell is: both silent, or both the same
-    publication. A `None` at the end of either adds nothing: "Trailing
-    placeholders have no effect" (TST-6).
+    They are when they have the same publications, each as long after
+    its run's start as the other's. A `_` at the end of a trace written
+    out is no publication, and adds nothing: "Trailing placeholders have
+    no effect" (TST-6).
     """
-    left, right = _trimmed(left), _trimmed(right)
-    return len(left) == len(right) and all(map(_same_cell, left, right))
-
-
-def _trimmed(trace):
-    trace = list(trace)
-    while trace and trace[-1] is None:
-        trace.pop()
-    return trace
+    left, right = _relative(left), _relative(right)
+    return len(left) == len(right) and all(
+        ours[0] == theirs[0] and _same_cell(ours[1], theirs[1])
+        for ours, theirs in zip(left, right)
+    )
 
 
 def _same_cell(left, right):
