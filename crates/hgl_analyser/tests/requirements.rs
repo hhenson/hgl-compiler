@@ -1079,3 +1079,46 @@ fn a_requires_is_held_to_a_default_that_names_a_constant() {
         ]
     );
 }
+
+/// GEN-2: "A struct application supplies all or none". A type that
+/// writes a struct's generic value is held to what it writes, however
+/// that is spelled, and never to the parameter's default; one that
+/// writes none is held to the default. Each application in a type is
+/// read for itself.
+#[test]
+fn a_written_argument_of_a_type_is_not_taken_for_the_default() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const FAST: Mode = .fast\n",
+        "const TWO: i64 = 2\n",
+        "struct Pick<const mode: Mode = SLOW> requires mode == .fast { value: i64 }\n",
+        "struct Wide<const size: i64 = TWO + 1> requires size == 2 { value: i64 }\n",
+        // Each of these holds: what is written is what counts.
+        "const fn a(held: Pick<Mode.fast>) -> i64 => 1\n",
+        "const fn b(held: Pick<.fast>) -> i64 => 1\n",
+        "const fn c(held: Pick<FAST>) -> i64 => 1\n",
+        "const fn d(held: Wide<TWO>) -> i64 => 1\n",
+        "const fn e(held: tuple<Pick<FAST>, Wide<2>>) -> i64 => 1\n",
+        // Line 13: each of these does not.
+        "const fn f(held: Pick) -> i64 => 1\n",
+        "const fn g(held: Pick<Mode.slow>) -> i64 => 1\n",
+        "const fn h(held: Pick<SLOW>) -> i64 => 1\n",
+        "const fn i(held: Wide) -> i64 => 1\n",
+        "const fn j(held: Wide<TWO + 1>) -> i64 => 1\n",
+        "const fn k(held: tuple<Pick<FAST>, Pick>) -> i64 => 1\n",
+        "const fn l(held: tuple<Pick, Pick<FAST>>) -> i64 => 1\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:18 constraint/requires.unmet GEN-3",
+            "m.hgl:14:18 constraint/requires.unmet GEN-3",
+            "m.hgl:15:18 constraint/requires.unmet GEN-3",
+            "m.hgl:16:18 constraint/requires.unmet GEN-3",
+            "m.hgl:17:18 constraint/requires.unmet GEN-3",
+            "m.hgl:18:18 constraint/requires.unmet GEN-3",
+            "m.hgl:19:18 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
