@@ -3849,6 +3849,203 @@ fn a_source_is_a_generator_a_node_resumes() {
     }
 }
 
+/// FN-15: a `var` parameter. A call gives it a place and assigns it:
+/// a `var`, a field or an element of one, a node's `state` and `cache`.
+const PLACES: &str = concat!(
+    "module demo.places\n",
+    "\n",
+    "struct Book {\n",
+    "    orders: list<i64>\n",
+    "    name: str\n",
+    "}\n",
+    "\n",
+    "const fn bump(var count: i64, by: i64) {\n",
+    "    count += by\n",
+    "}\n",
+    "const fn set_first(var items: list<i64>, value: i64) {\n",
+    "    items[0] = value\n",
+    "}\n",
+    // A `var` parameter is given on to another.
+    "const fn through(var count: i64) { bump(count, 1) }\n",
+    // A result beside the place.
+    "const fn take(var count: i64) -> i64 {\n",
+    "    let before = count\n",
+    "    count = 0\n",
+    "    return before\n",
+    "}\n",
+    "const fn both(var left: i64, var right: i64) {\n",
+    "    let held = left\n",
+    "    left = right\n",
+    "    right = held\n",
+    "}\n",
+    // Every way out gives the place what the parameter holds there.
+    "const fn early(var count: i64, halt: bool) -> i64 {\n",
+    "    if halt { return -1 }\n",
+    "    count += 1\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "const fn total(values: list<i64>) -> i64 {\n",
+    "    var sum: i64 = 0\n",
+    "    for value in values {\n",
+    "        bump(sum, value)\n",
+    "    }\n",
+    "    return sum\n",
+    "}\n",
+    // "a value taken from the place before the call is as it was".
+    "const fn kept() -> bool {\n",
+    "    var entries: list<i64> = [1, 2]\n",
+    "    let before = entries\n",
+    "    set_first(entries, 9)\n",
+    "    return before == [1, 2] && entries == [9, 2]\n",
+    "}\n",
+    "const fn nested() -> i64 {\n",
+    "    var book: Book = Book(orders: [1, 2], name: \"a\")\n",
+    "    set_first(book.orders, 5)\n",
+    "    bump(book.orders[1], 3)\n",
+    "    return book.orders[0] + book.orders[1]\n",
+    "}\n",
+    "const fn taken() -> i64 {\n",
+    "    var held: i64 = 7\n",
+    "    let was = take(held)\n",
+    "    return was * 10 + held\n",
+    "}\n",
+    "const fn swapped() -> i64 {\n",
+    "    var a: i64 = 1\n",
+    "    var b: i64 = 2\n",
+    "    both(a, b)\n",
+    "    return a * 10 + b\n",
+    "}\n",
+    "const fn stepped() -> i64 {\n",
+    "    var n: i64 = 0\n",
+    "    through(n)\n",
+    "    let first = early(n, true)\n",
+    "    let second = early(n, false)\n",
+    "    return first * 100 + second * 10 + n\n",
+    "}\n",
+    "fn counted(value: i64) -> i64 {\n",
+    "    state seen: i64 = 0\n",
+    "    cache held: i64 = 0\n",
+    "    when {\n",
+    "        bump(seen, 1)\n",
+    "        bump(held, value)\n",
+    "        return seen * 100 + held\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test places {\n",
+    "    assert total([1, 2, 3]) == 6\n",
+    "    assert kept()\n",
+    "    assert nested() == 10\n",
+    "    assert taken() == 70\n",
+    "    assert swapped() == 21\n",
+    "    assert stepped() == -100 + 20 + 2\n",
+    "    var count: i64 = 1\n",
+    "    bump(count, 4)\n",
+    "    assert count == 5\n",
+    "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
+    "}\n",
+);
+
+/// FN-15: "what it holds when the function returns is what the place
+/// is given". Python has no place to give a value to: a function with
+/// `var` parameters returns its result and then what each holds, and
+/// the call, the whole of a statement, assigns the places after it, in
+/// the order of the parameters.
+#[test]
+fn a_call_assigns_the_places_its_var_parameters_are_given() {
+    let emitted = emit(&[("places.hgl", PLACES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_places/__init__.py");
+    for expected in [
+        concat!(
+            "def bump(count, by):\n",
+            "    count = _core.add__i64_i64(lhs=count, rhs=by)\n",
+            "    return (None, count)\n",
+        ),
+        concat!(
+            "def take(count):\n",
+            "    before = count\n",
+            "    count = 0\n",
+            "    return (before, count)\n",
+        ),
+        "    return (None, left, right)\n",
+        concat!(
+            "def early(count, halt):\n",
+            "    if halt:\n",
+            "        return (_core.neg__i64(value=1), count)\n",
+        ),
+        // The call, and then the place.
+        concat!(
+            "        _given = bump(count=sum, by=value)\n",
+            "        sum = _given[1]\n",
+        ),
+        // A `var` parameter given on is a place of this function.
+        concat!(
+            "def through(count):\n",
+            "    _given = bump(count=count, by=1)\n",
+            "    count = _given[1]\n",
+            "    return (None, count)\n",
+        ),
+        // A place inside a value: its root is given a new value.
+        concat!(
+            "    _given = set_first(items=book.orders, value=5)\n",
+            "    book = _core.with_field(book, orders=_given[1])\n",
+            "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
+            "    book = _core.with_field(book, orders=_core.with_item(book.orders, 1, _given[1]))\n",
+        ),
+        // The call's own result is the first of what it gives.
+        concat!(
+            "    _given = take(count=held)\n",
+            "    held = _given[1]\n",
+            "    was = _given[0]\n",
+        ),
+        concat!(
+            "    _given = both(left=a, right=b)\n",
+            "    a = _given[1]\n",
+            "    b = _given[2]\n",
+        ),
+        // A node's `state` and `cache` are places.
+        concat!(
+            "    _given = bump(count=_state.seen, by=1)\n",
+            "    _state.seen = _given[1]\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// FN-15: a call that assigns a place is written with its assignments
+/// after it, which a statement has room for. One inside an expression
+/// is reported.
+#[test]
+fn a_place_call_inside_an_expression_is_reported() {
+    let emitted = emit(&[(
+        "inside.hgl",
+        concat!(
+            "module demo.inside\n",
+            "const fn take(var count: i64) -> i64 {\n",
+            "    count = 0\n",
+            "    return 1\n",
+            "}\n",
+            "const fn twice() -> i64 {\n",
+            "    var held: i64 = 7\n",
+            "    return take(held) + take(held)\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "inside.hgl:8:12 target.unsupported",
+            "inside.hgl:8:25 target.unsupported",
+        ]
+    );
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -4321,6 +4518,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("stops.hgl", STOPS));
     files.push(("caps.hgl", CAPABILITIES));
     files.push(("sources.hgl", SOURCES));
+    files.push(("places.hgl", PLACES));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4343,13 +4541,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        60,
+        61,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, and one of each demo's"
     );
 }
 

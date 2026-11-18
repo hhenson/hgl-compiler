@@ -191,12 +191,16 @@ fn packs(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
             }
             // UNIT-8: "A parameter that may be omitted follows every
             // parameter that may not." One may be omitted when it has
-            // a default or its type is written `T?`.
-            let omissible = tokens(&parameter).any(|token| token.kind() == SyntaxKind::Eq)
-                || parameter
-                    .children()
-                    .next()
-                    .is_some_and(|ty| ty.kind() == SyntaxKind::NullableType);
+            // a default or its type is written `T?`. "A `var`
+            // parameter is the exception: it is always given, whatever
+            // its type".
+            let var = tokens(&parameter).any(|token| token.kind() == SyntaxKind::KwVar);
+            let omissible = !var
+                && (tokens(&parameter).any(|token| token.kind() == SyntaxKind::Eq)
+                    || parameter
+                        .children()
+                        .next()
+                        .is_some_and(|ty| ty.kind() == SyntaxKind::NullableType));
             match (&omissible_seen, omissible) {
                 (None, true) => omissible_seen = Some(name.clone()),
                 (Some(earlier), false) => diagnostics.emit(

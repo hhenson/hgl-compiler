@@ -397,6 +397,12 @@ pub mod codes {
     /// In a hook or a value function, a `const` parameter given what is
     /// no constant expression (FN-1).
     pub const ARGUMENT_CONSTANT: &str = "argument.constant";
+    /// A `var` parameter is given what is no place (FN-15).
+    pub const ARGUMENT_PLACE: &str = "argument.place";
+    /// A `var` parameter of a temporal function, an operator or a
+    /// candidate, or one of a capability's type or `endpoint<T>`
+    /// (FN-15).
+    pub const PARAMETER_VAR: &str = "parameter.var";
     /// A value function calls a temporal function (FN-4).
     pub const CALL_ROLE: &str = "call.role";
     /// An abstract struct is constructed (TYPE-3).

@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use hgl_diagnostics::{Category, Diagnostics, Location};
 use hgl_parser::HasSpan;
 
-use crate::program::Program;
-use crate::types::{Detail, GenericKind, Type};
+use crate::program::{DeclarationKind, Program, Role};
+use crate::types::{Detail, GenericKind, NamedKind, Type};
 use crate::values::{Written, constant_fits, generic_default, written};
 use crate::{codes, error};
 
@@ -21,6 +21,81 @@ use crate::{codes, error};
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     generic_defaults(program, diagnostics);
     option_kinds(program, diagnostics);
+    var_parameters(program, diagnostics);
+}
+
+/// FN-15: "A value function, a `const fn` or a native one, may mark a
+/// parameter `var` ... Its type is an ordinary value type, and no
+/// capability's (TIME-8) or `endpoint<T>` (TIME-9), which no place
+/// holds ... A temporal `fn`, an operator, and a candidate declare none
+/// (`parameter.var`)." Each is reported at the `var`.
+fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
+    for module in &program.modules {
+        for (index, declaration) in module.declarations.iter().enumerate() {
+            let Some(Detail::Callable(signature)) = module.details.get(index) else {
+                continue;
+            };
+            if !signature.parameters.iter().any(|parameter| parameter.var) {
+                continue;
+            }
+            let file = module.files[declaration.file].file;
+            // What the declaration is, where it may declare none.
+            let declares_none = match declaration.kind {
+                DeclarationKind::Function(Role::Value)
+                | DeclarationKind::NativeFunction(Role::Value)
+                | DeclarationKind::NativeImplementation(Role::Value) => None,
+                DeclarationKind::Operator => Some("an operator"),
+                kind if kind.candidate().is_some() => Some("a candidate of an operator"),
+                DeclarationKind::NativeCandidateImplementation(_) => {
+                    Some("a candidate of an operator")
+                }
+                _ => Some("a temporal function"),
+            };
+            let written = crate::read::parameters(&declaration.syntax);
+            for (parameter, node) in signature.parameters.iter().zip(&written) {
+                if !parameter.var {
+                    continue;
+                }
+                let Some(var) = crate::read::tokens(node)
+                    .find(|token| token.kind() == hgl_parser::SyntaxKind::KwVar)
+                else {
+                    continue;
+                };
+                let at = Location::new(file, var.span());
+                let mut inner = &parameter.ty;
+                while let Type::Nullable(of) = inner {
+                    inner = of;
+                }
+                let no_place = match inner {
+                    Type::Named {
+                        kind: NamedKind::Native,
+                        module: of,
+                        ..
+                    } if Some(*of) == program.core() => Some("a capability"),
+                    Type::Endpoint(_) => Some("an endpoint"),
+                    _ => None,
+                };
+                let message = match (declares_none, no_place) {
+                    (Some(what), _) => format!(
+                        "`{}` is a `var` parameter of {what}: only a `const fn` or a native value function declares one",
+                        parameter.name
+                    ),
+                    (None, Some(what)) => format!(
+                        "`{}` is a `var` parameter of the type of {what}, which no place holds",
+                        parameter.name
+                    ),
+                    (None, None) => continue,
+                };
+                diagnostics.emit(error(
+                    Category::FunctionKind,
+                    codes::PARAMETER_VAR,
+                    at,
+                    message,
+                    "FN-15",
+                ));
+            }
+        }
+    }
 }
 
 /// GEN-13: "An explicit `const N: V` declares a value parameter of

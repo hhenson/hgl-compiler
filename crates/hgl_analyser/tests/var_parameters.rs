@@ -1,0 +1,259 @@
+//! The analyser against FN-15, the `var` parameter. Each test cites
+//! the rule.
+//!
+//! A finding is written `file:line:column category/code rule`.
+
+mod common;
+
+use common::{Checked, check};
+use hgl_analyser::hir::Body;
+use hgl_analyser::{Detail, LocalKind};
+
+/// No lines.
+const NONE: [&str; 0] = [];
+
+/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
+/// so the text given starts on line 2.
+fn module(text: &str) -> Checked {
+    check(&[("m.hgl", &format!("module m\n{text}"))])
+}
+
+/// The typed body of the function `name` of module `m`.
+fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
+    let module = checked.program.module("m").expect("module m exists");
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == name)
+        .expect("the declaration exists");
+    module.bodies[index].as_ref().expect("it has a body")
+}
+
+/// The functions the tests call.
+const DECLARED: &str = concat!(
+    "const fn bump(var count: i64, by: i64) {\n",
+    "    count += by\n",
+    "}\n",
+    "const fn set_first(var items: list<i64>, value: i64) {\n",
+    "    items[0] = value\n",
+    "}\n",
+    "const fn clear(var value: i64?) { value = null }\n",
+);
+
+/// FN-15: "A value function, a `const fn` or a native one, may mark a
+/// parameter `var` ... A call gives a `var` parameter a place, as the
+/// left of an assignment is (EXPR-3): a `var`, a `state`, or a `cache`,
+/// or a place inside one ... In the function the parameter is a `var`
+/// ... A `var` parameter may be given on to a `var` parameter of a
+/// function the body calls ... a call of it stands in a value function,
+/// in a runtime hook, or in composition where the place holds an
+/// ordinary value."
+#[test]
+fn a_var_parameter_takes_a_place() {
+    let checked = module(&format!(
+        "{DECLARED}{}",
+        concat!(
+            "struct Book {\n",
+            "    orders: list<i64>\n",
+            "    name: str\n",
+            "}\n",
+            "native const fn grow<V>(var values: list<V>, item: V)\n",
+            "const fn through(var count: i64) { bump(count, 1) }\n",
+            "const fn total(values: list<i64>) -> i64 {\n",
+            "    var sum: i64 = 0\n",
+            "    for value in values {\n",
+            "        bump(sum, value)\n",
+            "    }\n",
+            "    return sum\n",
+            "}\n",
+            // A field and an element of a `var` are places.
+            "const fn nested() -> i64 {\n",
+            "    var book: Book = Book(orders: [1, 2], name: \"a\")\n",
+            "    set_first(book.orders, 5)\n",
+            "    bump(book.orders[1], 3)\n",
+            "    grow(book.orders, 4)\n",
+            "    return book.orders[0]\n",
+            "}\n",
+            // A `state` and a `cache` of a node are.
+            "fn counted(value: i64) -> i64 {\n",
+            "    state seen: i64 = 0\n",
+            "    cache held: i64 = 0\n",
+            "    when {\n",
+            "        bump(seen, 1)\n",
+            "        bump(held, value)\n",
+            "        return seen\n",
+            "    }\n",
+            "}\n",
+            // A `var` of a test that holds an ordinary value is.
+            "test in_composition {\n",
+            "    var count: i64 = 1\n",
+            "    bump(count, 4)\n",
+            "    assert count == 5\n",
+            "}\n",
+        )
+    ));
+    assert_eq!(checked.summary(), NONE);
+    // The parameter is a `var` of the body, and the other is not.
+    let locals: Vec<(String, LocalKind)> = body(&checked, "bump")
+        .locals
+        .iter()
+        .map(|local| (local.name.clone(), local.kind))
+        .collect();
+    assert_eq!(
+        locals,
+        [
+            ("count".to_string(), LocalKind::Var),
+            ("by".to_string(), LocalKind::Parameter)
+        ]
+    );
+    let module = checked.program.module("m").expect("module m exists");
+    let bump = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == "bump")
+        .expect("it is declared");
+    let Detail::Callable(signature) = &module.details[bump] else {
+        panic!("`bump` is a function");
+    };
+    assert_eq!(
+        signature
+            .parameters
+            .iter()
+            .map(|parameter| parameter.var)
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
+}
+
+/// FN-15: "What is read-only rejects, a `let`, a parameter that is not
+/// `var`, a constant, or an iteration binding (`binding.immutable`); so
+/// does what is no place, a literal or what a call gives
+/// (`argument.place`) ... It is always given: it has no default, and is
+/// not left out where its type is written `T?` (UNIT-8)."
+#[test]
+fn what_is_no_place_is_not_given_to_a_var_parameter() {
+    let checked = module(&format!(
+        "{DECLARED}{}",
+        concat!(
+            "const LIMIT: i64 = 3\n",
+            "const fn made() -> i64 => 1\n",
+            // Line 11.
+            "const fn literal() -> i64 {\n",
+            "    bump(1, 2)\n",
+            "    return 1\n",
+            "}\n",
+            "const fn called() -> i64 {\n",
+            "    bump(made(), 2)\n",
+            "    return 1\n",
+            "}\n",
+            "const fn summed() -> i64 {\n",
+            "    var n: i64 = 1\n",
+            "    bump(n + 1, 2)\n",
+            "    return n\n",
+            "}\n",
+            "const fn fixed() -> i64 {\n",
+            "    let held = 0\n",
+            "    bump(held, 2)\n",
+            "    return held\n",
+            "}\n",
+            "const fn parameter(count: i64) -> i64 {\n",
+            "    bump(count, 2)\n",
+            "    return count\n",
+            "}\n",
+            "const fn constant() -> i64 {\n",
+            "    bump(LIMIT, 2)\n",
+            "    return 1\n",
+            "}\n",
+            "const fn iterated(values: list<i64>) -> i64 {\n",
+            "    for value in values { bump(value, 1) }\n",
+            "    return 1\n",
+            "}\n",
+            // A field of a `let` is read-only all the way down.
+            "const fn inside(values: list<i64>) -> i64 {\n",
+            "    let held = values\n",
+            "    bump(held[0], 1)\n",
+            "    return 1\n",
+            "}\n",
+            // UNIT-8: a `var` parameter is given though it is nullable.
+            "const fn omitted() -> i64 {\n",
+            "    clear()\n",
+            "    return 1\n",
+            "}\n",
+        )
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:10 type/argument.place FN-15",
+            "m.hgl:16:10 type/argument.place FN-15",
+            "m.hgl:21:10 type/argument.place FN-15",
+            "m.hgl:26:10 name/binding.immutable FN-15",
+            "m.hgl:30:10 name/binding.immutable FN-15",
+            "m.hgl:34:10 name/binding.immutable FN-15",
+            "m.hgl:38:32 name/binding.immutable FN-15",
+            "m.hgl:43:10 name/binding.immutable FN-15",
+            "m.hgl:47:5 type/argument.missing EXPR-2",
+        ]
+    );
+}
+
+/// FN-15: "Its type is an ordinary value type, and no capability's
+/// (TIME-8) or `endpoint<T>` (TIME-9), which no place holds
+/// (`parameter.var`) ... A temporal `fn`, an operator, and a candidate
+/// declare none (`parameter.var`)."
+#[test]
+fn only_a_value_function_declares_a_var_parameter() {
+    let checked = module(concat!(
+        "fn ticking(var value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn wired(var value: i64) -> i64 => value\n",
+        "operator joined(var lhs: i64, rhs: i64) -> i64\n",
+        "operator plain(lhs: i64, rhs: i64) -> i64\n",
+        "impl const fn plain(var lhs: i64, rhs: i64) -> i64 => lhs\n",
+        "native fn outside(var value: i64) -> i64\n",
+        "const fn logged(var logger: Logger) -> i64 => 1\n",
+        // A value function, and a native one, may.
+        "const fn fine(var value: i64) { value = 1 }\n",
+        "native const fn grown(var values: list<i64>, item: i64)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:12 function-kind/parameter.var FN-15",
+            "m.hgl:5:10 function-kind/parameter.var FN-15",
+            "m.hgl:6:17 function-kind/parameter.var FN-15",
+            "m.hgl:8:21 function-kind/parameter.var FN-15",
+            "m.hgl:9:19 function-kind/parameter.var FN-15",
+            "m.hgl:10:17 function-kind/parameter.var FN-15",
+        ]
+    );
+}
+
+/// FN-15: "A function that declares one is not lifted (FN-6) ... No
+/// argument of such a call is a connection (`connection.as_constant`),
+/// and the function is no target of an `eval` (`eval.target`)."
+#[test]
+fn a_function_with_a_var_parameter_is_not_lifted() {
+    let checked = module(&format!(
+        "{DECLARED}{}",
+        concat!(
+            // Line 9: `value` is a connection in a graph.
+            "fn wired(value: i64) -> i64 {\n",
+            "    var sum: i64 = 0\n",
+            "    bump(sum, value)\n",
+            "    return value\n",
+            "}\n",
+            "test evaluated {\n",
+            "    eval(clear(value: [1]))\n",
+            "}\n",
+        )
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:15 phase/connection.as_constant FN-15",
+            "m.hgl:15:10 type/eval.target FN-15",
+        ]
+    );
+}

@@ -212,6 +212,9 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | FN-12 | transpiler | planned | Aggregate lifting: one invocation with the whole value |
 | FN-13 | transpiler | planned | Stable argument values; retained results independent of later changes |
 | FN-14 | analyser | done | What an anonymous function may use from around it |
+| FN-15 | parser | done | `var` before a parameter's name, a name and a type; no pack and no default is read after one |
+| FN-15 | analyser | partial | A `var` parameter is a `var` of its function's body. A call gives it a place: a `var`, a `state` or a `cache`, or a field or an element of one; a `let`, any other parameter, an iteration binding and a constant are `binding.immutable`, and what is no place `argument.place`. No argument of such a call is a connection (`connection.as_constant`), and the function is no target of an eval (`eval.target`). One of a temporal function, an operator or a candidate, or of a capability's type or `endpoint<T>`, is `parameter.var`. It is not left out though its type is nullable (`argument.missing`). Left: a place of a type the parameter's admits by inheritance and is not; a native implementation part's `var` marks matched with its declaration's (NATIVE-2) |
+| FN-15 | transpiler | partial | hgraph: a function with `var` parameters returns its result and then what each holds, at every way out; a call that is the whole of a statement, or of what a `let`, an assignment or a `return` takes, is bound to `_given` and assigns each place after it, in the order of the parameters, a place inside a value by giving its root a new one. Left: such a call inside an expression, which is reported |
 
 ## Generics and operators
 

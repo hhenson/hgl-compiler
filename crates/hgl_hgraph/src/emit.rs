@@ -104,6 +104,8 @@ pub(crate) fn module(
         lifted: 0,
         candidates: BTreeSet::new(),
         propagates: false,
+        given_back: Vec::new(),
+        place_call: false,
         piece: Piece::default(),
         declared: Vec::new(),
         instanced: Vec::new(),
@@ -507,6 +509,13 @@ struct Emitter<'a> {
     /// failure then leaves the function through an exception of the
     /// provider's, which the function catches and returns (ERR-5).
     propagates: bool,
+    /// The `var` parameters of the value function being written, as
+    /// Python names them (FN-15): what each holds when the function
+    /// returns is given back to its caller, after the result.
+    given_back: Vec<String>,
+    /// True while the call that is the whole of a statement is
+    /// written: one that assigns a place is written only there.
+    place_call: bool,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -1013,9 +1022,27 @@ impl Emitter<'_> {
             signature: Some(signature),
             mode: Mode::Value,
         };
+        // FN-15: "what it holds when the function returns is what the
+        // place is given". Python has no place to give a value to, so
+        // the function returns what each `var` parameter holds after
+        // its result, `(result, count)`, and the call assigns the
+        // places.
+        self.given_back = signature
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.var)
+            .map(|parameter| name(&parameter.name))
+            .collect();
         let start = self.text.len();
         self.propagates = false;
         self.block(&function, &body.statements, 1);
+        if !self.given_back.is_empty()
+            && !matches!(body.statements.last(), Some(Stmt::Return { .. }))
+        {
+            // Where the body may end with no `return`.
+            let given = self.returned("None");
+            self.line(1, &format!("return {given}"));
+        }
         if std::mem::take(&mut self.propagates) {
             // ERR-5: "In a value function returning `result<U,E>`,
             // failure returns the same E as Err." A `?` is inside an
@@ -1029,8 +1056,85 @@ impl Emitter<'_> {
             self.line(1, "try:");
             self.text.push_str(&body);
             self.line(1, "except _core.Propagated as _left:");
-            self.line(2, "return _left.failure");
+            let given = self.returned("_left.failure");
+            self.line(2, &format!("return {given}"));
         }
+        self.given_back.clear();
+    }
+
+    /// What a `return` of `value` gives: the value, or in a function
+    /// with `var` parameters the value and then what each of them
+    /// holds (FN-15).
+    fn returned(&self, value: &str) -> String {
+        if self.given_back.is_empty() {
+            value.to_string()
+        } else {
+            format!("({value}, {})", self.given_back.join(", "))
+        }
+    }
+
+    /// The `var` parameters of what `value` calls, by their positions,
+    /// where it is a call of a function that declares any (FN-15).
+    fn places_of(&self, value: &Expr) -> Vec<usize> {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                },
+            ..
+        } = &value.kind
+        else {
+            return Vec::new();
+        };
+        match self.program.modules[*module].details.get(*declaration) {
+            Some(Detail::Callable(signature)) => signature
+                .parameters
+                .iter()
+                .enumerate()
+                .filter(|(_, parameter)| parameter.var)
+                .map(|(index, _)| index)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A call that assigns places, which is the whole of a statement
+    /// (FN-15): the call, and then each place given what its `var`
+    /// parameter held when the function returned, "in the order of the
+    /// parameters". Returns what the call's own result is read as, or
+    /// `None` where `value` is no such call.
+    ///
+    /// A function with `var` parameters returns its result and then
+    /// what each holds, so the call is bound to `_given`: `_given[0]`
+    /// is the result, and `_given[1]` the first place's new value. A
+    /// function that fails raises, and assigns nothing.
+    fn place_call(&mut self, function: &Function, value: &Expr, depth: usize) -> Option<String> {
+        let places = self.places_of(value);
+        if places.is_empty() {
+            return None;
+        }
+        let ExprKind::Call { arguments, .. } = &value.kind else {
+            return None;
+        };
+        self.place_call = true;
+        let called = self.expression(function, value);
+        self.place_call = false;
+        self.line(depth, &format!("_given = {called}"));
+        for (position, parameter) in places.iter().enumerate() {
+            let Some(argument) = arguments
+                .iter()
+                .find(|argument| argument.parameter == Some(*parameter))
+            else {
+                continue;
+            };
+            let given = format!("_given[{}]", position + 1);
+            if let Some((target, assigned)) = self.assigned(function, &argument.value, given) {
+                self.line(depth, &format!("{target} = {assigned}"));
+            }
+        }
+        Some("_given[0]".to_string())
     }
 
     /// The annotation of a parameter or a result of a temporal
@@ -1724,7 +1828,10 @@ impl Emitter<'_> {
         match statement {
             Stmt::Declare { local, value } => {
                 if let Some(value) = value {
-                    let value = self.expression(function, value);
+                    let value = match self.place_call(function, value, depth) {
+                        Some(result) => result,
+                        None => self.expression(function, value),
+                    };
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
                 } else if matches!(function.locals[*local].ty, Type::Nullable(_)) {
@@ -1741,7 +1848,10 @@ impl Emitter<'_> {
             // A compound assignment's value is already the symbol with
             // the target as its left operand.
             Stmt::Assign { local, value, .. } => {
-                let value = self.expression(function, value);
+                let value = match self.place_call(function, value, depth) {
+                    Some(result) => result,
+                    None => self.expression(function, value),
+                };
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
             }
@@ -1757,12 +1867,24 @@ impl Emitter<'_> {
             // FN-7: a `return` with a value publishes it and ends the
             // evaluation; with none, and where a body ends, nothing is
             // published. hgraph has a node that returns `None` not tick.
-            Stmt::Return { value: None, .. } => self.line(depth, "return"),
+            Stmt::Return { value: None, .. } if self.given_back.is_empty() => {
+                self.line(depth, "return")
+            }
+            // FN-15: a function with `var` parameters gives back what
+            // each holds, after its result.
+            Stmt::Return { value: None, .. } => {
+                let given = self.returned("None");
+                self.line(depth, &format!("return {given}"));
+            }
             Stmt::Return {
                 value: Some(value), ..
             } => {
-                let value = self.expression(function, value);
-                self.line(depth, &format!("return {value}"));
+                let value = match self.place_call(function, value, depth) {
+                    Some(result) => result,
+                    None => self.expression(function, value),
+                };
+                let given = self.returned(&value);
+                self.line(depth, &format!("return {given}"));
             }
             Stmt::Assert { condition, .. } => {
                 // Python's own `assert` is removed when the interpreter
@@ -1821,8 +1943,12 @@ impl Emitter<'_> {
                 self.statements(function, statements, depth);
             }
             Stmt::Expr(value) => {
-                let value = self.expression(function, value);
-                self.line(depth, &value);
+                // FN-15: a call that assigns places is written with
+                // its assignments, and has no value to write.
+                if self.place_call(function, value, depth).is_none() {
+                    let value = self.expression(function, value);
+                    self.line(depth, &value);
+                }
             }
             // SOURCE-2: "Yield evaluates its time once, then payload
             // once, before target validation." Python evaluates a
@@ -3077,6 +3203,9 @@ impl Emitter<'_> {
     ) -> String {
         let at = whole.at;
         let program = self.program;
+        // True for the call that is the whole of a statement, and not
+        // for what its arguments call.
+        let whole_statement = std::mem::take(&mut self.place_call);
         let (module, declaration, generics, candidate) = match callee {
             Callee::Function {
                 module,
@@ -3112,6 +3241,12 @@ impl Emitter<'_> {
             return "None".to_string();
         };
         let declared = &program.modules[module].declarations[declaration];
+        // FN-15: a call that assigns places is written with the
+        // assignments after it, which only a statement has room for.
+        if !whole_statement && signature.parameters.iter().any(|parameter| parameter.var) {
+            self.unsupported(at, "a call that assigns a place, inside an expression");
+            return "None".to_string();
+        }
         // A test is a composition block (TST-3), and a temporal function
         // called in one makes a connection, which Python has no graph
         // to make in: a target is run through `eval`.

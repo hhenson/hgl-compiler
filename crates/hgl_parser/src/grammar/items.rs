@@ -525,6 +525,7 @@ impl Parser<'_> {
     /// ```text
     /// parameter = IDENTIFIER, ":", type, [ "=", const_expression ]
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
+    ///           | "var", IDENTIFIER, ":", value_type
     ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
     /// pack = "...", type, [ cardinality ]
     ///      | "...", "{", type, "}", [ cardinality ] ;
@@ -534,19 +535,31 @@ impl Parser<'_> {
     /// or pack, an optional default. The grammar admits `const` and a
     /// default on a pack so that FN-8 rejects them by rule; that and
     /// which other combinations mean something is for the analyser.
+    ///
+    /// FN-15: a `var` parameter is `"var", IDENTIFIER, ":", value_type`,
+    /// and no more: it is no pack and has no default, so neither is
+    /// read after one, and what is written there is not expected.
     fn parameter(&mut self) {
-        if !self.at(Ident) {
+        let var = self.at(KwVar);
+        if !self.at(Ident) && !var {
             return;
         }
         self.start(Param);
-        // FN-5, LEX-9: `const` is a modifier only before the parameter's
-        // name. In `const: i64` it is the name.
-        if self.at_word("const") && self.nth(1) == Ident {
+        if var {
+            self.bump();
+            if !self.at(Ident) {
+                self.expected("a parameter's name");
+                self.finish();
+                return;
+            }
+        } else if self.at_word("const") && self.nth(1) == Ident {
+            // FN-5, LEX-9: `const` is a modifier only before the
+            // parameter's name. In `const: i64` it is the name.
             self.bump();
         }
         self.bump();
         if self.eat(Colon) {
-            if self.eat(Ellipsis) {
+            if !var && self.eat(Ellipsis) {
                 // FN-8: a pack takes any number of arguments. `...T` is a
                 // positional pack; `...{T}` a named one.
                 if self.at(LBrace) {
@@ -570,7 +583,7 @@ impl Parser<'_> {
         } else {
             self.expected("`:`");
         }
-        if self.at_assign() {
+        if !var && self.at_assign() {
             self.eat_assign();
             self.expression();
         }
