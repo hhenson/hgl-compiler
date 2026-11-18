@@ -1469,8 +1469,8 @@ only where the program reaches it, at core's source.
 | `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` of `_hgl._harness` |
-| `eval(target(input: [7]), RunConfig(length: 2us))` (RUN-1, core's CRUN-2) | `_harness.evaluate(target, input=[7], _config=...)`: the configuration last, by a name no input has, so that it is evaluated after the call's arguments (EXPR-13). The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and gives hgraph's `eval_node` the start and the end, which hgraph also takes as exclusive |
+| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, {"input": _hg.TS[_py.int]}, _hg.TS[_py.int], input=[7, None, 9])` of `_hgl._harness`: the target, the hgraph type of each of its temporal inputs by name, that of its result or `None`, and then the arguments. The harness wires the run from those |
+| `eval(target(input: [7]), RunConfig(length: 2us))` (RUN-1, core's CRUN-2) | `_harness.evaluate(target, {...}, ..., input=[7], _config=...)`: the configuration last, by a name no input has, so that it is evaluated after the call's arguments (EXPR-13). The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and runs the entry from the start to the end, which hgraph also takes as exclusive |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
@@ -1505,9 +1505,38 @@ refuses it afterwards, so the generator, which lives across
 evaluations, reads the clock, the logger and the store from the node's
 state, where the node puts the ones of the evaluation it is resumed in.
 
-`_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
-for each input through hgraph's own `eval_node` and ends the result at
-its last publication (TST-6). It also holds `same`, the comparison of two
+`_hgl/_harness.py` holds `evaluate`, which runs an eval as core has one
+(CEVAL-1): "a run of an entry it generates: core's `replay` wired to
+each temporal input of the target, and the target's result as the
+entry's".
+
+| Step | What the harness does |
+| --- | --- |
+| Entries | Each dense trace becomes a replay list: a tuple for each cell that is no placeholder, its time the run's start plus its position in smallest steps (CEVAL-2) |
+| Wiring | A graph: a replay for each temporal input, the target, and a record on its result under `"run.output"` (CRUN-8) |
+| Run | hgraph's `evaluate_graph`, a simulation from the run's start to its end, with a global state of its own (CRUN-7) |
+| Output | What the store has under `"run.output"` once the run has stopped; none is a failure (CEVAL-6) |
+| Trace | The recording written dense from the run's start through its last publication (TST-6) |
+
+hgraph's `eval_node` is not used. It keeps a dense recording counted
+from the earliest start whatever start a run has, so it gives no trace
+for a run that starts at a calendar date; here a recording holds times,
+and the dense trace is counted from the run's start.
+
+`replay` and `record` are core's, and core has them as HGL. Until they
+are source in core the harness has the two itself, written in Python:
+`replay` is the provider's `resume` over the entries, as a source's own
+statements are resumed, and `record` a sink that appends each
+publication's time and delta and puts them in the store at stop. Core's
+own will take their place (issue 142).
+
+hgraph makes a value of its own of what it is given to keep, a node's
+configuration and what its global state holds, and has none for a tuple
+that holds a set's delta. An object of a class it does not know is kept
+as it is, so the replay list and what the store is given are each
+inside one, the provider's `Held`.
+
+It also holds `same`, the comparison of two
 traces (TST-4): cell by cell, with a `None` at the end of either adding
 nothing. Python's `==` is not used: hgraph's set delta has `Removed(1)`
 equal to `1`, so a delta that removed an element would equal one that

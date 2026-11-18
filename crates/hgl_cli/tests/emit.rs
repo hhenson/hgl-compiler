@@ -74,7 +74,7 @@ fn an_accepted_program_is_written() {
     ));
     assert!(
         module
-            .contains("    if not (_harness.same(_harness.evaluate(pass_, value=[7, None, 9]), [7, None, 9])):\n        raise _py.AssertionError()\n")
+            .contains("    if not (_harness.same(_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[7, None, 9]), [7, None, 9])):\n        raise _py.AssertionError()\n")
     );
     assert!(out.join("_hgl").join("_harness.py").is_file());
     // The harness imports the provider, which is written with it.

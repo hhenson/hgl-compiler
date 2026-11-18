@@ -4,18 +4,30 @@ Written by the hgl compiler beside the modules it generates.
 """
 
 import datetime as _datetime
+import logging as _logging
+
+import hgraph as _hg
 
 import _hgl._core_native as _core
-from hgraph.test import eval_node
 
 # Where an eval's run starts, and how far apart two of its cycles are
 # (core's CRUN-3): "The earliest start is one smallest step after
 # `1970-01-01T00:00:00Z`", and the smallest step is a microsecond. They
-# are hgraph's own `MIN_ST` and `MIN_TD`, which `eval_node` runs from and
-# by. An instant is a `datetime` in UTC that names no zone, as hgraph has
-# them.
+# are hgraph's own `MIN_ST` and `MIN_TD`, which a simulation of hgraph's
+# runs from and by. An instant is a `datetime` in UTC that names no zone,
+# as hgraph has them.
 _SMALLEST_STEP = _datetime.timedelta(microseconds=1)
 _EARLIEST_START = _datetime.datetime(1970, 1, 1) + _SMALLEST_STEP
+
+# The key a run's recording is put under (core's CRUN-8): "The run wires
+# `record` to the entry's result under the key `"run.output"`, and its
+# output is the value under that key once the run has stopped."
+_RUN_OUTPUT = "run.output"
+
+# The longest dense trace an eval gives. A dense trace has a cell for
+# each smallest step from the run's start to its last publication, so a
+# publication a second after the start is a million cells on.
+_DENSE_LIMIT = 1_000_000
 
 
 class _Trace(list):
@@ -50,23 +62,96 @@ def _bounds(config):
     return start, end
 
 
-def evaluate(target, /, _config=None, **arguments):
+# The replay and record nodes made so far, each by the hgraph type of what
+# it publishes or takes.
+_REPLAYS = {}
+_RECORDS = {}
+
+
+def _replay(published):
+    """Core's `replay` for an input hgraph has as `published` (CEVAL-2,
+    CEVAL-3): a source of the publications a replay list holds.
+
+    Core has `replay` as HGL, a source that yields each entry at its
+    time. Until that is source in core this is the same source written
+    here: a node that the provider resumes over the entries, as it does
+    a source's own statements.
+    """
+    key = repr(published)
+    if key not in _REPLAYS:
+
+        @_hg.compute_node
+        def replay(
+            _begin: _hg.TS[bool],
+            items: object,
+            _state: _hg.STATE = None,
+            _clock: _hg.EvaluationClock = None,
+            _scheduler: _hg.SCHEDULER = None,
+        ) -> published:
+            due = _core.resume(_state.source, _clock.evaluation_time, _scheduler)
+            if due is not None:
+                return due[0]
+
+        @replay.start
+        def start(items: object, _state: _hg.STATE = None):
+            _state.source = _core.Source(iter(items.value))
+
+        _REPLAYS[key] = replay
+    return _REPLAYS[key]
+
+
+def _record(taken):
+    """Core's `record` for a result hgraph has as `taken` (CEVAL-4): a
+    sink that "starts with an empty recording. Each publication of its
+    input adds a tuple of the evaluation time and an independently
+    retained delta ... At stop it puts the recording in the store under
+    its key, an empty one included." Written here until it is source in
+    core, as `_replay` is.
+    """
+    key = repr(taken)
+    if key not in _RECORDS:
+
+        @_hg.sink_node
+        def record(
+            input: taken,
+            key: str,
+            _state: _hg.STATE = None,
+            _clock: _hg.EvaluationClock = None,
+        ):
+            _state.entries.append((_clock.evaluation_time, input.delta_value))
+
+        @record.start
+        def start(_state: _hg.STATE = None):
+            _state.entries = []
+
+        @record.stop
+        def stop(key: str, _state: _hg.STATE = None, _store: _hg.GlobalState = None):
+            _core.put_GlobalState_str_V(_store, key, tuple(_state.entries))
+
+        _RECORDS[key] = record
+    return _RECORDS[key]
+
+
+def evaluate(target, _inputs, _result, /, _config=None, **arguments):
     """Runs `target` with a dense trace for each temporal input.
 
-    `target` is given by position alone, so that an input of the target
-    may itself be named `target`, and the run's configuration as
-    `_config`, a name no input has.
+    `_inputs` has the hgraph type of each temporal input of the target,
+    by its name, and `_result` that of its result, `None` where it has
+    none. They and `target` are given by position alone, so that an
+    input of the target may have any name, and the run's configuration
+    as `_config`, a name no input has.
 
-    A trace is a list with one cell for each engine step from the run's
+    A trace is a list with one cell for each smallest step from the run's
     start, and `None` where nothing is published. The result is the dense
     trace of what the target published: it spans the run's start through
     the last publication, and is empty when there was none (the language's
     TST-6).
 
-    Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
-    runs before `start`, and none at or after `end`." hgraph's own end is
-    exclusive too, and its start is where the first cell of each trace
-    falls.
+    Core's CEVAL-1: "Eval is a run of an entry it generates: core's
+    `replay` wired to each temporal input of the target, and the
+    target's result as the entry's." The entry is wired here, and run as
+    a simulation of hgraph's under the configuration. Core's CRUN-2:
+    "`start` is inclusive and `end` exclusive", as hgraph's own are.
     """
     start, end = _bounds(_config)
     result = _Trace()
@@ -75,28 +160,63 @@ def evaluate(target, /, _config=None, **arguments):
         # No cycle runs. hgraph has no run that ends where it starts, so
         # none is made: the graph is not built, started or stopped.
         return result
-    bounds = {}
-    if start is not None:
-        bounds["__start_time__"] = start
-    if end is not None:
-        bounds["__end_time__"] = end
-    try:
-        ran = eval_node(target, **bounds, **arguments)
-    except RuntimeError as error:
-        if "too many cycles to" not in str(error):
-            raise
-        # hgraph 0.9.0 keeps a dense recording from the earliest start,
-        # whatever start the run has, and holds no more than about a
-        # second of cycles of it.
-        raise RuntimeError(
-            "the hgraph target cannot give the dense trace of a run that starts this far "
-            "after the earliest start"
-        ) from error
-    if ran is None:
-        return result
-    result.extend(ran)
-    while result and result[-1] is None:
-        result.pop()
+    # CEVAL-2: "Each tuple holds the absolute evaluation time and the
+    # publication's delta ... dense position i is the start plus i
+    # smallest steps. A dense placeholder locates any later entries and
+    # adds no replay entry or run bound."
+    replayed = {
+        name: tuple(
+            (result.start + position * _SMALLEST_STEP, cell)
+            for position, cell in enumerate(arguments[name])
+            if cell is not None
+        )
+        for name in _inputs
+        if name in arguments
+    }
+
+    @_hg.graph
+    def entry():
+        given = {
+            name: (
+                _replay(_inputs[name])(_hg.const(True), _core.Held(replayed[name]))
+                if name in replayed
+                else value
+            )
+            for name, value in arguments.items()
+        }
+        published = target(**given)
+        if _result is not None:
+            _record(_result)(published, _RUN_OUTPUT)
+
+    # CRUN-7: "A run has one store, which is empty when its graph is
+    # built."
+    with _hg.GlobalState() as store:
+        _hg.evaluate_graph(
+            entry,
+            _hg.GraphConfiguration(
+                start_time=result.start,
+                end_time=end,
+                # hgraph writes its own account of a run at the level
+                # below this one.
+                default_log_level=_logging.INFO,
+            ),
+        )
+        if _result is None:
+            return result
+        # CEVAL-6: "A failed run or a missing recording makes eval fail."
+        if not _core.has_GlobalState_str(store, _RUN_OUTPUT):
+            raise _core.HglError("the run stopped with no recording")
+        output = _core.get_GlobalState_str(store, _RUN_OUTPUT)
+    # TST-6: dense, from the run's start through the last publication.
+    for at, published in output:
+        position = (at - result.start) // _SMALLEST_STEP
+        if position >= _DENSE_LIMIT:
+            raise RuntimeError(
+                f"the dense trace of this run would have {position + 1} cells: its last "
+                "publication is that many smallest steps after its start"
+            )
+        result.extend([None] * (position + 1 - len(result)))
+        result[position] = published
     return result
 
 

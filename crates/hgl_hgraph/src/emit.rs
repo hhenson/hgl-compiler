@@ -3219,8 +3219,16 @@ impl Emitter<'_> {
         format!("{python}({arguments})")
     }
 
-    /// `eval(target, ...)`: the harness's `evaluate`, given the target
-    /// and each argument by its parameter's name.
+    /// `eval(target, ...)`: the harness's `evaluate`, given the target,
+    /// the types its run is wired with ([`Emitter::run_types`]), and
+    /// each argument by its parameter's name.
+    ///
+    /// The harness does the rest, as core has an eval: each dense trace
+    /// becomes a replay list (CEVAL-2), which a replay publishes
+    /// (CEVAL-3); a record keeps each publication of the result
+    /// (CEVAL-4) and puts them in the run's store (CRUN-7) under the
+    /// run's key (CRUN-8); and the eval's value is that recording
+    /// written dense, of a run of its own (CEVAL-5).
     ///
     /// RUN-1, core's CRUN-2: a run's configuration is given last, as
     /// `_config`, a name no parameter has, so that it is evaluated
@@ -3275,29 +3283,73 @@ impl Emitter<'_> {
                 signature.result.as_ref(),
                 call.at,
             );
-            let mut given = written;
+            // The lifted node's inputs are the parameters given traces.
+            let inputs: Vec<(String, Type)> = signature
+                .parameters
+                .iter()
+                .zip(&bound)
+                .filter_map(|(parameter, bound)| match bound {
+                    Some(Bound::Input(ty)) => Some((name(&parameter.name), ty.clone())),
+                    _ => None,
+                })
+                .collect();
+            let run = self.run_types(&inputs, signature.result.as_ref(), call.at);
+            let mut given = vec![node, run];
+            given.extend(written);
             if let Some(config) = config {
                 given.push(format!("_config={}", self.expression(function, config)));
             }
-            return if given.is_empty() {
-                format!("_harness.evaluate({node})")
-            } else {
-                format!("_harness.evaluate({node}, {})", given.join(", "))
-            };
+            return format!("_harness.evaluate({})", given.join(", "));
         }
+        // GEN-2: a target written by instance is run as its instance,
+        // whose types name no generic parameter.
+        let instances = self.instances;
+        let run_signature = instances
+            .find(self.program, (*module, *declaration), generics)
+            .map_or(signature, |instance| &instance.signature);
+        let inputs: Vec<(String, Type)> = run_signature
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.constant)
+            .map(|parameter| (name(&parameter.name), parameter.ty.clone()))
+            .collect();
+        let run = self.run_types(&inputs, run_signature.result.as_ref(), call.at);
         let target = self.called_name((*module, *declaration), generics, call.at);
-        let mut arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        let mut given = vec![target, run];
+        if !arguments.is_empty() {
+            given.push(arguments);
+        }
         if let Some(config) = config {
-            if !arguments.is_empty() {
-                arguments.push_str(", ");
-            }
-            arguments.push_str(&format!("_config={}", self.expression(function, config)));
+            given.push(format!("_config={}", self.expression(function, config)));
         }
-        if arguments.is_empty() {
-            format!("_harness.evaluate({target})")
-        } else {
-            format!("_harness.evaluate({target}, {arguments})")
-        }
+        format!("_harness.evaluate({})", given.join(", "))
+    }
+
+    /// What the harness is told of an eval's target, to wire its run
+    /// (core's CEVAL-1: "core's `replay` wired to each temporal input of
+    /// the target, and the target's result as the entry's"): the hgraph
+    /// type of each temporal input by its name, `{"value": _hg.TS[int]}`,
+    /// and then that of the result, or `None` where it has none.
+    fn run_types(
+        &mut self,
+        inputs: &[(String, Type)],
+        result: Option<&Type>,
+        at: Location,
+    ) -> String {
+        let inputs: Vec<String> = inputs
+            .iter()
+            .map(|(input, ty)| {
+                let annotation = self
+                    .annotation(ty, true, at)
+                    .unwrap_or_else(|| "_py.object".to_string());
+                format!("{}: {annotation}", string(input))
+            })
+            .collect();
+        let result = result
+            .and_then(|result| self.annotation(result, true, at))
+            .unwrap_or_else(|| "None".to_string());
+        format!("{{{}}}, {result}", inputs.join(", "))
     }
 
     /// TYPE-16: `delta<set<i64>>(added: [1, 2], removed: [3])`, a set's
