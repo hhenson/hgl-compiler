@@ -173,3 +173,36 @@ test a_nested_branch_that_may_not_assign_keeps_the_binding {
     assert eval(partly(outer: [true, _, false, true], inner: [true, false, _, _], price: [1, 2, 3, 4])) ==
         [10, 2, 4, 4]
 }
+
+# An `if` over a connection in a branch of a wiring-time `if` is
+# composition too: its child graph is selected at runtime.
+fn widened(price: i64, rising: bool, const wide: bool) -> i64 {
+    var chosen = price
+    if wide {
+        if rising { chosen = price * 10 }
+    }
+    return chosen
+}
+
+test an_if_over_a_connection_in_a_wiring_time_branch {
+    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: true)) == [10, 2, 30]
+    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: false)) == [1, 2, 3]
+}
+
+# A read after the branch has assigned the `var` is the branch's own
+# binding: the `var`, with no value before, is no input of the child.
+fn assigned_first(flag: bool, left: i64, right: i64) -> i64 {
+    var chosen: i64
+    if flag {
+        chosen = left
+        return chosen
+    } else {
+        chosen = right
+        return chosen
+    }
+}
+
+test a_read_after_an_assignment_is_no_capture {
+    assert eval(assigned_first(flag: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
+        [1, 20, 3]
+}

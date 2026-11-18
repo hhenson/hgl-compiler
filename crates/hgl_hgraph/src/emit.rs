@@ -522,6 +522,88 @@ fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
     }
 }
 
+/// Pushes onto `read` the locals `value` reads that are not in
+/// `assigned`.
+fn reads_of(value: &Expr, assigned: &[usize], read: &mut Vec<usize>) {
+    value.walk_nodes(&mut |node| {
+        if let hgl_analyser::hir::Node::Expression(Expr {
+            kind: ExprKind::Local(local),
+            ..
+        }) = node
+            && !assigned.contains(local)
+        {
+            read.push(*local);
+        }
+    });
+}
+
+/// Pushes onto `read` the locals `statements` read where a read can
+/// come before an assignment of the local in them: the locals a child
+/// graph takes from outside. `assigned` holds the locals assigned on
+/// every path so far, and is grown with those the statements assign.
+/// Each branch of an `if` or a `switch` is scanned with its own copy.
+fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &mut Vec<usize>) {
+    use hgl_analyser::hir::{Node, walk_statement_nodes};
+    for statement in statements {
+        match statement {
+            Stmt::Expr(Expr {
+                kind:
+                    ExprKind::If {
+                        condition,
+                        then,
+                        otherwise,
+                    },
+                ..
+            }) => {
+                reads_of(condition, assigned, read);
+                for branch in [Some(&**then), otherwise.as_deref()].into_iter().flatten() {
+                    let statements = alternative_statements(Some(branch));
+                    reads_before_assigned(&statements, &mut assigned.clone(), read);
+                }
+            }
+            Stmt::Switch {
+                selector,
+                cases,
+                default,
+                ..
+            } => {
+                reads_of(selector, assigned, read);
+                for body in cases
+                    .iter()
+                    .map(|case| case.body.as_slice())
+                    .chain(default.as_deref())
+                {
+                    reads_before_assigned(body, &mut assigned.clone(), read);
+                }
+            }
+            _ => walk_statement_nodes(std::slice::from_ref(statement), &mut |node| {
+                if let Node::Expression(Expr {
+                    kind: ExprKind::Local(local),
+                    ..
+                }) = node
+                    && !assigned.contains(local)
+                {
+                    read.push(*local);
+                }
+            }),
+        }
+        // The locals the statement assigns on every path through it.
+        let mut candidates = Vec::new();
+        walk_statement_nodes(std::slice::from_ref(statement), &mut |node| {
+            if let Node::Statement(Stmt::Assign { local, .. }) = node {
+                candidates.push(*local);
+            }
+        });
+        for local in candidates {
+            if !assigned.contains(&local)
+                && assigns_on_every_path(std::slice::from_ref(statement), local)
+            {
+                assigned.push(local);
+            }
+        }
+    }
+}
+
 /// True where every path through `statements` assigns the `var` at
 /// `var`: an assignment of it at the top, or an `if` with an `else`, or
 /// a `switch` with a `default`, each branch of which assigns it on
@@ -2891,15 +2973,18 @@ impl Emitter<'_> {
             let mut visit = |node: Node| match node {
                 Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
                 Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
-                Node::Expression(Expr {
-                    kind: ExprKind::Local(local),
-                    ..
-                }) => read.push(*local),
                 _ => {}
             };
             walk_statement_nodes(&branch.statements, &mut visit);
+            // A read after the branch has assigned the local on every
+            // path reads the branch's own binding: no capture.
+            let mut assigned = Vec::new();
+            reads_before_assigned(&branch.statements, &mut assigned, &mut read);
             match &branch.tail {
-                Tail::Value(value) => value.walk_nodes(&mut visit),
+                Tail::Value(value) => {
+                    value.walk_nodes(&mut visit);
+                    reads_of(value, &assigned, &mut read);
+                }
                 // A branch that may leave the `var` unassigned, on any
                 // path through it, gives the binding it had before.
                 Tail::Local(var) => {
@@ -3513,17 +3598,12 @@ impl Emitter<'_> {
     /// of its block, and its last expression as one more.
     fn branch(&mut self, function: &Function, branch: &Expr, depth: usize) {
         let before = self.text.len();
-        match &branch.kind {
-            ExprKind::Block { statements, value } => {
-                self.statements(function, statements, depth);
-                if let Some(value) = value {
-                    self.statement(function, &Stmt::Expr((**value).clone()), depth);
-                }
-            }
-            // `else if`: the next `if`, as the one statement of the
-            // `else`.
-            _ => self.statement(function, &Stmt::Expr(branch.clone()), depth),
-        }
+        // `else if` is the next `if`, as the one statement of the
+        // `else`. Each goes through `statements`, so that in a graph an
+        // `if` over a connection in the branch is composition
+        // (CTRL-13).
+        let statements = alternative_statements(Some(branch));
+        self.statements(function, &statements, depth);
         if self.text.len() == before {
             self.line(depth, "pass");
         }

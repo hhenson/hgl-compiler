@@ -6379,6 +6379,15 @@ fn a_graph_if_and_switch_are_child_graphs() {
             "    def _case_14_0(inner: _hg.TS[_py.bool], price: _hg.TS[_py.int], chosen: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
             "        @_hg.graph\n",
         ),
+        // An `if` over a connection in a wiring-time branch is a
+        // `switch_` there, not Python's `if` on the port.
+        concat!(
+            "    if wide:\n",
+            "        @_hg.graph\n",
+            "        def _case_16_0(price: _hg.TS[_py.int], chosen: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+        ),
+        // A read after the branch assigns the `var` is no input.
+        "    return _hg.switch_(flag, {True: _case_17_0, False: _case_17_1}, left=left, right=right)\n",
     ] {
         assert!(
             python.contains(expected),
