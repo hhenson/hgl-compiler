@@ -1463,6 +1463,7 @@ only where the program reaches it, at core's source.
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | `a =={abs: t} b`, `a !={rel: r} b` (NUM-4, EXPR-13) | The provider's function for the comparison with the tolerance where the source has it, `_core.eq__f64_f64_f64_f64(lhs=a, abs=t, rhs=b, rel=0.0)`: Python evaluates the arguments in that order. The function makes the test in exact arithmetic (NUM-5). Lifted, the tolerance is configuration of the node (NUM-11) |
 | A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. The analyser says which member a constant comes to, however it is written (TYPE-7), and the target reads none of its spelling. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
+| `convert<T>(value)` (OPS-4) | The provider's function for the candidate, named with what it gives too, `_core.convert_i64_to_f64(value=count)`: core's candidates of `convert` take one type and give different ones. One that can fail takes `invalid` as division takes `zero`, `_core.convert_str_to_bool(value=text, invalid="error")`, and gives a `result` under `"error"` and the plain value under `"fail"` (OPS-8). A number to and from text is not written |
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `impl fn` with a body (GEN-4) | A node or a graph of its module, as a temporal function is, under the same kind of name: `_impl_join__i64_i64`. A call in a graph that selects it calls it, and is not lifted. Where a value candidate has the same parameter types (GEN-5), the value one is `_value_impl_join__i64_i64` |
 | A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64__identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13) |
@@ -1691,10 +1692,10 @@ cell for each microsecond: a publication a second after a run's start
 would be a million cells on. A trace written out dense, `[7, _, 9]`, is
 read with cell i at i smallest steps from the start. A timed trace,
 `[0s: 7, 2s: 9]`, gives only the publications (TST-7). Its keys are
-durations from the run's start or absolute datetimes. The harness checks
-computed keys on replay and comparison. A key before the run's start,
-a duplicate key or a backward key fails. Two recordings match when the
-publications have the same values and offsets from their respective starts.
+durations from the run's start or absolute datetimes. Computed keys must
+strictly increase. Replay rejects an input key before the run's start
+(CEVAL-2). Two recordings match when the publications have the same
+values and offsets from their respective starts.
 
 #### An application
 
@@ -1704,8 +1705,9 @@ hgraph: the program's one application, or the one named.
 | Step | What does it |
 | --- | --- |
 | The run statement is written as a function, `_application`, in the application's own Python module | The transpiler |
+| What sets the run's store, `inject global_state` and the `put` calls before the run statement, is written as a function of the store, `_application_store` | The transpiler |
 | The function calls the harness's `run` with the entry, core's `record` for the entry's result, the mode, the entry's `const` arguments and the configuration | The generated code |
-| `run` wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
+| `run` makes the run's store, calls `_application_store` with it, wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
 | A driver loads the module, calls the function on a thread of its own, and writes each publication to a results file | `support/run_application.py` |
 | `hgl run` starts the driver, and prints the publications once the run has stopped | `hgl_hgraph::run_application`, `hgl_cli` |
 

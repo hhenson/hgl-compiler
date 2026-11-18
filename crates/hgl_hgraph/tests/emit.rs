@@ -1376,7 +1376,7 @@ fn a_run_in_real_time_and_an_application_are_written() {
 /// `run(call, config)` or `eval(call, config)`, where the call is of an
 /// entry ... giving the entry's const arguments, and the configuration
 /// is a value of core's `RunConfig`".
-const APPLICATIONS: [(&str, &str); 6] = [
+const APPLICATIONS: [(&str, &str); 7] = [
     (
         "ticks.hgl",
         concat!(
@@ -1400,6 +1400,15 @@ const APPLICATIONS: [(&str, &str); 6] = [
             "}\n",
             "export fn quiet(const upto: i64) {\n",
             "    kept(counted(upto))\n",
+            "}\n",
+            // An entry that reads a key of the run's store.
+            "export fn limited(const every: duration = 1s) -> i64 {\n",
+            "    inject global_state\n",
+            "    cache count: i64 = 0\n",
+            "    while count < get<i64>(global_state, \"limit\") {\n",
+            "        count += 1\n",
+            "        yield every: count\n",
+            "    }\n",
             "}\n",
             // An entry whose run fails.
             "fn inverse(value: i64) -> i64 {\n",
@@ -1428,6 +1437,21 @@ const APPLICATIONS: [(&str, &str); 6] = [
             // RUN-3: `run` is in real time, here for a fifth of a
             // second.
             "run(counted(upto: 100, every: 50ms), RunConfig(length: 220ms))\n",
+        ),
+    ),
+    (
+        "seeded.hgl",
+        concat!(
+            "application demo.ticks.seeded\n",
+            "use demo.ticks::{limited}\n",
+            "const base: i64 = 2\n",
+            // A value function written for each call of it (GEN-2).
+            "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
+            // UNIT-14: what sets the run's store, before the run. The
+            // store is `put`'s first parameter, wherever it is written.
+            "inject global_state\n",
+            "put(key: \"limit\", store: global_state, value: sum(base, 1))\n",
+            "eval(limited())\n",
         ),
     ),
     (
@@ -1484,6 +1508,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             ("demo.ticks.broken", false, false),
             ("demo.ticks.endless", true, false),
             ("demo.ticks.live", true, false),
+            ("demo.ticks.seeded", false, false),
             ("demo.ticks.silent", false, false),
         ]
     );
@@ -1506,6 +1531,24 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             "upto=100, every=_dt.timedelta(microseconds=50000), ",
         )),
         "{live}"
+    );
+    // UNIT-14: what sets the run's store is a function of the store,
+    // given to the run, which calls it before it builds the graph.
+    // The instance of `sum` its value calls is written, as one a body
+    // calls is (GEN-2).
+    let seeded = emitted.text("_hgl/_m_demo/_m_ticks/_m_seeded/__init__.py");
+    assert!(seeded.contains("def _inst_sum__i64(a, b):\n"), "{seeded}");
+    assert!(
+        seeded.ends_with(concat!(
+            "def _application_store(_store):\n",
+            "    _core.put_GlobalState_str_V(key=\"limit\", store=_store, ",
+            "value=_inst_sum__i64(a=base(), b=1))\n",
+            "\n\n",
+            "def _application():\n",
+            "    return _harness.run(_hgl_4demo_5ticks.limited, _hgl_4core._inst_record__i64, ",
+            "False, every=_dt.timedelta(microseconds=1000000), _store=_application_store)\n",
+        )),
+        "{seeded}"
     );
     // An entry with no result is given no `record`, and a statement
     // with no configuration writes none.
@@ -5033,7 +5076,7 @@ fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
         "_core.neg__tenor(value=_core.Tenor(1, 2))",
         "_core.lt__tenor_tenor(lhs=_core.Tenor(1, 0), rhs=_core.Tenor(2, 0))",
         "_core.compare__tenor_tenor(lhs=_core.Tenor(1, 0), rhs=_core.Tenor(0, 45))",
-        "_core.convert_tenor(value=_core.Tenor(0, 13))",
+        "_core.convert_tenor_to_str(value=_core.Tenor(0, 13))",
         // TEN-4: core's candidate, with no option.
         "_hgl_4core._impl_add__date_tenor(lhs=_dt.date(2026, 1, 31), rhs=_core.Tenor(1, 0))",
         // TEN-5: written for the calendar it is given.
@@ -5684,6 +5727,16 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_timed_traces");
     let emitted = emit(&[("timed_keys.hgl", include_str!("fixtures/timed_traces.hgl"))]);
     let cases = [
+        ("written_publications_preserve_absolute_instants", None),
+        (
+            "written_publications_require_ordered_keys",
+            Some("must strictly increase"),
+        ),
+        ("an_earlier_expectation_differs_from_the_recording", None),
+        (
+            "a_replay_cannot_publish_before_the_earliest_start",
+            Some("before the run's start"),
+        ),
         ("computed_nullable_and_mixed_keys", None),
         ("equal_computed_keys", Some("must strictly increase")),
         ("backward_computed_keys", Some("must strictly increase")),
@@ -5943,6 +5996,8 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("notified.hgl", NOTIFIED));
     files.push(("compound.hgl", COMPOUND));
     files.push(("timed.hgl", TIMED));
+    files.push(("wrapped.hgl", WRAPPED));
+    files.push(("converted.hgl", CONVERSIONS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6038,6 +6093,18 @@ fn an_application_runs_on_hgraph() {
             ("1970-01-01T00:00:01.000001Z", "2"),
             ("1970-01-01T00:00:02.000001Z", "4"),
             ("1970-01-01T00:00:03.000001Z", "6"),
+        ])
+    );
+
+    // UNIT-14, core's CRUN-7: the store holds what the application put
+    // there when the graph is built, so the entry reads its limit, 3,
+    // from its first evaluation.
+    assert_eq!(
+        ran("demo.ticks.seeded"),
+        published(&[
+            ("1970-01-01T00:00:01.000001Z", "1"),
+            ("1970-01-01T00:00:02.000001Z", "2"),
+            ("1970-01-01T00:00:03.000001Z", "3"),
         ])
     );
 
@@ -6162,6 +6229,237 @@ fn a_compound_assignment_evaluates_its_place_once() {
         .and_then(|rest| rest.split("\n\n\n").next())
         .expect("the node is written");
     assert_eq!(nested.matches("next_slot(").count(), 2, "{nested}");
+}
+
+/// FN-9: "A graph injects `global_state` and no other, and uses it where
+/// the graph is built: each call on it is evaluated once then, in the
+/// order written, before any node of that graph starts". So a graph
+/// that wraps another sets the store for it, and a test evaluates the
+/// wrapper. RUN-4: each eval is a run with a store of its own.
+const WRAPPED: &str = concat!(
+    "module demo.wrapped\n",
+    "fn counted(const every: duration = 1s) -> i64 {\n",
+    "    inject global_state\n",
+    "    cache count: i64 = 0\n",
+    "    while count < get<i64>(global_state, \"limit\") {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+    "fn scaled(value: i64, const factor: i64) -> i64 {\n",
+    "    when { return value * factor }\n",
+    "}\n",
+    "fn seeded(const limit: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    put(global_state, \"limit\", limit)\n",
+    "    return counted()\n",
+    "}\n",
+    // What the graph reads back is a value where it is built: a node's
+    // configuration.
+    "fn factored(value: i64, const first: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    put(global_state, \"factor\", first)\n",
+    "    let factor = get<i64>(global_state, \"factor\")\n",
+    "    return scaled(value, factor)\n",
+    "}\n",
+    "test the_store_is_set_where_the_graph_is_built {\n",
+    "    assert eval(seeded(limit: 2)) == [1s: 1, 2s: 2]\n",
+    // A run of its own: it reads 3, and nothing of the run before.
+    "    assert eval(seeded(limit: 3)) == [1s: 1, 2s: 2, 3s: 3]\n",
+    "    assert eval(factored(value: [1, 2], first: 10)) == [10, 20]\n",
+    "}\n",
+);
+
+/// A graph's `inject global_state` is the run's store where the graph's
+/// function runs, and a call on it there is run then (FN-9).
+#[test]
+fn a_graph_sets_the_store_where_it_is_built() {
+    let emitted = emit(&[("wrapped.hgl", WRAPPED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_wrapped/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.graph\n",
+            "def seeded(limit: _py.int) -> _hg.TS[_py.int]:\n",
+            "    _store = _hg.GlobalState.instance()\n",
+            "    _core.put_GlobalState_str_V(store=_store, key=\"limit\", value=limit)\n",
+            "    return counted(every=_dt.timedelta(microseconds=1000000))\n",
+        ),
+        concat!(
+            "    _store = _hg.GlobalState.instance()\n",
+            "    _core.put_GlobalState_str_V(store=_store, key=\"factor\", value=first)\n",
+            "    factor = _core.get_GlobalState_str(store=_store, key=\"factor\")\n",
+            "    return scaled(value=value, factor=factor)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// OPS-4: "`convert<T>(value)` converts a value to the type T." OPS-6
+/// says what each conversion yields, OPS-7 which can fail, and OPS-8
+/// their options. A number to and from text is not written yet.
+const CONVERSIONS: &str = concat!(
+    "module demo.converted\n",
+    "const fn as_float(value: i64) -> f64 => convert<f64>(value)\n",
+    "const fn as_flag(value: f64) -> bool => convert<bool>(value)\n",
+    // OPS-8: `invalid: .fail` gives the plain type.
+    "const fn as_whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)\n",
+    "const fn rounded(value: f64, how: Rounding) -> i64 =>\n",
+    "    convert<i64>(value, rounding: how, invalid: .fail)\n",
+    // And `.error`, the default, a `result`.
+    "const fn checked(value: f64) -> result<i64, error> => convert<i64>(value)\n",
+    "const fn flag(text: str) -> result<bool, error> => convert<bool>(text)\n",
+    "const fn whole_of(value: f64) -> i64 {\n",
+    "    let outcome = convert<i64>(value)\n",
+    "    if is_ok(outcome) { return outcome.value }\n",
+    "    return -1\n",
+    "}\n",
+    // OPS-8: "a failure is an Err carrying error code `convert.invalid`".
+    "const fn invalid(value: f64) -> bool {\n",
+    "    let outcome = convert<i64>(value)\n",
+    "    if is_err(outcome) {\n",
+    "        let code = outcome.error.code\n",
+    "        if code != null { return code == \"convert.invalid\" }\n",
+    "    }\n",
+    "    return false\n",
+    "}\n",
+    "const fn flag_of(text: str) -> bool {\n",
+    "    let outcome = convert<bool>(text)\n",
+    "    if is_ok(outcome) { return outcome.value }\n",
+    "    return false\n",
+    "}\n",
+    "const fn round_trip(text: str) -> str =>\n",
+    "    convert<str>(convert<bytes>(text), invalid: .fail)\n",
+    // FN-6: a conversion given a connection is lifted over it.
+    "fn floats(value: i64) -> f64 => convert<f64>(value)\n",
+    "fn wholes(value: f64) -> i64 => convert<i64>(value, rounding: .half_even, invalid: .fail)\n",
+    "test conversions {\n",
+    "    assert as_float(3) == 3.0\n",
+    // "False for zero, true otherwise; NaN is true".
+    "    assert as_flag(0.0) == false\n",
+    "    assert as_flag(0.5)\n",
+    "    assert as_flag(0.0 /{zero: .nan} 0.0)\n",
+    "    assert convert<bool>(7) && !convert<bool>(0)\n",
+    // "0 or 1".
+    "    assert convert<i64>(true) == 1 && convert<i64>(false) == 0\n",
+    "    assert convert<f64>(true) == 1.0\n",
+    "    assert convert<str>(false) == \"false\" && convert<str>(true) == \"true\"\n",
+    // OPS-8: each rounding. `.truncate`, the default, is toward zero.
+    "    assert as_whole(2.9) == 2 && as_whole(-2.9) == -2\n",
+    "    assert rounded(-2.5, .floor) == -3 && rounded(-2.5, .ceiling) == -2\n",
+    "    assert rounded(2.5, .half_even) == 2 && rounded(3.5, .half_even) == 4\n",
+    "    assert rounded(2.5, .half_up) == 3 && rounded(-2.5, .half_up) == -3\n",
+    "    assert rounded(2.5, .half_down) == 2 && rounded(-2.5, .half_down) == -2\n",
+    "    assert rounded(2.6, .half_down) == 3 && rounded(2.4, .half_up) == 2\n",
+    // OPS-7: "an `f64` that is NaN, an infinity, or outside `i64` once
+    // rounded" fails.
+    "    assert whole_of(2.9) == 2\n",
+    "    assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)\n",
+    "    assert is_err(checked(1.0 / 0.0)) && is_err(checked(-1.0 / 0.0))\n",
+    "    assert is_err(checked(9223372036854775808.0))\n",
+    "    assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1\n",
+    // OPS-8: `nan` is "the value a NaN converts to".
+    "    assert convert<i64>(0.0 /{zero: .nan} 0.0, nan: -1, invalid: .fail) == -1\n",
+    // "The value of the literal the text is", and a failure for "text
+    // that is no literal of the type asked for".
+    "    assert flag_of(\"true\") && is_ok(flag(\"false\")) && !flag_of(\"false\")\n",
+    "    assert is_err(flag(\"True\")) && is_err(flag(\"\"))\n",
+    // UTF-8, there and back.
+    "    assert round_trip(\"h\\u{e9}llo\") == \"h\\u{e9}llo\"\n",
+    // "The start of that date, in UTC", and "the date of the instant".
+    "    assert convert<datetime>(@2026-03-01) == @2026-03-01T00:00:00Z\n",
+    "    assert convert<date>(@2026-03-01T23:59:59Z) == @2026-03-01\n",
+    "    assert eval(floats(value: [1, 2])) == [1.0, 2.0]\n",
+    "    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]\n",
+    "}\n",
+);
+
+/// OPS-4: core's candidates of `convert` take one type and give
+/// different ones, so each is the provider's function named with what
+/// it gives. OPS-8: `invalid` is given as the name of its member, as
+/// division's `zero` is (NUM-9), and `rounding` and `nan` as arguments.
+#[test]
+fn a_conversion_is_the_providers_function_for_what_it_gives() {
+    let emitted = emit(&[("converted.hgl", CONVERSIONS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_converted/__init__.py");
+    for expected in [
+        "def as_float(value):\n    return _core.convert_i64_to_f64(value=value)\n",
+        "def as_flag(value):\n    return _core.convert_f64_to_bool(value=value)\n",
+        concat!(
+            "def as_whole(value):\n",
+            "    return _core.convert_f64_Rounding_i64__to_i64(value=value, ",
+            "rounding=_hgl_4core.Rounding[\"truncate\"], nan=None, invalid=\"fail\")\n",
+        ),
+        concat!(
+            "def checked(value):\n",
+            "    return _core.convert_f64_Rounding_i64__to_i64(value=value, ",
+            "rounding=_hgl_4core.Rounding[\"truncate\"], nan=None, invalid=\"error\")\n",
+        ),
+        "def flag(text):\n    return _core.convert_str_to_bool(value=text, invalid=\"error\")\n",
+        concat!(
+            "    return _core.convert_bytes_to_str(",
+            "value=_core.convert_str_to_bytes(value=text), invalid=\"fail\")\n",
+        ),
+        // FN-6: the lifted conversion reads the connection's value.
+        "    return _core.convert_i64_to_f64(value=value.value)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// OPS-6 has a number's text "the text of the literal that denotes the
+/// value", and a minus is no part of a literal (LEX-7): what `-3` and
+/// `2.5` are as text is not said, so the target does not write a number
+/// to or from text.
+#[test]
+fn a_number_to_and_from_text_is_not_written_yet() {
+    let emitted = emit(&[(
+        "texts.hgl",
+        concat!(
+            "module demo.texts\n",
+            "const fn shown(value: i64) -> str => convert<str>(value)\n",
+            "const fn written(value: f64) -> str => convert<str>(value)\n",
+            "const fn read(text: str) -> result<i64, error> => convert<i64>(text)\n",
+            "const fn parsed(text: str) -> f64 => convert<f64>(text, invalid: .fail)\n",
+            "test shows { assert shown(3) == \"3\" }\n",
+            "test writes { assert written(2.5) == \"2.5\" }\n",
+            "test reads { assert is_ok(read(\"3\")) }\n",
+            "test parses { assert parsed(\"2.5\") == 2.5 }\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "texts.hgl:2:38 target.unsupported",
+            "texts.hgl:3:40 target.unsupported",
+            "texts.hgl:4:51 target.unsupported",
+            "texts.hgl:5:38 target.unsupported",
+        ]
+    );
+    for (test, candidate) in [
+        ("shows", "convert(i64) -> str"),
+        ("writes", "convert(f64) -> str"),
+        ("reads", "convert(str) -> i64"),
+        ("parses", "convert(str) -> f64"),
+    ] {
+        let blocked = emitted
+            .blocked(test)
+            .expect("the test reaches the conversion");
+        assert!(
+            blocked.ends_with(&format!(
+                "the hgraph target does not write the candidate `{candidate}` yet"
+            )),
+            "{blocked}"
+        );
+    }
 }
 
 /// TST-5: "A trace written out is dense, `[7, _, 9]`, or timed, `[0s: 7,
@@ -6326,6 +6624,55 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
             "endless failed live.hgl:30:9 timed out: it was still running after its limit of 3s",
             "after passed",
             "brief failed live.hgl:38:9 timed out: it was still running after its limit of 0.5s",
+        ]
+    );
+}
+
+/// OPS-8: under `invalid: .fail` a conversion "returns T, and a failure
+/// is an escaping HGL error". The error that escapes fails the test
+/// that was running, at the statement it was at. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_conversion_that_fails_under_fail_escapes() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_escapes");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[(
+        "escapes.hgl",
+        concat!(
+            "module demo.escapes\n",
+            "const fn whole(value: f64) -> i64 => convert<i64>(value, invalid: .fail)\n",
+            "test fits { assert whole(2.5) == 2 }\n",
+            "test too_large { assert whole(1e19) == 0 }\n",
+            "test no_number { assert whole(0.0 /{zero: .nan} 0.0) == 0 }\n",
+            "test no_flag { assert convert<bool>(\"yes\", invalid: .fail) }\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let described: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .map(|(test, ran)| match ran {
+            Ran::Passed => format!("{} passed", test.name),
+            Ran::Failed { at, message } => format!(
+                "{} failed {} {message}",
+                test.name,
+                at.map_or("?".to_string(), |at| emitted.place(at))
+            ),
+            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
+        })
+        .collect();
+    assert_eq!(
+        described,
+        [
+            "fits passed",
+            "too_large failed escapes.hgl:4:18 HglError: convert.invalid: the number is outside `i64` once rounded",
+            "no_number failed escapes.hgl:5:18 HglError: convert.invalid: a NaN is no `i64`",
+            "no_flag failed escapes.hgl:6:16 HglError: convert.invalid: the text is no `bool` literal",
         ]
     );
 }

@@ -77,10 +77,8 @@ def _relative(trace, start=None):
         entries = []
         for at, published in trace.entries:
             after = at - start if start is not None and isinstance(at, _datetime.datetime) else at
-            # CEVAL-2 and TST-7 also hold for keys computed at run time.
+            # TST-7 also holds for keys computed at run time.
             # The catalogue's trace.key_order is a source diagnostic.
-            if isinstance(after, _datetime.timedelta) and after < _datetime.timedelta(0):
-                raise _core.HglError("a timed trace has a key before the run's start")
             if entries and after <= entries[-1][0]:
                 raise _core.HglError("the keys of a timed trace must strictly increase")
             entries.append((after, published))
@@ -88,6 +86,16 @@ def _relative(trace, start=None):
     return [
         (position * _SMALLEST_STEP, cell) for position, cell in enumerate(trace) if cell is not None
     ]
+
+
+def _replay_entries(trace, start):
+    """CEVAL-2: an input replay cannot publish before its run starts."""
+    entries = []
+    for after, published in _relative(trace, start):
+        if after < _datetime.timedelta(0):
+            raise _core.HglError("a timed trace has a key before the run's start")
+        entries.append((_core.add__datetime_duration(start, after), published))
+    return entries
 
 
 def _bounds(config, unstated):
@@ -159,7 +167,7 @@ def stop_withdrawn():
     _stop_wanted.clear()
 
 
-def _ran(target, replays, record, replayed, arguments, start, end, real_time):
+def _ran(target, replays, record, replayed, arguments, start, end, real_time, seed=None):
     """Runs the entry that wires `target`, from `start` and before
     `end`, and gives its output: the run's recording, or `None` where
     `record` is `None`.
@@ -193,6 +201,11 @@ def _ran(target, replays, record, replayed, arguments, start, end, real_time):
     # CRUN-7: "A run has one store, which is empty when its graph is
     # built."
     with _hg.GlobalState() as store:
+        # The language's UNIT-14: what an application puts in the store
+        # before its run statement is there "before the run's graph is
+        # built".
+        if seed is not None:
+            seed(store)
         try:
             _hg.evaluate_graph(
                 entry,
@@ -218,7 +231,7 @@ def _ran(target, replays, record, replayed, arguments, start, end, real_time):
         return _core.get_GlobalState_str(store, _RUN_OUTPUT)
 
 
-def run(target, _record, _real_time, /, _config=None, **arguments):
+def run(target, _record, _real_time, /, _config=None, _store=None, **arguments):
     """Runs an application's entry `target`, and gives the run's output.
 
     The language's RUN-1: "The entry's result, if any, is the run's
@@ -233,13 +246,18 @@ def run(target, _record, _real_time, /, _config=None, **arguments):
     true for `run` and false for `eval`. Core's CRUN-2: "A null `start`
     is the earliest start in simulation and the host clock's present
     time in real time."
+
+    `_store` is what the application sets the run's store with before
+    its run statement (the language's UNIT-14), a function of the store,
+    `None` where it writes none. Core's CRUN-7: "When its graph is built
+    the store holds what the run's application put there".
     """
     start, end = _bounds(_config, _present() if _real_time else _EARLIEST_START)
     if end is not None and end <= start:
         # No cycle runs. hgraph has no run that ends where it starts, so
         # none is made: the graph is not built, started or stopped.
         return None if _record is None else []
-    return _ran(target, {}, _record, {}, arguments, start, end, _real_time)
+    return _ran(target, {}, _record, {}, arguments, start, end, _real_time, _store)
 
 
 def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arguments):
@@ -270,10 +288,7 @@ def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arg
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
-        name: [
-            (_core.add__datetime_duration(start, after), published)
-            for after, published in _relative(arguments[name], start)
-        ]
+        name: _replay_entries(arguments[name], start)
         for name in _replays
         if name in arguments
     }
@@ -296,12 +311,14 @@ def publications(trace):
     """
     if isinstance(trace, _Recording):
         return list(trace.output)
-    # A trace written out: an offset is from the earliest start, and an
-    # instant is itself.
-    return [
-        (_core.add__datetime_duration(_EARLIEST_START, after), published)
-        for after, published in _relative(trace, _EARLIEST_START)
-    ]
+    # A written trace has no run to admit its keys against. Preserve
+    # its absolute instants and anchor only offsets to the earliest start.
+    entries = []
+    for key, published in _relative(trace):
+        if isinstance(key, _datetime.timedelta):
+            key = _core.add__datetime_duration(_EARLIEST_START, key)
+        entries.append((key, published))
+    return entries
 
 
 def same(left, right):

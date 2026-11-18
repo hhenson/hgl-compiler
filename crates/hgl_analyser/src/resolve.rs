@@ -226,6 +226,17 @@ impl Resolver<'_> {
             self.enter(run.file, false);
             self.children(&run.syntax);
         }
+        // UNIT-14: the statements that set the run's store are read as
+        // one block is: `inject global_state` binds the name for the
+        // calls after it.
+        if let Some(first) = module.store.first() {
+            self.enter(first.file, false);
+            self.frames.push(Frame::default());
+            for statement in &module.store {
+                self.children(&statement.syntax);
+            }
+            self.frames.pop();
+        }
         for (file, node) in &module.instantiations {
             self.enter(*file, false);
             self.children(node);

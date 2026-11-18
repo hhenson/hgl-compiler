@@ -39,7 +39,8 @@
 //!
 //! An application's run statement asks as an eval does: for what its
 //! call and its configuration name, and for core's `record` of its
-//! entry's result (core's CRUN-8).
+//! entry's result (core's CRUN-8). So do the statements it sets its
+//! run's store with (UNIT-14).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -363,6 +364,12 @@ impl Instances {
                         requirements: Vec::new(),
                     });
                 }
+            }
+            // UNIT-14: the statements an application sets its run's
+            // store with, whose values may call what is written by
+            // instance.
+            if let Some(body) = &module.store_body {
+                waiting.extend(instances.asked(program, &body.statements));
             }
             // What is worked out with no body around it: a constant's
             // value, and a default (UNIT-13, UNIT-8).

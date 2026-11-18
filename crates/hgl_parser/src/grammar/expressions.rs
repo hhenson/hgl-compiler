@@ -205,6 +205,22 @@ impl Parser<'_> {
     /// ```
     ///
     /// True when what was parsed is a bare function expression (FN-10).
+    /// `IDENTIFIER, call_suffix`: a name and a call's arguments, and no
+    /// suffix more, as a statement. The cursor is at the name, with
+    /// its `(` after it.
+    pub(crate) fn named_call_stmt(&mut self) {
+        self.start(ExprStmt);
+        let mark = self.mark();
+        self.start(NameExpr);
+        self.bump();
+        self.finish();
+        // LEX-27: a call's `(` touches what it calls.
+        self.attached(Bracket::Call);
+        self.arg_list(ArgMode::Call);
+        self.wrap(mark, CallExpr);
+        self.finish();
+    }
+
     fn postfix_expr(&mut self) -> bool {
         let mark = self.mark();
         let start = self.position;

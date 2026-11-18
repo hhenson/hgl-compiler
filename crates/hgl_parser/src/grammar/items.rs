@@ -24,6 +24,9 @@ enum Item {
     TestContext,
     /// An application's run statement: `run(...)` or `eval(...)`.
     Run,
+    /// A statement that sets an application's store: `inject ...`, or
+    /// a call.
+    Store,
     /// `export` before something that is no declaration.
     StrayExport,
 }
@@ -119,6 +122,8 @@ impl Parser<'_> {
                 // the file is an application's is the analyser's to say
                 // (`run.position`).
                 Item::Run if !in_test => {}
+                // UNIT-14: so is a statement that sets the run's store.
+                Item::Store if !in_test => {}
                 Item::Function | Item::Struct | Item::Enum | Item::Test | Item::StrayExport => {}
                 // TST-1: an unnamed test context holds helper functions,
                 // types and named tests. The item is parsed all the same.
@@ -170,6 +175,11 @@ impl Parser<'_> {
             Ident if self.nth_word(0, "run") && self.nth(1) == LParen => {
                 return Some(Item::Run);
             }
+            // UNIT-14: `store_statement = inject_decl | IDENTIFIER,
+            // call_suffix`, what an application sets its run's store
+            // with. No declaration begins with either.
+            KwInject => return Some(Item::Store),
+            Ident if self.nth(1) == LParen => return Some(Item::Store),
             _ => {}
         }
         // `export` may come first; the declaration is named by what
@@ -227,6 +237,7 @@ impl Parser<'_> {
             Item::Test => self.test_decl(),
             Item::TestContext => self.test_context(),
             Item::Run => self.run_statement(),
+            Item::Store => self.store_statement(),
             Item::StrayExport => {
                 self.leaf(Error);
                 self.expected("a declaration");
@@ -335,6 +346,24 @@ impl Parser<'_> {
         self.start(RunStmt);
         let kind = if self.at(KwEval) { EvalExpr } else { RunExpr };
         self.run_form(kind);
+        self.finish();
+    }
+
+    /// `store_statement = inject_decl | IDENTIFIER, call_suffix ;`
+    ///
+    /// UNIT-14: "Between its declarations and its run statement it may
+    /// set the run's store: `inject global_state`, and then calls of
+    /// `put` on it." Which names and which calls is the analyser's to
+    /// say (`application.statement`).
+    fn store_statement(&mut self) {
+        self.start(StoreStmt);
+        if self.at(KwInject) {
+            self.inject_decl();
+        } else {
+            // `item_kind` has seen a name and its `(`: a call, and no
+            // more of an expression than that.
+            self.named_call_stmt();
+        }
         self.finish();
     }
 

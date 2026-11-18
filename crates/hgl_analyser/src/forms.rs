@@ -49,6 +49,14 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
         if let Some(run) = &module.run {
             integer_range(&run.syntax, module.files[run.file].file, diagnostics);
         }
+        // UNIT-14: and so are the statements that set its store.
+        for statement in &module.store {
+            integer_range(
+                &statement.syntax,
+                module.files[statement.file].file,
+                diagnostics,
+            );
+        }
     }
 }
 

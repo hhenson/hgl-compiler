@@ -34,6 +34,7 @@ fn kinds(items: impl Iterator<Item = Item>) -> Vec<&'static str> {
             Item::Test(_) => "test",
             Item::TestContext(_) => "test context",
             Item::Run(_) => "run",
+            Item::Store(_) => "store",
         })
         .collect()
 }

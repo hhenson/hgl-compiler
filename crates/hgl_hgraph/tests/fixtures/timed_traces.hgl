@@ -4,6 +4,35 @@ fn relay(value: i64?) -> i64? {
     when { return value }
 }
 
+const fn first_time(seen: list<tuple<datetime, delta<i64?>>>) -> datetime => seen[0][0]
+
+test written_publications_preserve_absolute_instants {
+    let earlier = @1969-12-31T00:00:00Z
+    var seen = eval(relay(value: [0s: 1]))
+    seen = [earlier: 7]
+    assert first_time(seen) == earlier
+    seen = [3us: 7]
+    assert first_time(seen) == earliest_start + 3us
+}
+
+test written_publications_require_ordered_keys {
+    let earlier = @1969-12-31T00:00:00Z
+    let repeated = earlier
+    var seen = eval(relay(value: [0s: 1]))
+    seen = [earlier: 7, repeated: 9]
+    assert first_time(seen) == earlier
+}
+
+test an_earlier_expectation_differs_from_the_recording {
+    let earlier = @1969-12-31T00:00:00Z
+    assert eval(relay(value: [0s: 7])) != [earlier: 7]
+}
+
+test a_replay_cannot_publish_before_the_earliest_start {
+    let earlier = @1969-12-31T00:00:00Z
+    eval(relay(value: [earlier: 7]))
+}
+
 test computed_nullable_and_mixed_keys {
     let opening = @2026-01-05T09:30:00Z
     let empty: i64? = null

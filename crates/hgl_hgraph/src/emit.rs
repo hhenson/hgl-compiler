@@ -21,8 +21,8 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
-    FieldRef, LocalKind, Member, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature,
-    Type,
+    FieldRef, LocalKind, Member, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
+    Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -395,6 +395,55 @@ fn mangled(ty: &Type) -> String {
             }
         })
         .collect()
+}
+
+/// What a candidate gives, for the name of its provider's function: its
+/// result, or the T of a `result<T, error>`. A candidate that can fail
+/// is declared once for each value of its policy (NUM-9, OPS-8), and
+/// the provider has one function for the two, which takes the policy.
+fn given(signature: &Signature) -> Option<&Type> {
+    match signature.result.as_ref()? {
+        Type::Result { value, .. } => Some(value),
+        other => Some(other),
+    }
+}
+
+/// True when core's native candidates of `operator` are told apart by
+/// what they give: two of them take the same types and give different
+/// ones, as `convert(value: i64) -> f64` and `convert(value: i64) ->
+/// bool` do (OPS-4). The provider's function of each such candidate is
+/// named with what it gives.
+fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
+    let Some(core) = program.core() else {
+        return false;
+    };
+    let module = &program.modules[core];
+    // What each candidate read so far takes and gives.
+    let mut read: Vec<(Vec<&Type>, Option<&Type>)> = Vec::new();
+    for (position, declared) in module.declarations.iter().enumerate() {
+        if declared.kind != DeclarationKind::NativeCandidate(Role::Value, Some(operator))
+            && declared.kind != DeclarationKind::NativeCandidate(Role::Temporal, Some(operator))
+        {
+            continue;
+        }
+        let Some(Detail::Callable(signature)) = module.details.get(position) else {
+            continue;
+        };
+        let takes: Vec<&Type> = signature
+            .parameters
+            .iter()
+            .map(|parameter| &parameter.ty)
+            .collect();
+        let gives = given(signature);
+        if read
+            .iter()
+            .any(|(other, result)| *other == takes && *result != gives)
+        {
+            return true;
+        }
+        read.push((takes, gives));
+    }
+    false
 }
 
 /// One `when` of a node: what its header asks, and its body.
@@ -2063,6 +2112,35 @@ impl Emitter<'_> {
         let Some(headed) = module.application_at() else {
             return;
         };
+        // UNIT-14: "Between its declarations and its run statement it
+        // may set the run's store: `inject global_state`, and then
+        // calls of `put` on it. Each is evaluated once, in the order
+        // written, before the run's graph is built". They are a
+        // function of the store, which the harness calls with the
+        // run's own before it builds the graph (core's CRUN-7).
+        let seeded = match &module.store_body {
+            Some(body) => {
+                let setting = Function {
+                    locals: &body.locals,
+                    signature: None,
+                    mode: Mode::Lifecycle,
+                };
+                // The `inject` is the function's parameter.
+                let puts: Vec<Stmt> = body
+                    .statements
+                    .iter()
+                    .filter(|statement| !matches!(statement, Stmt::Inject { .. }))
+                    .cloned()
+                    .collect();
+                self.hgraph = true;
+                self.line(0, "");
+                self.line(0, "");
+                self.line(0, &format!("def {APPLICATION}_store(_store):"));
+                self.block(&setting, &puts, 1);
+                true
+            }
+            None => false,
+        };
         self.line(0, "");
         self.line(0, "");
         self.line(0, &format!("def {APPLICATION}():"));
@@ -2075,8 +2153,14 @@ impl Emitter<'_> {
                     signature: None,
                     mode: Mode::Test,
                 };
-                self.piece.statements.push((1, run.at));
-                let written = self.run_statement(&function, run);
+                let line = self.text.matches('\n').count();
+                self.piece.statements.push((line, run.at));
+                let mut written = self.run_statement(&function, run);
+                if seeded {
+                    // Given last, by a name no parameter has.
+                    let call = written.strip_suffix(')').unwrap_or(&written).to_string();
+                    written = format!("{call}, _store={APPLICATION}_store)");
+                }
                 self.line(1, &format!("return {written}"));
             }
             // The analyser gave the statement no reading.
@@ -2586,6 +2670,20 @@ impl Emitter<'_> {
                 ..
             } if function.mode.runs() => {
                 self.switch(function, selector, cases, default.as_deref(), depth);
+            }
+            // FN-9: "A graph injects `global_state` and no other, and
+            // uses it where the graph is built: each call on it is
+            // evaluated once then, in the order written, before any
+            // node of that graph starts". hgraph builds a graph with
+            // the run's store current, so the store is the current one
+            // where the graph's function runs, and a call on it there
+            // is run then.
+            Stmt::Inject { local, .. }
+                if function.mode == Mode::Graph
+                    && function.locals[*local].name == "global_state" =>
+            {
+                self.hgraph = true;
+                self.line(depth, "_store = _hg.GlobalState.instance()");
             }
             other => self.unsupported(at_of(other, function.locals), "this statement"),
         }
@@ -4204,13 +4302,22 @@ impl Emitter<'_> {
                 .iter()
                 .map(|parameter| mangled(&parameter.ty))
                 .collect();
-            let native = format!("{}_{}", declared.name, types.join("_"));
+            let mut native = format!("{}_{}", declared.name, types.join("_"));
+            let mut shown = format!("{}({})", declared.name, types.join(", "));
+            // OPS-4: "`convert<T>(value)` converts a value to the type
+            // T": core's candidates of `convert` take the same type and
+            // give different ones, so the provider's function is named
+            // with what it gives too, `convert_i64_to_f64`.
+            if let DeclarationKind::NativeCandidate(_, Some(operator)) = declared.kind
+                && told_apart_by_result(program, operator)
+                && let Some(given) = given(signature)
+            {
+                native = format!("{native}_to_{}", mangled(given));
+                shown = format!("{shown} -> {given}");
+            }
             let core = Some(module) == program.core();
             if !core || !provided().any(|provided| provided == native) {
-                self.unsupported(
-                    at,
-                    &format!("the candidate `{}({})`", declared.name, types.join(", ")),
-                );
+                self.unsupported(at, &format!("the candidate `{shown}`"));
                 return "None".to_string();
             }
             Some(native)

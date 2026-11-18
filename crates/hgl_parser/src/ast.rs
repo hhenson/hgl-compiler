@@ -78,6 +78,9 @@ ast_nodes! {
     ApplicationDecl,
     /// `run(heartbeat())` or `eval(heartbeat())` as an item of a file
     RunStmt,
+    /// `inject global_state` or `put(global_state, "limit", 3)` as an
+    /// item of a file
+    StoreStmt,
     /// `pricing.curves`
     ModulePath,
     /// `use pricing.curves::{curve, bump}` or `use pricing.curves as pc`
@@ -191,6 +194,14 @@ impl ApplicationDecl {
     }
 }
 
+impl StoreStmt {
+    /// The statement inside: an `InjectDecl`, or an `ExprStmt` that
+    /// holds a call.
+    pub fn statement(&self) -> Option<SyntaxNode> {
+        self.syntax.children().next()
+    }
+}
+
 impl RunStmt {
     /// The `run(...)` or `eval(...)` the statement is: a `RunExpr` or
     /// an `EvalExpr` node.
@@ -301,6 +312,9 @@ pub enum Item {
     TestContext(TestContext),
     /// `run(...)` or `eval(...)`: an application's run statement
     Run(RunStmt),
+    /// `inject global_state` or `put(global_state, "limit", 3)`: what
+    /// an application sets its run's store with
+    Store(StoreStmt),
 }
 
 impl Item {
@@ -320,6 +334,7 @@ impl Item {
             SyntaxKind::TestDecl => Item::Test(TestDecl { syntax: node }),
             SyntaxKind::TestContext => Item::TestContext(TestContext { syntax: node }),
             SyntaxKind::RunStmt => Item::Run(RunStmt { syntax: node }),
+            SyntaxKind::StoreStmt => Item::Store(StoreStmt { syntax: node }),
             _ => return None,
         };
         Some(item)
@@ -340,6 +355,7 @@ impl Item {
             Item::Test(item) => item.syntax(),
             Item::TestContext(item) => item.syntax(),
             Item::Run(item) => item.syntax(),
+            Item::Store(item) => item.syntax(),
         }
     }
 }

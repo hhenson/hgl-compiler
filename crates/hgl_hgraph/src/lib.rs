@@ -23,9 +23,11 @@
 //! | A temporal `set<i64>` | `_hg.TSS[_py.int]`, whose tick is the set's delta |
 //! | `delta<set<i64>>(added: [1], removed: [2])` | `_hg.set_delta(added=..., removed=..., tp=_py.int)` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
+//! | `convert<T>(value)` (OPS-4, OPS-6) | The provider's function named with what it gives, `convert_i64_to_f64`; one that can fail takes `invalid` (OPS-7, OPS-8) |
 //! | A `state` and a `cache` | Fields of the node's `STATE`, given their values in its `start` |
 //! | A source, a `fn` with a `yield` | A Python generator, a node that resumes it, and a graph that wakes the node as it starts |
 //! | `inject clock`, `logger`, `global_state` | hgraph's `EvaluationClock`, `LOGGER` and `GlobalState`, given to the node, its `start` and its `stop` |
+//! | `inject global_state` in a graph | `_store = _hg.GlobalState.instance()`, the run's store where the graph is built |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |
 //! | A temporal function or candidate with generic parameters | A node or a graph for each set of generic arguments it is called with, `_inst_identity_sum__f64` |
@@ -46,6 +48,7 @@
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |
+//! | An application's `inject global_state` and `put(global_state, "limit", 3)` | `def _application_store(_store): ...`, given to `_harness.run` as `_store=` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.

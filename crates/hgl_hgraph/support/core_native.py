@@ -3,7 +3,14 @@
 Written by the hgl compiler beside the modules it generates. Each function
 is one native candidate of core's `hgl/native/scalar_operators.hgl`, named
 after the candidate and the types of its parameters: `add__i64_i64` is
-`native impl const fn add_(lhs: i64, rhs: i64) -> i64`.
+`native impl const fn add_(lhs: i64, rhs: i64) -> i64`. A conversion is
+named with what it gives too, `convert_i64_to_f64`: core's candidates of
+`convert` take one type and give different ones (OPS-4).
+
+A conversion that can fail takes `invalid`, the name of a member of core's
+`InvalidPolicy` (OPS-8): under `"error"` it gives a `result`, an `Err`
+carrying the code `convert.invalid` for a failure, and under `"fail"` the
+plain value, and a failure is an error raised.
 
 Core's numeric contract has `i64` arithmetic neither wrap nor promote: a
 result outside the signed 64-bit range is an error with the code
@@ -1085,6 +1092,155 @@ def floordiv__duration_duration(lhs, rhs, zero):
     return _divide(_floordiv_i64, _microseconds(lhs), _microseconds(rhs), zero)
 
 
+# ---- Conversions ----
+#
+# OPS-4: "`convert<T>(value)` converts a value to the type T." Core's
+# candidates of it take the same type and give different ones, so each
+# function here is named with what it gives too: `convert_i64_to_f64`
+# is `native impl const fn convert(value: i64) -> f64`.
+#
+# OPS-6 says what each yields. A number to and from text is not here.
+
+
+def convert_i64_to_f64(value):
+    # "The nearest `f64`": Python rounds an `int` to the nearest
+    # `float`, a tie to the even one.
+    return float(value)
+
+
+def convert_i64_to_bool(value):
+    """OPS-6: "False for zero, true otherwise"."""
+    return value != 0
+
+
+def convert_f64_to_bool(value):
+    """OPS-6: "False for zero, true otherwise; NaN is true". A NaN is
+    unequal to zero, as to everything."""
+    return value != 0
+
+
+def convert_bool_to_i64(value):
+    """OPS-6: "0 or 1"."""
+    return 1 if value else 0
+
+
+def convert_bool_to_f64(value):
+    return 1.0 if value else 0.0
+
+
+def convert_bool_to_str(value):
+    """OPS-6: "The text of the literal that denotes the value"."""
+    return "true" if value else "false"
+
+
+def convert_str_to_bytes(value):
+    """OPS-6: UTF-8."""
+    return value.encode("utf-8")
+
+
+def convert_date_to_datetime(value):
+    """OPS-6: "The start of that date, in UTC". An instant here is a
+    `datetime` in UTC that names no zone."""
+    return _datetime.datetime(value.year, value.month, value.day)
+
+
+def convert_datetime_to_date(value):
+    """OPS-6: "The date of the instant, in UTC"."""
+    return value.date()
+
+
+def _unconverted(message, invalid):
+    """A conversion that failed, under its policy (OPS-8).
+
+    Under `"error"` "a failure is an Err carrying error code
+    `convert.invalid`", and under `"fail"` "an escaping HGL error":
+    the same failure, raised.
+    """
+    if invalid == "error":
+        return Err(Error(message, code="convert.invalid"))
+    if invalid == "fail":
+        raise HglError(message, code="convert.invalid")
+    raise HglError(f"the invalid policy `{invalid}` is not provided")
+
+
+def _converted(value, invalid):
+    """A conversion that can fail and did not: "the conversion then
+    returns `result<T, error>`" under `"error"`, and T under `"fail"`
+    (OPS-7, OPS-8)."""
+    return Ok(value) if invalid == "error" else value
+
+
+def _rounded(value, rounding):
+    """The integer `rounding` selects for a finite `value` (OPS-8).
+
+    What is left of `value` past its whole part is exact: a `float`
+    with a fraction is below 2**52, where the difference of two
+    `float`s of one sign is held exactly. So a tie is seen as one.
+    """
+    if rounding == "floor":
+        return _math.floor(value)
+    if rounding == "ceiling":
+        return _math.ceil(value)
+    # Toward zero.
+    whole = _math.trunc(value)
+    if rounding == "truncate":
+        return whole
+    if rounding == "half_even":
+        # Python's `round` of a `float` is to the nearest integer, "a
+        # tie to the even integer".
+        return round(value)
+    left = _magnitude(value - whole)
+    # The integer next to `whole` on the side away from zero.
+    away = whole + (1 if value > 0 else -1)
+    if rounding == "half_up":
+        # "a tie away from zero"
+        return away if left >= 0.5 else whole
+    if rounding == "half_down":
+        # "a tie toward zero"
+        return away if left > 0.5 else whole
+    raise HglError(f"the rounding `{rounding}` is not provided")
+
+
+def convert_f64_Rounding_i64__to_i64(value, rounding, nan, invalid):
+    """An `f64` as an `i64`: "The integer its rounding selects".
+
+    OPS-7: it fails for "an `f64` that is NaN, an infinity, or outside
+    `i64` once rounded". OPS-8: `nan` is "the value a NaN converts to.
+    Null leaves a NaN to `invalid`". `rounding` is a member of core's
+    `Rounding`, which is named as the language names it.
+    """
+    if value != value:
+        if nan is not None:
+            return _converted(nan, invalid)
+        return _unconverted("a NaN is no `i64`", invalid)
+    if value in (_INFINITY, -_INFINITY):
+        return _unconverted("an infinity is no `i64`", invalid)
+    whole = _rounded(value, rounding.name)
+    if not _I64_MIN <= whole <= _I64_MAX:
+        return _unconverted("the number is outside `i64` once rounded", invalid)
+    return _converted(whole, invalid)
+
+
+def convert_str_to_bool(value, invalid):
+    """OPS-6: "The value of the literal the text is". OPS-7: it fails
+    for "text that is no literal of the type asked for"."""
+    if value == "true":
+        return _converted(True, invalid)
+    if value == "false":
+        return _converted(False, invalid)
+    return _unconverted("the text is no `bool` literal", invalid)
+
+
+def convert_bytes_to_str(value, invalid):
+    """OPS-6: UTF-8. OPS-7: it fails for "bytes that are not
+    well-formed UTF-8"."""
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError:
+        return _unconverted("the bytes are not well-formed UTF-8", invalid)
+    return _converted(text, invalid)
+
+
 def _moved(instant, duration):
     """An instant a duration on from another (OPS-1).
 
@@ -1182,7 +1338,7 @@ class Tenor:
         return hash(self._counts())
 
     def __repr__(self):
-        return convert_tenor(self)
+        return convert_tenor_to_str(self)
 
 
 def _tenor_count(value):
@@ -1268,7 +1424,7 @@ def ge__tenor_tenor(lhs, rhs):
     return compare__tenor_tenor(lhs, rhs) in ("greater", "equivalent")
 
 
-def convert_tenor(value):
+def convert_tenor_to_str(value):
     """TEN-9: a tenor's text "uses the largest units: its months as `Y`
     and `M`, its days as `W` and `D`, or its business days as `B`. A unit
     whose count is zero is not written; a tenor of no months and no days

@@ -106,6 +106,10 @@ define_syntax_kinds! {
         /// An application's run statement: a `RunExpr` or an `EvalExpr`
         /// that stands as an item of the file (RUN-1)
         RunStmt,
+        /// `inject global_state` or `put(global_state, "limit", 3)` as an
+        /// item of the file: what an application sets its run's store
+        /// with (UNIT-14)
+        StoreStmt,
         /// `pricing.curves`
         ModulePath,
         /// `use pricing.curves::{curve, bump}` or `use pricing.curves as pc`
