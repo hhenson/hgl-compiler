@@ -262,25 +262,33 @@ const ECHOED: &str = concat!(
 
 /// RUN-2: "a constant checked against the type it replaces". The type
 /// of a generic entry's parameter is the one the application's call
-/// makes it: `echo(value: 3)` runs `echo<i64>`, and text given for
-/// `value` would make it `echo<str>`, another entry with another
-/// output. It is rejected: status 1.
+/// makes it: `echo(value: 3)` runs `echo<i64>`. The second read has
+/// the entry's generic arguments written, so text given for `value`
+/// is checked against the `i64` it replaces, and is rejected: status
+/// 1, where it would otherwise have made the entry `echo<str>`.
 #[test]
 fn a_replacement_does_not_change_what_the_entry_is() {
     let root = scratch("replacements_generic");
     write(&root, "sides.hgl", SIDES);
-    write(&root, "echoed.hgl", ECHOED);
+    let application = write(&root, "echoed.hgl", ECHOED);
     let output = hgl(&["run", &argument(&root), "--arg", "value=\"text\""]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         text(&output.stdout),
         "not run: the program is rejected with the replacements given\n"
     );
-    assert_eq!(
-        text(&output.stderr),
-        "hgl: a replacement is of the type it replaces: `demo.sides.echoed` runs \
-         `demo.sides::echo<i64>`, and with the replacements given it would run \
-         `demo.sides::echo<str>`\n"
+    let reported = text(&output.stderr);
+    assert!(
+        reported.contains("this is `str`, and the parameter `value` is `i64`"),
+        "{reported}"
+    );
+    assert!(
+        reported.contains(&format!("{application}:5:24")),
+        "{reported}"
+    );
+    assert!(
+        reported.contains("eval(echo<i64>(value: (\"text\")))"),
+        "{reported}"
     );
 }
 
@@ -413,6 +421,66 @@ fn an_application_runs_with_what_starts_it_replaces() {
         concat!(
             "1970-01-01T00:00:01.000001Z  5\n",
             "ran demo.sides.echoed on hgraph: 1 publication\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    // A replacement is read as the argument it replaces was expected:
+    // with the `Side` and the `f64` the application's own argument
+    // made the entry's `T`, `.sell` is a member (TYPE-7) and `3` an
+    // `f64` (EXPR-5).
+    write(
+        &root,
+        "member.hgl",
+        concat!(
+            "application demo.sides.member\n",
+            "\n",
+            "use demo.sides::{echo, Side}\n",
+            "\n",
+            "eval(echo(value: Side.buy))\n",
+        ),
+    );
+    write(
+        &root,
+        "real.hgl",
+        concat!(
+            "application demo.sides.real\n",
+            "\n",
+            "use demo.sides::{echo}\n",
+            "\n",
+            "eval(echo(value: 2.5))\n",
+        ),
+    );
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--application",
+        "demo.sides.member",
+        "--arg",
+        "value=.sell",
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  .sell\n",
+            "ran demo.sides.member on hgraph: 1 publication\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--application",
+        "demo.sides.real",
+        "--arg",
+        "value=3",
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  3.0\n",
+            "ran demo.sides.real on hgraph: 1 publication\n",
         ),
         "{}",
         text(&output.stderr)

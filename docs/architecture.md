@@ -1724,10 +1724,17 @@ The value is read as it is put, between its parentheses, where `.buy`
 is a member of the enum the place expects; `3, 4` and `3) + (4` are not
 one expression there. An error of the second read is reported in the
 application's file, with the statement as it was checked. The type a
-replacement is checked against is the one it replaces: where the call
-with the replacements is of another entry than the application's, or
-of the same one with other generic arguments, `echo<str>` for
-`echo<i64>`, the program is rejected. A configuration that is not written as
+replacement is checked against is the one it replaces. The generic
+arguments an entry's call infers, `<i64>` for `echo(value: 3)`, are
+written after the entry's name for the second read, so a replacement
+is read as the argument it replaces was expected: `.sell` is a member
+of the enum the call made `T`, `3` is the `f64` it made it, and
+`"text"` is no `i64`. They are written as a message writes a type,
+which the application's file may have no name for: they are left out
+where the application, with them written and nothing replaced, does not
+read as it did. In either case, where the call with the replacements is
+of another entry than the application's, or of the same one with other
+generic arguments, the program is rejected. A configuration that is not written as
 `RunConfig(...)`, a constant's name, has its fields replaced by nothing
 yet.
 

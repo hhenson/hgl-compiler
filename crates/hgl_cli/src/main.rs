@@ -861,6 +861,42 @@ fn run(arguments: &RunArgs) -> ExitCode {
     // program checked again: the replacement is held to what an
     // argument the application writes is.
     if !arguments.arguments.is_empty() || !arguments.config.is_empty() {
+        let written = replace::EntryCall::of(&program, &chosen);
+        let written_as = written
+            .as_ref()
+            .map_or("no entry".to_string(), |entry| entry.shown(&program));
+        // The entry's generic arguments, where the application left
+        // them to be inferred from the arguments now replaced. They are
+        // written out for the second read, so that a replacement is
+        // read as the argument was expected: but only where the
+        // application, with them written and nothing replaced, still
+        // reads as it did. Its file may have no name for one of them.
+        let inferred = replace::inferred_generics(&parsed, &program, &chosen);
+        let explicit = inferred.as_ref().filter(|generics| {
+            let Ok((file, text)) = replace::replaced(
+                &sources,
+                &parsed,
+                &program,
+                &chosen,
+                &[],
+                &[],
+                Some(generics),
+                limits,
+            ) else {
+                return false;
+            };
+            let name = sources.file(file).name().to_string();
+            let Ok(Parsed {
+                files,
+                diagnostics: mut found,
+                ..
+            }) = parse_program_with(&arguments.roots, limits, Some((&name, &text)))
+            else {
+                return false;
+            };
+            let read = hgl_analyser::analyse(&files, &mut found);
+            !found.has_errors() && replace::EntryCall::of(&read, &chosen) == written
+        });
         let (file, text) = match replace::replaced(
             &sources,
             &parsed,
@@ -868,6 +904,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             &chosen,
             &arguments.arguments,
             &arguments.config,
+            explicit,
             limits,
         ) {
             Ok(replaced) => replaced,
@@ -877,10 +914,6 @@ fn run(arguments: &RunArgs) -> ExitCode {
             }
         };
         let name = sources.file(file).name().to_string();
-        let written = replace::EntryCall::of(&program, &chosen);
-        let written_as = written
-            .as_ref()
-            .map_or("no entry".to_string(), |entry| entry.shown(&program));
         let Parsed {
             sources: read_again,
             files: parsed,

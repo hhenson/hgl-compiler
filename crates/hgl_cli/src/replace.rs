@@ -299,11 +299,71 @@ impl EntryCall {
     }
 }
 
+/// The generic arguments of an entry's call that the application left
+/// to be inferred, as text to write after the entry's name, and where
+/// that is: `<i64>` for `echo(value: 3)`. `None` where the call infers
+/// none: the entry has no generic parameter, or the application wrote
+/// its arguments.
+///
+/// A replacement is read in place of an argument, and the entry's
+/// generic arguments may have been inferred from that argument. With
+/// them written the replacement is read as the argument was expected:
+/// `.sell` is a member of the `Side` the call made `T`, and `3` the
+/// `f64` it made it (EXPR-5).
+///
+/// The text is each argument as a message writes it, which the
+/// application's file may have no name for, or another meaning for:
+/// the caller checks that the application reads as it did with the
+/// text written, before it relies on it.
+pub(crate) fn inferred_generics(
+    files: &[ParsedFile],
+    program: &Program,
+    path: &str,
+) -> Option<(u32, String)> {
+    let run = program
+        .modules
+        .iter()
+        .find(|module| module.path == path)?
+        .run_body
+        .as_ref()?;
+    let entry = EntryCall::of(program, path)?;
+    if entry.generics.is_empty() {
+        return None;
+    }
+    let root = &files
+        .iter()
+        .find(|parsed| parsed.file == run.call.at.file)?
+        .root;
+    // `echo(value: 3)` is a call of a name. One that writes its
+    // generic arguments, `echo<i64>(value: 3)`, is another kind of
+    // node, and is left as it is.
+    let call = root.descendants().find(|node| {
+        let range = node.text_range();
+        node.kind() == SyntaxKind::CallExpr
+            && u32::from(range.start()) == run.call.at.span.start
+            && u32::from(range.end()) == run.call.at.span.end
+    })?;
+    let name = call
+        .children()
+        .find(|node| node.kind() == SyntaxKind::NameExpr)?;
+    let written: Vec<String> = entry
+        .generics
+        .iter()
+        .map(|given| given.to_string())
+        .collect();
+    Some((
+        u32::from(name.text_range().end()),
+        format!("<{}>", written.join(", ")),
+    ))
+}
+
 /// The text of the application `path` of `program` with its run
 /// statement's arguments and configuration replaced, and the file the
-/// text is of. On failure, the message to print: a name the entry or
-/// the configuration has not, a name given twice, or a value that is
-/// not one expression.
+/// text is of. `generics` is what [`inferred_generics`] gave, where the
+/// entry's generic arguments are to be written too. On failure, the
+/// message to print: a name the entry or the configuration has not, a
+/// name given twice, or a value that is not one expression.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn replaced(
     sources: &SourceMap,
     files: &[ParsedFile],
@@ -311,6 +371,7 @@ pub(crate) fn replaced(
     path: &str,
     arguments: &[Replacement],
     config: &[Replacement],
+    generics: Option<&(u32, String)>,
     limits: Limits,
 ) -> Result<(FileId, String), String> {
     let unread = || format!("the run statement of `{path}` could not be read for a replacement");
@@ -338,6 +399,9 @@ pub(crate) fn replaced(
         .ok_or_else(unread)?
         .root;
     let mut changes: Vec<(Span, String)> = Vec::new();
+    if let Some((after_name, written)) = generics {
+        changes.push((Span::empty(*after_name), written.clone()));
+    }
 
     // The entry's call: `counted(upto: 3)`.
     let ExprKind::Call {
@@ -473,6 +537,9 @@ mod tests {
         "export fn once() -> i64 {\n",
         "    yield 1s: 1\n",
         "}\n",
+        "export fn echo<T>(const value: T) -> T {\n",
+        "    yield 1s: value\n",
+        "}\n",
     );
 
     /// The run statement of an application that ends with the line
@@ -480,7 +547,7 @@ mod tests {
     /// its last line. Or the message that says why they are not.
     fn rewritten(statement: &str, arguments: &[&str], config: &[&str]) -> Result<String, String> {
         let application = format!(
-            "application demo.app\nuse demo.ticks::{{counted, once}}\n\
+            "application demo.app\nuse demo.ticks::{{counted, once, echo}}\n\
              const standard: RunConfig = RunConfig(length: 1m)\n{statement}\n"
         );
         let mut sources = SourceMap::new();
@@ -520,6 +587,7 @@ mod tests {
             "demo.app",
             &read(arguments),
             &read(config),
+            inferred_generics(&files, &program, "demo.app").as_ref(),
             Limits::DEFAULT,
         )
         .map(|(_, text)| text.lines().last().unwrap().to_string())
@@ -610,6 +678,26 @@ mod tests {
             rewritten("eval(counted(3), standard)", &[], &["length=10s"]).unwrap_err(),
             "the configuration of `demo.app` is not written as `RunConfig(...)`: \
              a field of one that is named or computed is not replaced yet"
+        );
+    }
+
+    /// The generic arguments an entry's call infers are written for
+    /// the second read, after the entry's name: a replacement is then
+    /// read as the argument it replaces was expected. Those the
+    /// application wrote are left as they are.
+    #[test]
+    fn inferred_generic_arguments_are_written() {
+        assert_eq!(
+            rewritten("eval(echo(value: 3))", &["value=4"], &[]).unwrap(),
+            "eval(echo<i64>(value: (4)))"
+        );
+        assert_eq!(
+            rewritten("eval(echo(2.5), RunConfig(length: 1m))", &["value=3"], &[]).unwrap(),
+            "eval(echo<f64>((3)), RunConfig(length: 1m))"
+        );
+        assert_eq!(
+            rewritten("eval(echo<i64>(value: 3))", &["value=4"], &[]).unwrap(),
+            "eval(echo<i64>(value: (4)))"
         );
     }
 
