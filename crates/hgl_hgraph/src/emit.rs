@@ -4057,6 +4057,12 @@ impl Emitter<'_> {
                     return "None".to_string();
                 };
                 let base = self.expression(function, base);
+                // In a graph it is a field of a bundle's connection,
+                // the child's port, taken by its name: a field may be
+                // named as a port's own attribute is, `value`.
+                if function.mode == Mode::Graph {
+                    return format!("{base}[{}]", string(&name(&field.name)));
+                }
                 format!("{base}.{}", name(&field.name))
             }
             // EXPR-7: "Brackets read an element of a list or a tuple by
@@ -4894,7 +4900,7 @@ impl Emitter<'_> {
 
     /// The port of a node's temporal input that `value` reads, where it
     /// is the input or a field of a temporal struct port, as hgraph
-    /// names it: `quote`, `quote.bid`. `None` for anything else, an
+    /// names it: `quote`, `quote["bid"]`. `None` for anything else, an
     /// `atomic<V>`'s field among them, which is read from its value.
     fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
@@ -4906,7 +4912,7 @@ impl Emitter<'_> {
             ExprKind::Field { base, member } => {
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
-                Some(format!("{base}.{}", name(&field.name)))
+                Some(format!("{base}[{}]", string(&name(&field.name))))
             }
             _ => None,
         }
@@ -4936,7 +4942,7 @@ impl Emitter<'_> {
             .iter()
             .map(|member| {
                 let field = name(&member.name);
-                let read = self.port_value(&member.ty, &format!("{port}.{field}"));
+                let read = self.port_value(&member.ty, &format!("{port}[{}]", string(&field)));
                 format!("{field}={read}")
             })
             .collect();

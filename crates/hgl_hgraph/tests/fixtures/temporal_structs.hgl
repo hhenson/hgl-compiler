@@ -107,6 +107,20 @@ fn present(quote: atomic<Quote?>) -> bool {
     when { return quote != null }
 }
 
+# Fields named as a port's own attributes are.
+struct Boxed {
+    value: i64
+    valid: i64
+}
+
+fn boxed(value: i64) -> Boxed {
+    when { return Boxed(value: value, valid: value + 1) }
+}
+
+fn unboxed(held: Boxed) -> i64 {
+    when { return held.value + held.valid }
+}
+
 # A source that yields whole structs (SOURCE-1).
 fn two_quotes() -> Quote {
     yield 1us: Quote(bid: 1, ask: 2)
@@ -126,6 +140,8 @@ fn nested_bid_of(bid: i64, size: i64) -> i64 => ordered(bid, size).quote.bid
 fn atomic_ask_of(bid: i64, ask: i64) -> i64 => snapshot(bid, ask).ask
 fn atomic_read_of(bid: i64, ask: i64) -> i64 => snapshot_ask(snapshot(bid, ask))
 
+fn boxed_sum(value: i64) -> i64 => unboxed(boxed(value))
+fn boxed_valid(value: i64) -> i64 => boxed(value).valid
 fn raised_ask(bid: i64) -> i64 => raised(bid).ask
 fn present_of(bid: i64) -> bool => present(maybe(bid))
 fn level_set_of(price: i64) -> bool => level_set(leveled(price))
@@ -133,6 +149,8 @@ fn source_width() -> i64 => width(two_quotes())
 fn widened_width(bid: i64, ask: i64) -> i64 => width(widened(quoted(bid, ask)))
 
 test struct_fields_tick_as_their_own {
+    assert eval(boxed_sum(value: [1, 2])) == [3, 5]
+    assert eval(boxed_valid(value: [1, 2])) == [2, 3]
     assert eval(raised_ask(bid: [1, 3])) == [3, 7]
     assert eval(present_of(bid: [1, -1, 2])) == [true, false, true]
     assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
