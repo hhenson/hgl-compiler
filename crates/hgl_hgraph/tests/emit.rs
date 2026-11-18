@@ -4315,16 +4315,107 @@ fn a_nullable_is_a_value_that_may_be_unset() {
     }
 }
 
-/// TYPE-17: "The core contract gives a tenor's operators, how each
-/// form moves a date, and what a business day is." Until the target
-/// has those a tenor is reported as not written, where it is a value
-/// and where it is a type of a temporal function.
+/// A tenor on hgraph (core's TEN-1 to TEN-9): its literal, its own
+/// arithmetic, order and text, and a date moved by one, on a calendar
+/// and under a rolling rule.
+const MOVES: &str = concat!(
+    "module demo.moves\n",
+    "\n",
+    // A calendar of the program's own: one day closed, beside the weekend.
+    "struct Closed {\n",
+    "    day: date\n",
+    "}\n",
+    "\n",
+    "impl const fn business_day(calendar: Closed, day: date) -> bool =>\n",
+    "    day != calendar.day && business_day(Weekdays(), day)\n",
+    "\n",
+    // TEN-5, TEN-7: the options of `+`, each an argument of the candidate.
+    "const fn settles(trade: date, calendar: Closed) -> date => trade +{calendar: calendar} 2B\n",
+    "\n",
+    "const fn matures(spot: date) -> date => spot +{rolling_rule: Rolling.modified_following} 3M\n",
+    "\n",
+    "const fn summed(lhs: tenor, rhs: tenor) -> tenor => lhs + rhs\n",
+    "\n",
+    "test moves {\n",
+    // TEN-4: months first, to the last day of a shorter month.
+    "    assert @2026-01-31 + 1M == @2026-02-28\n",
+    "    assert @2026-01-31 - 2W == @2026-01-17\n",
+    // TEN-6: a count of business days starts from a business day. The
+    // 3rd is a Saturday: on to the Monday, or back to the Friday.
+    "    assert @2026-01-03 + 2B == @2026-01-07\n",
+    "    assert @2026-01-03 - 0B == @2026-01-02\n",
+    "    assert settles(@2026-01-02, Closed(day: @2026-01-05)) == @2026-01-07\n",
+    // TEN-8: `modified_following` gives the business day before where
+    // the one after is in another month.
+    "    assert matures(@2025-10-31) == @2026-01-30\n",
+    // TEN-2, TEN-3, TEN-9: a tenor's own arithmetic, order and text.
+    "    assert 6M + 6M == 1Y\n",
+    "    assert 2 * 1Y6M == 3Y\n",
+    "    assert -(1M2D) == -1 * 1M2D\n",
+    "    assert 1M < 2M\n",
+    "    assert !(1M < 45D)\n",
+    "    assert (1M <=> 45D) == CmpResult.unordered\n",
+    "    assert convert<str>(13D) == \"1W6D\"\n",
+    "    assert convert<str>(1M - 1D) == \"1M-1D\"\n",
+    "    assert raises(\"tenor.mixed_units\") { summed(2B, 1M) }\n",
+    "    assert raises(\"numeric.out_of_range\") { summed(9223372036854775807D, 1D) }\n",
+    "}\n",
+);
+
+/// TEN-1 to TEN-9 on hgraph. A tenor literal is the provider's `Tenor`
+/// by its counts (LEX-28, TYPE-17), and its own operators the
+/// provider's functions. `date + tenor` is core's HGL, written for the
+/// calendar and the rolling rule it is given, each an argument of the
+/// candidate; core's functions ask the program's own `business_day`.
 #[test]
-fn a_tenor_is_not_written_yet() {
+fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
+    let emitted = emit(&[("moves.hgl", MOVES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_moves/__init__.py");
+    for expected in [
+        // LEX-28: a year is twelve months, a week seven days, and
+        // business days a count of their own.
+        "_core.Tenor(1, 0)",
+        "_core.Tenor(0, 14)",
+        "_core.Tenor(18, 0)",
+        "_core.Tenor(business=2)",
+        // TEN-2, TEN-3, TEN-9: the provider's.
+        "_core.add__tenor_tenor(lhs=_core.Tenor(6, 0), rhs=_core.Tenor(6, 0))",
+        "_core.neg__tenor(value=_core.Tenor(1, 2))",
+        "_core.lt__tenor_tenor(lhs=_core.Tenor(1, 0), rhs=_core.Tenor(2, 0))",
+        "_core.compare__tenor_tenor(lhs=_core.Tenor(1, 0), rhs=_core.Tenor(0, 45))",
+        "_core.convert_tenor(value=_core.Tenor(0, 13))",
+        // TEN-4: core's candidate, with no option.
+        "_hgl_4core._impl_add__date_tenor(lhs=_dt.date(2026, 1, 31), rhs=_core.Tenor(1, 0))",
+        // TEN-5: written for the calendar it is given.
+        "_hgl_4core._inst__impl_add__date_tenor_C__demo_moves__Closed(lhs=trade, calendar=calendar, rhs=_core.Tenor(business=2))",
+        // TEN-7, TEN-8: and for the rolling rule.
+        "_hgl_4core._inst__impl_add__date_tenor_R__core__Rolling(lhs=spot, rolling_rule=_hgl_4core.Rolling[\"modified_following\"], rhs=_core.Tenor(3, 0))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // Core's own functions, written for the program's calendar, ask the
+    // program's `business_day`.
+    let core = emitted.text("_hgl/_m_core/__init__.py");
+    assert!(
+        core.contains(
+            "_hgl_4demo_5moves._impl_business_day_Closed_date(calendar=calendar, day=at)"
+        ),
+        "{core}"
+    );
+}
+
+/// TYPE-17: a tenor is written as a value. As the type of a temporal
+/// function's input or result it is reported as not written.
+#[test]
+fn a_tenor_is_no_temporal_type_yet() {
     let emitted = emit(&[(
         "tenor.hgl",
         concat!(
-            "module demo.moves\n",
+            "module demo.rules\n",
             "const fn quarter() -> tenor => 3M\n",
             "fn passed(lag: tenor) -> tenor {\n",
             "    when { return lag }\n",
@@ -4334,7 +4425,6 @@ fn a_tenor_is_not_written_yet() {
     assert_eq!(
         emitted.reported,
         [
-            "tenor.hgl:2:32 target.unsupported",
             "tenor.hgl:3:11 target.unsupported",
             "tenor.hgl:3:4 target.unsupported",
         ]
@@ -5163,6 +5253,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("nullable.hgl", NULLABLE));
     files.push(("lists.hgl", LISTS));
     files.push(("shared.hgl", SHARED));
+    files.push(("moves.hgl", MOVES));
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
@@ -5186,13 +5277,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        65,
+        66,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on configuration of a generic type, and one of each demo's"
     );
 }
 

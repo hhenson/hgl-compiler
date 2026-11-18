@@ -26,6 +26,7 @@ A struct is a class `struct` makes: a value that is never changed, so
 that one held in two places is as good as a copy in each (TYPE-5).
 """
 
+import calendar as _calendar
 import dataclasses as _dataclasses
 import datetime as _datetime
 import functools as _functools
@@ -908,6 +909,169 @@ def add__date_duration(lhs, rhs):
 
 def sub__date_duration(lhs, rhs):
     return _moved(_datetime.datetime.combine(lhs, _datetime.time()), -rhs)
+
+
+class Tenor:
+    """A `tenor`, a rule for moving a date (the language's TYPE-17): "a
+    count of months and a count of days, or it is a count of business
+    days".
+
+    `business` is `None` for a tenor of months and days. Two are equal
+    "when they are of the same form and their counts are equal".
+    """
+
+    __slots__ = ("months", "days", "business")
+
+    def __init__(self, months=0, days=0, business=None):
+        self.months = months
+        self.days = days
+        self.business = business
+
+    def _counts(self):
+        return (self.months, self.days, self.business)
+
+    def __eq__(self, other):
+        return isinstance(other, Tenor) and self._counts() == other._counts()
+
+    def __hash__(self):
+        return hash(self._counts())
+
+    def __repr__(self):
+        return convert_tenor(self)
+
+
+def _tenor_count(value):
+    """TEN-2: "A count outside the i64 range is an HGL error with code
+    `numeric.out_of_range`"."""
+    if not _I64_MIN <= value <= _I64_MAX:
+        raise HglError("a count of a tenor is outside the signed 64-bit range", code="numeric.out_of_range")
+    return value
+
+
+def _same_form(lhs, rhs):
+    """TEN-2: "The operands of a sum or a difference are of one form: a
+    tenor of business days with one of months and days is an HGL error
+    with code `tenor.mixed_units`"."""
+    if (lhs.business is None) != (rhs.business is None):
+        raise HglError(
+            "a tenor of business days and one of months and days have no sum",
+            code="tenor.mixed_units",
+        )
+
+
+def add__tenor_tenor(lhs, rhs):
+    """TEN-2: "A sum, a difference, a negation, and a scaling apply to
+    each count"."""
+    _same_form(lhs, rhs)
+    if lhs.business is not None:
+        return Tenor(business=_tenor_count(lhs.business + rhs.business))
+    return Tenor(_tenor_count(lhs.months + rhs.months), _tenor_count(lhs.days + rhs.days))
+
+
+def sub__tenor_tenor(lhs, rhs):
+    _same_form(lhs, rhs)
+    if lhs.business is not None:
+        return Tenor(business=_tenor_count(lhs.business - rhs.business))
+    return Tenor(_tenor_count(lhs.months - rhs.months), _tenor_count(lhs.days - rhs.days))
+
+
+def neg__tenor(value):
+    if value.business is not None:
+        return Tenor(business=_tenor_count(-value.business))
+    return Tenor(_tenor_count(-value.months), _tenor_count(-value.days))
+
+
+def mul__tenor_i64(lhs, rhs):
+    if lhs.business is not None:
+        return Tenor(business=_tenor_count(lhs.business * rhs))
+    return Tenor(_tenor_count(lhs.months * rhs), _tenor_count(lhs.days * rhs))
+
+
+def compare__tenor_tenor(lhs, rhs):
+    """TEN-3: "The order is count by count ... `<=>` gives `equivalent`
+    for two equal tenors; `less` or `greater` where each count that
+    differs differs that way; and `unordered` otherwise, two tenors of
+    different forms included"."""
+    if (lhs.business is None) != (rhs.business is None):
+        return "unordered"
+    if lhs.business is not None:
+        pairs = ((lhs.business, rhs.business),)
+    else:
+        pairs = ((lhs.months, rhs.months), (lhs.days, rhs.days))
+    less = any(left < right for left, right in pairs)
+    greater = any(left > right for left, right in pairs)
+    if less and greater:
+        return "unordered"
+    return "less" if less else "greater" if greater else "equivalent"
+
+
+def lt__tenor_tenor(lhs, rhs):
+    """TEN-3: "`<`, `<=`, `>`, and `>=` are false for an unordered
+    pair"."""
+    return compare__tenor_tenor(lhs, rhs) == "less"
+
+
+def le__tenor_tenor(lhs, rhs):
+    return compare__tenor_tenor(lhs, rhs) in ("less", "equivalent")
+
+
+def gt__tenor_tenor(lhs, rhs):
+    return compare__tenor_tenor(lhs, rhs) == "greater"
+
+
+def ge__tenor_tenor(lhs, rhs):
+    return compare__tenor_tenor(lhs, rhs) in ("greater", "equivalent")
+
+
+def convert_tenor(value):
+    """TEN-9: a tenor's text "uses the largest units: its months as `Y`
+    and `M`, its days as `W` and `D`, or its business days as `B`. A unit
+    whose count is zero is not written; a tenor of no months and no days
+    is `0D`. A count below zero has `-` before its units"."""
+
+    def units(count, larger, each, smaller):
+        if count == 0:
+            return ""
+        sign, count = ("-", -count) if count < 0 else ("", count)
+        high, low = divmod(count, each)
+        return sign + (f"{high}{larger}" if high else "") + (f"{low}{smaller}" if low else "")
+
+    if value.business is not None:
+        return f"{value.business}B"
+    return units(value.months, "Y", 12, "M") + units(value.days, "W", 7, "D") or "0D"
+
+
+def fn_business_days(value):
+    """The count of a tenor of business days, and null for one of months
+    and days (TEN-1)."""
+    return value.business
+
+
+def fn_moved(day, by):
+    """TEN-4: "A date moved by a tenor of months and days takes the
+    months first: the same day of the month that many months on, or the
+    last day of that month where it has no such day. Then it takes the
+    days ... A result outside the `date` range is an HGL error with code
+    `numeric.out_of_range`"."""
+    year, month = divmod(day.year * 12 + (day.month - 1) + by.months, 12)
+    month += 1
+    try:
+        last = _calendar.monthrange(year, month)[1]
+        return _datetime.date(year, month, min(day.day, last)) + _datetime.timedelta(days=by.days)
+    except (OverflowError, ValueError):
+        raise HglError(
+            "a date result is outside the years 1 to 9999", code="numeric.out_of_range"
+        ) from None
+
+
+def fn_weekend(day):
+    """TEN-5: true for a Saturday and for a Sunday."""
+    return day.weekday() >= 5
+
+
+def fn_same_month(lhs, rhs):
+    """TEN-8: true where the two dates are in one month of one year."""
+    return (lhs.year, lhs.month) == (rhs.year, rhs.month)
 
 
 def neg__i64(value):

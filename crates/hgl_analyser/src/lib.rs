@@ -559,7 +559,11 @@ fn warning(
 /// `include_str!` puts a file's text in the compiler when the compiler
 /// is built, so the module is the one at the `spec/hgl_core` pin. A
 /// test fails when the pin adds a file this list does not have.
-pub const CORE_FILES: [(&str, &str); 5] = [
+pub const CORE_FILES: [(&str, &str); 7] = [
+    (
+        "<core>/core/calendar.hgl",
+        include_str!("../../../spec/hgl_core/hgl/core/calendar.hgl"),
+    ),
     (
         "<core>/core/core.hgl",
         include_str!("../../../spec/hgl_core/hgl/core/core.hgl"),
@@ -579,6 +583,10 @@ pub const CORE_FILES: [(&str, &str); 5] = [
     (
         "<core>/native/scalar_operators.hgl",
         include_str!("../../../spec/hgl_core/hgl/native/scalar_operators.hgl"),
+    ),
+    (
+        "<core>/native/tenors.hgl",
+        include_str!("../../../spec/hgl_core/hgl/native/tenors.hgl"),
     ),
 ];
 

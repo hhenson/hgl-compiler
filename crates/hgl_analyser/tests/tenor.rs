@@ -74,3 +74,78 @@ fn a_tenor_literal_is_a_tenor_and_no_duration() {
         ]
     );
 }
+
+/// Core's TEN-1: "The symbol operators admit the operand types of the
+/// first table below. Every other pairing is a source rejection,
+/// `operator.no_candidate`. Scaling commutes ...; a date is the left
+/// operand." The pairings are core's candidates, found as any
+/// operator's are. TEN-5, TEN-7: `calendar` and `rolling_rule` are
+/// options of `+` and `-`, each an argument of the candidate that takes
+/// it (EXPR-10): a calendar is a value `business_day` has a candidate
+/// for, and a rolling rule one `roll` has.
+#[test]
+fn a_tenors_operators_and_options_are_cores_candidates() {
+    let checked = module(concat!(
+        "struct Closed {\n",
+        "    day: date\n",
+        "}\n",
+        "impl const fn business_day(calendar: Closed, day: date) -> bool => day != calendar.day\n",
+        "const fn found(day: date, closed: Closed) -> i64 {\n",
+        "    let moved = day + 3M\n",
+        "    let back = day - 2B\n",
+        "    let both = 6M + 6M\n",
+        "    let less = 1Y6M - 6M\n",
+        "    let scaled = 2 * 1Y6M\n",
+        "    let other = 1Y6M * 2\n",
+        "    let turned = -(1M)\n",
+        "    let ordered = 1M < 2M\n",
+        "    let outcome = 1M <=> 45D\n",
+        "    let same = 1Y == 12M\n",
+        "    let text = convert<str>(13D)\n",
+        "    let settled = day +{calendar: closed} 2B\n",
+        "    let rolled = day +{rolling_rule: Rolling.following} 3M\n",
+        "    let each = day -{rolling_rule: Rolling.preceding, calendar: closed} 3M\n",
+        "    return 1\n",
+        "}\n",
+        // Line 23: a tenor on the left of a date, an instant that is no
+        // date, a division, a calendar that is none, and an option no
+        // candidate takes.
+        "const fn refused(day: date, at: datetime) -> i64 {\n",
+        "    let turned = 3M + day\n",
+        "    let instant = at + 3M\n",
+        "    let halved = 3M / 2\n",
+        "    let counted = day +{calendar: 5} 2B\n",
+        "    let named = day +{holidays: 5} 2B\n",
+        "    return 1\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:24:21 operator/operator.no_candidate OPS-1",
+            "m.hgl:25:22 operator/operator.no_candidate OPS-1",
+            "m.hgl:26:21 operator/operator.no_candidate OPS-1",
+            "m.hgl:27:23 operator/operator.no_candidate OPS-1",
+            "m.hgl:28:23 name/argument.unknown EXPR-10",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "found")[2..],
+        [
+            "moved: date",
+            "back: date",
+            "both: tenor",
+            "less: tenor",
+            "scaled: tenor",
+            "other: tenor",
+            "turned: tenor",
+            "ordered: bool",
+            "outcome: CmpResult",
+            "same: bool",
+            "text: str",
+            "settled: date",
+            "rolled: date",
+            "each: date",
+        ]
+    );
+}

@@ -12,7 +12,8 @@
 //! not known, and nothing is reported of it (ERR-9).
 
 use hgl_diagnostics::Location;
-use hgl_lexer::literal::Tenor;
+// A tenor's value is the lexer's: a later stage reads it from here.
+pub use hgl_lexer::literal::Tenor;
 
 use crate::program::LocalKind;
 use crate::types::{Argument as GenericArgument, Type};
