@@ -438,7 +438,8 @@ def entry_of(dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K]) -> _TS[_SCALAR]:
     if child is None or not child.valid:
         raise HglError(f"the dictionary has no key {selected!r}", code="value.missing_key")
     if key.modified or child.modified:
-        return child.value
+        # A child that holds a null publishes it (see `published`).
+        return published(child.value)
 
 
 def updated(delta):

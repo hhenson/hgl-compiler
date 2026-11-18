@@ -90,6 +90,15 @@ fn keys_of(key: str, price: i64) -> i64? => b_in_hook(priced(key, price))
 fn removals_of(key: str, price: i64) -> i64 => removals(priced(key, price))
 fn a_of(key: str, price: i64) -> i64? => price_of_a(priced(key, price))
 fn b_of(key: str, price: i64) -> i64 => priced(key, price)["B"]
+
+fn maybe_priced(price: i64) -> dict<str, i64?> {
+    when {
+        if price < 0 { return delta<dict<str, i64?>>(updated: ["A": delta<i64?>()]) }
+        return delta<dict<str, i64?>>(updated: ["A": price])
+    }
+}
+
+fn maybe_a(price: i64) -> i64? => maybe_priced(price)["A"]
 fn chosen_of(chosen: str, key: str, price: i64) -> i64 => priced(key, price)[chosen]
 
 test lists_tick_whole_or_by_position {
@@ -108,6 +117,7 @@ test dictionaries_tick_by_key {
     assert eval(keys_of(key: ["A", "B", "A"], price: [1, 2, -1])) == [null, 2, 2]
     assert eval(removals_of(key: ["A", "A"], price: [1, -1])) == [1, 10]
     assert eval(a_of(key: ["B", "A", "A"], price: [2, 7, -1])) == [null, 7, null]
+    assert eval(maybe_a(price: [1, -1, 2])) == [1, null, 2]
     assert eval(b_of(key: ["B", "A", "B"], price: [1, 2, 3])) == [1, _, 3]
     assert eval(chosen_of(chosen: ["A", "B", _], key: ["A", "B", "A"], price: [1, 2, 3])) ==
         [1, 2, _]
