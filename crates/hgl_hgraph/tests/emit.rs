@@ -4411,7 +4411,7 @@ fn a_list_grows_through_cores_append_and_extend() {
 /// A generic node whose configuration is of its generic parameter:
 /// what `T` is at a call decides how the configuration is given.
 const KEPT: &str = concat!(
-    "module demo.kept\n",
+    "module demo.tagged\n",
     "\n",
     "fn tagged<T>(value: i64, const tag: T) -> i64 {\n",
     "    when { return value }\n",
@@ -4445,9 +4445,9 @@ const KEPT: &str = concat!(
 /// for an argument left out.
 #[test]
 fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
-    let emitted = emit(&[("kept.hgl", KEPT)]);
+    let emitted = emit(&[("tagged.hgl", KEPT)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
+    let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
     for expected in [
         "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(tags))\n",
         "    return _inst_optional__list_i64_(value=value, tag=_core.Held(None))\n",
@@ -4948,7 +4948,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("places.hgl", PLACES));
     files.push(("nullable.hgl", NULLABLE));
     files.push(("lists.hgl", LISTS));
-    files.push(("kept.hgl", KEPT));
+    files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
