@@ -1600,7 +1600,7 @@ impl Emitter<'_> {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
             }
-            let child = self.annotation(value, true, at)?;
+            let child = self.child_annotation(ty, value, at)?;
             self.hgraph = true;
             return Some(format!("_hg.TSD[{key}, {child}]"));
         }
@@ -1680,6 +1680,17 @@ impl Emitter<'_> {
                     ..
                 },
             ) => self.type_name(*module, *declaration),
+            // ERR-2 and ERR-4: a `result` and an `error` are no
+            // composite, and publish whole (TYPE-9): the provider's
+            // classes, `Ok` and `Err` both a `Result`.
+            (None, Type::Error) => {
+                self.natives = true;
+                "_core.Error".to_string()
+            }
+            (None, Type::Result { .. }) => {
+                self.natives = true;
+                "_core.Result".to_string()
+            }
             _ => {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
@@ -1691,6 +1702,19 @@ impl Emitter<'_> {
         } else {
             Some(python)
         }
+    }
+
+    /// The temporal annotation of `child`, a field, a position or a
+    /// keyed child of the temporal composite `ty` (TYPE-9). An unsized
+    /// list ticks whole here (`list_annotation`), and its parent's
+    /// update would give it a position's change, so as a child it is
+    /// reported.
+    fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
+        if growing_list(child) {
+            self.unsupported(at, &format!("the type `{ty}`"));
+            return None;
+        }
+        self.annotation(child, true, at)
     }
 
     /// The annotation of a temporal list `ty` of `element`, of `size`.
@@ -1715,7 +1739,7 @@ impl Emitter<'_> {
     ) -> Option<String> {
         match size.map(|size| &size.value) {
             Some(ConstantValue::Int(count)) => {
-                let child = self.annotation(element, true, at)?;
+                let child = self.child_annotation(ty, element, at)?;
                 self.hgraph = true;
                 Some(format!("_hg.TSL[{child}, _hg.Size[{count}]]"))
             }
@@ -1770,7 +1794,7 @@ impl Emitter<'_> {
         };
         let mut fields = Vec::new();
         for member in members {
-            let field = self.annotation(&member.ty, true, at)?;
+            let field = self.child_annotation(ty, &member.ty, at)?;
             fields.push(format!("{}: {field}", string(&name(&member.name))));
         }
         self.hgraph = true;
@@ -3984,6 +4008,8 @@ impl Emitter<'_> {
                     | ExprKind::Widen(_)
                     | ExprKind::EnumMember { .. }
                     | ExprKind::Constant { .. }
+                    | ExprKind::Capture(_)
+                    | ExprKind::Captured { .. }
             )
             && !self.connected_field(function, value)
             && !self.connected_element(function, value)
@@ -4406,6 +4432,33 @@ impl Emitter<'_> {
                     self.unsupported(value.at, "a list's element at a position that ticks");
                     return "None".to_string();
                 }
+                // ERR-6: a dictionary's brackets "are strict
+                // point-in-time reads; absence fails". hgraph's own
+                // child selection is silent where the key is absent, so
+                // the provider's node selects it and fails there, with
+                // the code `value.missing_key`. It publishes where the
+                // key ticks or the selected child does. A key known
+                // where the graph is built is a constant connection of
+                // the key's type.
+                if let Type::Dict { key, value: child } = &base.ty {
+                    if !publishes_whole(child) {
+                        self.unsupported(value.at, "an element of a dictionary of composites");
+                        return "None".to_string();
+                    }
+                    let connected = self.connects(function, index);
+                    let Some(key) = self.annotation(key, false, value.at) else {
+                        return "None".to_string();
+                    };
+                    let base = self.expression(function, base);
+                    let index = self.expression(function, index);
+                    let index = if connected {
+                        index
+                    } else {
+                        format!("_hg.const({index}, tp=_hg.TS[{key}])")
+                    };
+                    self.natives = true;
+                    return format!("_core.entry_of({base}, {index})");
+                }
                 let base = self.expression(function, base);
                 let index = self.expression(function, index);
                 format!("{base}[{index}]")
@@ -4496,10 +4549,110 @@ impl Emitter<'_> {
                 let result = self.expression(function, result);
                 format!("_core.{called}({result})")
             }
+            ExprKind::Capture(call) => self.capture(function, call),
+            // ERR-7: "`.value` retains the normal output type": the
+            // child's own output. `.error` is "a connection of `error`":
+            // hgraph's stream of the child's failures, each made an
+            // `error` by the provider's node.
+            ExprKind::Captured { capture, error } => {
+                let capture = self.expression(function, capture);
+                if *error {
+                    self.natives = true;
+                    format!("_core.captured_error({capture}.exception)")
+                } else {
+                    format!("{capture}.out")
+                }
+            }
             _ => {
                 self.unsupported(value.at, "this expression");
                 "None".to_string()
             }
+        }
+    }
+
+    /// `capture(callable, args...)` in a graph (ERR-7): "a temporal
+    /// error boundary" around `call`, the call it names. hgraph's
+    /// `try_except` gives a bundle of the child's output, `out`, and its
+    /// failures, `exception`; for a child with no output it gives the
+    /// failures alone, which are put in a bundle of that one field, so
+    /// that `.error` reads either the same way.
+    ///
+    /// ERR-8: "Capture ends the failed pass without rollback or
+    /// immediate retry. The child remains live for future ordinary work"
+    /// and "Start/stop failures escape": hgraph catches a failure of the
+    /// child's evaluation only, and the child is evaluated again on its
+    /// next input. The nearest `try_except` catches a failure, once.
+    ///
+    /// The call is a node or a graph of the program. A lifted value
+    /// function, and a graph given a wiring-time value, which hgraph's
+    /// `try_except` does not take, are not written yet.
+    fn capture(&mut self, function: &Function, call: &Expr) -> String {
+        let at = call.at;
+        let program = self.program;
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                }
+                | Callee::Candidate {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                },
+            arguments,
+            ..
+        } = &call.kind
+        else {
+            self.unsupported(at, "this capture");
+            return "None".to_string();
+        };
+        let (module, declaration) = (*module, *declaration);
+        let declared = &program.modules[module].declarations[declaration];
+        let bodied = matches!(
+            declared.kind,
+            DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
+        );
+        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        else {
+            self.unsupported(at, "this capture");
+            return "None".to_string();
+        };
+        if declared.kind.role() != Some(Role::Temporal) || !bodied {
+            self.unsupported(at, "a capture of a lifted call");
+            return "None".to_string();
+        }
+        if !self.is_node((module, declaration))
+            && signature
+                .parameters
+                .iter()
+                .any(|parameter| parameter.constant)
+        {
+            self.unsupported(at, "a capture of a graph given a wiring-time value");
+            return "None".to_string();
+        }
+        let python = self.called_name((module, declaration), generics, at);
+        let arguments = self.arguments(
+            function,
+            (module, declaration),
+            generics,
+            signature,
+            arguments,
+        );
+        let given = if arguments.is_empty() {
+            python
+        } else {
+            format!("{python}, {arguments}")
+        };
+        self.hgraph = true;
+        let attempted = format!("_hg.try_except({given})");
+        if signature.result.is_none() {
+            format!("_hg.combine(exception={attempted})")
+        } else {
+            attempted
         }
     }
 
@@ -5436,6 +5589,8 @@ impl Emitter<'_> {
                         .any(|argument| self.connects(function, &argument.value))
             }
             ExprKind::Widen(inner) => self.connects(function, inner),
+            // ERR-7: a capture is "read through two connections".
+            ExprKind::Capture(_) | ExprKind::Captured { .. } => true,
             // A field of a connection is the field's own connection,
             // and so is an element of one.
             ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => {

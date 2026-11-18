@@ -108,7 +108,7 @@ test dictionaries_tick_by_key {
     assert eval(keys_of(key: ["A", "B", "A"], price: [1, 2, -1])) == [null, 2, 2]
     assert eval(removals_of(key: ["A", "A"], price: [1, -1])) == [1, 10]
     assert eval(a_of(key: ["B", "A", "A"], price: [2, 7, -1])) == [null, 7, null]
-    assert eval(b_of(key: ["A", "B", "B"], price: [1, 2, 3])) == [_, 2, 3]
+    assert eval(b_of(key: ["B", "A", "B"], price: [1, 2, 3])) == [1, _, 3]
     assert eval(chosen_of(chosen: ["A", "B", _], key: ["A", "B", "A"], price: [1, 2, 3])) ==
         [1, 2, _]
 }

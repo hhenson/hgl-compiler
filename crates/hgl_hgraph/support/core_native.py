@@ -37,12 +37,24 @@ import calendar as _calendar
 import dataclasses as _dataclasses
 import datetime as _datetime
 import functools as _functools
+import json as _json
 import math as _math
 import re as _re
 from fractions import Fraction as _Fraction
 
-from hgraph import REMOVE as _REMOVE, REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS
-from hgraph import Null as _Null, TimeSeriesSchema as _TimeSeriesSchema
+from hgraph import (
+    EvaluationClock as _EvaluationClock,
+    NodeError as _NodeError,
+    Null as _Null,
+    REMOVE as _REMOVE,
+    REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS,
+    K as _K,
+    SCALAR as _SCALAR,
+    TS as _TS,
+    TSD as _TSD,
+    TimeSeriesSchema as _TimeSeriesSchema,
+    compute_node as _compute_node,
+)
 
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
 # parameter below: Python's own is kept under another name.
@@ -67,15 +79,38 @@ def constant(function):
     return _functools.cache(function)
 
 
+# The start of the note an `HglError` carries, which says what error a
+# capture of the failure gives (see `captured_error`).
+_NOTE = "hgl-error: "
+
+
 class HglError(Exception):
     """A failure of an HGL operation while a program runs.
 
-    `code` is the catalogued code of the failure, where it has one.
+    `code` is the catalogued code of the failure, where it has one, and
+    `context` the provenance of the error it fails with, where that was
+    an error retained from an earlier failure (ERR-8: "A consumer that
+    propagates a retained error with `?` makes a new failure event,
+    whose error keeps its first provenance").
+
+    hgraph gives a capture of a node's failure as text, the failure's
+    traceback, and no object: the error is written as one line of JSON
+    in a note of the exception, which the traceback ends with, and
+    `captured_error` reads it back.
     """
 
-    def __init__(self, message, code=None):
+    def __init__(self, message, code=None, context=None):
         super().__init__(message if code is None else f"{code}: {message}")
         self.code = code
+        self.context = context
+        written = {"message": message, "code": code}
+        if context is not None:
+            written["context"] = [
+                context.node,
+                context.phase,
+                context.evaluation_time.isoformat(),
+            ]
+        self.add_note(_NOTE + _json.dumps(written))
 
 
 def _equal(lhs, rhs):
@@ -103,7 +138,14 @@ def _equal(lhs, rhs):
     return lhs == rhs
 
 
-class Ok:
+class Result:
+    """A `result`: an `Ok` or an `Err` (ERR-2). The class a temporal
+    `result` is a time series of."""
+
+    __slots__ = ()
+
+
+class Ok(Result):
     """A success of a `result`, which owns its value (ERR-2)."""
 
     __slots__ = ("value",)
@@ -121,7 +163,7 @@ class Ok:
         return f"ok({self.value!r})"
 
 
-class Err:
+class Err(Result):
     """A failure of a `result`, which owns its error (ERR-2)."""
 
     __slots__ = ("error",)
@@ -140,20 +182,70 @@ class Error:
     """An `error`: a message, and a code that may be null (ERR-4).
 
     "Equality excludes provenance": two errors are equal when their
-    messages and their codes are.
+    messages and their codes are. `context` is the provenance, an
+    `ErrorContext`, which "a constructed error has none" of.
     """
 
-    __slots__ = ("message", "code")
+    __slots__ = ("message", "code", "context")
 
-    def __init__(self, message, code=None):
+    def __init__(self, message, code=None, context=None):
         self.message = message
         self.code = code
+        self.context = context
 
     def __eq__(self, other):
         return type(other) is Error and (self.message, self.code) == (other.message, other.code)
 
     def __repr__(self):
         return f"error(message: {self.message!r}, code: {self.code!r})"
+
+
+class ErrorContext:
+    """The provenance of an error a graph failure gave (ERR-4): "`.node:
+    str`, `.phase: str`, one of `"evaluate"`, `"start"`, and `"stop"`,
+    and `.evaluation_time: datetime`"."""
+
+    __slots__ = ("node", "phase", "evaluation_time")
+
+    def __init__(self, node, phase, evaluation_time):
+        self.node = node
+        self.phase = phase
+        self.evaluation_time = evaluation_time
+
+
+def error_of(failure, evaluation_time):
+    """The `error` a capture gives for hgraph's `NodeError` `failure`,
+    met at `evaluation_time` (ERR-4, ERR-7).
+
+    An `HglError` says its error in the last note of the traceback (see
+    `HglError`). "On first graph failure, attach original node identity,
+    phase, and evaluation time; propagation/capture preserve them": an
+    error with no context of its own is given the failing node's, in
+    the phase hgraph captures, evaluation. Any other failure is an error
+    of the traceback's last line, with no code.
+    """
+    lines = failure.error_msg.rstrip().splitlines()
+    written = next((line for line in reversed(lines) if line.startswith(_NOTE)), None)
+    if written is None:
+        return Error(lines[-1] if lines else "", None, ErrorContext(failure.label, "evaluate", evaluation_time))
+    written = _json.loads(written[len(_NOTE):])
+    context = written.get("context")
+    if context is None:
+        context = ErrorContext(failure.label, "evaluate", evaluation_time)
+    else:
+        node, phase, at = context
+        context = ErrorContext(node, phase, _datetime.datetime.fromisoformat(at))
+    return Error(written["message"], written["code"], context)
+
+
+@_compute_node
+def captured_error(failure: _TS[_NodeError], _clock: _EvaluationClock = None) -> _TS[Error]:
+    """ERR-7: a capture's `.error`, "a connection of `error`". "Each
+    evaluation failure ticks its canonical error; before failure the
+    stream is invalid, and later success leaves its retained error valid
+    but unmodified": hgraph's stream of the child's failures, each made
+    an `error`."""
+    return error_of(failure.value, _clock.evaluation_time)
 
 
 class Propagated(Exception):
@@ -180,7 +272,7 @@ def succeeded(result):
     the node with the error it holds (ERR-5)."""
     if type(result) is Ok:
         return result.value
-    raise HglError(result.error.message, code=result.error.code)
+    raise HglError(result.error.message, code=result.error.code, context=result.error.context)
 
 
 def member(enum, value):
@@ -331,6 +423,22 @@ def dict_delta(updated=None, removed=()):
 
 def _removes(change):
     return change is _REMOVE or change is _REMOVE_IF_EXISTS
+
+
+@_compute_node
+def entry_of(dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K]) -> _TS[_SCALAR]:
+    """`dictionary[key]` in a graph: the child of a temporal dictionary
+    that `key` selects (the language's TYPE-9, "dictionaries to keyed
+    children"). The read is strict (ERR-6: "absence fails"), with the
+    code `value.missing_key`, where hgraph's own selection would be
+    silent. It publishes where the key ticks or the selected child
+    does, so another child's tick is silent."""
+    selected = key.value
+    child = dictionary[selected] if selected in dictionary.keys() else None
+    if child is None or not child.valid:
+        raise HglError(f"the dictionary has no key {selected!r}", code="value.missing_key")
+    if key.modified or child.modified:
+        return child.value
 
 
 def updated(delta):

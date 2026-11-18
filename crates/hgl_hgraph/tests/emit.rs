@@ -6041,6 +6041,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
+    files.push(("captures.hgl", CAPTURES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6313,6 +6314,65 @@ fn a_timer_wakes_its_own_handlers() {
 /// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection
 /// and over a `const` parameter.
 const CONDITIONALS: &str = include_str!("fixtures/conditionals.hgl");
+
+/// ERR-7 and ERR-8: captures of a node and of a graph, nested.
+const CAPTURES: &str = include_str!("fixtures/captures.hgl");
+
+/// ERR-7: "`capture(callable, args...)` creates a temporal error
+/// boundary", hgraph's `try_except`, whose `out` is `.value` and whose
+/// failures, each made an `error` by the provider, are `.error`. A
+/// capture of an outputless call is read the same way.
+#[test]
+fn a_capture_is_a_try_except() {
+    let emitted = emit(&[
+        ("captures.hgl", CAPTURES),
+        (
+            "sink.hgl",
+            concat!(
+                "module demo.sink\n",
+                "fn drop(value: i64) { when { } }\n",
+                "fn watched(value: i64) -> error {\n",
+                "    let boundary = capture(drop, value)\n",
+                "    return boundary.error\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_captures/__init__.py");
+    for expected in [
+        "    boundary = _hg.try_except(doubled, value=value)\n    return boundary.out\n",
+        "    return is_negative(failure=_core.captured_error(boundary.exception))\n",
+        "    outer = _hg.try_except(handled, value=value, repeat=repeat)\n",
+        "def handled(value: _hg.TS[_py.int], repeat: _hg.TS[_py.bool]) -> _hg.TS[_core.Error]:\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+    let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
+    let expected = concat!(
+        "    boundary = _hg.combine(exception=_hg.try_except(drop, value=value))\n",
+        "    return _core.captured_error(boundary.exception)\n",
+    );
+    assert!(sink.contains(expected), "{expected}\nnot in\n{sink}");
+}
+
+/// hgraph's `try_except` does not take a graph given a wiring-time
+/// value: that capture is reported, and not written.
+#[test]
+fn a_capture_of_a_graph_given_a_constant_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn scaled(value: i64, const by: i64) -> i64 { return value * by }\n",
+            "fn watched(value: i64) -> i64 {\n",
+            "    let boundary = capture(scaled, value, 2)\n",
+            "    return boundary.value\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:4:20 target.unsupported"]);
+}
 
 /// CTRL-15: over a connection "each case is a child graph selected at
 /// runtime", hgraph's `switch_` with a graph for each branch. CTRL-13:
@@ -7482,8 +7542,8 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "store=_py.dict(prices.value), key=\"B\"".to_string(),
         "    for key in _core.removed(change):".to_string(),
         "store=_core.updated(change), key=\"A\"".to_string(),
-        "    return priced(key=key, price=price)[\"B\"]".to_string(),
-        "    return priced(key=key, price=price)[chosen]".to_string(),
+        "    return _core.entry_of(priced(key=key, price=price), _hg.const(\"B\", tp=_hg.TS[_py.str]))".to_string(),
+        "    return _core.entry_of(priced(key=key, price=price), chosen)".to_string(),
     ] {
         assert!(
             python.contains(&expected),
@@ -7496,7 +7556,8 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 /// is reported: an unsized list's delta, published or read (it ticks
 /// whole here), an unsized list of composite elements, a whole
 /// dictionary published, a nullable element of a fixed list published
-/// whole, and a list's element at a position that ticks.
+/// whole, a list's element at a position that ticks, and an unsized
+/// list as the child of a temporal composite.
 #[test]
 fn a_temporal_collection_form_not_written_yet_is_reported() {
     let emitted = emit(&[(
@@ -7526,6 +7587,9 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "    when { return [value, value] }\n",
             "}\n",
             "fn moving(slot: i64, value: i64) -> i64 => fixed(value)[slot]\n",
+            "fn nested(key: str) -> dict<str, list<i64>> {\n",
+            "    when { return delta<dict<str, list<i64>>>(removed: [key]) }\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
@@ -7537,6 +7601,7 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:16:19 target.unsupported",
             "m.hgl:19:19 target.unsupported",
             "m.hgl:24:44 target.unsupported",
+            "m.hgl:25:4 target.unsupported",
         ]
     );
 }
