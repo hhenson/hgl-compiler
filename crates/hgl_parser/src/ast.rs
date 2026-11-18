@@ -471,6 +471,17 @@ impl TestDecl {
         name_after(&self.syntax, SyntaxKind::KwTest)
     }
 
+    /// The duration of `@timeout(5s)` on the line before an integration
+    /// test (TST-17), as its token. `None` for a test with none.
+    pub fn timeout(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children()
+            .find(|child| child.kind() == SyntaxKind::TimeoutAnnotation)?
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Duration)
+    }
+
     /// True for `integration_test name { ... }` (TST-17): a test that
     /// may run in real time, and is run only when it is asked for.
     pub fn is_integration(&self) -> bool {
