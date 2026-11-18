@@ -37,6 +37,13 @@ fn a_graph_injects_the_store_and_sets_it_where_it_is_built() {
             "    put(global_state, \"limit\", value)\n",
             "    return pass(value)\n",
             "}\n",
+            // The store under another name is the store.
+            "fn aliased(value: i64) -> i64 {\n",
+            "    inject global_state\n",
+            "    let store = global_state\n",
+            "    put(store, \"limit\", value)\n",
+            "    return pass(value)\n",
+            "}\n",
             // Any other capability makes the body a node's.
             "fn clocked(value: i64) -> i64 {\n",
             "    inject clock\n",
@@ -53,8 +60,9 @@ fn a_graph_injects_the_store_and_sets_it_where_it_is_built() {
         checked.summary(),
         [
             "m.hgl:16:32 phase/connection.as_constant FN-9",
-            "m.hgl:21:5 phase/node.statement FN-2",
-            "m.hgl:25:5 phase/node.statement FN-2",
+            "m.hgl:22:25 phase/connection.as_constant FN-9",
+            "m.hgl:27:5 phase/node.statement FN-2",
+            "m.hgl:31:5 phase/node.statement FN-2",
         ],
         "{}",
         checked.report
@@ -73,6 +81,7 @@ fn a_graph_injects_the_store_and_sets_it_where_it_is_built() {
             "scaled: Some(Node)",
             "seeded: Some(Graph)",
             "connected: Some(Graph)",
+            "aliased: Some(Graph)",
             "clocked: Some(Node)",
             "both: Some(Node)",
         ]

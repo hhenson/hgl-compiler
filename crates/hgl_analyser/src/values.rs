@@ -4894,12 +4894,11 @@ impl<'a> Typer<'a> {
         let ExprKind::Call { arguments, .. } = kind else {
             return;
         };
-        let on_store = arguments.iter().any(|argument| {
-            matches!(
-                &argument.value.kind,
-                ExprKind::Local(local) if self.locals[*local].kind == LocalKind::Inject
-            )
-        });
+        // The capability itself, or a `let` it is bound to: `let store =
+        // global_state` and then `put(store, ...)` is a call on it too.
+        let on_store = arguments
+            .iter()
+            .any(|argument| self.capability_of(&argument.value).is_some());
         if !on_store {
             return;
         }
