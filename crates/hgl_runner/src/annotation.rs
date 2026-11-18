@@ -1,8 +1,8 @@
 //! Reads `# expect-error` annotations (TST-12).
 //!
 //! ```text
-//! # expect-error(type, "rolling.size_kind")
-//! fn invalid(value: rolling<f64, 5m, 3>) { when {} }
+//! # expect-error(type, "rolling_window.size_kind")
+//! fn invalid(value: rolling_window<f64, 5m, 3>) { when {} }
 //! ```
 //!
 //! An annotation is a line comment, alone on its line, of the form
@@ -229,11 +229,11 @@ mod tests {
     /// tabs is allowed in six places and nowhere else.
     #[test]
     fn the_form_is_the_production() {
-        let expected = Comment::Annotation(Category::Type, "rolling.size_kind".to_string());
+        let expected = Comment::Annotation(Category::Type, "rolling_window.size_kind".to_string());
         for comment in [
-            "# expect-error(type, \"rolling.size_kind\")",
-            "#expect-error(type,\"rolling.size_kind\")",
-            "#\t expect-error( \ttype \t, \t\"rolling.size_kind\" \t) \t",
+            "# expect-error(type, \"rolling_window.size_kind\")",
+            "#expect-error(type,\"rolling_window.size_kind\")",
+            "#\t expect-error( \ttype \t, \t\"rolling_window.size_kind\" \t) \t",
         ] {
             assert_eq!(classify(comment), expected, "{comment:?}");
         }
@@ -263,10 +263,10 @@ mod tests {
         for comment in [
             "#",
             "# a comment",
-            "# expects-error(type, \"rolling.size_kind\")",
-            "# see expect-error(type, \"rolling.size_kind\")",
-            "# Expect-Error(type, \"rolling.size_kind\")",
-            "## expect-error(type, \"rolling.size_kind\")",
+            "# expects-error(type, \"rolling_window.size_kind\")",
+            "# see expect-error(type, \"rolling_window.size_kind\")",
+            "# Expect-Error(type, \"rolling_window.size_kind\")",
+            "## expect-error(type, \"rolling_window.size_kind\")",
         ] {
             assert_eq!(classify(comment), Comment::Plain, "{comment:?}");
         }
@@ -279,23 +279,23 @@ mod tests {
         let cases = [
             ("# expect-error", "`(` directly follows `expect-error`"),
             (
-                "# expect-error (type, \"rolling.size_kind\")",
+                "# expect-error (type, \"rolling_window.size_kind\")",
                 "`(` directly follows `expect-error`",
             ),
             (
-                "# expect-errors(type, \"rolling.size_kind\")",
+                "# expect-errors(type, \"rolling_window.size_kind\")",
                 "`(` directly follows `expect-error`",
             ),
             (
-                "# expect-error(type \"rolling.size_kind\")",
+                "# expect-error(type \"rolling_window.size_kind\")",
                 "a comma follows the category",
             ),
             (
-                "# expect-error(type, rolling.size_kind)",
+                "# expect-error(type, rolling_window.size_kind)",
                 "the code is a string literal",
             ),
             (
-                "# expect-error(type, \"rolling.size_kind)",
+                "# expect-error(type, \"rolling_window.size_kind)",
                 "the code's string has no closing quote",
             ),
             (
@@ -303,33 +303,33 @@ mod tests {
                 "the code is not a valid string literal",
             ),
             (
-                "# expect-error(type, \"rolling.size_kind\"",
+                "# expect-error(type, \"rolling_window.size_kind\"",
                 "`)` follows the code",
             ),
             (
-                "# expect-error(type, \"rolling.size_kind\", \"again\")",
+                "# expect-error(type, \"rolling_window.size_kind\", \"again\")",
                 "`)` follows the code",
             ),
             (
-                "# expect-error(type, \"rolling.size_kind\") and more",
+                "# expect-error(type, \"rolling_window.size_kind\") and more",
                 "nothing follows `)` on the line",
             ),
             (
-                "# expect-error(types, \"rolling.size_kind\")",
+                "# expect-error(types, \"rolling_window.size_kind\")",
                 "`types` is not a source category",
             ),
             (
-                "# expect-error(build, \"rolling.size_kind\")",
+                "# expect-error(build, \"rolling_window.size_kind\")",
                 "`build` is not a source category",
             ),
             (
-                "# expect-error(, \"rolling.size_kind\")",
+                "# expect-error(, \"rolling_window.size_kind\")",
                 "`` is not a source category",
             ),
             // The category is part of what is catalogued.
             (
-                "# expect-error(parse, \"rolling.size_kind\")",
-                "the diagnostic catalogue has no `rolling.size_kind` in category `parse`",
+                "# expect-error(parse, \"rolling_window.size_kind\")",
+                "the diagnostic catalogue has no `rolling_window.size_kind` in category `parse`",
             ),
             // An execution code is not a source code.
             (

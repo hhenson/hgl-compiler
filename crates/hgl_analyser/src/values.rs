@@ -809,7 +809,7 @@ impl<'a> Typer<'a> {
                 // of its default, so the default is a value a constant
                 // of the parameter's type can publish." What that is
                 // for a window, an atomic or a reference is not settled
-                // here: `window: rolling<f64, 5> = []` is read, and
+                // here: `window: rolling_window<f64, 5> = []` is read, and
                 // held to no type.
                 let expected = if shaped(&parameter.ty) || names_parameter(&parameter.ty) {
                     Type::Unknown
@@ -11918,7 +11918,7 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))
         | (Type::List { element: left, .. }, Type::List { element: right, .. })
-        | (Type::Rolling { value: left, .. }, Type::Rolling { value: right, .. }) => {
+        | (Type::RollingWindow { value: left, .. }, Type::RollingWindow { value: right, .. }) => {
             specificity(left, right)
         }
         (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => all(&mut left
@@ -12413,7 +12413,7 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(key, found);
             struct_applications(value, found);
         }
-        Type::Rolling { value, .. } => struct_applications(value, found),
+        Type::RollingWindow { value, .. } => struct_applications(value, found),
         Type::Result { value, error } => {
             struct_applications(value, found);
             struct_applications(error, found);
@@ -13511,7 +13511,7 @@ fn whole(ty: &Type) -> bool {
         | Type::Trace { cell: inner, .. }
         | Type::Nullable(inner) => whole(inner),
         Type::Dict { key, value } => whole(key) && whole(value),
-        Type::Rolling { value, .. } => whole(value),
+        Type::RollingWindow { value, .. } => whole(value),
         Type::Result { value, error } => whole(value) && whole(error),
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
     }
@@ -13716,7 +13716,7 @@ fn holds_trace(ty: &Type) -> bool {
             .any(|argument| matches!(argument, Argument::Type(ty) if holds_trace(ty))),
         Type::Tuple(elements) => elements.iter().any(holds_trace),
         Type::List { element: inner, .. }
-        | Type::Rolling { value: inner, .. }
+        | Type::RollingWindow { value: inner, .. }
         | Type::Set(inner)
         | Type::Ref(inner)
         | Type::Endpoint(inner)
@@ -13898,12 +13898,12 @@ fn infer(
             infer(value, actual_value, generics, found);
         }
         (
-            Type::Rolling {
+            Type::RollingWindow {
                 value,
                 maximum,
                 minimum,
             },
-            Type::Rolling {
+            Type::RollingWindow {
                 value: actual,
                 maximum: actual_maximum,
                 minimum: actual_minimum,
@@ -14057,7 +14057,7 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
         | Type::Trace { cell: ty, .. }
         | Type::Nullable(ty) => inner(ty),
         Type::Dict { key, value } => inner(key) || inner(value),
-        Type::Rolling {
+        Type::RollingWindow {
             value,
             maximum,
             minimum,
@@ -14267,7 +14267,7 @@ fn shaped(ty: &Type) -> bool {
     matches!(
         not_null(Some(ty)),
         Some(
-            Type::Rolling { .. }
+            Type::RollingWindow { .. }
                 | Type::Atomic(_)
                 | Type::Ref(_)
                 | Type::Signal

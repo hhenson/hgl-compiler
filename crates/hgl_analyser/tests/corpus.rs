@@ -129,7 +129,7 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
         failures.join("\n")
     );
     assert!(assembled > 0, "no example shows a module in several files");
-    // TYPE-11's `rolling.size_kind` illustration, for one.
+    // TYPE-11's `rolling_window.size_kind` illustration, for one.
     assert!(rejections > 0, "no example states a rejection");
 }
 

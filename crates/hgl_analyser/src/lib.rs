@@ -277,9 +277,9 @@ pub mod codes {
     pub const STATE_INPUT_READ: &str = "state.input_read";
     /// A window's size is neither a tick count nor a duration, or its
     /// two sizes are of different kinds (TYPE-11).
-    pub const ROLLING_SIZE_KIND: &str = "rolling.size_kind";
+    pub const ROLLING_WINDOW_SIZE_KIND: &str = "rolling_window.size_kind";
     /// A window's size is out of bounds (TYPE-11).
-    pub const ROLLING_SIZE_BOUNDS: &str = "rolling.size_bounds";
+    pub const ROLLING_WINDOW_SIZE_BOUNDS: &str = "rolling_window.size_bounds";
     /// An integer literal is outside the `i64` domain: 2^63 with no
     /// minus before it (LEX-7).
     pub const NUMBER_INTEGER_RANGE: &str = "number.integer_range";
@@ -287,7 +287,7 @@ pub mod codes {
     /// A name in a type position is not a type (UNIT-10, GEN-2,
     /// GEN-13).
     pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
-    /// A `rolling`, `ref`, `atomic` or `signal` where only an
+    /// A `rolling_window`, `ref`, `atomic` or `signal` where only an
     /// ordinary value type may stand, under a `?` included (TYPE-12,
     /// TYPE-14 and the grammar's `value_type`).
     pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";

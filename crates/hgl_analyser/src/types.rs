@@ -180,8 +180,8 @@ pub enum Type {
         /// The value type.
         value: Box<Type>,
     },
-    /// `rolling<f64, 5m>` or `rolling<f64, 5, 2>`: a window (TYPE-11).
-    Rolling {
+    /// `rolling_window<f64, 5m>` or `rolling_window<f64, 5, 2>`: a window (TYPE-11).
+    RollingWindow {
         /// What the window holds.
         value: Box<Type>,
         /// The most it holds: a tick count or a duration.
@@ -289,8 +289,8 @@ impl Type {
                 of
             }
             // "`atomic<V>`: V: an atomic publishes whole";
-            // "`rolling<V, Max, Min>`: V: the value that arrived".
-            Type::Atomic(value) | Type::Rolling { value, .. } => *value,
+            // "`rolling_window<V, Max, Min>`: V: the value that arrived".
+            Type::Atomic(value) | Type::RollingWindow { value, .. } => *value,
             // "`dict<i64, delta<V>>`: for each position that changed,
             // its delta".
             Type::List { element, .. } => Type::Dict {
@@ -310,9 +310,10 @@ impl Type {
             // argument or a field that may be left out, and is no part
             // of what is published".
             Type::Nullable(inner) => match *inner {
-                inner @ (Type::Rolling { .. } | Type::Atomic(_) | Type::Ref(_) | Type::Signal) => {
-                    Type::delta(inner)
-                }
+                inner @ (Type::RollingWindow { .. }
+                | Type::Atomic(_)
+                | Type::Ref(_)
+                | Type::Signal) => Type::delta(inner),
                 inner => Type::Delta(Box::new(Type::Nullable(Box::new(inner)))),
             },
             // A type of its own; one not yet known; and one that has no
@@ -512,13 +513,13 @@ impl fmt::Display for Type {
             },
             Type::Set(element) => write!(f, "set<{element}>"),
             Type::Dict { key, value } => write!(f, "dict<{key}, {value}>"),
-            Type::Rolling {
+            Type::RollingWindow {
                 value,
                 maximum,
                 minimum,
             } => match minimum {
-                Some(minimum) => write!(f, "rolling<{value}, {maximum}, {minimum}>"),
-                None => write!(f, "rolling<{value}, {maximum}>"),
+                Some(minimum) => write!(f, "rolling_window<{value}, {maximum}, {minimum}>"),
+                None => write!(f, "rolling_window<{value}, {maximum}>"),
             },
             Type::Ref(target) => write!(f, "ref<{target}>"),
             Type::Endpoint(target) => write!(f, "endpoint<{target}>"),

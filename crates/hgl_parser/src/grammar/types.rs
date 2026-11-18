@@ -14,7 +14,7 @@ fn built_in(word: SyntaxKind) -> Option<SyntaxKind> {
         KwList => ListType,
         KwSet => SetType,
         KwDict => DictType,
-        KwRolling => RollingType,
+        KwRollingWindow => RollingWindowType,
         KwRef => RefType,
         KwEndpoint => EndpointType,
         KwAtomic => AtomicType,
@@ -49,7 +49,7 @@ impl Parser<'_> {
 
     /// ```text
     /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
-    ///           | dict_type | rolling_type | ref_type | "signal" | endpoint_type
+    ///           | dict_type | rolling_window_type | ref_type | "signal" | endpoint_type
     ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
     /// ```
     ///
@@ -101,7 +101,7 @@ impl Parser<'_> {
     /// size_expression = additive_expr | "unbounded" ;
     /// set_type = "set", "<", value_type, ">" ;
     /// dict_type = "dict", "<", value_type, ",", type, ">" ;
-    /// rolling_type = "rolling", "<", value_type, ",", const_expression,
+    /// rolling_window_type = "rolling", "<", value_type, ",", const_expression,
     ///     [ ",", const_expression ], ">" ;
     /// ref_type = "ref", "<", type, ">" ;
     /// endpoint_type = "endpoint", "<", type, ">" ;
@@ -145,7 +145,7 @@ impl Parser<'_> {
                 parser.expect(Comma);
                 parser.type_();
             }
-            RollingType => {
+            RollingWindowType => {
                 parser.type_();
                 parser.expect(Comma);
                 parser.expression();

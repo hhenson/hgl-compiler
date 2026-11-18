@@ -65,7 +65,7 @@ fn a_plain_parameter_is_what_its_signature_uses_it_as() {
     let checked = module(concat!(
         "struct Box<T> { value: T }\n",
         "struct Sized<N> { items: list<f64, N> }\n",
-        "struct Window<D> { values: rolling<f64, D> }\n",
+        "struct Window<D> { values: rolling_window<f64, D> }\n",
         "struct Grid<N, M, T> { cells: list<list<T, M>, N> }\n",
         "struct Defaulted<N> { size: i64 = N }\n",
         "abstract struct Base<T> { id: T }\n",

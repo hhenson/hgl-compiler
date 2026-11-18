@@ -114,7 +114,7 @@ fn every_form_of_type_is_read() {
         "    i: datetime, j: duration, k: civil_datetime, l: timezone, m: zoned_datetime,\n",
         "    n: zoned_time) {}\n",
         "fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
-        "    e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>,\n",
+        "    e: rolling_window<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>,\n",
         "    i: result<f64, error>, j: error, k: delta<set<f64>>, l: T, m: f64?)\n",
         "    -> list<dict<str, Box<Quote>>> {}\n",
         "fn named(a: Quote, b: Box<i64>, c: Side, d: Handle) {}\n",
@@ -128,7 +128,7 @@ fn every_form_of_type_is_read() {
     assert_eq!(
         signature(&checked, "shapes"),
         "<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>, \
-         e: rolling<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>, i: result<f64, error>, \
+         e: rolling_window<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>, i: result<f64, error>, \
          j: error, k: delta<set<f64>>, l: T, m: f64?) -> list<dict<str, Box<Quote>>>"
     );
     assert_eq!(
@@ -625,7 +625,7 @@ fn a_generic_application_is_known_by_its_arguments() {
 
 /// The grammar gives `value_type` to a set's element, a dictionary's
 /// key, a window's value, an atomic payload and a result's payloads, and
-/// `rolling`, `ref`, `atomic` and `signal` are not value types. TYPE-12:
+/// `rolling_window`, `ref`, `atomic` and `signal` are not value types. TYPE-12:
 /// "`ref<T>` ... is excluded from const values, atomic payloads, keys,
 /// and window values."
 #[test]
@@ -634,29 +634,29 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
         "struct Quote { bid: f64 }\n",
         // What may hold an endpoint or a temporal shape.
         "fn good(a: list<ref<f64>>, b: dict<str, ref<f64>>, c: tuple<ref<f64>, atomic<Quote>>,\n",
-        "    d: dict<str, rolling<f64, 5>>, e: ref<list<f64>>, f: delta<rolling<f64, 5>>,\n",
+        "    d: dict<str, rolling_window<f64, 5>>, e: ref<list<f64>>, f: delta<rolling_window<f64, 5>>,\n",
         "    g: set<tuple<i64, list<str>>>, h: atomic<dict<str, list<Quote>>>) {}\n",
-        "fn sets(a: set<ref<f64>>, b: set<rolling<f64, 5>>, c: set<atomic<Quote>>) {}\n",
+        "fn sets(a: set<ref<f64>>, b: set<rolling_window<f64, 5>>, c: set<atomic<Quote>>) {}\n",
         "fn keys(a: dict<ref<str>, f64>, b: dict<atomic<Quote>, f64>) {}\n",
-        "fn windows(a: rolling<ref<f64>, 5>, b: rolling<rolling<f64, 5>, 5>) {}\n",
+        "fn windows(a: rolling_window<ref<f64>, 5>, b: rolling_window<rolling_window<f64, 5>, 5>) {}\n",
         "fn payloads(a: atomic<ref<f64>>, b: atomic<atomic<Quote>>) {}\n",
-        "fn results(a: result<ref<f64>, error>, b: result<f64, rolling<f64, 5>>) {}\n",
+        "fn results(a: result<ref<f64>, error>, b: result<f64, rolling_window<f64, 5>>) {}\n",
         // A value is made of values, however deep.
         "fn deep(a: set<list<tuple<i64, ref<f64>>>>, b: atomic<dict<str, signal>>) {}\n",
         // And so through the arguments of a generic type.
         "struct Box<T> { value: T }\n",
-        "fn boxed(a: atomic<Box<ref<i64>>>, b: set<Box<list<rolling<f64, 5>>>>, c: Box<ref<i64>>) {}\n",
+        "fn boxed(a: atomic<Box<ref<i64>>>, b: set<Box<list<rolling_window<f64, 5>>>>, c: Box<ref<i64>>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:6:16 type/type.not_ordinary TYPE-12",
             "m.hgl:6:34 type/type.not_ordinary TYPE-9",
-            "m.hgl:6:59 type/type.not_ordinary TYPE-9",
+            "m.hgl:6:66 type/type.not_ordinary TYPE-9",
             "m.hgl:7:17 type/type.not_ordinary TYPE-12",
             "m.hgl:7:41 type/type.not_ordinary TYPE-9",
-            "m.hgl:8:23 type/type.not_ordinary TYPE-12",
-            "m.hgl:8:48 type/type.not_ordinary TYPE-11",
+            "m.hgl:8:30 type/type.not_ordinary TYPE-12",
+            "m.hgl:8:62 type/type.not_ordinary TYPE-11",
             "m.hgl:9:23 type/type.not_ordinary TYPE-12",
             "m.hgl:9:44 type/type.not_ordinary TYPE-9",
             "m.hgl:10:22 type/type.not_ordinary TYPE-12",
@@ -673,7 +673,7 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
     );
     assert_eq!(
         checked.findings[6].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and a window's value is one"
+        "`rolling_window<f64, 5>` is not an ordinary value type, and a window's value is one"
     );
     assert_eq!(
         checked.findings[12].message,
@@ -690,11 +690,11 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
 fn constant_configuration_is_an_ordinary_value_type() {
     let checked = module(concat!(
         "fn good(value: ref<f64>, const depth: i64, const names: list<str> = []) {}\n",
-        "const fn defaults(value: f64, factor: f64 = 2.0, window: rolling<f64, 5> = []) -> f64 => 1.0\n",
+        "const fn defaults(value: f64, factor: f64 = 2.0, window: rolling_window<f64, 5> = []) -> f64 => 1.0\n",
         "fn constants(const a: ref<f64>, const b: signal, const c: atomic<i64>) {}\n",
         "fn generic<const N: ref<i64>>(value: f64) {}\n",
         "operator add<T>(left: T, right: T) -> T\n",
-        "    properties<i64, rolling<i64, 5>> { associative }\n",
+        "    properties<i64, rolling_window<i64, 5>> { associative }\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -709,7 +709,7 @@ fn constant_configuration_is_an_ordinary_value_type() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
+        "`rolling_window<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
          one"
     );
     assert_eq!(
@@ -768,20 +768,20 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         "const fn good(b: list<f64?>, a: f64?, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
         // On the whole type of an input `?` follows any type: the
         // argument may be omitted.
-        "fn inputs(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
+        "fn inputs(a: ref<f64>?, b: signal?, c: rolling_window<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
         // Not in a result, a local's annotation, a part of another
         // type, a value function's parameter or a `const` one.
         "fn output() -> ref<f64>? {}\n",
-        "fn body() {\n    let window: rolling<f64, 5>? = make()\n}\n",
-        "fn parts(a: list<ref<f64>?>, b: dict<str, rolling<f64, 5>?>) {}\n",
-        "const fn values(a: rolling<f64, 5>?) -> i64 => 1\n",
+        "fn body() {\n    let window: rolling_window<f64, 5>? = make()\n}\n",
+        "fn parts(a: list<ref<f64>?>, b: dict<str, rolling_window<f64, 5>?>) {}\n",
+        "const fn values(a: rolling_window<f64, 5>?) -> i64 => 1\n",
         "fn configured(const a: ref<f64>?) {}\n",
         // As what a set's element must be, and as a key that takes no
         // `?`.
         "fn once(a: set<ref<f64>?>) {}\n",
         // On the whole type of a field it makes the field optional; a
         // `signal` is no field with it or without.
-        "struct Fields {\n    last: atomic<i64>?\n    window: rolling<f64, 5>?\n    tick: signal?\n}\n",
+        "struct Fields {\n    last: atomic<i64>?\n    window: rolling_window<f64, 5>?\n    tick: signal?\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -803,12 +803,12 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     );
     assert_eq!(
         checked.findings[4].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is one"
+        "`rolling_window<f64, 5>` is not an ordinary value type, and a parameter of a value function is one"
     );
     assert_eq!(
         signature(&checked, "inputs"),
         // TYPE-9: `atomic<i64>` is `i64`.
-        "(a: ref<f64>?, b: signal?, c: rolling<f64, 5>?, d: i64?, e: list<ref<f64>>?)"
+        "(a: ref<f64>?, b: signal?, c: rolling_window<f64, 5>?, d: i64?, e: list<ref<f64>>?)"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
@@ -981,33 +981,33 @@ fn a_size_is_checked_against_a_parameter_declared_after_it() {
     );
 }
 
-/// TYPE-11: "A rolling maximum/minimum has one constant kind: tick count
-/// or duration. Omitted minimum equals maximum."
+/// TYPE-11: "Its maximum and minimum have one constant kind: tick count
+/// or duration ... Omitted minimum equals maximum".
 #[test]
 fn a_windows_sizes_are_of_one_kind() {
     let checked = module(concat!(
-        "fn good<const N: i64, const D: duration, M>(a: rolling<f64, 5>, b: rolling<f64, 5m>,\n",
-        "    c: rolling<f64, 5, 2>, d: rolling<f64, 5m, 30s>, e: rolling<f64, N>,\n",
-        "    f: rolling<f64, D, 1s>, g: rolling<f64, M, 2>, h: rolling<f64, N, 1>) {}\n",
+        "fn good<const N: i64, const D: duration, M>(a: rolling_window<f64, 5>, b: rolling_window<f64, 5m>,\n",
+        "    c: rolling_window<f64, 5, 2>, d: rolling_window<f64, 5m, 30s>, e: rolling_window<f64, N>,\n",
+        "    f: rolling_window<f64, D, 1s>, g: rolling_window<f64, M, 2>, h: rolling_window<f64, N, 1>) {}\n",
         // The specification's illustration, then the other way round.
-        "fn invalid(value: rolling<f64, 5m, 3>) { when {} }\n",
-        "fn mixed(a: rolling<f64, 5, 1s>, b: rolling<f64, N, 1s>) {}\n",
-        "fn mixed_generic<const N: i64, const D: duration>(a: rolling<f64, N, 1s>, b: rolling<f64, D, 1>) {}\n",
+        "fn invalid(value: rolling_window<f64, 5m, 3>) { when {} }\n",
+        "fn mixed(a: rolling_window<f64, 5, 1s>, b: rolling_window<f64, N, 1s>) {}\n",
+        "fn mixed_generic<const N: i64, const D: duration>(a: rolling_window<f64, N, 1s>, b: rolling_window<f64, D, 1>) {}\n",
         // Neither a tick count nor a duration.
-        "fn wrong(a: rolling<f64, 1.5>, b: rolling<f64, \"long\">, c: rolling<f64, 5, null>) {}\n",
-        "fn wrong_generic<const F: f64>(a: rolling<f64, F>) {}\n",
+        "fn wrong(a: rolling_window<f64, 1.5>, b: rolling_window<f64, \"long\">, c: rolling_window<f64, 5, null>) {}\n",
+        "fn wrong_generic<const F: f64>(a: rolling_window<f64, F>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:5:36 type/rolling.size_kind TYPE-11",
-            "m.hgl:6:29 type/rolling.size_kind TYPE-11",
-            "m.hgl:7:70 type/rolling.size_kind TYPE-11",
-            "m.hgl:7:94 type/rolling.size_kind TYPE-11",
-            "m.hgl:8:26 type/rolling.size_kind TYPE-11",
-            "m.hgl:8:48 type/rolling.size_kind TYPE-11",
-            "m.hgl:8:76 type/rolling.size_kind TYPE-11",
-            "m.hgl:9:48 type/rolling.size_kind TYPE-11",
+            "m.hgl:5:43 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:6:36 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:7:77 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:7:108 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:8:33 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:8:62 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:8:97 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:9:55 type/rolling_window.size_kind TYPE-11",
         ]
     );
     assert_eq!(
@@ -1033,9 +1033,9 @@ fn a_windows_sizes_are_of_one_kind() {
 #[test]
 fn an_omitted_minimum_is_the_maximum() {
     let checked = module(concat!(
-        "fn windows<const N: i64>(a: rolling<i64, 5>, b: rolling<i64, 5, 5>, c: rolling<i64, 5, 2>,\n",
-        "    d: rolling<f64, 5m>, e: rolling<f64, 5m, 300s>, f: rolling<f64, N>, g: rolling<f64, N, N>,\n",
-        "    h: rolling<i64, 2 + 3, 5>) {}\n",
+        "fn windows<const N: i64>(a: rolling_window<i64, 5>, b: rolling_window<i64, 5, 5>, c: rolling_window<i64, 5, 2>,\n",
+        "    d: rolling_window<f64, 5m>, e: rolling_window<f64, 5m, 300s>, f: rolling_window<f64, N>, g: rolling_window<f64, N, N>,\n",
+        "    h: rolling_window<i64, 2 + 3, 5>) {}\n",
     ));
     assert_eq!(checked.summary(), NONE);
     let Detail::Callable(windows) = detail(&checked, "windows") else {
@@ -1050,7 +1050,7 @@ fn an_omitted_minimum_is_the_maximum() {
             .ty
     };
     assert_eq!(ty("a"), ty("b"));
-    assert_eq!(ty("b").to_string(), "rolling<i64, 5>");
+    assert_eq!(ty("b").to_string(), "rolling_window<i64, 5>");
     assert_ne!(ty("a"), ty("c"));
     assert_eq!(ty("d"), ty("e"));
     assert_eq!(ty("f"), ty("g"));
@@ -1062,24 +1062,24 @@ fn an_omitted_minimum_is_the_maximum() {
 #[test]
 fn a_windows_sizes_are_in_bounds() {
     let checked = module(concat!(
-        "fn good(a: rolling<f64, 1>, b: rolling<f64, 5, 5>, c: rolling<f64, 1us>,\n",
-        "    d: rolling<f64, 5m, 0s>, e: rolling<f64, 5m, 5m>, f: rolling<f64, 2 * 3, 6>) {}\n",
-        "fn ticks(a: rolling<f64, 0>, b: rolling<f64, -5>, c: rolling<f64, 5, 0>, d: rolling<f64, 5, 6>) {}\n",
-        "fn durations(a: rolling<f64, 0s>, b: rolling<f64, -5m>, c: rolling<f64, 5m, -1s>,\n",
-        "    d: rolling<f64, 5m, 10m>, e: rolling<f64, 1h, 61m>) {}\n",
+        "fn good(a: rolling_window<f64, 1>, b: rolling_window<f64, 5, 5>, c: rolling_window<f64, 1us>,\n",
+        "    d: rolling_window<f64, 5m, 0s>, e: rolling_window<f64, 5m, 5m>, f: rolling_window<f64, 2 * 3, 6>) {}\n",
+        "fn ticks(a: rolling_window<f64, 0>, b: rolling_window<f64, -5>, c: rolling_window<f64, 5, 0>, d: rolling_window<f64, 5, 6>) {}\n",
+        "fn durations(a: rolling_window<f64, 0s>, b: rolling_window<f64, -5m>, c: rolling_window<f64, 5m, -1s>,\n",
+        "    d: rolling_window<f64, 5m, 10m>, e: rolling_window<f64, 1h, 61m>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:4:26 type/rolling.size_bounds TYPE-11",
-            "m.hgl:4:46 type/rolling.size_bounds TYPE-11",
-            "m.hgl:4:70 type/rolling.size_bounds TYPE-11",
-            "m.hgl:4:93 type/rolling.size_bounds TYPE-11",
-            "m.hgl:5:30 type/rolling.size_bounds TYPE-11",
-            "m.hgl:5:51 type/rolling.size_bounds TYPE-11",
-            "m.hgl:5:77 type/rolling.size_bounds TYPE-11",
-            "m.hgl:6:25 type/rolling.size_bounds TYPE-11",
-            "m.hgl:6:51 type/rolling.size_bounds TYPE-11",
+            "m.hgl:4:33 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:4:60 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:4:91 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:4:121 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:5:37 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:5:65 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:5:98 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:6:32 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:6:65 type/rolling_window.size_bounds TYPE-11",
         ]
     );
     let messages: Vec<&str> = checked
@@ -1137,7 +1137,7 @@ fn any_parameter_but_a_pack_may_have_a_default() {
         "const fn value(first: f64, second: f64 = 2.0) -> f64 => first\n",
         "fn configured(first: f64, const second: f64 = 2.0) -> f64 {}\n",
         "native const fn native_value(first: f64 = 1.0) -> f64\n",
-        "fn temporal(first: f64, second: f64 = 2.0, window: rolling<f64, 5> = []) -> f64 {}\n",
+        "fn temporal(first: f64, second: f64 = 2.0, window: rolling_window<f64, 5> = []) -> f64 {}\n",
         "native fn native_temporal(first: f64 = 1.0) -> f64\n",
         "native fn completed(first: f64) -> f64\n",
         "native fn completed(first: f64 = 1.0) -> f64 { when; }\n",
@@ -1149,7 +1149,7 @@ fn any_parameter_but_a_pack_may_have_a_default() {
     assert_eq!(checked.summary(), ["m.hgl:11:24 type/pack.default FN-8"]);
     assert_eq!(
         signature(&checked, "temporal"),
-        "(first: f64, second: f64 = ..., window: rolling<f64, 5> = ...) -> f64"
+        "(first: f64, second: f64 = ..., window: rolling_window<f64, 5> = ...) -> f64"
     );
 }
 
@@ -1162,12 +1162,12 @@ fn any_parameter_but_a_pack_may_have_a_default() {
 fn a_value_functions_signature_is_of_ordinary_values() {
     let checked = module(concat!(
         "const fn good(a: list<f64?>, b: dict<str, f64>, c: tuple<i64, str>?, rest: ...f64) -> set<str> => []\n",
-        "const fn parameters(a: ref<f64>, b: signal, c: rolling<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
+        "const fn parameters(a: ref<f64>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
         "const fn nested(a: list<ref<f64>>, rest: ...ref<f64>) -> i64 => 1\n",
         "const fn gives() -> ref<f64> => make()\n",
-        "native const fn native_value(a: rolling<f64, 5>) -> atomic<i64>\n",
+        "native const fn native_value(a: rolling_window<f64, 5>) -> atomic<i64>\n",
         // A temporal function takes and gives them all.
-        "fn temporal(a: ref<f64>, b: signal, c: rolling<f64, 5>, d: atomic<i64>) -> ref<f64> {}\n",
+        "fn temporal(a: ref<f64>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> ref<f64> {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1175,17 +1175,17 @@ fn a_value_functions_signature_is_of_ordinary_values() {
             "m.hgl:3:24 type/type.not_ordinary TYPE-12",
             "m.hgl:3:37 type/type.not_ordinary TYPE-12",
             "m.hgl:3:48 type/type.not_ordinary FN-1",
-            "m.hgl:3:68 type/type.not_ordinary FN-1",
+            "m.hgl:3:75 type/type.not_ordinary FN-1",
             "m.hgl:4:25 type/type.not_ordinary TYPE-12",
             "m.hgl:4:45 type/type.not_ordinary TYPE-12",
             "m.hgl:5:21 type/type.not_ordinary TYPE-12",
             "m.hgl:6:33 type/type.not_ordinary FN-1",
-            "m.hgl:6:53 type/type.not_ordinary FN-1",
+            "m.hgl:6:60 type/type.not_ordinary FN-1",
         ]
     );
     assert_eq!(
         checked.findings[2].message,
-        "`rolling<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
+        "`rolling_window<f64, 5>` is not an ordinary value type, and a parameter of a value function is \
          one"
     );
     assert_eq!(
@@ -1304,19 +1304,19 @@ fn another_parameter_in_a_constraint_is_rejected() {
 fn an_unknown_type_is_reported_once_and_its_surroundings_are_checked() {
     let checked = module(concat!(
         "const fn helper() -> i64 => 1\n",
-        "fn f(a: set<helper>, b: rolling<helper, 5m, 3>, c: list<Missing, -1>) {}\n",
+        "fn f(a: set<helper>, b: rolling_window<helper, 5m, 3>, c: list<Missing, -1>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:3:13 type/type.not_a_type UNIT-10",
-            "m.hgl:3:33 type/type.not_a_type UNIT-10",
-            "m.hgl:3:45 type/rolling.size_kind TYPE-11",
-            "m.hgl:3:66 type/list.size TYPE-10",
+            "m.hgl:3:40 type/type.not_a_type UNIT-10",
+            "m.hgl:3:52 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:3:73 type/list.size TYPE-10",
         ]
     );
     assert_eq!(
         signature(&checked, "f"),
-        "(a: set<_>, b: rolling<_, 5m, 3>, c: list<_, -1>)"
+        "(a: set<_>, b: rolling_window<_, 5m, 3>, c: list<_, -1>)"
     );
 }

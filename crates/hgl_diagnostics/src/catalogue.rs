@@ -144,8 +144,8 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Operator, "operator.ambiguous"),
     (Category::Type, "default.order"),
     (Category::Type, "tuple.index"),
-    (Category::Type, "rolling.size_kind"),
-    (Category::Type, "rolling.size_bounds"),
+    (Category::Type, "rolling_window.size_kind"),
+    (Category::Type, "rolling_window.size_bounds"),
     (Category::Type, "yield.time_type"),
     (Category::Type, "test.raises_code"),
     (Category::Type, "eval.target"),
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn a_row_is_found_by_category_and_code() {
         assert!(contains(Category::Parse, "syntax.expected_token"));
-        assert!(contains(Category::Type, "rolling.size_kind"));
+        assert!(contains(Category::Type, "rolling_window.size_kind"));
         // The category is part of the row.
         assert!(!contains(Category::Name, "syntax.expected_token"));
         assert!(!contains(Category::Parse, "syntax.nesting_limit"));

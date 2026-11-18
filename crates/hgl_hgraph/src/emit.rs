@@ -4155,18 +4155,22 @@ fn canonical(program: &Program, ty: &Type) -> Option<String> {
         },
         Type::Set(element) => format!("set<{}>", one(element)?),
         Type::Dict { key, value } => format!("dict<{}, {}>", one(key)?, one(value)?),
-        Type::Rolling {
+        Type::RollingWindow {
             value,
             maximum,
             minimum,
         } => match minimum {
             Some(minimum) => format!(
-                "rolling<{}, {}, {}>",
+                "rolling_window<{}, {}, {}>",
                 one(value)?,
                 canonical_constant(maximum)?,
                 canonical_constant(minimum)?
             ),
-            None => format!("rolling<{}, {}>", one(value)?, canonical_constant(maximum)?),
+            None => format!(
+                "rolling_window<{}, {}>",
+                one(value)?,
+                canonical_constant(maximum)?
+            ),
         },
         Type::Ref(target) => format!("ref<{}>", one(target)?),
         Type::Endpoint(target) => format!("endpoint<{}>", one(target)?),
