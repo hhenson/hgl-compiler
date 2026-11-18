@@ -3413,8 +3413,8 @@ fn an_element_is_read_and_assigned_through_the_provider() {
         "        before = _core.get_dict_K__T__K(store=seen, key=name)\n",
         "            seen = _core.set_entry(seen, name, 1)\n",
         // An element of a field, and an element of an element.
-        "    next = _core.with_field(next, sizes=_core.with_entry(next.sizes, \"top\", 1))\n",
-        "    rows = _core.set_item(rows, 1, _core.with_item(_core.item(rows, 1), 0, 9))\n",
+        "    next = _core.set_at(next, ((\"f\", \"sizes\"), (\"k\", \"top\"),), lambda: 1)\n",
+        "    rows = _core.set_at(rows, ((\"i\", 1), (\"i\", 0),), lambda: 9)\n",
         // A `state` that is a dictionary.
         "        _state.seen = _core.set_entry(_state.seen, name.value, 1)\n",
         // `[]` where a dictionary is expected.
@@ -4113,7 +4113,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _given = set_first(items=_core.shared(book.orders), value=5)\n",
             "    book = _core.with_field(book, orders=_given[1])\n",
             "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
-            "    book = _core.with_field(book, orders=_core.with_item(book.orders, 1, _given[1]))\n",
+            "    book = _core.set_at(book, ((\"f\", \"orders\"), (\"i\", 1),), lambda: _given[1])\n",
         ),
         // The call's own result is the first of what it gives.
         concat!(
@@ -4151,7 +4151,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _arg_1 = _core.item(_in_1, _at_2)\n",
             "    _arg_2 = 1\n",
             "    _given = bump(count=_arg_1, by=_arg_2)\n",
-            "    rows = _core.set_entry(rows, _at_1, _core.with_item(_core.entry(rows, _at_1), _at_2, _given[1]))\n",
+            "    rows = _core.set_at(rows, ((\"k\", _at_1), (\"i\", _at_2),), lambda: _given[1])\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(
@@ -4420,9 +4420,198 @@ fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
         "    items = _core.with_item(items, 0, value)\n",
         // An entry that is a list: the dictionary is changed where it
         // is, and the list inside it is given a new value.
-        "    rows = _core.set_entry(rows, \"a\", _core.with_item(_core.entry(rows, \"a\"), 0, 2))\n",
+        "    rows = _core.set_at(rows, ((\"k\", \"a\"), (\"i\", 0),), lambda: 2)\n",
         // What a dictionary keeps is marked.
         "    rows = _core.set_entry(rows, \"b\", _core.shared(items))\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// EXPR-3 and LIST-1 on hgraph for a collection inside another value: a
+/// struct's dictionary and list, a list in a dictionary, a list in a
+/// list. Each is changed where it is, and what took it before is as it
+/// was.
+const INSIDE: &str = concat!(
+    "module demo.inside\n",
+    "\n",
+    "struct Book {\n",
+    "    bids: dict<i64, i64>\n",
+    "    orders: list<i64>\n",
+    "    name: str\n",
+    "}\n",
+    "\n",
+    "const fn total(values: list<i64>) -> i64 {\n",
+    "    var sum: i64 = 0\n",
+    "    for value in values { sum += value }\n",
+    "    return sum\n",
+    "}\n",
+    "\n",
+    // A function whose result cannot be the struct: it is lent it, and
+    // marks the list it gives of it.
+    "const fn orders_of(book: Book) -> list<i64> => book.orders\n",
+    "\n",
+    // A struct's dictionary and its list, each changed a step at a time.
+    "const fn built(count: i64) -> Book {\n",
+    "    var book: Book = Book(bids: [], orders: [], name: \"a\")\n",
+    "    var i: i64 = 0\n",
+    "    while i < count {\n",
+    "        book.bids[i] = i * 2\n",
+    "        append(book.orders, i)\n",
+    "        i += 1\n",
+    "    }\n",
+    "    return book\n",
+    "}\n",
+    "\n",
+    // Lists in a dictionary, under a key that is an expression.
+    "const fn grouped(count: i64) -> dict<i64, list<i64>> {\n",
+    "    var groups: dict<i64, list<i64>> = [0: [], 1: []]\n",
+    "    var i: i64 = 0\n",
+    "    while i < count {\n",
+    "        append(groups[i % 2], i)\n",
+    "        i += 1\n",
+    "    }\n",
+    "    return groups\n",
+    "}\n",
+    "\n",
+    // A loop's name holds an entry that the list holds too.
+    "const fn copied(rows: list<list<i64>>) -> list<list<i64>> {\n",
+    "    var out: list<list<i64>> = []\n",
+    "    for row in rows { append(out, row) }\n",
+    "    return out\n",
+    "}\n",
+    "\n",
+    "const fn rows_kept() -> bool {\n",
+    "    var rows: list<list<i64>> = [[1], [2]]\n",
+    "    let copy = copied(rows)\n",
+    "    append(rows[0], 9)\n",
+    "    rows[1][0] = 7\n",
+    "    return copy == [[1], [2]] && rows == [[1, 9], [7]]\n",
+    "}\n",
+    "\n",
+    // EXPR-7: the way in is read before the value is evaluated: a key
+    // the dictionary has not fails first.
+    "const fn missing(zero: i64) -> i64 {\n",
+    "    var groups: dict<str, list<i64>> = [\"a\": [1]]\n",
+    "    groups[\"nope\"][0] = 1 //{zero: .fail} zero\n",
+    "    return 1\n",
+    "}\n",
+    "\n",
+    // What is put in holds a collection on the way in: the value the
+    // place had, and not the one it is given. Evaluating the argument
+    // marks `rows`, after the way in has been read and before anything
+    // is changed.
+    "const fn grafted() -> bool {\n",
+    "    var rows: list<list<any>> = [[1]]\n",
+    "    append(rows[0], 2)\n",
+    "    append(rows[0], rows)\n",
+    "    return rows == [[1, 2, [[1, 2]]]]\n",
+    "}\n",
+    "\n",
+    "const fn planted() -> bool {\n",
+    "    var rows: list<list<any>> = [[1]]\n",
+    "    append(rows[0], 2)\n",
+    "    rows[0][0] = rows\n",
+    "    return rows == [[[[1, 2]], 2]]\n",
+    "}\n",
+    "\n",
+    // A node's `state` that is a struct of collections.
+    "fn gathered(value: i64) -> i64 {\n",
+    "    state book: Book = Book(bids: [], orders: [], name: \"s\")\n",
+    "    when {\n",
+    "        append(book.orders, value)\n",
+    "        book.bids[value] = value * 2\n",
+    "        return total(book.orders) + book.bids[value]\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "test inside {\n",
+    // A `let` is the struct as it was, however what is inside the
+    // place changes.
+    "    var book: Book = Book(bids: [1: 10], orders: [1], name: \"a\")\n",
+    "    let before = book\n",
+    "    append(book.orders, 2)\n",
+    "    book.bids[2] = 20\n",
+    "    assert before == Book(bids: [1: 10], orders: [1], name: \"a\")\n",
+    "    assert book == Book(bids: [1: 10, 2: 20], orders: [1, 2], name: \"a\")\n",
+    // A collection taken out of a value is as it was.
+    "    let orders = book.orders\n",
+    "    append(book.orders, 3)\n",
+    "    assert orders == [1, 2]\n",
+    "    assert total(book.orders) == 6\n",
+    "    let taken = orders_of(book)\n",
+    "    append(book.orders, 4)\n",
+    "    assert taken == [1, 2, 3]\n",
+    // A field that is no collection: the struct is made anew, and its
+    // collections are still its own.
+    "    book.name = \"b\"\n",
+    "    append(book.orders, 5)\n",
+    "    assert book.orders == [1, 2, 3, 4, 5]\n",
+    "    assert before.orders == [1]\n",
+    "    var groups: dict<str, list<i64>> = [\"a\": [1]]\n",
+    "    let group = groups[\"a\"]\n",
+    "    append(groups[\"a\"], 2)\n",
+    "    groups[\"a\"][0] = 9\n",
+    "    groups[\"b\"] = group\n",
+    "    append(groups[\"b\"], 5)\n",
+    "    assert group == [1]\n",
+    "    assert groups == [\"a\": [9, 2], \"b\": [1, 5]]\n",
+    "    assert rows_kept()\n",
+    "    assert grafted()\n",
+    "    assert planted()\n",
+    "    assert raises(\"value.missing_key\") { missing(0) }\n",
+    "    assert built(3) == Book(bids: [0: 0, 1: 2, 2: 4], orders: [0, 1, 2], name: \"a\")\n",
+    "    assert grouped(5) == [0: [0, 2, 4], 1: [1, 3]]\n",
+    "    assert eval(gathered(value: [1, _, 2])) == [3, _, 7]\n",
+    "}\n",
+);
+
+/// EXPR-3: "An assignment may name a place inside a value, at any
+/// depth". Where the place is inside the value a `var` or a `state` of
+/// the function holds, with a collection on the way, the provider goes
+/// in: `_core.set_at` for an assignment, and `_core.given_at` for a
+/// native function of core that is given the place (LIST-1, FN-15).
+/// Each collection on the way is changed where it is while it is its
+/// holder's alone. A collection read out of a value by what may keep
+/// it is marked as shared, and one read through, or lent, is not.
+#[test]
+fn a_collection_inside_a_value_is_changed_where_it_is() {
+    let emitted = emit(&[("inside.hgl", INSIDE)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_inside/__init__.py");
+    for expected in [
+        // A struct's dictionary and list: the way in, and the value as
+        // it is asked for.
+        "        book = _core.set_at(book, ((\"f\", \"bids\"), (\"k\", i),), lambda: _core.mul__i64_i64(lhs=i, rhs=2))\n",
+        concat!(
+            "        _given = _core.given_at(book, ((\"f\", \"orders\"),), _core.fn_append, \"values\", lambda: _py.dict(item=i))\n",
+            "        book = _given[1]\n",
+        ),
+        // A key that is an expression is evaluated once, before.
+        concat!(
+            "        _key_1 = _core.mod__i64_i64(lhs=i, rhs=2, zero=\"fail\")\n",
+            "        _given = _core.given_at(groups, ((\"k\", _key_1),), _core.fn_append, \"values\", lambda: _py.dict(item=i))\n",
+        ),
+        // Two steps in.
+        "    rows = _core.set_at(rows, ((\"i\", 1), (\"i\", 0),), lambda: 7)\n",
+        // A node's `state`.
+        "    _state.book = _core.set_at(_state.book, ((\"f\", \"bids\"), (\"k\", value.value),), lambda: _core.mul__i64_i64(lhs=value.value, rhs=2))\n",
+        // Read through, and lent: unmarked.
+        "total(values=_state.book.orders)",
+        "_core.entry(_state.book.bids, value.value)",
+        "    taken = orders_of(book=book)\n",
+        // Taken by what may keep it: marked.
+        "    before = _core.shared(book)\n",
+        "    orders = _core.shared(book.orders)\n",
+        "    group = _core.shared(_core.entry(groups, \"a\"))\n",
+        "    return _core.shared(book.orders)\n",
+        // A loop's entries are marked as they are taken.
+        "    for row in _core.each(rows):\n",
+        // A field that is no collection: a new struct.
+        "    book = _core.with_field(book, name=\"b\")\n",
     ] {
         assert!(
             python.contains(expected),
@@ -4860,8 +5049,8 @@ fn a_list_is_shared_and_copied_only_where_it_then_grows() {
         ),
         // A place inside a value is held by that value too.
         concat!(
-            "    _given = _core.fn_append(values=_core.shared(_core.item(rows, 0)), item=2)\n",
-            "    rows = _core.set_item(rows, 0, _given[1])\n",
+            "    _given = _core.given_at(rows, ((\"i\", 0),), _core.fn_append, \"values\", lambda: _py.dict(item=2))\n",
+            "    rows = _given[1]\n",
         ),
         // What a list and a struct keep.
         "    _given = _core.fn_append(values=rows, item=_core.shared(entries))\n",
@@ -5371,6 +5560,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("shared.hgl", SHARED));
     files.push(("moves.hgl", MOVES));
     files.push(("entries.hgl", ENTRIES));
+    files.push(("inside.hgl", INSIDE));
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
@@ -5394,13 +5584,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        67,
+        68,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on configuration of a generic type, and one of each demo's"
     );
 }
 
