@@ -237,7 +237,7 @@ def struct(name, fields):
         kw_only=True,
         eq=False,
         # `_hgl_fields` names the fields, for what looks inside a value
-        # (`shared`).
+        # (`copied`).
         namespace={"__eq__": equal, "__hash__": hashed, "_hgl_fields": tuple(fields)},
     )
 
@@ -270,9 +270,10 @@ def with_field(value, /, **field):
     it; the compiler assigns what this gives to the place.
 
     `value` is taken by position only: a field may be named `value`.
-    The new struct keeps the field's value, which is marked as shared.
+    The new struct keeps the field's value, which the compiler gives it
+    as a copy where something else holds it.
     """
-    return _dataclasses.replace(value, **{name: shared(new) for name, new in field.items()})
+    return _dataclasses.replace(value, **field)
 
 
 def item(sequence, index):
@@ -532,39 +533,13 @@ def has_GlobalState_str(store, key):
 
 def put_GlobalState_str_V(store, key, value):
     """CAP-6: "puts one there". It is kept as it is (`Held`). The store
-    keeps the value, so a list a place grows is marked as shared
-    (`shared`): the place's later growth does not reach the store."""
-    store[key] = Held(shared(value))
+    keeps the value, and is given a copy (`copied`): a place it was
+    read from goes on changing, and that does not reach the store."""
+    store[key] = Held(copied(value))
 
 
-class Grown(list):
-    """A list that a place grows where it is: what a `var`, a `state`
-    or a `cache` holds once `append` or `extend` has grown it.
-
-    LIST-3: "a value taken from the place before the call is as it
-    was". A `let`, a parameter and whatever else is given a place's
-    list is given the list itself, with no copy, and the list is then
-    marked as shared (`shared`). While `owned` holds nothing else has
-    the list, and it grows where it is; once it does not, the place
-    takes a copy before it grows, and what was given the list keeps it
-    as it was.
-    """
-
-    # One made in any other way than by `_own` is not a place's own.
-    owned = False
-
-
-class GrownDict(dict):
-    """A dictionary that a place changes where it is: what a `var`, a
-    `state` or a `cache` holds once an entry of it has been assigned.
-    It is marked and copied as a `Grown` list is."""
-
-    # One made in any other way than by `_own_dict` is not a place's own.
-    owned = False
-
-
-# The types of the values that hold no other: `shared` has nothing to
-# look for in one.
+# The types of the values that hold no other: `copied` has nothing to
+# copy in one.
 _PLAIN = frozenset(
     (
         int,
@@ -581,92 +556,49 @@ _PLAIN = frozenset(
 )
 
 
-def shared(value):
-    """`value`, marked as held by more than the place it was read from.
+def copied(value):
+    """A copy of `value` that shares no list and no dictionary with it.
 
-    A list or a dictionary a place changes is marked itself. A struct, a
-    tuple and a success are small and are never changed, so they carry
-    no mark: the collections directly inside one are marked in its
-    place. What is inside a marked collection is not looked at: a change
-    reaches it only through that collection, which is copied first.
+    A `var`, a `state` and a `cache` change the list or the dictionary
+    they hold where it is, and Python's is one object that every name
+    of it sees change. So what is kept of a value that something else
+    holds is a copy of it, made where it is kept: the compiler says
+    where (the language's TYPE-5, "Retained results own their data;
+    later mutation of a source cannot change an earlier retained
+    value"). A struct, a tuple and a result are never changed, and are
+    made again only to hold the copies of what is inside them.
     """
     kind = type(value)
     if kind in _PLAIN:
         return value
-    if kind is Grown or kind is GrownDict:
-        value.owned = False
-    elif kind is tuple:
-        for part in value:
-            shared(part)
-    elif kind is Ok:
-        shared(value.value)
-    else:
-        fields = getattr(kind, "_hgl_fields", None)
-        if fields is not None:
-            for field in fields:
-                shared(getattr(value, field))
+    if kind is list:
+        # One pass that Python makes itself tells whether any entry may
+        # hold a collection.
+        if set(map(type, value)) <= _PLAIN:
+            return value.copy()
+        return [copied(part) for part in value]
+    if kind is dict:
+        return {key: copied(part) for key, part in value.items()}
+    if kind is tuple:
+        return tuple(copied(part) for part in value)
+    if kind is Ok:
+        return Ok(copied(value.value))
+    if kind is Err:
+        return Err(copied(value.error))
+    fields = getattr(kind, "_hgl_fields", None)
+    if fields is not None:
+        return kind(**{field: copied(getattr(value, field)) for field in fields})
     return value
-
-
-def _shared_parts(values):
-    """Marks each of `values`, the entries of a collection that is now
-    held by two: a copy holds what the list it was copied from holds."""
-    if not values:
-        return
-    # One pass that Python makes itself tells whether any entry may
-    # hold a collection.
-    if set(map(type, values)) <= _PLAIN:
-        return
-    for part in values:
-        shared(part)
-
-
-def _own(values):
-    """The list a place grows: `values` itself where the place alone
-    holds it, and a copy otherwise."""
-    if type(values) is Grown and values.owned:
-        return values
-    grown = Grown(values)
-    grown.owned = True
-    _shared_parts(grown)
-    return grown
-
-
-def _own_dict(values):
-    """The dictionary a place changes: `values` itself where the place
-    alone holds it, and a copy otherwise."""
-    if type(values) is GrownDict and values.owned:
-        return values
-    grown = GrownDict(values)
-    grown.owned = True
-    _shared_parts(grown.values())
-    return grown
-
-
-def each(values):
-    """The entries of a list or a set a `for` runs over, each marked as
-    shared: the loop's name holds an entry that the collection holds
-    too."""
-    for value in values:
-        yield shared(value)
-
-
-def each_entry(dictionary):
-    """The keys and values of a dictionary a `for` runs over, each value
-    marked as shared (`each`)."""
-    for key, value in dictionary.items():
-        yield key, shared(value)
 
 
 def _changed(holder, steps, at, change):
     """What `holder` is to be once the value `steps[at:]` leads to inside
     it has been changed by `change`.
 
-    `holder` is held by its place alone, or by a collection that is. A
-    list and a dictionary on the way are changed where they are while
-    their own mark says they are their holder's alone, and are copied
-    once otherwise (`_own`); a struct and a tuple are small, and a new
-    one is made where a part of it has another value. A step that fails,
+    `holder` is held by its place, or by a collection that is. A list
+    and a dictionary on the way are changed where they are; a struct
+    and a tuple are never changed, and a new one is made where a part
+    of it has another value. A step that fails,
     an index outside a list or a key a dictionary has not, fails before
     anything is changed.
     """
@@ -680,7 +612,6 @@ def _changed(holder, steps, at, change):
     if kind == "k":
         if key not in holder:
             raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-        holder = _own_dict(holder)
     else:
         if not 0 <= key < len(holder):
             raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
@@ -688,7 +619,6 @@ def _changed(holder, steps, at, change):
             inner = holder[key]
             changed = _changed(inner, steps, at + 1, change)
             return holder if changed is inner else holder[:key] + (changed,) + holder[key + 1 :]
-        holder = _own(holder)
     inner = holder[key]
     changed = _changed(inner, steps, at + 1, change)
     if changed is not inner:
@@ -718,7 +648,7 @@ def set_at(root, steps, value, /):
     """`place = value` where the place is inside the value a `var`, a
     `state` or a `cache` holds, more than one step in: `book.bids[price]
     = size`, `rows[key][0] = 2` (EXPR-3). Each collection on the way is
-    changed where it is while it is its holder's alone (`_changed`).
+    changed where it is (`_changed`).
 
     `steps` is the way in, each step its kind and what it names: `"f"`
     a struct's field, `"k"` a dictionary's key, and `"i"` a list's index
@@ -727,28 +657,25 @@ def set_at(root, steps, value, /):
 
     `value` gives the value when it is called. It is called once the
     way in has been read, so that a step that fails does so before the
-    value is evaluated, as in any assignment; what it gives is kept, and
-    is marked as shared. Only then is anything changed: the value may
-    be, or hold, a collection on the way in, `tree.kids[0].kids[0] =
-    tree`, which evaluating it marks as shared, and which is then
-    copied and not changed.
+    value is evaluated, as in any assignment; what it gives is kept.
+    Only then is anything changed: the value may be, or hold, a
+    collection on the way in, `tree.kids[0].kids[0] = tree`, of which
+    the compiler gives a copy, taken before the change.
     """
     kind, key = steps[-1]
     _read_in(root, steps[:-1])
-    new = shared(value())
+    new = value()
 
     def assign(holder):
         if kind == "f":
             return _dataclasses.replace(holder, **{key: new})
         if kind == "k":
-            holder = _own_dict(holder)
             holder[key] = new
             return holder
         if not 0 <= key < len(holder):
             raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
         if type(holder) is tuple:
             return holder[:key] + (new,) + holder[key + 1 :]
-        holder = _own(holder)
         holder[key] = new
         return holder
 
@@ -761,13 +688,13 @@ def given_at(root, steps, function, place, arguments, /):
     `root`: `append(book.orders, order)` (the language's FN-15).
 
     The function is given the value `steps` leads to, which it changes
-    where it is while that is its holder's alone. `arguments` gives its
-    other arguments, by name, when it is called: once the way in has
-    been read, as they are written after the place. Only then is
-    anything changed: an argument may be, or hold, a collection on the
-    way in, `append(tree.kids[0].kids, tree)`, which evaluating it
-    marks as shared, and which is then copied and not changed. This
-    gives the function's result and then what `root` is to be.
+    where it is. `arguments` gives its other arguments, by name, when
+    it is called: once the way in has been read, as they are written
+    after the place. Only then is anything changed: an argument may
+    be, or hold, a collection on the way in, `append(tree.kids[0].kids,
+    tree)`, of which the compiler gives a copy, taken before the
+    change. This gives the function's result and then what `root` is
+    to be.
     """
     _read_in(root, steps)
     others = arguments()
@@ -785,14 +712,11 @@ def given_at(root, steps, function, place, arguments, /):
 def set_item(sequence, index, value, /):
     """`place[index] = value` where the place is an element of the list
     a `var`, a `state` or a `cache` holds itself (EXPR-3). The list is
-    changed where it is while the place alone holds it, and copied
-    once otherwise (`Grown`); it keeps `value`, which is marked as
-    shared. "An index outside a list fails where it is evaluated", and
-    the list is then as it was."""
+    changed where it is, and keeps `value`. "An index outside a list
+    fails where it is evaluated", and the list is then as it was."""
     if not 0 <= index < len(sequence):
         raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
-    sequence = _own(sequence)
-    sequence[index] = shared(value)
+    sequence[index] = value
     return sequence
 
 
@@ -800,28 +724,9 @@ def set_entry(dictionary, key, value, /):
     """`place[key] = value` where the place is an entry of the
     dictionary a `var`, a `state` or a `cache` holds itself (EXPR-3).
     "A key the dictionary has not is added." The dictionary is changed
-    where it is while the place alone holds it, and copied once
-    otherwise (`GrownDict`)."""
-    dictionary = _own_dict(dictionary)
-    dictionary[key] = shared(value)
+    where it is."""
+    dictionary[key] = value
     return dictionary
-
-
-def restored(values, length):
-    """What a place holds once a call that was given its list has
-    failed (the language's FN-15: a function that fails "assigns
-    nothing"): the list as long as it was before the call.
-
-    A list the place alone holds is cut back where it is. One that
-    something took while the call ran stays as that took it, and the
-    place holds a list of its first entries.
-    """
-    if len(values) <= length:
-        return values
-    if type(values) is Grown and values.owned:
-        del values[length:]
-        return values
-    return values[:length]
 
 
 def fn_append(values, item):
@@ -830,20 +735,17 @@ def fn_append(values, item):
 
     `values` is a `var` parameter (the language's FN-15), so this gives
     back the list the place is to hold, after a result it has none of.
-    The list grows where it is while the place alone holds it (LIST-3,
-    `Grown`), and the list keeps `item`, which is marked as shared.
+    The list grows where it is (LIST-3), and keeps `item`: the compiler
+    gives a copy of one that something else holds.
     """
-    values = _own(values)
-    values.append(shared(item))
+    values.append(item)
     return (None, values)
 
 
 def fn_extend(values, items):
     """LIST-2: "each entry of `items` after its last entry, in the
     order `items` has them". The list grows as `fn_append` grows it,
-    and keeps each entry, which `items` holds too."""
-    values = _own(values)
-    _shared_parts(items)
+    and keeps each entry."""
     values.extend(items)
     return (None, values)
 
@@ -851,29 +753,26 @@ def fn_extend(values, items):
 def get_dict_K__T__K(store, key):
     """Core's `get<K, T>(store: dict<K, T>, key: K) -> T?`: the value a
     dictionary has for a key, or null where it has none (ERR-6). What
-    it gives is still in the dictionary, and is marked as shared."""
-    return shared(store.get(key))
+    it gives is still in the dictionary: it is read there, and what
+    keeps it takes a copy."""
+    return store.get(key)
 
 
 def with_item(sequence, index, value, /):
-    """`place[index] = value` for a list or a tuple (EXPR-3): the
-    sequence with one element another value. "An index outside a list
-    fails where it is evaluated." `sequence` itself is as it was, for
-    whatever else holds it."""
+    """`place[index] = value` for a tuple, and for a list that is no
+    place's own (EXPR-3): the sequence with one element another value.
+    "An index outside a list fails where it is evaluated." `sequence`
+    itself is as it was, for whatever else holds it."""
     if not 0 <= index < len(sequence):
         raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
-    # The new sequence holds what `sequence` holds, and the value.
-    _shared_parts(sequence)
-    return sequence[:index] + type(sequence)((shared(value),)) + sequence[index + 1 :]
+    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
 
 
 def with_entry(dictionary, key, value, /):
-    """`place[key] = value` for a dictionary (EXPR-3): the dictionary
-    with the key given the value. "A key the dictionary has not is
-    added." `dictionary` itself is as it was."""
-    # The new dictionary holds what `dictionary` holds, and the value.
-    _shared_parts(dictionary.values())
-    return {**dictionary, key: shared(value)}
+    """`place[key] = value` for a dictionary that is no place's own
+    (EXPR-3): the dictionary with the key given the value. "A key the
+    dictionary has not is added." `dictionary` itself is as it was."""
+    return {**dictionary, key: value}
 
 
 def unmatched(selected):

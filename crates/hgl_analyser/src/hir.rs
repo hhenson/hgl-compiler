@@ -866,7 +866,18 @@ impl Expr {
     /// `&mut dyn FnMut` is a reference to any closure that may change
     /// what it has captured, a list it adds to say.
     pub fn walk(&self, visit: &mut dyn FnMut(&Expr)) {
-        visit(self);
+        self.walk_nodes(&mut |node| {
+            if let Node::Expression(expression) = node {
+                visit(expression);
+            }
+        });
+    }
+
+    /// [`Expr::walk`], which also calls `visit` with every statement
+    /// inside the expression, a block's and a loop's among them: each
+    /// before what it holds.
+    pub fn walk_nodes<'a>(&'a self, visit: &mut dyn FnMut(Node<'a>)) {
+        visit(Node::Expression(self));
         match &self.kind {
             ExprKind::Literal(_)
             | ExprKind::Constant { .. }
@@ -877,9 +888,9 @@ impl Expr {
             | ExprKind::EnumMember { .. }
             | ExprKind::Unread => {}
             ExprKind::Block { statements, value } => {
-                walk_statements(statements, visit);
+                walk_statement_nodes(statements, visit);
                 if let Some(value) = value {
-                    value.walk(visit);
+                    value.walk_nodes(visit);
                 }
             }
             ExprKind::If {
@@ -887,10 +898,10 @@ impl Expr {
                 then,
                 otherwise,
             } => {
-                condition.walk(visit);
-                then.walk(visit);
+                condition.walk_nodes(visit);
+                then.walk_nodes(visit);
                 if let Some(otherwise) = otherwise {
-                    otherwise.walk(visit);
+                    otherwise.walk_nodes(visit);
                 }
             }
             ExprKind::Unary { operand: inner, .. }
@@ -904,50 +915,50 @@ impl Expr {
             | ExprKind::Propagate(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
-            | ExprKind::Publications(inner) => inner.walk(visit),
+            | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {
                 base: left,
                 index: right,
             }
             | ExprKind::TraceCompare { left, right, .. } => {
-                left.walk(visit);
-                right.walk(visit);
+                left.walk_nodes(visit);
+                right.walk_nodes(visit);
             }
             ExprKind::Call { arguments, .. }
             | ExprKind::Construct { arguments, .. }
             | ExprKind::Delta { arguments } => {
                 for argument in arguments {
-                    argument.value.walk(visit);
+                    argument.value.walk_nodes(visit);
                 }
             }
             ExprKind::Error { message, code } => {
-                message.walk(visit);
+                message.walk_nodes(visit);
                 if let Some(code) = code {
-                    code.walk(visit);
+                    code.walk_nodes(visit);
                 }
             }
             ExprKind::Tuple(entries) | ExprKind::Sequence(entries) => {
                 for entry in entries {
-                    entry.walk(visit);
+                    entry.walk_nodes(visit);
                 }
             }
             ExprKind::Pairs(entries) => {
                 for (key, value) in entries {
-                    key.walk(visit);
-                    value.walk(visit);
+                    key.walk_nodes(visit);
+                    value.walk_nodes(visit);
                 }
             }
             ExprKind::Eval { call, config, .. } => {
-                call.walk(visit);
+                call.walk_nodes(visit);
                 if let Some(config) = config {
-                    config.walk(visit);
+                    config.walk_nodes(visit);
                 }
             }
             ExprKind::Trace(cells) => {
                 for cell in cells {
                     for part in [&cell.time, &cell.value].into_iter().flatten() {
-                        part.walk(visit);
+                        part.walk_nodes(visit);
                     }
                 }
             }
@@ -1103,22 +1114,43 @@ pub(crate) fn walk_statements_mut(statements: &mut [Stmt], visit: &mut dyn FnMut
     }
 }
 
+/// A statement or an expression, as a walk over both visits them.
+#[derive(Debug, Clone, Copy)]
+pub enum Node<'a> {
+    /// A statement.
+    Statement(&'a Stmt),
+    /// An expression.
+    Expression(&'a Expr),
+}
+
 /// Calls `visit` with every expression of `statements`, as
 /// [`Expr::walk`] does for one expression.
 pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
+    walk_statement_nodes(statements, &mut |node| {
+        if let Node::Expression(expression) = node {
+            visit(expression);
+        }
+    });
+}
+
+/// Calls `visit` with every statement of `statements` and every
+/// expression of each, as [`Expr::walk_nodes`] does for one expression:
+/// each statement before what it holds, a nested statement among them.
+pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(Node<'a>)) {
     for statement in statements {
+        visit(Node::Statement(statement));
         match statement {
             Stmt::Inject { .. } | Stmt::Unread { .. } => {}
             Stmt::Declare { value, .. } | Stmt::Return { value, .. } => {
                 if let Some(value) = value {
-                    value.walk(visit);
+                    value.walk_nodes(visit);
                 }
             }
-            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk(visit),
-            Stmt::Assert { condition, .. } => condition.walk(visit),
+            Stmt::Assign { value, .. } | Stmt::Expr(value) => value.walk_nodes(visit),
+            Stmt::Assert { condition, .. } => condition.walk_nodes(visit),
             Stmt::AssignPlace { place, value, .. } => {
-                place.walk(visit);
-                value.walk(visit);
+                place.walk_nodes(visit);
+                value.walk_nodes(visit);
             }
             Stmt::Hook {
                 condition, body, ..
@@ -1127,18 +1159,18 @@ pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
                 condition, body, ..
             } => {
                 if let Some(condition) = condition {
-                    condition.walk(visit);
+                    condition.walk_nodes(visit);
                 }
-                walk_statements(body, visit);
+                walk_statement_nodes(body, visit);
             }
-            Stmt::AssertRaises { body, .. } => walk_statements(body, visit),
+            Stmt::AssertRaises { body, .. } => walk_statement_nodes(body, visit),
             Stmt::Yield { time, value, .. } => {
-                time.walk(visit);
-                value.walk(visit);
+                time.walk_nodes(visit);
+                value.walk_nodes(visit);
             }
             Stmt::For { sequence, body, .. } => {
-                sequence.walk(visit);
-                walk_statements(body, visit);
+                sequence.walk_nodes(visit);
+                walk_statement_nodes(body, visit);
             }
             Stmt::Switch {
                 selector,
@@ -1146,13 +1178,13 @@ pub fn walk_statements(statements: &[Stmt], visit: &mut dyn FnMut(&Expr)) {
                 default,
                 ..
             } => {
-                selector.walk(visit);
+                selector.walk_nodes(visit);
                 for case in cases {
-                    case.label.walk(visit);
-                    walk_statements(&case.body, visit);
+                    case.label.walk_nodes(visit);
+                    walk_statement_nodes(&case.body, visit);
                 }
                 if let Some(default) = default {
-                    walk_statements(default, visit);
+                    walk_statement_nodes(default, visit);
                 }
             }
         }
