@@ -433,7 +433,7 @@ fn a_generic_delta_is_published_and_recorded() {
         "    time: datetime\n",
         "    value: delta<T>\n",
         "}\n",
-        "native const fn append<T>(items: list<T>, item: T) -> list<T>\n",
+        "native const fn appended<T>(items: list<T>, item: T) -> list<T>\n",
         "fn eval_replay<T>(const items: list<EvalEntry<T>>) -> T {\n",
         "    for item in items {\n",
         "        yield item.time: item.value\n",
@@ -443,7 +443,7 @@ fn a_generic_delta_is_published_and_recorded() {
         "    cache entries: list<EvalEntry<T>> = []\n",
         "    inject clock, global_state\n",
         "    when valid(input) && modified(input) {\n",
-        "        entries = append(entries, EvalEntry<T>(\n",
+        "        entries = appended(entries, EvalEntry<T>(\n",
         "            time: clock.evaluation_time,\n",
         "            value: delta_value(input)\n",
         "        ))\n",
@@ -481,7 +481,7 @@ fn a_generic_delta_is_published_and_recorded() {
         "    cache entries: list<EvalEntry<T>> = []\n",
         "    inject clock\n",
         "    when {\n",
-        "        entries = append(entries, EvalEntry<T>(time: clock.evaluation_time, value: input))\n",
+        "        entries = appended(entries, EvalEntry<T>(time: clock.evaluation_time, value: input))\n",
         "    }\n",
         "}\n",
     ));
@@ -491,7 +491,7 @@ fn a_generic_delta_is_published_and_recorded() {
             "m.hgl:37:54 type/type.mismatch EXPR-5",
             "m.hgl:38:50 type/type.mismatch TYPE-14",
             "m.hgl:43:26 type/type.mismatch EXPR-5",
-            "m.hgl:50:84 type/type.mismatch EXPR-5",
+            "m.hgl:50:86 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(

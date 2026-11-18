@@ -381,3 +381,50 @@ fn a_call_that_assigns_a_place_is_held_to_what_an_assignment_is() {
         ]
     );
 }
+
+/// Core's LIST-1 and LIST-2: `append` and `extend` are core's native
+/// functions, bound in every module (UNIT-11), and each takes its list
+/// as a `var` parameter (LIST-3, FN-15): the list is a place, of the
+/// list type the item is of.
+#[test]
+fn cores_append_and_extend_take_a_place() {
+    let checked = module(concat!(
+        "const fn grown() -> list<i64> {\n",
+        "    var entries: list<i64> = [1]\n",
+        "    append(entries, 2)\n",
+        "    extend(entries, [3, 4])\n",
+        "    return entries\n",
+        "}\n",
+        "fn gathered(value: i64) -> i64 {\n",
+        "    cache seen: list<i64> = []\n",
+        "    when {\n",
+        "        append(seen, value)\n",
+        "        return seen[0]\n",
+        "    }\n",
+        "}\n",
+        // Line 15: no place, a read-only one, and an item of another
+        // type.
+        "const fn literal() -> i64 {\n",
+        "    append([1], 2)\n",
+        "    return 1\n",
+        "}\n",
+        "const fn fixed() -> i64 {\n",
+        "    let entries = [1]\n",
+        "    extend(entries, [2])\n",
+        "    return 1\n",
+        "}\n",
+        "const fn mixed() -> i64 {\n",
+        "    var entries: list<i64> = [1]\n",
+        "    append(entries, \"two\")\n",
+        "    return 1\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:12 type/argument.place FN-15",
+            "m.hgl:21:12 name/binding.immutable FN-15",
+            "m.hgl:26:21 type/type.mismatch EXPR-5",
+        ]
+    );
+}

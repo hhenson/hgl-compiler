@@ -62,84 +62,16 @@ def _bounds(config):
     return start, end
 
 
-# The replay and record nodes made so far, each by the hgraph type of what
-# it publishes or takes.
-_REPLAYS = {}
-_RECORDS = {}
-
-
-def _replay(published):
-    """Core's `replay` for an input hgraph has as `published` (CEVAL-2,
-    CEVAL-3): a source of the publications a replay list holds.
-
-    Core has `replay` as HGL, a source that yields each entry at its
-    time. Until that is source in core this is the same source written
-    here: a node that the provider resumes over the entries, as it does
-    a source's own statements.
-    """
-    key = repr(published)
-    if key not in _REPLAYS:
-
-        @_hg.compute_node
-        def replay(
-            _begin: _hg.TS[bool],
-            items: object,
-            _state: _hg.STATE = None,
-            _clock: _hg.EvaluationClock = None,
-            _scheduler: _hg.SCHEDULER = None,
-        ) -> published:
-            due = _core.resume(_state.source, _clock.evaluation_time, _scheduler)
-            if due is not None:
-                return due[0]
-
-        @replay.start
-        def start(items: object, _state: _hg.STATE = None):
-            _state.source = _core.Source(iter(items.value))
-
-        _REPLAYS[key] = replay
-    return _REPLAYS[key]
-
-
-def _record(taken):
-    """Core's `record` for a result hgraph has as `taken` (CEVAL-4): a
-    sink that "starts with an empty recording. Each publication of its
-    input adds a tuple of the evaluation time and an independently
-    retained delta ... At stop it puts the recording in the store under
-    its key, an empty one included." Written here until it is source in
-    core, as `_replay` is.
-    """
-    key = repr(taken)
-    if key not in _RECORDS:
-
-        @_hg.sink_node
-        def record(
-            input: taken,
-            key: str,
-            _state: _hg.STATE = None,
-            _clock: _hg.EvaluationClock = None,
-        ):
-            _state.entries.append((_clock.evaluation_time, input.delta_value))
-
-        @record.start
-        def start(_state: _hg.STATE = None):
-            _state.entries = []
-
-        @record.stop
-        def stop(key: str, _state: _hg.STATE = None, _store: _hg.GlobalState = None):
-            _core.put_GlobalState_str_V(_store, key, tuple(_state.entries))
-
-        _RECORDS[key] = record
-    return _RECORDS[key]
-
-
-def evaluate(target, _inputs, _result, /, _config=None, **arguments):
+def evaluate(target, _replays, _record, /, _config=None, **arguments):
     """Runs `target` with a dense trace for each temporal input.
 
-    `_inputs` has the hgraph type of each temporal input of the target,
-    by its name, and `_result` that of its result, `None` where it has
-    none. They and `target` are given by position alone, so that an
-    input of the target may have any name, and the run's configuration
-    as `_config`, a name no input has.
+    `_replays` has core's `replay` for each temporal input the eval
+    gives a trace, by the input's name, and `_record` core's `record`
+    for the target's result, `None` where it has none: each as the
+    compiler wrote it for the type it is of. They and `target` are
+    given by position alone, so that an input of the target may have
+    any name, and the run's configuration as `_config`, a name no input
+    has.
 
     A trace is a list with one cell for each smallest step from the run's
     start, and `None` where nothing is published. The result is the dense
@@ -165,28 +97,26 @@ def evaluate(target, _inputs, _result, /, _config=None, **arguments):
     # smallest steps. A dense placeholder locates any later entries and
     # adds no replay entry or run bound."
     replayed = {
-        name: tuple(
+        name: [
             (result.start + position * _SMALLEST_STEP, cell)
             for position, cell in enumerate(arguments[name])
             if cell is not None
-        )
-        for name in _inputs
+        ]
+        for name in _replays
         if name in arguments
     }
 
     @_hg.graph
     def entry():
         given = {
-            name: (
-                _replay(_inputs[name])(_hg.const(True), _core.Held(replayed[name]))
-                if name in replayed
-                else value
-            )
+            name: (_replays[name](items=replayed[name]) if name in replayed else value)
             for name, value in arguments.items()
         }
         published = target(**given)
-        if _result is not None:
-            _record(_result)(published, _RUN_OUTPUT)
+        if _record is not None:
+            # CRUN-8: "The run wires `record` to the entry's result under
+            # the key `"run.output"`".
+            _record(input=published, key=_RUN_OUTPUT)
 
     # CRUN-7: "A run has one store, which is empty when its graph is
     # built."
@@ -201,7 +131,7 @@ def evaluate(target, _inputs, _result, /, _config=None, **arguments):
                 default_log_level=_logging.INFO,
             ),
         )
-        if _result is None:
+        if _record is None:
             return result
         # CEVAL-6: "A failed run or a missing recording makes eval fail."
         if not _core.has_GlobalState_str(store, _RUN_OUTPUT):
