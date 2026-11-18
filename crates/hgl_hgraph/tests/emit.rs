@@ -1346,6 +1346,10 @@ fn a_run_in_real_time_and_an_application_are_written() {
         })
         .collect();
     assert_eq!(limits, [("bounded", false, None), ("live", true, Some(60))]);
+    // One that writes `@timeout(...)` has that limit.
+    let written = emit(&[("live.hgl", INTEGRATION)]);
+    let (_, brief) = written.test("brief");
+    assert_eq!(brief.limit(), Some(std::time::Duration::from_millis(500)));
     assert_eq!(
         emitted.text("_hgl/_m_m/_m_live/__init__.py"),
         concat!(
@@ -6263,13 +6267,19 @@ const INTEGRATION: &str = concat!(
     "integration_test after {\n",
     "    assert run(pass(value: [1]), RunConfig(length: 50ms)) == [1]\n",
     "}\n",
+    // TST-17: a limit of the test's own, on the line before it.
+    "@timeout(500ms)\n",
+    "integration_test brief {\n",
+    "    let seen = run(beats(every: 10ms))\n",
+    "    assert ticks(seen) > 0\n",
+    "}\n",
 );
 
 /// TST-17: an integration test runs on hgraph, its `run` in real time.
-/// It is held to a time limit (hhenson/hgl_spec#110): one still
-/// running when its limit passes is stopped, and has failed, with the
-/// statement it was at. The test after it runs as any does. Needs
-/// hgraph, as above.
+/// It is held to a time limit, the one `@timeout(...)` gives it or a
+/// minute: one still running when its limit passes is stopped, and has
+/// failed, with the statement it was at. The test after it runs as any
+/// does. Needs hgraph, as above.
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_integration_test_runs_in_real_time_within_its_limit() {
@@ -6279,9 +6289,9 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
     let emitted = emit(&[("live.hgl", INTEGRATION)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    // Each integration test is given three seconds here, where it has
-    // a minute of its own: long enough for a slow host to run the ones
-    // that end.
+    // An integration test that writes no limit is given three seconds
+    // here, where it has a minute: long enough for a slow host to run
+    // the ones that end. One that writes its own keeps it.
     let ran = run_within(
         Path::new(&python),
         &directory,
@@ -6289,7 +6299,7 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
         &all,
         &|test: &Test| {
             test.integration
-                .then_some(std::time::Duration::from_secs(3))
+                .then(|| test.timeout.unwrap_or(std::time::Duration::from_secs(3)))
         },
     );
     let described: Vec<String> = emitted
@@ -6315,6 +6325,7 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
             "passes_through passed",
             "endless failed live.hgl:30:9 timed out: it was still running after its limit of 3s",
             "after passed",
+            "brief failed live.hgl:38:9 timed out: it was still running after its limit of 0.5s",
         ]
     );
 }

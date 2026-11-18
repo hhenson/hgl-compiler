@@ -322,11 +322,22 @@ fn an_integration_test_writes_run_and_a_test_does_not() {
         "    assert seen == [7]\n",
         "    assert run(pass(value: [7]), RunConfig()) == eval(pass(value: [7]))\n",
         "}\n",
+        // TST-17: "the duration `@timeout(5s)` gives on the line before
+        // it, or one minute where none is written".
+        "@timeout(1m30s)\n",
+        "integration_test bounded {\n",
+        "    assert true\n",
+        "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     assert_eq!(locals(&checked, "live"), ["seen: trace of i64"]);
     let module = checked.program.module("m").unwrap();
     assert!(module.tests[0].integration);
+    // The limit a test writes, in microseconds; none where it writes
+    // none.
+    assert_eq!(module.tests[0].timeout, None);
+    assert!(module.tests[1].integration);
+    assert_eq!(module.tests[1].timeout, Some(90_000_000));
     // The run is an eval's, in real time.
     let body = module.test_bodies[0].as_ref().unwrap();
     let Stmt::Declare {

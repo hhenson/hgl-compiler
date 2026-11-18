@@ -1207,6 +1207,57 @@ fn an_integration_test_is_a_test_that_may_write_run() {
     );
 }
 
+#[test]
+fn an_integration_test_takes_a_timeout_on_the_line_before_it() {
+    // TST-17: "It is time-bound: it runs within a time limit by the host
+    // clock, the duration `@timeout(5s)` gives on the line before it".
+    assert_eq!(
+        accepted(
+            Entry::Declarations,
+            "@timeout(5s)\nintegration_test live {\n    assert true\n}"
+        ),
+        "TestDecl[TimeoutAnnotation[\"@\" \"timeout\" \"(\" \"5s\" \")\"] \
+         \"integration_test\" \"live\" Block[\"{\" AssertStmt[\"assert\" \
+         Literal[\"true\"]] \"}\"]]"
+    );
+    // LEX-10: `timeout` "acquires its special meaning only in its
+    // defined positions": it is a name anywhere else, and `@` before
+    // any other word is the annotation of a function (ERR-10).
+    let named = accepted(
+        Entry::Declarations,
+        "fn timeout(timeout: i64) -> i64 => timeout",
+    );
+    assert!(named.contains("FnDecl[\"fn\" \"timeout\""), "{named}");
+    // LEX-18: "`@` directly followed by a digit or `[` begins a
+    // temporal literal": the two uses of `@` are told apart by what
+    // follows it.
+    let literal = accepted(Entry::Statements, "let at = @2026-09-03T09:30:00Z");
+    assert!(!literal.contains("TimeoutAnnotation"), "{literal}");
+
+    // The annotation is an integration test's alone: before a test
+    // that is none, and before a function, it is a syntax error.
+    for text in [
+        "@timeout(5s)\ntest plain {\n    assert true\n}",
+        "@timeout(5s)\nfn f() {}",
+        // On the line before the test, and not on its line.
+        "@timeout(5s) integration_test live {\n    assert true\n}",
+        // "The annotation's literal is a duration".
+        "@timeout(5)\nintegration_test live {\n    assert true\n}",
+        "@timeout(\"5s\")\nintegration_test live {\n    assert true\n}",
+        "@timeout(1M)\nintegration_test live {\n    assert true\n}",
+        "@timeout()\nintegration_test live {\n    assert true\n}",
+        "@timeout\nintegration_test live {\n    assert true\n}",
+    ] {
+        // Each is the parser's `syntax.expected_token`: it says what
+        // it expected there.
+        let findings = rejected(Entry::Declarations, text);
+        assert!(
+            findings.iter().all(|finding| finding.contains("expected ")),
+            "`{text}`: {findings:?}"
+        );
+    }
+}
+
 // ---- UNIT-1 ----
 
 #[test]

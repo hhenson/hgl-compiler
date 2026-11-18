@@ -157,7 +157,10 @@ impl Parser<'_> {
         match self.current() {
             KwModule => return Some(Item::Module),
             KwUse => return Some(Item::Use),
-            // ERR-10: an annotation stands before a function.
+            // TST-17: `@timeout(...)` stands before an integration test.
+            // LEX-10: `timeout` is a name with that meaning only here.
+            At if self.nth_word(1, "timeout") => return Some(Item::Test),
+            // ERR-10: any other annotation stands before a function.
             At => return Some(Item::Function),
             // RUN-1: `eval(...)` where an item starts is a run
             // statement.
@@ -968,9 +971,27 @@ impl Parser<'_> {
 
     // ---- Tests ----
 
-    /// `test_decl = ( "test" | "integration_test" ), IDENTIFIER, block ;`
+    /// ```text
+    /// test_decl = "test", IDENTIFIER, block
+    ///           | [ timeout_annotation, NL ], "integration_test", IDENTIFIER, block ;
+    /// ```
     fn test_decl(&mut self) {
         self.start(TestDecl);
+        // TST-17: `@timeout(5s)` stands on the line before an
+        // integration test, and before nothing else.
+        if self.at(At) {
+            self.timeout_annotation();
+            if self.at_line_start() {
+                self.begin_entry();
+            } else if !self.at(Eof) {
+                self.expected_rule("a line break", "TST-17");
+            }
+            if !(self.nth_word(0, "integration_test") && self.nth(1) == Ident) {
+                self.expected_rule("an integration test", "TST-17");
+                self.finish();
+                return;
+            }
+        }
         self.no_export();
         // `item_kind` has seen which of the two words this is.
         if self.nth_word(0, "integration_test") {
@@ -983,6 +1004,32 @@ impl Parser<'_> {
         let outer = std::mem::replace(&mut self.in_test, true);
         self.body_block();
         self.in_test = outer;
+        self.finish();
+    }
+
+    /// `timeout_annotation = "@", "timeout", "(", TEMPORAL_LITERAL, ")" ;`
+    ///
+    /// TST-17: "The annotation's literal is a duration".
+    fn timeout_annotation(&mut self) {
+        self.start(TimeoutAnnotation);
+        self.bump();
+        // `item_kind` has seen the word.
+        self.bump();
+        if self.at(LParen) && !self.cut() {
+            // LEX-27: an annotation's argument is a call's.
+            self.attached(Bracket::Call);
+            self.bump();
+            self.nested(Context::PLAIN, |parser| {
+                if parser.at(Duration) {
+                    parser.bump();
+                } else {
+                    parser.expected_rule("a duration", "TST-17");
+                }
+                parser.close(RParen);
+            });
+        } else {
+            self.expected("`(`");
+        }
         self.finish();
     }
 

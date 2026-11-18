@@ -120,6 +120,8 @@ define_syntax_kinds! {
         FnDecl,
         /// `@suppress_warning("node.no_activation")` before a function
         WarningAnnotation,
+        /// `@timeout(5s)` before an integration test
+        TimeoutAnnotation,
         /// `(value: f64, const factor: f64 = 2.0)`, of a declaration or of
         /// a function expression
         ParamList,
