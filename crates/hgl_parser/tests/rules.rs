@@ -2705,6 +2705,30 @@ fn error_is_reserved_and_still_constructs_and_names_a_member() {
     assert!(!rejected(Entry::Declarations, "enum error { a }").is_empty());
 }
 
+// ---- FN-15 ----
+
+/// FN-15: "A value function ... may mark a parameter `var`". The
+/// grammar has `"var", IDENTIFIER, ":", value_type`: no default, and no
+/// pack.
+#[test]
+fn a_var_parameter_is_a_mark_a_name_and_a_type() {
+    assert_eq!(
+        declarations("const fn bump(var count: i64, by: i64) {}"),
+        "FnDecl[\"const\" \"fn\" \"bump\" ParamList[\"(\" \
+         Param[\"var\" \"count\" \":\" ScalarType[\"i64\"]] \",\" \
+         Param[\"by\" \":\" ScalarType[\"i64\"]] \")\"] Block[\"{\" \"}\"]]"
+    );
+    declarations("native const fn append<V>(var values: list<V>, item: V)");
+    // `var` is a keyword, and is no parameter's name.
+    assert!(!rejected(Entry::Declarations, "const fn f(var: i64) {}").is_empty());
+    assert_eq!(
+        rejected(Entry::Declarations, "const fn f(var count: i64 = 1) {}"),
+        ["- 1:27: expected `,` or `)`, found `=`"]
+    );
+    assert!(!rejected(Entry::Declarations, "const fn f(var rest: ...i64) {}").is_empty());
+    assert!(!rejected(Entry::Declarations, "const fn f(const var count: i64) {}").is_empty());
+}
+
 // ---- TST-13 ----
 
 /// TST-13: "Use the primary range's first character and the EOF

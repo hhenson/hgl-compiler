@@ -58,7 +58,7 @@ delta_argument = member_name, ":", expression ;
 function_decl = { warning_annotation, NL }, [ "export" | "impl" ], [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], function_body ;
 function_signature = "(", [ parameters ], ")", [ "->", type ] ;
 parameters = parameter, { ",", parameter }, [ "," ] ;
-parameter = IDENTIFIER, ":", type, [ "=", const_expression ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
+parameter = IDENTIFIER, ":", type, [ "=", const_expression ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | "var", IDENTIFIER, ":", value_type | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
 pack = "...", type, [ cardinality ] | "...", "{", type, "}", [ cardinality ] ;
 function_body = "=>", expression | block ;
 function_expr = "fn", "(", [ lambda_parameters ], ")", [ "->", type ], ( "=>", expression | block ) ;

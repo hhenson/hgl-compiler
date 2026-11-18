@@ -129,6 +129,8 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Name, "argument.duplicate"),
     (Category::Type, "argument.missing"),
     (Category::Type, "argument.constant"),
+    (Category::Type, "argument.place"),
+    (Category::FunctionKind, "parameter.var"),
     (Category::FunctionKind, "call.role"),
     (Category::Type, "return.missing"),
     (Category::Type, "switch.duplicate_label"),

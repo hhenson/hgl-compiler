@@ -604,6 +604,9 @@ pub struct Parameter {
     pub at: Location,
     /// True when it is marked `const`: fixed configuration (FN-1).
     pub constant: bool,
+    /// True when it is marked `var`: a call gives it a place, which the
+    /// call assigns (FN-15).
+    pub var: bool,
     /// Its type. For a pack, the type after `...` or inside `...{ }`.
     pub ty: Type,
     /// What kind of pack it is, when it is one (FN-8).

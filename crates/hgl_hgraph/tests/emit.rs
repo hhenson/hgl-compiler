@@ -3901,6 +3901,272 @@ fn a_source_is_a_generator_a_node_resumes() {
     }
 }
 
+/// FN-15: a `var` parameter. A call gives it a place and assigns it:
+/// a `var`, a field or an element of one, a node's `state` and `cache`.
+const PLACES: &str = concat!(
+    "module demo.places\n",
+    "\n",
+    "struct Book {\n",
+    "    orders: list<i64>\n",
+    "    name: str\n",
+    "}\n",
+    "\n",
+    "const fn bump(var count: i64, by: i64) {\n",
+    "    count += by\n",
+    "}\n",
+    "const fn set_first(var items: list<i64>, value: i64) {\n",
+    "    items[0] = value\n",
+    "}\n",
+    // A `var` parameter is given on to another.
+    "const fn through(var count: i64) { bump(count, 1) }\n",
+    // A result beside the place.
+    "const fn take(var count: i64) -> i64 {\n",
+    "    let before = count\n",
+    "    count = 0\n",
+    "    return before\n",
+    "}\n",
+    "const fn both(var left: i64, var right: i64) {\n",
+    "    let held = left\n",
+    "    left = right\n",
+    "    right = held\n",
+    "}\n",
+    // Every way out gives the place what the parameter holds there.
+    "const fn early(var count: i64, halt: bool) -> i64 {\n",
+    "    if halt { return -1 }\n",
+    "    count += 1\n",
+    "    return count\n",
+    "}\n",
+    "\n",
+    "const fn total(values: list<i64>) -> i64 {\n",
+    "    var sum: i64 = 0\n",
+    "    for value in values {\n",
+    "        bump(sum, value)\n",
+    "    }\n",
+    "    return sum\n",
+    "}\n",
+    // "a value taken from the place before the call is as it was".
+    "const fn kept() -> bool {\n",
+    "    var entries: list<i64> = [1, 2]\n",
+    "    let before = entries\n",
+    "    set_first(entries, 9)\n",
+    "    return before == [1, 2] && entries == [9, 2]\n",
+    "}\n",
+    "const fn nested() -> i64 {\n",
+    "    var book: Book = Book(orders: [1, 2], name: \"a\")\n",
+    "    set_first(book.orders, 5)\n",
+    "    bump(book.orders[1], 3)\n",
+    "    return book.orders[0] + book.orders[1]\n",
+    "}\n",
+    "const fn taken() -> i64 {\n",
+    "    var held: i64 = 7\n",
+    "    let was = take(held)\n",
+    "    return was * 10 + held\n",
+    "}\n",
+    "const fn swapped() -> i64 {\n",
+    "    var a: i64 = 1\n",
+    "    var b: i64 = 2\n",
+    "    both(a, b)\n",
+    "    return a * 10 + b\n",
+    "}\n",
+    "const fn stepped() -> i64 {\n",
+    "    var n: i64 = 0\n",
+    "    through(n)\n",
+    "    let first = early(n, true)\n",
+    "    let second = early(n, false)\n",
+    "    return first * 100 + second * 10 + n\n",
+    "}\n",
+    "fn counted(value: i64) -> i64 {\n",
+    "    state seen: i64 = 0\n",
+    "    cache held: i64 = 0\n",
+    "    when {\n",
+    "        bump(seen, 1)\n",
+    "        bump(held, value)\n",
+    "        return seen * 100 + held\n",
+    "    }\n",
+    "}\n",
+    // The place is the one named when the call's arguments are
+    // evaluated: `items[i]` is `items[0]`, though the call moves `i`.
+    "const fn change(var index: i64, var item: i64) {\n",
+    "    index = 1\n",
+    "    item = 9\n",
+    "}\n",
+    // EXPR-2: the first argument fails first, though the second's
+    // index is held before the call.
+    "const fn apply(value: i64, var item: i64) { item = value }\n",
+    "const fn ordered(zero: i64, indices: dict<str, i64>) -> i64 {\n",
+    "    var items: list<i64> = [5, 6]\n",
+    "    apply(1 //{zero: .fail} zero, items[indices[\"missing\"]])\n",
+    "    return items[0]\n",
+    "}\n",
+    // What an index is of is read before the index is evaluated: a
+    // missing `key` fails before the division does.
+    "const fn deep(key: str, zero: i64) -> i64 {\n",
+    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
+    "    bump(rows[key][1 //{zero: .fail} zero], 1)\n",
+    "    return rows[\"a\"][1]\n",
+    "}\n",
+    // Two places inside one root: each assignment reads the root as
+    // the one before it left it.
+    "const fn crossed(key: str, i: i64, j: i64) -> i64 {\n",
+    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
+    "    both(rows[key][i], rows[key][j])\n",
+    "    return rows[\"a\"][0] * 10 + rows[\"a\"][1]\n",
+    "}\n",
+    "const fn moved() -> i64 {\n",
+    "    var i: i64 = 0\n",
+    "    var items: list<i64> = [5, 6]\n",
+    "    change(i, items[i])\n",
+    "    return items[0] * 100 + items[1] * 10 + i\n",
+    "}\n",
+    "\n",
+    "test places {\n",
+    "    assert total([1, 2, 3]) == 6\n",
+    "    assert kept()\n",
+    "    assert nested() == 10\n",
+    "    assert taken() == 70\n",
+    "    assert swapped() == 21\n",
+    "    assert stepped() == -100 + 20 + 2\n",
+    "    var count: i64 = 1\n",
+    "    bump(count, 4)\n",
+    "    assert count == 5\n",
+    "    assert moved() == 961\n",
+    "    assert raises(\"numeric.division_by_zero\") { ordered(0, [\"a\": 1]) }\n",
+    "    assert raises(\"value.missing_key\") { ordered(1, [\"a\": 1]) }\n",
+    "    assert ordered(1, [\"missing\": 1]) == 5\n",
+    "    assert raises(\"value.missing_key\") { deep(\"b\", 0) }\n",
+    "    assert raises(\"numeric.division_by_zero\") { deep(\"a\", 0) }\n",
+    "    assert deep(\"a\", 1) == 7\n",
+    "    assert crossed(\"a\", 0, 1) == 65\n",
+    "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
+    "}\n",
+);
+
+/// FN-15: "what it holds when the function returns is what the place
+/// is given". Python has no place to give a value to: a function with
+/// `var` parameters returns its result and then what each holds, and
+/// the call, the whole of a statement, assigns the places after it, in
+/// the order of the parameters.
+#[test]
+fn a_call_assigns_the_places_its_var_parameters_are_given() {
+    let emitted = emit(&[("places.hgl", PLACES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_places/__init__.py");
+    for expected in [
+        concat!(
+            "def bump(count, by):\n",
+            "    count = _core.add__i64_i64(lhs=count, rhs=by)\n",
+            "    return (None, count)\n",
+        ),
+        concat!(
+            "def take(count):\n",
+            "    before = count\n",
+            "    count = 0\n",
+            "    return (before, count)\n",
+        ),
+        "    return (None, left, right)\n",
+        concat!(
+            "def early(count, halt):\n",
+            "    if halt:\n",
+            "        return (_core.neg__i64(value=1), count)\n",
+        ),
+        // The call, and then the place.
+        concat!(
+            "        _given = bump(count=sum, by=value)\n",
+            "        sum = _given[1]\n",
+        ),
+        // A `var` parameter given on is a place of this function.
+        concat!(
+            "def through(count):\n",
+            "    _given = bump(count=count, by=1)\n",
+            "    count = _given[1]\n",
+            "    return (None, count)\n",
+        ),
+        // A place inside a value: its root is given a new value.
+        concat!(
+            "    _given = set_first(items=book.orders, value=5)\n",
+            "    book = _core.with_field(book, orders=_given[1])\n",
+            "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
+            "    book = _core.with_field(book, orders=_core.with_item(book.orders, 1, _given[1]))\n",
+        ),
+        // The call's own result is the first of what it gives.
+        concat!(
+            "    _given = take(count=held)\n",
+            "    held = _given[1]\n",
+            "    was = _given[0]\n",
+        ),
+        concat!(
+            "    _given = both(left=a, right=b)\n",
+            "    a = _given[1]\n",
+            "    b = _given[2]\n",
+        ),
+        // An index of a place is evaluated once, before the call, and
+        // every argument with it, each in the order written (EXPR-2).
+        concat!(
+            "    _arg_1 = i\n",
+            "    _at_1 = i\n",
+            "    _arg_2 = _core.item(items, _at_1)\n",
+            "    _given = change(index=_arg_1, item=_arg_2)\n",
+            "    i = _given[1]\n",
+            "    items = _core.with_item(items, _at_1, _given[2])\n",
+        ),
+        concat!(
+            "    _arg_1 = _core.floordiv__i64_i64(lhs=1, rhs=zero, zero=\"fail\")\n",
+            "    _at_1 = _core.entry(indices, \"missing\")\n",
+            "    _arg_2 = _core.item(items, _at_1)\n",
+            "    _given = apply(value=_arg_1, item=_arg_2)\n",
+        ),
+        // What an index is of is read, and held, before the index is
+        // evaluated. Where the place is assigned it is read again.
+        concat!(
+            "    _at_1 = key\n",
+            "    _in_1 = _core.entry(rows, _at_1)\n",
+            "    _at_2 = _core.floordiv__i64_i64(lhs=1, rhs=zero, zero=\"fail\")\n",
+            "    _arg_1 = _core.item(_in_1, _at_2)\n",
+            "    _arg_2 = 1\n",
+            "    _given = bump(count=_arg_1, by=_arg_2)\n",
+            "    rows = _core.with_entry(rows, _at_1, _core.with_item(_core.entry(rows, _at_1), _at_2, _given[1]))\n",
+        ),
+        // A node's `state` and `cache` are places.
+        concat!(
+            "    _given = bump(count=_state.seen, by=1)\n",
+            "    _state.seen = _given[1]\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// FN-15: a call that assigns a place is written with its assignments
+/// after it, which a statement has room for. One inside an expression
+/// is reported.
+#[test]
+fn a_place_call_inside_an_expression_is_reported() {
+    let emitted = emit(&[(
+        "inside.hgl",
+        concat!(
+            "module demo.inside\n",
+            "const fn take(var count: i64) -> i64 {\n",
+            "    count = 0\n",
+            "    return 1\n",
+            "}\n",
+            "const fn twice() -> i64 {\n",
+            "    var held: i64 = 7\n",
+            "    return take(held) + take(held)\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "inside.hgl:8:12 target.unsupported",
+            "inside.hgl:8:25 target.unsupported",
+        ]
+    );
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -4373,6 +4639,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("stops.hgl", STOPS));
     files.push(("caps.hgl", CAPABILITIES));
     files.push(("sources.hgl", SOURCES));
+    files.push(("places.hgl", PLACES));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4395,13 +4662,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        60,
+        61,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, and one of each demo's"
     );
 }
 

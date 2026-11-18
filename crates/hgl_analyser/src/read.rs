@@ -891,6 +891,7 @@ impl Reader<'_> {
                 name: name.text().to_string(),
                 at: self.at(name.span()),
                 constant,
+                var: has_token(&parameter, SyntaxKind::KwVar),
                 ty,
                 pack,
                 has_default,

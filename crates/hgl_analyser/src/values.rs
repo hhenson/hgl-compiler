@@ -542,13 +542,14 @@ impl<'a> Typer<'a> {
                 Some(_) => Type::Unknown,
                 None => parameter.ty.clone(),
             };
-            typer.declare(
-                &parameter.name,
-                parameter.at,
-                LocalKind::Parameter,
-                ty,
-                true,
-            );
+            // FN-15: "In the function the parameter is a `var`, whose
+            // first value is the place's".
+            let kind = if parameter.var {
+                LocalKind::Var
+            } else {
+                LocalKind::Parameter
+            };
+            typer.declare(&parameter.name, parameter.at, kind, ty, true);
         }
         typer.applications();
         typer
@@ -4644,10 +4645,216 @@ impl<'a> Typer<'a> {
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
     fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
+        self.places_given(kind);
         self.capabilities_given(kind);
         self.fixed_arguments(kind);
         self.traces_given(kind, evaluating);
         self.store_keys(kind);
+    }
+
+    /// FN-15: "A call gives a `var` parameter a place, as the left of an
+    /// assignment is (EXPR-3): a `var`, a `state`, or a `cache`, or a
+    /// place inside one, that holds an ordinary value ... What is
+    /// read-only rejects, a `let`, a parameter that is not `var`, a
+    /// constant, or an iteration binding (`binding.immutable`); so does
+    /// what is no place, a literal or what a call gives
+    /// (`argument.place`)." And "A function that declares one is not
+    /// lifted (FN-6) ... No argument of such a call is a connection
+    /// (`connection.as_constant`)".
+    fn places_given(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee, arguments, ..
+        } = kind
+        else {
+            return;
+        };
+        let (module, declaration, generics) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                generics,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                generics,
+                ..
+            } => (*module, *declaration, generics),
+            Callee::Required { .. } | Callee::Unread => return,
+        };
+        let program = self.program;
+        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
+        else {
+            return;
+        };
+        if !signature.parameters.iter().any(|parameter| parameter.var) {
+            return;
+        }
+        let callee = &program.modules[module].declarations[declaration].name;
+        // What a parameter's type is at this call, the callee's generic
+        // parameters in place.
+        let own: Vec<Location> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
+        let mut reports = Vec::new();
+        // The places the call assigns: the local each is rooted in,
+        // where it is written, and whether it is inside the local's
+        // value.
+        let mut assigned: Vec<(LocalId, Location, bool)> = Vec::new();
+        for argument in arguments {
+            let Some(parameter) = argument
+                .parameter
+                .and_then(|index| signature.parameters.get(index))
+            else {
+                continue;
+            };
+            let at = argument.value.at;
+            if self.category(&argument.value) == ValueCategory::Connection {
+                reports.push(error(
+                    Category::Phase,
+                    codes::CONNECTION_AS_CONSTANT,
+                    at,
+                    format!(
+                        "`{callee}` has a `var` parameter and is not lifted: this is a connection, and it takes an ordinary value"
+                    ),
+                    "FN-15",
+                ));
+                continue;
+            }
+            if !parameter.var {
+                continue;
+            }
+            // The root of the place: `book` of `book.orders[0]`.
+            let mut root = &argument.value;
+            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
+                root = base;
+            }
+            let takes = format!("the `var` parameter `{}` of `{callee}`", parameter.name);
+            // "that holds an ordinary value of the parameter's type":
+            // the call gives the place what the parameter holds, so
+            // the two are one type. A place of `i64` takes no `i64?`
+            // back, though an `i64` is a value of `i64?`.
+            let taken = placed(substitute_within(&parameter.ty, &map), &own);
+            let held = &argument.value.ty;
+            let assignable = matches!(
+                &root.kind,
+                ExprKind::Local(local) if matches!(
+                    self.locals[*local].kind,
+                    LocalKind::Var | LocalKind::State | LocalKind::Cache
+                )
+            );
+            if assignable && whole(&taken) && whole(held) && *held != taken {
+                reports.push(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "this place is `{held}`, and {takes} is `{taken}`: the call gives \
+                             the place what the parameter holds, so the two are one type"
+                    ),
+                    "FN-15",
+                ));
+                continue;
+            }
+            match &root.kind {
+                ExprKind::Local(local) => {
+                    let declared = &self.locals[*local];
+                    if !matches!(
+                        declared.kind,
+                        LocalKind::Var | LocalKind::State | LocalKind::Cache
+                    ) {
+                        reports.push(
+                            error(
+                                Category::Name,
+                                codes::BINDING_IMMUTABLE,
+                                at,
+                                format!(
+                                    "`{}` is {} and cannot be assigned, as {takes} is: only a `var`, a `state` or a `cache` can",
+                                    declared.name,
+                                    declared.kind.describe()
+                                ),
+                                "FN-15",
+                            )
+                            .with_related(declared.at, "declared here"),
+                        );
+                    } else if let Some((what, rule)) = Self::read_only_inside(&argument.value) {
+                        // NATIVE-6, TYPE-16: a property of a native
+                        // value or of a delta is read-only whatever
+                        // holds the value, as an assignment has it.
+                        reports.push(error(
+                            Category::Name,
+                            codes::BINDING_IMMUTABLE,
+                            at,
+                            format!(
+                                "this is a property of {what}, and a property is read and not assigned, as {takes} is"
+                            ),
+                            rule,
+                        ));
+                    } else {
+                        // The call assigns the place, and is held to
+                        // what an assignment there is.
+                        let inside = !matches!(&argument.value.kind, ExprKind::Local(_));
+                        assigned.push((*local, at, inside));
+                    }
+                }
+                ExprKind::Constant { .. } => reports.push(error(
+                    Category::Name,
+                    codes::BINDING_IMMUTABLE,
+                    at,
+                    format!("a constant cannot be assigned, as {takes} is"),
+                    "FN-15",
+                )),
+                // What is not read says nothing sure (ERR-9).
+                ExprKind::Unread => {}
+                _ => reports.push(
+                    error(
+                        Category::Type,
+                        codes::ARGUMENT_PLACE,
+                        at,
+                        format!("{takes} takes a place, and this is none"),
+                        "FN-15",
+                    )
+                    .with_note(
+                        "a place is a `var`, a `state` or a `cache`, or a field or an element of one",
+                    ),
+                ),
+            }
+        }
+        for report in reports {
+            self.diagnostics.emit(report);
+        }
+        // In a graph an assignment is held to more (CTRL-14, CTRL-15),
+        // and so is a call that assigns: a `var` declared outside a
+        // loop that makes a child for each member is not carried, and
+        // one that holds an ordinary value is not assigned in a branch
+        // selected at runtime. What the call gives the place is an
+        // ordinary value: the function is not lifted.
+        if !self.graph {
+            return;
+        }
+        for (local, at, inside) in assigned {
+            if self.dynamic.is_some_and(|outside| local < outside) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::LOOP_CARRIED,
+                        at,
+                        format!(
+                            "`{}` is declared outside this loop, which makes one child for each member: nothing is carried from one child to the next",
+                            self.locals[local].name
+                        ),
+                        "CTRL-15",
+                    )
+                    .with_related(self.locals[local].at, "declared here"),
+                );
+            } else {
+                self.assigned_category(local, (ValueCategory::Value, at), inside);
+            }
+        }
     }
 
     /// The global store: "The key `"run.output"` is the run's own,
@@ -5693,6 +5900,28 @@ impl<'a> Typer<'a> {
             self.after_call(&given, "an eval", "TST-5");
             return unread;
         };
+        // FN-15: a function that declares a `var` parameter "is no
+        // target of an `eval`": an eval lifts a value function (TST-8),
+        // and that one is not lifted.
+        if let Some(Detail::Callable(signature)) =
+            self.program.modules[module].details.get(declaration)
+            && signature.parameters.iter().any(|parameter| parameter.var)
+        {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::EVAL_TARGET,
+                self.at(&argument),
+                format!(
+                    "`{}` has a `var` parameter, and is no target of an eval",
+                    called.name.text()
+                ),
+                "FN-15",
+            ));
+            // Nothing more is reported of the call (ERR-9).
+            let unread = self.unread_call(&called.arguments);
+            self.after_call(&given, "an eval", "TST-5");
+            return unread;
+        }
         let name = called.name.clone();
         self.evaluating = true;
         let (kind, ty) = self.call_function(
@@ -6643,7 +6872,9 @@ impl<'a> Typer<'a> {
         let required = |parameter: &crate::types::Parameter| {
             // UNIT-8: "A parameter whose type is written `T?` needs no
             // default to be omitted."
-            !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_))
+            // "A `var` parameter is the exception: it is always
+            // given, whatever its type" (FN-15).
+            parameter.var || !parameter.has_default && !matches!(parameter.ty, Type::Nullable(_))
         };
         let Some((mut found, faulty)) = explicit.filter(|_| !generics.is_empty()) else {
             // No generic parameter, or none this pass resolves: a type
