@@ -41,7 +41,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
-use hgl_hgraph::{Ran, RanApplication};
+use hgl_hgraph::{Ran, RanApplication, Stop};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
@@ -840,13 +840,16 @@ fn run(arguments: &RunArgs) -> ExitCode {
         .python
         .clone()
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
-    // An interrupt reaches this process and the interpreter it starts.
-    // The interpreter takes it as the host's stop of the run; this
-    // process outlives it, to print what the run recorded. Where the
-    // handler cannot be set the run goes on all the same, and an
-    // interrupt then ends this process as it always did.
-    let _ = ctrlc::set_handler(|| {});
-    match hgl_hgraph::run_application(&python, directory, &output, chosen) {
+    // An interrupt or a request to end, of this process, is the host's
+    // stop of the run (RUN-3). It is passed to the interpreter, which
+    // one sent to this process alone does not reach, and this process
+    // outlives it, to print what the run recorded. Where the handler
+    // cannot be set the run goes on all the same, and an interrupt
+    // then ends this process as it always did.
+    let stop = Stop::new();
+    let asked = stop.clone();
+    let _ = ctrlc::set_handler(move || asked.ask());
+    match hgl_hgraph::run_application(&python, directory, &output, chosen, &stop) {
         RanApplication::Stopped { output, by_host } => {
             let how = if by_host { " until it was stopped" } else { "" };
             match output {

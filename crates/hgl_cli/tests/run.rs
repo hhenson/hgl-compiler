@@ -195,6 +195,57 @@ fn a_host_that_does_not_start_runs_no_application() {
     );
 }
 
+/// An application with no end: it runs until its host stops it.
+const ENDLESS: &str = concat!(
+    "application demo.ticks.endless\n",
+    "\n",
+    "use demo.ticks::{counted}\n",
+    "\n",
+    "run(counted(upto: 1000000, every: 20ms))\n",
+);
+
+/// RUN-3: a run in real time goes on "until its host stops it". An
+/// interrupt sent to `hgl` alone, as what supervises it sends one,
+/// stops the run all the same: `hgl` passes it on, and prints what the
+/// run recorded. Needs hgraph, as below, and a system with `kill`.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn an_interrupt_of_hgl_alone_stops_the_run() {
+    let python = std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let root = scratch("interrupted");
+    write(&root, "ticks.hgl", TICKS);
+    write(&root, "endless.hgl", ENDLESS);
+    let child = Command::new(env!("CARGO_BIN_EXE_hgl"))
+        .args(["run", &argument(&root), "--python", &python])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the hgl binary runs");
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    // To `hgl` alone: its process, and not its group.
+    let sent = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("`kill` runs");
+    assert!(sent.success());
+    let output = child.wait_with_output().expect("hgl ends");
+    let printed = text(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{printed}");
+    let lines: Vec<&str> = printed.lines().collect();
+    let (summary, published) = lines.split_last().expect("something is printed");
+    assert!(!published.is_empty(), "{printed}");
+    assert!(published[0].ends_with("  1"), "{printed}");
+    assert_eq!(
+        *summary,
+        format!(
+            "ran demo.ticks.endless on hgraph until it was stopped: {} publications",
+            published.len()
+        )
+    );
+}
+
 /// UNIT-14, RUN-1: an application runs, and its output is printed: a
 /// line for each publication of its entry's result, in time order,
 /// its instant and then what was published (core's CRUN-8). A run

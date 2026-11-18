@@ -57,7 +57,7 @@ use std::collections::BTreeSet;
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
-pub use host::{Ran, RanApplication, run, run_application, write};
+pub use host::{Ran, RanApplication, Stop, run, run_application, write};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";

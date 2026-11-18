@@ -1,10 +1,11 @@
 """Runs an application of a program written by the hgl compiler for hgraph.
 
-Usage: _run_application.py OUTPUT_DIRECTORY MODULE FUNCTION RESULTS
+Usage: _run_application.py OUTPUT_DIRECTORY MODULE FUNCTION RESULTS MODE
 
 MODULE is the application's Python module and FUNCTION the function its
-run statement is written as. RESULTS is written as the run goes, one
-line for each thing that happens:
+run statement is written as. MODE is `real-time` or `simulation`, as the
+statement's word has it. RESULTS is written as the run goes, one line
+for each thing that happens:
 
     start               the application is about to be loaded and run
     published TIME TEXT one publication of the run's output, in time
@@ -26,9 +27,14 @@ left to what reports the run's output.
 
 The run is on a thread of its own, so that this one is free to take an
 interrupt: hgraph waits for a run's next cycle where no signal reaches
-Python. An interrupt asks a run in real time to stop, which ends it as
-its end does. A simulation waits for nothing, and a second interrupt
-asks twice: either ends the interpreter at once.
+Python. The host asks the run to stop in one of two ways: an interrupt
+of this process, or a line `stop` on standard input, which what started
+this process writes for a request that reached it alone. Standard
+input closed is such a request too: what started the run is gone.
+
+A run in real time that is asked to stop ends as it does at its end. A
+simulation waits for nothing, so the interpreter ends at once, and a
+second interrupt ends it at once whatever the mode.
 """
 
 import datetime
@@ -134,7 +140,7 @@ def _shown(value):
     return str(value)
 
 
-def main(directory, module_name, function_name, results):
+def main(directory, module_name, function_name, results, mode):
     # Python puts this script's directory first on its path. The
     # program is found from the output directory and nowhere else.
     own = os.path.dirname(os.path.abspath(__file__))
@@ -171,21 +177,40 @@ def main(directory, module_name, function_name, results):
 
         asked = []
 
-        def interrupted(signum, frame):
-            # The first asks a run in real time to stop. A simulation
-            # has nothing to ask, and a second interrupt has asked
-            # already: the interpreter ends as it is.
-            if asked or not harness.stop():
+        def stop(again):
+            # The host asks the run to stop. A run in real time ends as
+            # it does at its end: the request is kept for a run that has
+            # not started yet. A simulation has nothing to ask, and
+            # `again` is a second interrupt: the interpreter ends as it
+            # is.
+            if mode != "real-time" or (again and asked):
                 say("failed", "interrupted")
                 os._exit(130)
-            asked.append(signum)
-            say("host")
+            if not asked:
+                say("host")
+            asked.append(True)
+            harness.stop()
+
+        def interrupted(signum, frame):
+            stop(True)
+
+        def listen():
+            # A request passed down standard input, and its end.
+            try:
+                for line in sys.stdin:
+                    if line.strip() == "stop":
+                        stop(False)
+            except (OSError, ValueError):
+                pass
+            if "output" not in outcome and "error" not in outcome:
+                stop(False)
 
         signal.signal(signal.SIGINT, interrupted)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, interrupted)
         thread = threading.Thread(target=work, name="hgl-run", daemon=True)
         thread.start()
+        threading.Thread(target=listen, name="hgl-stop", daemon=True).start()
         # A wait with an end, so that a signal's handler is run.
         while thread.is_alive():
             thread.join(0.1)
@@ -204,4 +229,4 @@ def main(directory, module_name, function_name, results):
 
 
 if __name__ == "__main__":
-    sys.exit(main(*sys.argv[1:5]))
+    sys.exit(main(*sys.argv[1:6]))

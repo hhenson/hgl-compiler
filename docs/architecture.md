@@ -1696,13 +1696,15 @@ it has a way to. What the program logs and hgraph prints goes to standard
 error, as the run goes.
 
 `eval` is a simulation, and `run` is in real time (RUN-3). An interrupt
-of `hgl run` is the host's stop of a run in real time. hgraph waits for
-a run's next cycle where no signal reaches Python, so the driver keeps
-its main thread for the signal, and asks the run to stop through a
-source hgraph wakes for: the run ends as it does at its end, every node
-is stopped, and what was recorded up to then is printed. `hgl` outlives
-the interrupt to print it. An interrupt of a simulation, and a second
-one, end the run at once with no output.
+of `hgl run`, or a request for it to end, is the host's stop of a run in
+real time. hgraph waits for a run's next cycle where no signal reaches
+Python, so the driver keeps its main thread for the signal, and asks the
+run to stop through a source hgraph wakes for: the run ends as it does
+at its end, every node is stopped, and what was recorded up to then is
+printed. `hgl` takes the signal too, and passes the stop to the driver
+down a pipe: a signal sent to `hgl` alone reaches no other process. It
+outlives the signal to print the output. A stop of a simulation, and a
+second one of any run, end the run at once with no output.
 
 | Exit status of `hgl run` | When |
 | --- | --- |
@@ -1803,7 +1805,7 @@ the job the way the design needs is dropped.
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
-| `ctrlc` | `hgl_cli` | outliving an interrupt while an application runs, so that the run's output is still printed |
+| `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |
 | `rowan` | `hgl_parser` | the lossless syntax tree: nodes, tokens, byte ranges, traversal |
 | `tempfile` | `hgl_cli` | the directory a program is written to for a test run or an application's run, removed after it |
