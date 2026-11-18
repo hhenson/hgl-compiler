@@ -3659,6 +3659,185 @@ fn a_capability_that_is_not_written_is_reported() {
     );
 }
 
+/// SOURCE-1 to SOURCE-4: sources. One with no declaration and no hook;
+/// one with both hooks and its yields in a block; one that keeps a
+/// `cache` from one `yield` to the next; targets that are durations and
+/// instants; and a source wired into a graph.
+const SOURCES: &str = concat!(
+    "module demo.sources\n",
+    "\n",
+    "fn two_values() -> i64 {\n",
+    "    yield 1us: 7\n",
+    "    yield 1us: 9\n",
+    "}\n",
+    "\n",
+    "fn greeting(const every: duration = 1us) -> str {\n",
+    "    inject logger\n",
+    "    start { log_info(logger, \"greeting starts\") }\n",
+    "    {\n",
+    "        yield every: \"hello\"\n",
+    "        yield every: \"world\"\n",
+    "    }\n",
+    "    stop { log_info(logger, \"greeting ends\") }\n",
+    "}\n",
+    "\n",
+    "fn counter(const every: duration = 1us, const limit: i64 = 3) -> i64 {\n",
+    "    inject logger\n",
+    "    cache count: i64 = 0\n",
+    "    while count < limit {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "    stop { if count > 0 { log_info(logger, \"counted\") } }\n",
+    "}\n",
+    "\n",
+    // SOURCE-3: "a current target publishes now".
+    "fn at_once(const first: i64) -> i64 {\n",
+    "    yield 0us: first\n",
+    "    yield 2us: first + 1\n",
+    "}\n",
+    "\n",
+    // SOURCE-2: "A duration is relative to current evaluation time; a
+    // datetime is absolute." The clock is read where the source is
+    // resumed.
+    "fn absolute() -> i64 {\n",
+    "    inject clock\n",
+    "    {\n",
+    "        yield clock.evaluation_time + 3us: 1\n",
+    "        yield earliest_start + 5us: 2\n",
+    "        yield clock.evaluation_time + 1us: 3\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    // SOURCE-3: "A past absolute target is skipped".
+    "fn late() -> i64 {\n",
+    "    yield earliest_start + 1us: 1\n",
+    "    yield earliest_start + 4us: 2\n",
+    "}\n",
+    "\n",
+    // SOURCE-4: "A bare return ... finishes the source", and an
+    // unbounded `while`.
+    "fn ended(const limit: i64) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while {\n",
+    "        if count == limit { return }\n",
+    "        count += 1\n",
+    "        yield 1us: count\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn doubled(value: i64) -> i64 {\n",
+    "    when { return value * 2 }\n",
+    "}\n",
+    "\n",
+    "fn wired() -> i64 => doubled(two_values())\n",
+    "\n",
+    "fn backwards() -> i64 {\n",
+    "    yield 2us: 1\n",
+    "    yield earliest_start + 1us: 2\n",
+    "}\n",
+    "\n",
+    "fn negative() -> i64 {\n",
+    "    yield -1us: 1\n",
+    "}\n",
+    "\n",
+    "test sources {\n",
+    "    assert eval(two_values()) == [_, 7, 9]\n",
+    "    assert eval(greeting()) == [_, \"hello\", \"world\"]\n",
+    "    assert eval(greeting(every: 2us)) == [_, _, \"hello\", _, \"world\"]\n",
+    "    assert eval(counter()) == [_, 1, 2, 3]\n",
+    "    assert eval(counter(limit: 0)) == []\n",
+    "    assert eval(at_once(first: 5)) == [5, _, 6]\n",
+    "    assert eval(absolute()) == [_, _, _, 1, _, 2, 3]\n",
+    "    assert eval(late(), RunConfig(start: earliest_start + 2us)) == [_, _, 2]\n",
+    "    assert eval(ended(limit: 2)) == [_, 1, 2]\n",
+    "    assert eval(wired()) == [_, 14, 18]\n",
+    // CRUN-2: a run ends before its `end`, with the source suspended.
+    "    assert eval(counter(limit: 9), RunConfig(length: 3us)) == [_, 1, 2]\n",
+    "    assert raises(\"yield.non_increasing_time\") { eval(backwards()) }\n",
+    "    assert raises(\"yield.negative_duration\") { eval(negative()) }\n",
+    "}\n",
+);
+
+/// SOURCE-1: a source is a generator that holds its statements, a node
+/// that resumes it, with the source's `start` and `stop`, and a graph
+/// that wakes the node once as it starts. SOURCE-2: `yield time:
+/// value` gives the generator's caller the time, then the value.
+#[test]
+fn a_source_is_a_generator_a_node_resumes() {
+    let emitted = emit(&[("sources.hgl", SOURCES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_sources/__init__.py");
+    for expected in [
+        concat!(
+            "def _yields_two_values(_state):\n",
+            "    yield (_dt.timedelta(microseconds=1), 7)\n",
+            "    yield (_dt.timedelta(microseconds=1), 9)\n",
+        ),
+        concat!(
+            "@_hg.compute_node\n",
+            "def _source_two_values(_begin: _hg.TS[_py.bool], _state: _hg.STATE = None, ",
+            "_clock: _hg.EvaluationClock = None, _scheduler: _hg.SCHEDULER = None) ",
+            "-> _hg.TS[_py.int]:\n",
+            "    _published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)\n",
+            "    if _published is not None:\n",
+            "        return _published[0]\n",
+        ),
+        concat!(
+            "@_source_two_values.start\n",
+            "def _start__source_two_values(_state: _hg.STATE = None):\n",
+            "    _state._source = _core.Source(_yields_two_values(_state))\n",
+        ),
+        concat!(
+            "@_hg.graph\n",
+            "def two_values() -> _hg.TS[_py.int]:\n",
+            "    return _source_two_values(_hg.const(True))\n",
+        ),
+        // A capability is the node's for one evaluation: the node puts
+        // it in its state, where the generator reads it.
+        concat!(
+            "def _yields_absolute(_state):\n",
+            "    yield (_core.add__datetime_duration(lhs=_core.Clock_evaluation_time(",
+            "_state._clock), rhs=_dt.timedelta(microseconds=3)), 1)\n",
+        ),
+        "    _state._clock = _clock\n",
+        // A `cache` is a field of the state the generator is given,
+        // which `stop` reads.
+        concat!(
+            "def _yields_counter(every, limit, _state):\n",
+            "    while _core.lt__T_T(lhs=_state.count, rhs=limit):\n",
+            "        _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
+            "        yield (every, _state.count)\n",
+        ),
+        concat!(
+            "@_source_counter.start\n",
+            "def _start__source_counter(every: _dt.timedelta, limit: _py.int, ",
+            "_state: _hg.STATE = None, _logger: _hg.LOGGER = None):\n",
+            "    _state.count = 0\n",
+            "    _state._source = _core.Source(_yields_counter(every, limit, _state))\n",
+        ),
+        concat!(
+            "@_source_greeting.stop\n",
+            "def _stop__source_greeting(every: _dt.timedelta, _state: _hg.STATE = None, ",
+            "_logger: _hg.LOGGER = None):\n",
+            "    _hgl_4core.log_info(logger=_logger, message=\"greeting ends\")\n",
+        ),
+        // SOURCE-4: an unbounded `while`, and a bare `return`.
+        concat!(
+            "    while True:\n",
+            "        if _core.eq__i64_i64_f64_f64(lhs=_state.count, rhs=limit, abs=0.0, rel=0.0):\n",
+            "            return\n",
+        ),
+        // A graph wires a source as any function.
+        "def wired() -> _hg.TS[_py.int]:\n    return doubled(value=two_values())\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -4130,6 +4309,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("compare.hgl", COMPARE));
     files.push(("stops.hgl", STOPS));
     files.push(("caps.hgl", CAPABILITIES));
+    files.push(("sources.hgl", SOURCES));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4152,13 +4332,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        59,
+        60,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, and one of each demo's"
+         capabilities, one on sources, and one of each demo's"
     );
 }
 

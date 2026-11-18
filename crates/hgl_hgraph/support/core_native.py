@@ -280,6 +280,72 @@ def entry(dictionary, key):
         raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
 
 
+class Source:
+    """A source between two evaluations of its node (SOURCE-1).
+
+    `body` is the generator that holds the source's statements: each
+    `yield time: value` gives it a `(time, value)`. `pending` is the
+    payload it retains for a target still to come, in a tuple of one,
+    `target` that target, and `previous` the last target of any kind.
+    """
+
+    __slots__ = ("body", "pending", "target", "previous")
+
+    def __init__(self, body):
+        self.body = body
+        self.pending = None
+        self.target = None
+        self.previous = None
+
+
+def resume(source, now, scheduler):
+    """Resumes a source in the evaluation at `now`: what it publishes
+    there, in a tuple of one, or `None` where it publishes nothing.
+
+    SOURCE-2: "A duration is relative to current evaluation time; a
+    datetime is absolute. Negative duration fails. Resolve duration
+    addition with checked arithmetic." SOURCE-3: "Targets strictly
+    increase across the invocation, including skipped past targets. The
+    first has no predecessor. A past absolute target is skipped; a
+    current target publishes now; a future target retains its payload
+    and suspends. On wake it publishes and resumes after yield."
+    SOURCE-4: "A bare return or body completion finishes the source."
+    """
+    published = None
+    if source.pending is not None:
+        if source.target != now:
+            return None
+        published, source.pending = source.pending, None
+    while True:
+        try:
+            time, value = next(source.body)
+        except StopIteration:
+            return published
+        if isinstance(time, _datetime.timedelta):
+            if time < _datetime.timedelta(0):
+                raise HglError(
+                    "a `yield` after a negative duration", code="yield.negative_duration"
+                )
+            target = _moved(now, time)
+        else:
+            target = time
+        if source.previous is not None and target <= source.previous:
+            raise HglError(
+                "a `yield` at a time that is not after the one before it",
+                code="yield.non_increasing_time",
+            )
+        source.previous = target
+        if target < now:
+            continue
+        if target == now:
+            published = (value,)
+            continue
+        source.pending = (value,)
+        source.target = target
+        scheduler.schedule(target)
+        return published
+
+
 def Clock_evaluation_time(clock):
     """CAP-3: a clock's four properties, each read from hgraph's
     `EvaluationClock`, which has them by the same names. An instant is
