@@ -1619,7 +1619,9 @@ impl Emitter<'_> {
                 other => self.unsupported(at_of(other, &body.locals), "this statement of a node"),
             }
         }
-        if has_out {
+        // TIME-7: "`inject out` exposes that same result": hgraph's own
+        // `_output`, which it gives the node and its `stop`.
+        let output = has_out.then(|| {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set.
             let annotation = match &result {
@@ -1629,8 +1631,11 @@ impl Emitter<'_> {
                 Some(result) => result.replacen("TS[", "TS_OUT[", 1),
                 None => "_py.object".to_string(),
             };
+            format!("_output: {annotation} = None")
+        });
+        if let Some(output) = &output {
             self.hgraph = true;
-            parameters.push(format!("_output: {annotation} = None"));
+            parameters.push(output.clone());
         }
         // TIME-4: what the handlers ask together.
         let active: Vec<usize> = inputs
@@ -1711,6 +1716,10 @@ impl Emitter<'_> {
         );
         if has_state {
             stopping.push("_state: _hg.STATE = None".to_string());
+        }
+        // TIME-7: "`out` is read in a `when` and in `stop`".
+        if let Some(output) = output {
+            stopping.push(output);
         }
         // A capability is given to the node, to its `start` and to its
         // `stop`, each for that one call.
@@ -2423,10 +2432,11 @@ impl Emitter<'_> {
             // TIME-7: "`inject out` exposes that same result for reads,
             // assignment".
             LocalKind::Inject if declared.name == "out" => {
-                // hgraph gives a lifecycle hook no output: TIME-7's read
-                // of `out` in `stop` has nothing to be written as.
-                if matches!(function.mode, Mode::Lifecycle | Mode::Stop) {
-                    self.unsupported(declared.at, "`out` in `stop`");
+                // "`start` neither reads nor writes it": the analyser
+                // rejects that (`out.lifecycle`), and `start` is given
+                // no output.
+                if function.mode == Mode::Lifecycle {
+                    self.unsupported(declared.at, "`out` in `start`");
                 }
                 "_output.value".to_string()
             }
@@ -2961,13 +2971,12 @@ impl Emitter<'_> {
             } if inputs.len() == 1 => {
                 let endpoint = &function.locals[inputs[0]];
                 // hgraph gives `start` no endpoint, and `stop` its
-                // inputs and not its output: there `valid(input)` is the
-                // guard a read stands under (TIME-5).
+                // inputs and its output: there `valid(input)` is the
+                // guard a read stands under (TIME-5), and `valid(out)`
+                // the one a read of the output does (TIME-7).
                 let given = match function.mode {
                     Mode::Lifecycle => false,
-                    Mode::Stop => {
-                        endpoint.kind != LocalKind::Inject && *operation == EndpointOperation::Valid
-                    }
+                    Mode::Stop => *operation == EndpointOperation::Valid,
                     _ => true,
                 };
                 if !given {
