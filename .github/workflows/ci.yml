@@ -41,7 +41,7 @@ jobs:
 
   hgraph:
     # The tests that run a generated program on hgraph, which the jobs
-    # above leave out, and the pinned core's conformance cases. hgraph
+    # above leave out, and both test suites of the pinned core. hgraph
     # has a wheel for Linux.
     runs-on: ubuntu-latest
     steps:
@@ -56,6 +56,6 @@ jobs:
       - run: echo "HGL_HGRAPH_PYTHON=$(which python)" >> "$GITHUB_ENV"
       - run: cargo --version
       - run: cargo test -p hgl_hgraph -p hgl_cli --locked -- --ignored
-      - run: >
-          cargo run --locked -- test spec/hgl_core/tests/conformance
-          --target hgraph --python "$HGL_HGRAPH_PYTHON"
+      - run: python -m unittest discover -s crates/hgl_hgraph/ci
+      - run: cargo build --locked --bin hgl
+      - run: python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core

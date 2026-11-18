@@ -46,6 +46,7 @@ cargo run -- check path/to/sources --modules
 cargo run -- test path/to/sources --rejections-only
 cargo run -- test path/to/sources --integration
 cargo run -- run path/to/sources --application demo.app --python path/to/python
+cargo run -- run path/to/sources --arg upto=5 --config length=10s
 cargo doc --workspace --no-deps --open
 ```
 
@@ -62,7 +63,8 @@ phases and constants are not checked yet. `hgl test` checks the
 program's rejection cases, each an import, declaration or test marked
 `# expect-error(category, "code")`, and lists its tests.
 `hgl test --target hgraph` also runs the tests on hgraph, with the
-Python interpreter `--python PATH` names, which must have hgraph
+Python interpreter `--python PATH` names, or the one the environment
+variable `HGL_HGRAPH_PYTHON` names, which must have hgraph
 installed; a test that needs a form the target does not write yet is
 reported `not run`, with the form. An `integration_test` is left out
 unless `--integration` asks for them or `--test NAME` names it; its
@@ -75,7 +77,10 @@ target does not write yet. `hgl run` runs an application of the program
 on hgraph, the one `--application PATH` names or the only one, and prints
 its output when the run has stopped: a line for each publication of its
 entry's result. An `eval` application is a simulation; a `run` one is in
-real time, and an interrupt stops it. Exit status is 0 when the source is
+real time, and an interrupt stops it. `--arg NAME=VALUE` replaces an
+argument of the application's entry and `--config FIELD=VALUE` a field
+of its run configuration, each with an HGL constant checked as if the
+application had written it. Exit status is 0 when the source is
 accepted and every selected case passed or the application's run ended,
 1 when the source is rejected, a case failed or the run failed, 2 when
 the command could not run or a selected test or the application was not

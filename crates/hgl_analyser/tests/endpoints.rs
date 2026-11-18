@@ -24,6 +24,7 @@ const CORE: &str = concat!(
     "export native const fn invalidate<T>(input: endpoint<T>)\n",
     "export native const fn activate<T>(input: endpoint<T>)\n",
     "export native const fn passivate<T>(input: endpoint<T>)\n",
+    "export native const fn is_active<T>(input: endpoint<T>) -> bool\n",
     "operator add_<L, R, O>(lhs: L, rhs: R) -> O\n",
     "native impl const fn add_(lhs: i64, rhs: i64) -> i64\n",
 );
@@ -231,4 +232,95 @@ fn an_endpoint_parameter_takes_an_input_by_its_name() {
     };
     assert!(matches!(arguments[0].value.kind, ExprKind::EndpointOf(0)));
     assert_eq!(arguments[0].value.ty.to_string(), "endpoint<i64>");
+}
+
+/// TIME-9: a node can change the activity of a direct temporal input.
+/// Its output and a computed payload have no input subscription to change.
+#[test]
+fn activity_operations_take_direct_inputs() {
+    let checked = module(concat!(
+        "fn change(input: i64) -> i64 {\n",
+        "    inject out\n",
+        "    when {\n",
+        "        passivate(input)\n",
+        "        activate<i64>(input)\n",
+        "        activate(out)\n",
+        "        passivate<i64>(out)\n",
+        "        activate(input + 1)\n",
+        "        return input\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:18 phase/endpoint.argument TIME-9",
+            "m.hgl:8:24 phase/endpoint.argument TIME-9",
+            "m.hgl:9:18 phase/endpoint.argument TIME-9",
+        ]
+    );
+}
+
+/// END-5 and TIME-9: core's activity query takes a direct input in a
+/// handler or in stop. As an ordinary boolean guard it proves no validity.
+#[test]
+fn activity_is_an_observation_of_a_direct_input() {
+    let checked = module(concat!(
+        "use core as c\n",
+        "fn observe(data: i64, const fixed: i64) -> i64 {\n",
+        "    inject out\n",
+        "    start { let early = is_active(data) }\n",
+        "    when valid([]) && is_active(input: data) { return data }\n",
+        "    when valid([]) {\n",
+        "        let current = c::is_active<i64>(input: (data))\n",
+        "        let output = is_active(out)\n",
+        "        let constant = is_active(fixed)\n",
+        "        let expression = is_active(1)\n",
+        "        let wrong = is_active(other: fixed)\n",
+        "        return 0\n",
+        "    }\n",
+        "    stop { let final_activity = is_active(data) }\n",
+        "}\n",
+        "fn wired(data: i64) -> bool => is_active(data)\n",
+        "test no_node { let unused = eval(is_active<i64>(input: [])) }\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:25 phase/input.lifecycle TIME-5",
+            "m.hgl:6:55 phase/payload.unguarded TIME-4",
+            "m.hgl:9:32 phase/endpoint.argument TIME-9",
+            "m.hgl:10:34 phase/endpoint.argument TIME-9",
+            "m.hgl:11:36 phase/endpoint.argument TIME-9",
+            "m.hgl:12:21 type/argument.missing EXPR-2",
+            "m.hgl:12:31 name/argument.unknown EXPR-2",
+            "m.hgl:17:42 phase/endpoint.argument TIME-9",
+            "m.hgl:18:56 phase/endpoint.argument TIME-9",
+        ],
+        "{}",
+        checked.report
+    );
+    let observed = locals(&checked, "observe");
+    assert!(observed.iter().any(|entry| entry == "current: bool"));
+    assert!(observed.iter().any(|entry| entry == "final_activity: bool"));
+}
+
+/// UNIT-11: a program whose core has no activity query can define an
+/// ordinary function with that name. The call reads its payload arguments.
+#[test]
+fn the_spelling_is_active_alone_does_not_make_an_endpoint_query() {
+    let checked = check(&[
+        ("core.hgl", "module core\n"),
+        (
+            "local.hgl",
+            concat!(
+                "module local\n",
+                "const fn is_active(left: i64, right: i64) -> i64 => left\n",
+                "fn use_local(data: i64) -> i64 {\n",
+                "    when { return is_active(left: data, right: 0) }\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
 }

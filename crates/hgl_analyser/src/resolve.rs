@@ -926,7 +926,7 @@ impl Resolver<'_> {
         // language ... These reserved intrinsics cannot be shadowed."
         // No declaration binds one, the prelude's included, so its name
         // is not one the prelude is waited on for.
-        if EndpointOperation::named(name).is_some() {
+        if EndpointOperation::language_form(name).is_some() {
             return None;
         }
 

@@ -594,9 +594,12 @@ hook is a `Stmt::Hook` with its condition and its statements.
 | --- | --- | --- |
 | A temporal parameter | A value of its declared type, as in a value function | FN-3 |
 | `valid(value)`, `modified(value)`, `scheduled()` | A bool: an operation on the endpoint, which is the language's own and no call of a function | TIME-9 |
-| `delta_value(value)`, `last_modified(value)` | The input's type; a `datetime?` | TIME-9 and core's endpoint contract |
+| `delta_value(value)`, `last_modified(value)` | The endpoint's `delta<T>` and its retained publication time as a `datetime?`, respectively | TIME-9, END-3, END-6 |
+| `is_active(input)` | A bool for a direct temporal input. In a guard it adds no subscription or validity requirement | TIME-9, END-5 |
 | `valid()`, `valid(a, b)`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
-| `modified()`, `modified(a, b)`, `modified([])` | A selector of a `when` header: a subscription to every temporal input, to those named, to none | TIME-3 |
+| No `modified` selector | Subscribes to every temporal input. An active invalidation can wake the node and reach a handler whose other conditions hold | TIME-3 |
+| `modified()`, `modified(a, b)` | Subscribes to every temporal input or to the named inputs, respectively. At least one selected input must have published this cycle | TIME-3 |
+| `modified([])` | Subscribes to no temporal input and selects a scheduler or alarm wake | TIME-3 |
 | `out` | The node's result: read, or assigned | TIME-7 |
 | `return`, `return value` | Ends the evaluation; the value is of the result's type and is published | FN-7 |
 | A call | Of a value function or an operator's value candidate | FN-3 |
@@ -1227,9 +1230,11 @@ A name that nothing binds is rejected, `name.unknown` (UNIT-10): a
 local, a parameter, a generic parameter, a declaration, an import and
 the prelude are all there is to bind one. An `impl` of an operator that
 nothing declares is `impl.unknown_operator` (GEN-4). Over core's own
-source and its conformance cases there is none. The operations on an
-endpoint, `valid` and the rest, are the language's own (TIME-9): no
-declaration binds one, the prelude's included. `types(Ts)` and
+source and its conformance cases there is none. Core declares the public
+endpoint functions. The analyser recognises endpoint forms such as the
+`valid` and `modified` selectors and `scheduled()` in a node (TIME-9).
+A call to core's `is_active` follows ordinary name and argument binding.
+`types(Ts)` and
 `schemas(pack)` are forms of the language too (GEN-9, GEN-10), which no
 pass reads yet: neither name is reported. A program given with no module
 `core` has no prelude and is no whole program: its unbound names are
@@ -1428,7 +1433,7 @@ only where the program reaches it, at core's source.
 | --- | --- |
 | `const fn` | A plain function |
 | A node, a `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` where it has no result. hgraph is imported as `_hg` |
-| A `when` header's selectors | The node's `active=` is every input a handler subscribes to and its `valid=` the inputs every handler requires (TIME-3, TIME-4). A handler is guarded by what it asks beyond those: that one of its own inputs ticked, that the inputs only it requires are valid, and the rest of its condition. Handlers are tried in the order written |
+| A `when` header's selectors | The node's `active=` is the union of handler subscriptions and its `valid=` holds the validity requirements common to all handlers (TIME-3, TIME-4). In source order, each handler checks its remaining validity requirements and condition. Explicit `modified()` and `modified(a, b)` read the current `valid` and `modified` flags on each selected input. A publication on any selected input satisfies the guard. An omitted selector adds no publication check |
 | `inject out` | `_output: _hg.TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
 | A graph | `@_hg.graph` |
 | In a graph, a value function or a candidate of core given a connection (FN-6) | A node of its own, `_lift_N_name`, written before the graph: an input `name: _hg.TS[type]` for each connection, a scalar parameter for each ordinary argument, and a default left out written where the node calls. An input whose parameter has a default is not required valid, `valid=(...)`, and is read as `(name.value if name.valid else default)` (FN-11). The same lifting twice in one graph is one node |
@@ -1452,7 +1457,9 @@ only where the program reaches it, at core's source.
 | `log(logger, .info, message)`, a native function of core (NATIVE-7) | `_core.fn_log(logger=_logger, level=LogLevel["info"], message=message)`: the provider's function, `fn_` and the name it binds |
 | `get<i64>(global_state, "key")`, `has(...)`, `put(...)` (CAP-6) | Core's candidates for the store, the provider's as any native candidate: `_core.get_GlobalState_str(store=_store, key="key")` |
 | `stop { if valid(input) { ... } }` (TIME-5) | `@name.stop` on a function that takes the node's `const` parameters, its inputs as the node has them, its state, and its output where the node injects `out`. An input is read there as in a `when`, `input.value` under `input.valid`, and `out` as `_output.value` under `_output.valid` (TIME-7). `start` is given no input and no output |
-| `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
+| `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified and x.valid`, `x.delta_value` |
+| `activate(input)`, `passivate(input)`, `is_active(input)` (END-5) | `input.make_active()`, `input.make_passive()`, `input.active`. A passive input can satisfy a handler's modification check when another input wakes the node in the same cycle |
+| `last_modified(input)`, `last_modified(out)` (END-6) | The input or injected output's `last_modified_time` while valid and `None` while invalid, in a handler or in `stop` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
 | `a =={abs: t} b`, `a !={rel: r} b` (NUM-4, EXPR-13) | The provider's function for the comparison with the tolerance where the source has it, `_core.eq__f64_f64_f64_f64(lhs=a, abs=t, rhs=b, rel=0.0)`: Python evaluates the arguments in that order. The function makes the test in exact arithmetic (NUM-5). Lifted, the tolerance is configuration of the node (NUM-11) |
 | A generic value a native candidate is given, the `zero` of a division (NUM-9) | An argument by its name: a member of an enum as its name, `zero="ieee"`, and an integer as itself. The analyser says which member a constant comes to, however it is written (TYPE-7), and the target reads none of its spelling. `a / b` is `_core.div__f64_f64(lhs=a, rhs=b, zero="ieee")`, the default its candidate declares |
@@ -1523,11 +1530,11 @@ entry's".
 
 | Step | What the harness does |
 | --- | --- |
-| Entries | Each dense trace becomes a replay list: a tuple for each cell that is no placeholder, its time the run's start plus its position in smallest steps (CEVAL-2) |
+| Entries | Each present dense cell or timed entry gives replay one publication at its absolute time (CEVAL-2) |
 | Wiring | A graph: a replay for each temporal input, the target, and a record on its result under `"run.output"` (CRUN-8) |
 | Run | hgraph's `evaluate_graph`, a simulation from the run's start to its end, with a global state of its own (CRUN-7) |
 | Output | What the store has under `"run.output"` once the run has stopped; none is a failure (CEVAL-6) |
-| Trace | The recording written dense from the run's start through its last publication (TST-6) |
+| Trace | The recording keeps its run start and one timed entry per publication, through the last publication (TST-6, TST-7) |
 
 hgraph's `eval_node` is not used. It keeps a dense recording counted
 from the earliest start whatever start a run has, so it gives no trace
@@ -1613,15 +1620,13 @@ node inside one, the provider's `Held`, and taken out at the head of
 the node, of its `start` and of its `stop`; to hgraph such a parameter
 is an `object`. What the store is given is inside one too.
 
-It also holds `same`, the comparison of two
-traces (TST-4): cell by cell, with a `None` at the end of either adding
-nothing. Python's `==` is not used: hgraph's set delta has `Removed(1)`
-equal to `1`, so a delta that removed an element would equal one that
-added it. `same` compares what each delta added and what each removed.
-`publications` makes of a dense trace the list a `const fn` is given
-(TST-16): position i is at the earliest start plus i smallest steps
-(core's CRUN-3), which are hgraph's own `MIN_ST` and `MIN_TD`, and an
-instant is a `datetime` in UTC that names no zone, as hgraph has them.
+The harness compares traces with `same` (TST-4). It compares each
+publication's time and value. A trailing placeholder adds no publication.
+hgraph's set delta has `Removed(1)` equal to `1`, so `same` compares
+additions and removals separately. A `const fn` given a recording receives
+its publications and their recorded UTC instants through `publications`
+(TST-16). A written trace uses the earliest start for relative keys or
+dense positions (CRUN-3) and preserves absolute datetime keys.
 
 Reported as not written yet (`target.unsupported`): as the type of an
 input, an output or configuration, any but the four scalars above, an
@@ -1637,7 +1642,7 @@ not known; an operation a generic declaration requires that no
 candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
-`out` read in `stop`, which hgraph gives no lifecycle hook;
+a bare payload read of `out` in `stop`;
 the `inject` of `scheduler` or `alarm`; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
@@ -1653,7 +1658,9 @@ module, was left out; it then carries the first such report.
 
 `hgl_hgraph::run` runs the tests that are not blocked. hgraph is run
 from Python, so the host is a Python interpreter that has hgraph:
-`--python PATH`, or `python3` (`python` on Windows). The program is
+`--python PATH`, or the one the environment variable
+`HGL_HGRAPH_PYTHON` names, or `python3` (`python` on Windows). The
+program is
 written to a temporary directory, or to the one `--keep DIR` names, and
 the interpreter is started once, with `-B` so that it writes no
 bytecode files, on a driver the target carries, `_hgl/_run_tests.py`.
@@ -1685,17 +1692,56 @@ A test that is no integration test has no limit yet.
 A trace is kept as its publications and when each was, and never as a
 cell for each microsecond: a publication a second after a run's start
 would be a million cells on. A trace written out dense, `[7, _, 9]`, is
-read as cell i being i smallest steps after the start. Its publications
-are replayed at the run's start plus that, and a run's recording is
-compared with it by how long after the run's start each publication was.
-A timed trace, `[0s: 7, 2s: 9]`, is that form as written (TST-7): each
-entry's key is a duration from the run's start, or an instant, which is
-replayed then and compared as the run's start plus an offset.
+read with cell i at i smallest steps from the start. A timed trace,
+`[0s: 7, 2s: 9]`, gives only the publications (TST-7). Its keys are
+durations from the run's start or absolute datetimes. Computed keys must
+strictly increase. Replay rejects an input key before the run's start
+(CEVAL-2). Two recordings match when the publications have the same
+values and offsets from their respective starts.
 
 #### An application
 
-`hgl run ROOT... [--application PATH]` runs an application (UNIT-14) on
-hgraph: the program's one application, or the one named.
+`hgl run ROOT... [--application PATH] [--arg NAME=VALUE]... [--config
+FIELD=VALUE]...` runs an application (UNIT-14) on hgraph: the program's
+one application, or the one named.
+
+What starts an application "may replace an argument of its entry or a
+field of its configuration with a constant checked against the type it
+replaces, and what the application writes is the default" (RUN-2).
+`--arg` replaces an argument and `--config` a field. The value is HGL,
+one expression on one line. `hgl_cli`'s `replace` puts it, in
+parentheses, in the text of the application's run statement: in place
+of the value the application wrote for that parameter or field, or as
+an argument by name where it wrote none. The program is then read and
+checked again as if the application had written that, so the analyser
+holds a replacement to every rule it holds a written argument to, and
+no stage knows of replacements.
+
+```text
+eval(counted(upto: 3))                         the application
+--arg upto=5 --config length=10s               what starts it
+eval(counted(upto: (5)), RunConfig(length: (10s)))
+```
+
+A name the entry or the configuration has not, a name given twice, and
+a value that is not one expression are refused before the second read.
+The value is read as it is put, between its parentheses, where `.buy`
+is a member of the enum the place expects; `3, 4` and `3) + (4` are not
+one expression there. An error of the second read is reported in the
+application's file, with the statement as it was checked. The type a
+replacement is checked against is the one it replaces. The generic
+arguments an entry's call infers, `<i64>` for `echo(value: 3)`, are
+written after the entry's name for the second read, so a replacement
+is read as the argument it replaces was expected: `.sell` is a member
+of the enum the call made `T`, `3` is the `f64` it made it, and
+`"text"` is no `i64`. They are written as a message writes a type,
+which the application's file may have no name for: they are left out
+where the application, with them written and nothing replaced, does not
+read as it did. In either case, where the call with the replacements is
+of another entry than the application's, or of the same one with other
+generic arguments, the program is rejected. A configuration that is not written as
+`RunConfig(...)`, a constant's name, has its fields replaced by nothing
+yet.
 
 | Step | What does it |
 | --- | --- |
@@ -1731,38 +1777,37 @@ second one of any run, end the run at once with no output.
 | Exit status of `hgl run` | When |
 | --- | --- |
 | 0 | The run ended |
-| 1 | The program is rejected, or the run failed |
-| 2 | No application was chosen, the target does not write all it needs, or the host did not run it |
+| 1 | The program is rejected, as written or with the replacements given, or the run failed |
+| 2 | No application was chosen, a replacement names nothing or is not one expression, the target does not write all it needs, or the host did not run it |
 
-Not written: what starts an application replacing an argument or a field
-of the configuration (RUN-2), outside events in real time, and a view of
-the output while the run goes.
+Not written: outside events in real time, and a view of the output
+while the run goes.
 
 The crate's tests compare the Python written for a small module with
-what is expected, check that core's dense scalar eval cases are written
-whole, and check which tests of a program with unwritten forms are
+what is expected, check how dense scalar traces are written, and check
+which tests of a program with unwritten forms are
 blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The `hgraph` job of
-the CI workflow runs them on Linux for every pull request, and then the
-pinned core's conformance cases. The baseline is
-hgraph 0.9.1, the first with a value that may be unset (its RFC 0050),
-which a published null needs. With it,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes all 28
-tests of the pinned core's conformance cases:
+the CI workflow runs them on Linux for every pull request. Its backend is
+hgraph 0.9.1. The harness preserves a published null and omits silence
+(TST-6).
 
-| File | Tests | Pass |
-| --- | --- | --- |
-| `scalar_eval.hgl` | 8 | 8 |
-| `scalar_endpoints.hgl` | 6 | 6 |
-| `record_eval.hgl` | 2 | 2 |
-| `mixed_eval.hgl` | 1 | 1 |
-| `set_endpoints.hgl` | 1 | 1 |
-| `identity_arithmetic.hgl` | 5 | 5 |
-| `failure_eval.hgl` | 1 | 1 |
-| `lists.hgl` | 4 | 4 |
+The job also builds `hgl` and runs every test in the pinned core's
+`tests/conformance` and `tests/implementation`, including integration tests.
+Run the same check with a Python that has hgraph installed:
 
-That is a run by hand, and no conformance claim.
+```sh
+python crates/hgl_hgraph/ci/check_core.py target/debug/hgl spec/hgl_core
+```
+
+The check compares the runner's full discovery and execution lists and prints
+the outcomes and counts for each suite. A case can be reported as not run
+only for its source-located hgraph target diagnostic listed in
+[`unsupported_cases.toml`](../crates/hgl_hgraph/ci/unsupported_cases.toml).
+An assertion or source failure, an unavailable host, a new gap, or a listed
+case that passes or disappears fails the check. Remove a listed gap when its
+case starts passing. The backend owns this list alongside its target tests.
 
 ## Finding source files
 

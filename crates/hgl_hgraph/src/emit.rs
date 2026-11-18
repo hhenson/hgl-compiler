@@ -190,8 +190,7 @@ enum Mode {
     /// nor its output.
     Lifecycle,
     /// A node's `stop`: a function of its own to hgraph, which is given
-    /// the node's configuration, its state and its inputs, and not its
-    /// output.
+    /// the node's configuration, state, inputs and any injected output.
     Stop,
     /// A source's statements (SOURCE-1): the body of a Python
     /// generator, which is resumed in an evaluation of the source's
@@ -453,7 +452,7 @@ struct Handler<'a> {
     subscribed: Vec<usize>,
     /// The inputs it requires to be valid.
     required: Vec<usize>,
-    /// The rest of its condition: the conjuncts that are no selector.
+    /// Predicates checked when the node runs, including explicit modification guards.
     conditions: Vec<&'a Expr>,
     /// Its statements.
     body: &'a [Stmt],
@@ -502,7 +501,15 @@ impl<'a> Handler<'a> {
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Modified,
                     inputs: named,
-                } => add(&mut subscribed, named),
+                } => {
+                    add(&mut subscribed, named);
+                    // TIME-3: scheduling and modification are distinct. An
+                    // explicit guard still checks its publications. The empty
+                    // selector listens for a scheduled wake instead.
+                    if !named.as_ref().is_some_and(Vec::is_empty) {
+                        conditions.push(conjunct);
+                    }
+                }
                 ExprKind::Endpoint {
                     operation: EndpointOperation::Valid,
                     inputs: named,
@@ -1521,8 +1528,7 @@ impl Emitter<'_> {
     /// TIME-3: "In a `when` header, `modified()` subscribes to all
     /// temporal inputs; `modified(a, b)` subscribes to both named inputs
     /// ... `valid()` requires all temporal inputs to be valid ...
-    /// Omitting either selector uses the same default as its
-    /// zero-argument form ... A selector sets subscription or admission
+    /// A selector sets subscription or admission
     /// when it stands alone in the header or appears as a top-level
     /// conjunct." TIME-4: "Aggregate subscriptions cover every handler.
     /// Node-wide validity includes only requirements common to
@@ -1647,58 +1653,26 @@ impl Emitter<'_> {
                     .any(|handler| handler.subscribed.contains(input))
             })
             .collect();
-        // The inputs whose invalidation a handler is to be woken by,
-        // and told apart from another input's notification: those a
-        // handler subscribes to and does not require valid, where the
-        // handler is woken by fewer inputs than the node is.
-        //
-        // END-4: "Invalidation clears validity, modification, payload,
-        // and delta. The transition to invalid notifies active
-        // subscribers." So such a handler is woken by a notification
-        // that is no modification, and hgraph's `modified` of an input
-        // in the cycle it is invalidated is not one thing: it is true
-        // to a node that injects something and false to one that does
-        // not. The node keeps what it needs itself: whether each such
-        // input was valid when it last looked. An input woke the
-        // handler where it published, or was valid then and is not
-        // now. A handler that requires the input valid is not woken
-        // by its invalidation, and asks only whether it published.
-        let watched: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers.iter().any(|handler| {
-                    handler.subscribed.contains(input)
-                        && !handler.required.contains(input)
-                        && active
-                            .iter()
-                            .any(|other| !handler.subscribed.contains(other))
-                })
-            })
-            .collect();
-        // The node's validity is what every handler requires. A node
-        // that watches an input is evaluated at each notification, to
-        // see the input's validity change, so it requires none: each
-        // handler is then guarded by all it requires.
+        // TIME-4: only validity requirements shared by all handlers may
+        // prevent the whole node from evaluating.
         let valid: Vec<usize> = inputs
             .iter()
             .copied()
             .filter(|input| {
-                watched.is_empty()
-                    && handlers
-                        .iter()
-                        .all(|handler| handler.required.contains(input))
+                handlers
+                    .iter()
+                    .all(|handler| handler.required.contains(input))
             })
             .collect();
-        let has_state = !states.is_empty() || !watched.is_empty();
+        let has_state = !states.is_empty();
         if has_state {
             parameters.push("_state: _hg.STATE = None".to_string());
             lifecycle.push("_state: _hg.STATE = None".to_string());
         }
         // TIME-5: "`stop` reads a temporal input under manual
         // admission". hgraph gives a `stop` each input it names, as the
-        // node has it: the configuration, then the inputs, then the
-        // state.
+        // node has it: the configuration, then the inputs. Its injected
+        // output and state are available at stop too.
         let mut stopping: Vec<String> = signature
             .parameters
             .iter()
@@ -1780,49 +1754,11 @@ impl Emitter<'_> {
                 name(&declared.name)
             }
         };
-        // Whether each watched input woke the node in this cycle, and
-        // then what the node keeps of it for the next.
-        for &local in &watched {
-            let input = name(&body.locals[local].name);
-            self.line(
-                1,
-                &format!(
-                    "_woke_{input} = {input}.modified or (_state._valid_{input} and not {input}.valid)"
-                ),
-            );
-            self.line(1, &format!("_state._valid_{input} = {input}.valid"));
-        }
         for handler in &handlers {
-            // What this handler asks beyond what the node does. It is
-            // woken by fewer inputs than the node where one the node is
-            // woken by is none of its own.
             let mut guards: Vec<String> = Vec::new();
             if handler.subscribed.is_empty() && !active.is_empty() {
                 self.unsupported(declaration.at, "a handler that no input wakes");
                 continue;
-            }
-            let narrower = active
-                .iter()
-                .any(|input| !handler.subscribed.contains(input));
-            if narrower {
-                let ticked: Vec<String> = handler
-                    .subscribed
-                    .iter()
-                    .map(|&local| {
-                        // An input the handler requires valid woke it
-                        // where it published; one it does not, where
-                        // it published or became invalid.
-                        if watched.contains(&local) && !handler.required.contains(&local) {
-                            format!("_woke_{}", name(&body.locals[local].name))
-                        } else {
-                            format!("{}.modified", endpoint(local))
-                        }
-                    })
-                    .collect();
-                guards.push(match ticked.as_slice() {
-                    [one] => one.clone(),
-                    several => format!("({})", several.join(" or ")),
-                });
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {
@@ -1830,7 +1766,31 @@ impl Emitter<'_> {
                 }
             }
             for condition in &handler.conditions {
-                guards.push(self.expression(&function, condition));
+                if let ExprKind::Endpoint {
+                    operation: EndpointOperation::Modified,
+                    inputs: selected,
+                } = &condition.kind
+                {
+                    // One selector matches a publication on any named input.
+                    // Separate selectors remain separate conjuncts. END-4:
+                    // invalidation can wake the node but is no publication.
+                    let mut publications = Vec::new();
+                    for &local in selected.as_deref().unwrap_or(&inputs) {
+                        let input = endpoint(local);
+                        publications.push(if handler.required.contains(&local) {
+                            format!("{input}.modified")
+                        } else {
+                            format!("({input}.modified and {input}.valid)")
+                        });
+                    }
+                    guards.push(match publications.as_slice() {
+                        [] => "False".to_string(),
+                        [one] => one.clone(),
+                        several => format!("({})", several.join(" or ")),
+                    });
+                } else {
+                    guards.push(self.expression(&function, condition));
+                }
             }
             if guards.is_empty() {
                 self.statements(&function, handler.body, 1);
@@ -1862,11 +1822,6 @@ impl Emitter<'_> {
             self.line(0, &format!("def _start_{python}({lifecycle}):"));
             let before = self.text.len();
             self.unheld(signature);
-            // No watched input has published when the node starts.
-            for &local in &watched {
-                let input = name(&body.locals[local].name);
-                self.line(1, &format!("_state._valid_{input} = False"));
-            }
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
@@ -2970,13 +2925,22 @@ impl Emitter<'_> {
                 inputs: Some(inputs),
             } if inputs.len() == 1 => {
                 let endpoint = &function.locals[inputs[0]];
-                // hgraph gives `start` no endpoint, and `stop` its
-                // inputs and its output: there `valid(input)` is the
-                // guard a read stands under (TIME-5), and `valid(out)`
-                // the one a read of the output does (TIME-7).
+                // At stop, validity guards payload reads of inputs and out,
+                // and both expose their last publication time (TIME-5, TIME-7).
                 let given = match function.mode {
                     Mode::Lifecycle => false,
-                    Mode::Stop => *operation == EndpointOperation::Valid,
+                    Mode::Stop => {
+                        matches!(
+                            operation,
+                            EndpointOperation::Valid | EndpointOperation::LastModified
+                        ) || (endpoint.kind != LocalKind::Inject
+                            && matches!(
+                                operation,
+                                EndpointOperation::IsActive
+                                    | EndpointOperation::Activate
+                                    | EndpointOperation::Passivate
+                            ))
+                    }
                     _ => true,
                 };
                 if !given {
@@ -3002,8 +2966,17 @@ impl Emitter<'_> {
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
                     EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                    // TIME-9: input activity controls delivery of notifications.
+                    EndpointOperation::Activate => format!("{input}.make_active()"),
+                    EndpointOperation::Passivate => format!("{input}.make_passive()"),
+                    EndpointOperation::IsActive => format!("{input}.active"),
                     // END-3: what the input published this cycle.
                     EndpointOperation::DeltaValue => format!("{input}.delta_value"),
+                    // END-6: an invalid endpoint has no timestamp, even
+                    // if it held a value before being invalidated.
+                    EndpointOperation::LastModified => {
+                        format!("({input}.last_modified_time if {input}.valid else None)")
+                    }
                     other => {
                         self.unsupported(value.at, &format!("`{}`", other.name()));
                         "None".to_string()
@@ -4520,11 +4493,9 @@ impl Emitter<'_> {
             let signature = instances
                 .find(self.program, (*module, *declaration), generics)
                 .map_or(signature, |instance| &instance.signature);
-            let (written, bound) =
-                self.bound(function, signature, arguments, |_, value| match &value.ty {
-                    Type::Trace { cell, .. } => Some((**cell).clone()),
-                    _ => None,
-                });
+            let (written, bound) = self.bound(function, signature, arguments, |_, value| {
+                crate::instances::trace_payload(&value.ty)
+            });
             let node = self.lifted(
                 (*module, *declaration),
                 Lifts::Function(generics),

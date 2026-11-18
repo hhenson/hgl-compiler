@@ -114,6 +114,17 @@ pub enum TraceStyle {
     Timed(Scalar),
 }
 
+impl TraceStyle {
+    /// TST-7 distinguishes dense and timed notation across traces. Absolute
+    /// datetimes and offsets can name the same instant in different traces.
+    pub(crate) fn same_notation(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Dense, Self::Dense) | (Self::Timed(_), Self::Timed(_))
+        )
+    }
+}
+
 /// What a named type is declared as. A type carries it so that what its
 /// delta is (TYPE-16) can be said from the type alone, wherever a
 /// generic parameter is replaced by it.
