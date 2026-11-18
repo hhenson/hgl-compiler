@@ -947,3 +947,74 @@ fn a_requires_is_held_to_a_generic_value_however_it_is_written() {
         ]
     );
 }
+
+/// GEN-3: a function, and a struct, with no generic parameter may
+/// state a `requires` of types it names itself, and a call, a
+/// construction and a written type are held to it.
+#[test]
+fn a_requires_with_no_generic_parameter_is_held_too() {
+    let checked = module(concat!(
+        "const fn blocked(value: i64) -> i64 requires add_(bool, bool) -> bool => value\n",
+        "const fn open(value: i64) -> i64 requires add_(i64, i64) -> i64 => value + value\n",
+        "fn node_blocked(value: i64) -> i64 requires add_(bool, bool) -> bool {\n",
+        "    when { return value }\n",
+        "}\n",
+        "struct Shut requires add_(bool, bool) -> bool { value: i64 }\n",
+        "struct Ajar requires add_(i64, i64) -> i64 { value: i64 }\n",
+        // Line 9.
+        "const fn a() -> i64 => blocked(1)\n",
+        "const fn b() -> i64 => open(1)\n",
+        "fn c(value: i64) -> i64 => node_blocked(value)\n",
+        "const fn d() -> i64 => Shut(value: 1).value\n",
+        "const fn e() -> i64 => Ajar(value: 1).value\n",
+        "const fn f(held: Shut, other: Ajar) -> i64 => 1\n",
+        "test g {\n",
+        "    let seen = eval(node_blocked(value: [1]))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:24 constraint/requires.unmet GEN-3",
+            "m.hgl:11:28 constraint/requires.unmet GEN-3",
+            "m.hgl:12:24 constraint/requires.unmet GEN-3",
+            "m.hgl:14:18 constraint/requires.unmet GEN-3",
+            "m.hgl:16:21 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-3, GEN-16: a struct's named operator requirement is told
+/// wherever a type that applies it is written: in a function's
+/// signature, a struct's field, an operator's and a native function's
+/// parameters. GEN-7: where its argument is a generic parameter of the
+/// declaration that writes it, it holds where that declaration states
+/// it.
+#[test]
+fn a_structs_operator_requirement_is_told_where_its_type_is_written() {
+    let checked = module(concat!(
+        "struct Summed<T> requires add_(T, T) -> T { value: T }\n",
+        // Each of these holds.
+        "const fn whole(held: Summed<i64>) -> i64 => 1\n",
+        "const fn stated<U>(held: Summed<U>) -> i64 requires add_(U, U) -> U => 1\n",
+        "struct Stated<U> requires add_(U, U) -> U { held: Summed<U> }\n",
+        // Line 6: each of these does not.
+        "const fn flags(held: Summed<bool>) -> i64 => 1\n",
+        "const fn unstated<U>(held: Summed<U>) -> i64 => 1\n",
+        "struct Holder { held: Summed<bool> }\n",
+        "struct Unstated<U> { held: Summed<U> }\n",
+        "operator through(held: Summed<bool>) -> bool\n",
+        "native const fn outside(held: Summed<bool>) -> bool\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:22 constraint/requires.unmet GEN-3",
+            "m.hgl:7:28 constraint/requires.unmet GEN-3",
+            "m.hgl:8:23 constraint/requires.unmet GEN-3",
+            "m.hgl:9:28 constraint/requires.unmet GEN-3",
+            "m.hgl:10:24 constraint/requires.unmet GEN-3",
+            "m.hgl:11:31 constraint/requires.unmet GEN-3",
+        ]
+    );
+}

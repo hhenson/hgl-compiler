@@ -1109,12 +1109,16 @@ the struct applied:
 | --- | --- |
 | A call of a function | A membership or an equality of a type, a generic value parameter compared with constants, and a named operator requirement |
 | A construction of a struct, its arguments written or found from its fields | The same |
-| A type written that applies a struct, at any depth | The same but a named operator requirement: no body is being read there |
+| A type written that applies a struct, at any depth, in any declaration: a signature, a body, a struct's field, a constant's type | The same |
 
-Nothing is reported where it cannot be told. A generic parameter of the
-declaration a call is written in is no one type, so a membership of it
-is not told; a named operator requirement of it is, by what that
-declaration states (GEN-7).
+A function and a struct with no generic parameter are held to a
+`requires` they state too. Nothing is reported where it cannot be told.
+A generic parameter of the declaration a call is written in is no one
+type, so a membership of it is not told; a named operator requirement
+of it is, by what that declaration states (GEN-7), a struct's as a
+function's. A generic value is read however it is written (GEN-8): a
+literal of any kind, an enum's member in any spelling, a constant's
+name, after the callee's name or by name.
 
 `Program::instance` puts the two together for a target with no generics
 of its own. Given a declaration, the generic arguments of one call of
