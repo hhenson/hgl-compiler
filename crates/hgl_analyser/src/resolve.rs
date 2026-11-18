@@ -927,6 +927,24 @@ impl Resolver<'_> {
                 at,
             });
         }
+        // UNIT-10: "A name that none of these binds rejects
+        // (`name.unknown`)." The prelude is core's module (UNIT-11): a
+        // program that has none is no whole program, and what its
+        // prelude would bind is not known.
+        //
+        // GEN-9, GEN-10: `types(Ts)` and `schemas(pack)` are forms of
+        // the language, which no declaration binds and no pass reads
+        // yet. Each is left as it was, listed and not reported.
+        let form = matches!(name, "types" | "schemas");
+        if self.program.core().is_some() && !form {
+            self.diagnostics.emit(error(
+                Category::Name,
+                codes::NAME_UNKNOWN,
+                at,
+                format!("nothing binds `{name}` here"),
+                "UNIT-10",
+            ));
+        }
         None
     }
 

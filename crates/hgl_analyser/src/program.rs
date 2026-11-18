@@ -134,10 +134,13 @@ pub struct Module {
     pub declarations: Vec<Declaration>,
     /// The named tests, in file order and then source order.
     pub tests: Vec<Test>,
-    /// Names the module uses that nothing it declares or imports binds.
-    /// The prelude binds such a name, or nothing does (UNIT-11). Core's
-    /// mandatory module has no declarations yet, so the analyser cannot
-    /// say which, and reports neither.
+    /// Names the module uses that nothing binds: no local, parameter,
+    /// declaration, import, or declaration of the prelude (UNIT-10,
+    /// UNIT-11), each once, where it is first used. In a program that
+    /// has core's module each is reported, `name.unknown`, but for the
+    /// two forms of the language no pass reads yet, `types` and
+    /// `schemas` (GEN-9, GEN-10). In one that has not, no prelude is
+    /// known, and they are only listed here.
     pub prelude_names: Vec<PreludeName>,
     /// Every name used in the module's signatures, bodies, types and
     /// constraints that resolved, with what it resolved to (UNIT-10), in
@@ -576,7 +579,7 @@ pub struct Decision {
     pub constructor: Option<bool>,
 }
 
-/// A name left for the prelude to bind. See [`Module::prelude_names`].
+/// A name nothing binds. See [`Module::prelude_names`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreludeName {
     /// The name.

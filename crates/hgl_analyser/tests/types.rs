@@ -397,11 +397,11 @@ fn a_value_name_among_generic_arguments_is_a_constant() {
 
 /// UNIT-10: a parameter's type is read in the scope around the
 /// parameters, so it does not see them: a name there that only a
-/// parameter has is left for the prelude.
+/// parameter has is one nothing binds (`name.unknown`).
 #[test]
 fn a_parameters_type_does_not_see_the_parameters() {
     let checked = module("fn sized(value: i64, other: value) {}\n");
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(checked.summary(), ["m.hgl:2:29 name/name.unknown UNIT-10",]);
     assert_eq!(checked.prelude_names("m"), ["value"]);
     assert_eq!(signature(&checked, "sized"), "(value: i64, other: _)");
 }
@@ -417,11 +417,17 @@ fn a_generic_parameter_is_named_where_its_kind_fits() {
         "fn types<T>(value: T, items: list<T>) -> T {}\n",
         "fn packs<...Ts>(rest: ...Ts, named: ...{Ts}) -> Row<Ts> {}\n",
         "fn values<const N: i64, const M: i64>(grid: Grid<N, M>, flat: list<f64, N * M>) {}\n",
-        // UNIT-11: a name nothing binds is left for the prelude, and its
-        // type is not known.
+        // UNIT-10: a name nothing binds is reported, and its type is
+        // not known.
         "fn open(value: Missing, items: list<Missing<i64>>) {}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:7:16 name/name.unknown UNIT-10",
+            "m.hgl:7:37 name/name.unknown UNIT-10",
+        ]
+    );
     assert_eq!(
         signature(&checked, "packs"),
         "<...Ts>(rest: ...Ts, named: ...{Ts}) -> Row<Ts>"
@@ -588,7 +594,16 @@ fn a_generic_application_is_known_by_its_arguments() {
         "fn sizes(a: Sized<6>, b: Sized<2 * 3>, c: Sized<7>, d: Sized<limit()>, e: Sized<limit()>,\n",
         "    f: Sized<other()>) {}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:48 name/name.unknown UNIT-10",
+            "m.hgl:8:70 name/name.unknown UNIT-10",
+            "m.hgl:9:62 name/name.unknown UNIT-10",
+            "m.hgl:9:81 name/name.unknown UNIT-10",
+            "m.hgl:10:14 name/name.unknown UNIT-10",
+        ]
+    );
     let types = |name: &str| match detail(&checked, name) {
         Detail::Callable(signature) => signature
             .parameters
@@ -747,6 +762,7 @@ fn signal_is_the_whole_type_of_an_input() {
             "m.hgl:6:58 type/signal.position TYPE-12",
             "m.hgl:6:80 type/signal.position TYPE-12",
             "m.hgl:9:15 type/signal.position TYPE-12",
+            "m.hgl:9:24 name/name.unknown UNIT-10",
             "m.hgl:10:22 type/signal.position TYPE-12",
         ]
     );
@@ -788,6 +804,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         [
             "m.hgl:4:16 type/type.not_ordinary TYPE-14",
             "m.hgl:6:17 type/type.not_ordinary TYPE-14",
+            "m.hgl:6:43 name/name.unknown UNIT-10",
             "m.hgl:8:18 type/type.not_ordinary TYPE-14",
             "m.hgl:8:43 type/type.not_ordinary TYPE-14",
             "m.hgl:9:20 type/type.not_ordinary FN-1",
@@ -802,7 +819,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         "`ref<f64>` is not an ordinary value type, and what `?` is applied to is one"
     );
     assert_eq!(
-        checked.findings[4].message,
+        checked.findings[5].message,
         "`rolling_window<f64, 5>` is not an ordinary value type, and a parameter of a value function is one"
     );
     assert_eq!(
@@ -1002,6 +1019,7 @@ fn a_windows_sizes_are_of_one_kind() {
         [
             "m.hgl:5:43 type/rolling_window.size_kind TYPE-11",
             "m.hgl:6:36 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:6:64 name/name.unknown UNIT-10",
             "m.hgl:7:77 type/rolling_window.size_kind TYPE-11",
             "m.hgl:7:108 type/rolling_window.size_kind TYPE-11",
             "m.hgl:8:33 type/rolling_window.size_kind TYPE-11",
@@ -1016,14 +1034,15 @@ fn a_windows_sizes_are_of_one_kind() {
          count"
     );
     assert_eq!(
-        checked.findings[4].message,
+        checked.findings[5].message,
         "a window's size is a tick count or a duration, and this is a float"
     );
     assert_eq!(
-        checked.findings[7].message,
+        checked.findings[8].message,
         "a window's size is a tick count or a duration, and `F` is a constant of type `f64`"
     );
-    // `N` in `mixed` is left for the prelude: its kind is not known.
+    // UNIT-10: nothing binds `N` in `mixed`, so its kind is not known,
+    // and it is reported as that and as nothing more.
     assert_eq!(checked.prelude_names("m"), ["N"]);
 }
 
@@ -1179,6 +1198,7 @@ fn a_value_functions_signature_is_of_ordinary_values() {
             "m.hgl:4:25 type/type.not_ordinary TYPE-12",
             "m.hgl:4:45 type/type.not_ordinary TYPE-12",
             "m.hgl:5:21 type/type.not_ordinary TYPE-12",
+            "m.hgl:5:33 name/name.unknown UNIT-10",
             "m.hgl:6:33 type/type.not_ordinary FN-1",
             "m.hgl:6:60 type/type.not_ordinary FN-1",
         ]
@@ -1312,6 +1332,7 @@ fn an_unknown_type_is_reported_once_and_its_surroundings_are_checked() {
             "m.hgl:3:13 type/type.not_a_type UNIT-10",
             "m.hgl:3:40 type/type.not_a_type UNIT-10",
             "m.hgl:3:52 type/rolling_window.size_kind TYPE-11",
+            "m.hgl:3:64 name/name.unknown UNIT-10",
             "m.hgl:3:73 type/list.size TYPE-10",
         ]
     );

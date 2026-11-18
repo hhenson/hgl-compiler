@@ -305,7 +305,7 @@ before one (LEX-7), `+`, `-` and `*` between two, parentheses, and the
 name of a generic parameter. Any other size is kept as written for the
 pass that evaluates constants.
 
-A type the pass cannot know, because its name is left for the prelude or
+A type the pass cannot know, because nothing binds its name or
 it has been reported, is `Unknown`. Nothing more is reported of it
 (ERR-9), and what holds it is still checked.
 
@@ -829,7 +829,7 @@ expected, or as an operand no candidate takes, is
 
 What the pass does not read yet has no type, and nothing is reported of
 it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
-sequence with a `_`, a call of a name left for the prelude or of an operator
+sequence with a `_`, a call of a name nothing binds or of an operator
 that has a pack, a generic function's parameter and result types, the
 payload of a nullable, an error's `.context`, and a conversion written
 `str(value)`. The arguments of a call that is not
@@ -1223,14 +1223,17 @@ nothing nearer binds is its public declaration of that name, an operator
 candidate finds its operator there (GEN-4), and outside it no
 declaration, import alias or local takes such a name (UNIT-12).
 
-Core declares part of its module so far: the comparison outcome and the
-symbol operators. A name that nothing binds is therefore not reported:
-the analysed program lists it as left for the prelude, once for each
-module, and `hgl check` prints the list. Over core's conformance cases
-and the complete examples of the specification and core the list is
-`get`, `info` and `schedule`. The operations on an endpoint, `valid`
-and the rest, are the language's own (TIME-9): no declaration binds
-one, the prelude's included, and none is listed.
+A name that nothing binds is rejected, `name.unknown` (UNIT-10): a
+local, a parameter, a generic parameter, a declaration, an import and
+the prelude are all there is to bind one. An `impl` of an operator that
+nothing declares is `impl.unknown_operator` (GEN-4). Over core's own
+source and its conformance cases there is none. The operations on an
+endpoint, `valid` and the rest, are the language's own (TIME-9): no
+declaration binds one, the prelude's included. `types(Ts)` and
+`schemas(pack)` are forms of the language too (GEN-9, GEN-10), which no
+pass reads yet: neither name is reported. A program given with no module
+`core` has no prelude and is no whole program: its unbound names are
+listed in the analysed program and not reported.
 
 ### Leaving declarations out
 

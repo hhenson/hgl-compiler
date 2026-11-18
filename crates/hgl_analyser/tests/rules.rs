@@ -700,6 +700,7 @@ fn a_module_binds_cores_public_names_without_a_use() {
     assert_eq!(
         checked.summary(),
         [
+            "app.hgl:4:30 name/name.unknown UNIT-10",
             "bad.hgl:2:12 name/name.duplicate UNIT-12",
             "bad.hgl:3:10 name/name.duplicate UNIT-12",
             "bad.hgl:5:9 name/name.duplicate UNIT-12",
@@ -743,7 +744,10 @@ fn an_implementation_finds_its_operator() {
             ),
         ),
     ]);
-    assert_eq!(checked.summary(), [] as [&str; 0]);
+    assert_eq!(
+        checked.summary(),
+        ["app.hgl:6:9 operator/impl.unknown_operator GEN-4",]
+    );
     let app = checked.program.module("app").unwrap();
     let operators: Vec<Option<(&str, &str)>> = app
         .declarations
@@ -763,8 +767,8 @@ fn an_implementation_finds_its_operator() {
         operators,
         [Some(("app", "add")), Some(("lib", "mul")), None]
     );
-    // UNIT-11: nothing in the program binds `div`, so it is left for the
-    // prelude and not reported.
+    // GEN-4: nothing in the program or in core declares an operator
+    // `div`, which is reported above.
     assert_eq!(checked.prelude_names("app"), ["div"]);
 }
 
@@ -801,6 +805,7 @@ fn an_implementation_of_something_else_is_rejected() {
             "app.hgl:5:9 operator/impl.unknown_operator GEN-4",
             "app.hgl:6:9 operator/impl.unknown_operator GEN-4",
             "app.hgl:7:9 operator/impl.unknown_operator GEN-4",
+            "part.hgl:2:9 operator/impl.unknown_operator GEN-4",
         ]
     );
     assert_eq!(checked.prelude_names("app"), ["mul"]);

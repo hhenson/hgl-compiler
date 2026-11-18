@@ -70,12 +70,16 @@ const FILES: [(&str, &str); 3] = [
 ];
 
 #[test]
-fn the_whole_program_is_accepted_but_for_its_cycle() {
+fn the_whole_program_is_accepted_but_for_its_cycle_and_an_unknown_operator() {
     let checked = check_broken(&FILES);
     assert_eq!(checked.front_end_errors, 0, "{}", checked.report);
     assert_eq!(
         checked.summary(),
-        ["app.hgl:2:5 module/import.cycle UNIT-3"]
+        [
+            "app.hgl:2:5 module/import.cycle UNIT-3",
+            // GEN-4: nothing declares an operator `mul`.
+            "app.hgl:5:9 operator/impl.unknown_operator GEN-4",
+        ]
     );
 }
 

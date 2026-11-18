@@ -651,7 +651,13 @@ fn a_form_not_read_yet_is_not_reported() {
         "    return prelude\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:19 name/name.unknown UNIT-10",
+            "m.hgl:4:18 name/name.unknown UNIT-10",
+        ]
+    );
     assert_eq!(
         locals(&checked, "later"),
         [
@@ -689,6 +695,7 @@ fn entries_of_two_types_are_judged_only_where_nothing_is_expected() {
     assert_eq!(
         checked.summary(),
         [
+            "m.hgl:6:18 name/name.unknown UNIT-10",
             "m.hgl:8:21 type/type.mismatch EXPR-5",
             "m.hgl:9:23 type/type.mismatch EXPR-5",
             "m.hgl:10:22 type/type.mismatch EXPR-5",
@@ -698,6 +705,7 @@ fn entries_of_two_types_are_judged_only_where_nothing_is_expected() {
     assert_eq!(
         messages(&checked),
         [
+            "nothing binds `missing` here",
             "this is `Square`, and an element, as the first is, is `Round`",
             "this is `list<_>`, and the type written for it is `i64`",
             "this is `list<_>`, and the type written for it is `i64`",
@@ -744,8 +752,8 @@ fn an_argument_is_given_to_its_parameter() {
         "    let order = scale(value: 1.5, 2.5)\n",
         "    let many = scale(1.5, 2.5, 3.5, \"n\", 5.5)\n",
         "    let role = temporal(1.5)\n",
-        // A name left for the prelude is not read, and its arguments
-        // are.
+        // A name nothing binds is reported and not read, and its
+        // arguments are.
         "    let left = prelude(a, !text)\n",
         "    return plain\n",
         "}\n",
@@ -760,6 +768,7 @@ fn an_argument_is_given_to_its_parameter() {
             "m.hgl:12:35 type/argument.order EXPR-2",
             "m.hgl:13:42 type/argument.unexpected EXPR-2",
             "m.hgl:14:16 function-kind/call.role FN-3",
+            "m.hgl:15:16 name/name.unknown UNIT-10",
             "m.hgl:15:28 type/type.mismatch EXPR-5",
         ]
     );
@@ -773,6 +782,7 @@ fn an_argument_is_given_to_its_parameter() {
             "an argument with no name follows a named one: positional arguments come first",
             "`scale` has 4 parameters, and this is one more",
             "`temporal` is a temporal function, and a value function calls value functions",
+            "nothing binds `prelude` here",
             "this is `str`, and the operand of `!` is `bool`",
         ]
     );

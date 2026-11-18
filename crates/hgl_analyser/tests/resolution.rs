@@ -84,7 +84,7 @@ fn a_name_resolves_to_the_one_binding_in_scope() {
             ),
         ),
     ]);
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(checked.summary(), ["m.hgl:9:30 name/name.unknown UNIT-10",]);
     assert_eq!(
         uses(&checked, "m"),
         [
@@ -105,8 +105,8 @@ fn a_name_resolves_to_the_one_binding_in_scope() {
             "value 13:39 -> Parameter",
         ]
     );
-    // UNIT-11: `make` is bound by nothing in the program, so it is left
-    // for the prelude and not reported.
+    // UNIT-10: `make` is bound by nothing, the prelude included, and is
+    // reported above. The program keeps it as a name nothing binds.
     assert_eq!(checked.prelude_names("m"), ["make"]);
 }
 
@@ -141,7 +141,8 @@ fn members_and_labels_are_not_looked_up() {
 
 /// UNIT-11: "Every module binds [the prelude's declarations] without a
 /// `use`." A name nothing binds, core's declarations included, is
-/// listed once for its module, at its first use, and not reported.
+/// rejected (UNIT-10, `name.unknown`), once for its module, at its
+/// first use.
 /// TIME-9: "The operations on an endpoint are intrinsics of the
 /// language ... These reserved intrinsics cannot be shadowed." No
 /// declaration binds one, so it is not a name the prelude is waited on
@@ -156,7 +157,14 @@ fn a_name_nothing_binds_is_left_for_the_prelude() {
         "    when { return clamp(smooth(value)) }\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:51 name/name.unknown UNIT-10",
+            "m.hgl:6:19 name/name.unknown UNIT-10",
+            "m.hgl:6:25 name/name.unknown UNIT-10",
+        ]
+    );
     assert_eq!(checked.prelude_names("m"), ["smooth", "clamp"]);
 }
 
@@ -525,7 +533,16 @@ fn generic_scope_covers_the_whole_declaration() {
     ));
     assert_eq!(
         checked.summary(),
-        ["m.hgl:8:46 name/name.duplicate UNIT-12"]
+        [
+            // UNIT-10: nothing binds `comparable`, `numeric`, or the
+            // `U` outside the braces its `each` binds it in. `types`
+            // is a form of the language, and is not reported.
+            "m.hgl:4:36 name/name.unknown UNIT-10",
+            "m.hgl:8:46 name/name.duplicate UNIT-12",
+            "m.hgl:8:63 name/name.unknown UNIT-10",
+            "m.hgl:8:79 name/name.unknown UNIT-10",
+            "m.hgl:8:90 name/name.unknown UNIT-10",
+        ]
     );
     assert_eq!(
         checked.prelude_names("m"),
@@ -570,8 +587,7 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         "    let compared = a<b>(c)\n",
         // `Plain` is a type with no generic parameters: comparisons.
         "    let plain = Plain<b>(c)\n",
-        // Nothing binds `unknown`: it is left for the prelude, and so
-        // is the decision.
+        // Nothing binds `unknown` (UNIT-10): the decision is not made.
         "    let open = unknown<b>(c)\n",
         // A generic type before a `<` that opens no arguments.
         "    let ordered = Box < a\n",
@@ -582,6 +598,7 @@ fn a_generic_types_name_decides_an_undecided_constructor() {
         checked.summary(),
         [
             "m.hgl:5:27 type/argument.unexpected TYPE-5",
+            "m.hgl:8:16 name/name.unknown UNIT-10",
             "m.hgl:9:19 type/generic.invalid_application GEN-14",
         ]
     );
@@ -693,6 +710,7 @@ fn every_binding_form_binds_in_its_scope() {
     assert_eq!(
         checked.summary(),
         [
+            "m.hgl:11:19 name/name.unknown UNIT-10",
             "m.hgl:15:17 name/name.duplicate UNIT-5",
             "m.hgl:19:11 name/name.duplicate UNIT-12",
             "m.hgl:20:12 name/name.duplicate UNIT-12",
