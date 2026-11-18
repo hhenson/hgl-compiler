@@ -2938,16 +2938,13 @@ impl Emitter<'_> {
                 format!("{{{}}}", entries.join(", "))
             }
             ExprKind::Delta { arguments } => self.delta(function, value, arguments),
-            // TST-17, RUN-3: a run in real time is not written yet.
+            // TST-17, RUN-3: `run(...)` in an integration test is the
+            // eval's run in real time.
             ExprKind::Eval {
-                real_time: true, ..
-            } => {
-                self.unsupported(value.at, "a run in real time");
-                "None".to_string()
-            }
-            ExprKind::Eval { call, config, .. } => {
-                self.eval(function, call, &value.ty, config.as_deref())
-            }
+                call,
+                config,
+                real_time,
+            } => self.eval(function, call, &value.ty, config.as_deref(), *real_time),
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the
@@ -4282,12 +4279,18 @@ impl Emitter<'_> {
     /// `_config`, a name no parameter has, so that it is evaluated
     /// after the call's arguments, as EXPR-13 has them. The harness
     /// reads its `start`, `end` and `length`.
+    ///
+    /// TST-17: "An integration test ... beside `eval` it writes
+    /// `run(call, config)` (RUN-3), whose value is the run's output as
+    /// an eval's is." `real_time` is true for that form, and the
+    /// harness is told so with `_real_time=True`.
     fn eval(
         &mut self,
         function: &Function,
         call: &Expr,
         ty: &Type,
         config: Option<&Expr>,
+        real_time: bool,
     ) -> String {
         let ExprKind::Call {
             callee:
@@ -4343,6 +4346,9 @@ impl Emitter<'_> {
             if let Some(config) = config {
                 given.push(format!("_config={}", self.expression(function, config)));
             }
+            if real_time {
+                given.push("_real_time=True".to_string());
+            }
             return format!("_harness.evaluate({})", given.join(", "));
         }
         let run = self.run_wired(call, ty);
@@ -4361,6 +4367,9 @@ impl Emitter<'_> {
         }
         if let Some(config) = config {
             given.push(format!("_config={}", self.expression(function, config)));
+        }
+        if real_time {
+            given.push("_real_time=True".to_string());
         }
         format!("_harness.evaluate({})", given.join(", "))
     }

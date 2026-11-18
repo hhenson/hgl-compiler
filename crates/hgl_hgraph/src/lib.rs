@@ -41,6 +41,7 @@
 //! | `assert condition` | `if not (condition): raise _py.AssertionError()` |
 //! | `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, input=[7, None, 9])` |
 //! | `eval(target(input: [7]), RunConfig(length: 2us))` | `_harness.evaluate(target, input=[7], _config=...)` |
+//! | `run(target(input: [7]))` in an integration test | `_harness.evaluate(target, input=[7], _real_time=True)` |
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |
@@ -53,11 +54,12 @@ mod host;
 mod instances;
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use hgl_analyser::Program;
 use hgl_diagnostics::{Diagnostic, Diagnostics, Location};
 
-pub use host::{Ran, RanApplication, Stop, run, run_application, write};
+pub use host::{Ran, RanApplication, Stop, run, run_application, run_within, write};
 
 /// The name `hgl emit --target` takes for this target.
 pub const TARGET: &str = "hgraph";
@@ -121,6 +123,9 @@ pub struct Test {
     pub module: String,
     /// Its name.
     pub name: String,
+    /// True for an integration test (TST-17), which may run in real
+    /// time and is held to a time limit ([`Test::limit`]).
+    pub integration: bool,
     /// The first form the test needs that the target does not write
     /// yet, in the test or in a function it reaches. `None` for a test
     /// that can be run.
@@ -136,6 +141,24 @@ impl Test {
         format!("{}::{}", self.module, self.name)
     }
 
+    /// How long the test may run, by the host clock, before it is
+    /// stopped and fails. `None` for one with no limit.
+    ///
+    /// Owner decision, 2026-11-18 (hhenson/hgl_spec#110): "integration
+    /// tests are alway time-bound. The test itself you provide a
+    /// time-out or the default timeout of 1 minute is applied." The
+    /// language has no way to write a test's own limit yet, so every
+    /// integration test has the default.
+    pub fn limit(&self) -> Option<Duration> {
+        self.integration.then_some(INTEGRATION_LIMIT)
+    }
+}
+
+/// The time limit of an integration test that gives none of its own:
+/// one minute (TST-17, hhenson/hgl_spec#110).
+pub const INTEGRATION_LIMIT: Duration = Duration::from_secs(60);
+
+impl Test {
     /// The statement of the test that line `line` of its module's file
     /// is part of: the last one to start at or before it.
     pub fn statement_at(&self, line: usize) -> Option<Location> {
@@ -305,6 +328,7 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             tests.push(Test {
                 module: module.path.clone(),
                 name: test.name.clone(),
+                integration: test.integration,
                 blocked: blocked(&modules, piece),
                 statements: piece.statements.clone(),
             });

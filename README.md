@@ -65,7 +65,9 @@ program's rejection cases, each an import, declaration or test marked
 Python interpreter `--python PATH` names, which must have hgraph
 installed; a test that needs a form the target does not write yet is
 reported `not run`, with the form. An `integration_test` is left out
-unless `--integration` asks for them or `--test NAME` names it.
+unless `--integration` asks for them or `--test NAME` names it; its
+`run(...)` is a run in real time, and it has failed if it is still
+running after a minute.
 `hgl emit --out DIR` writes an
 accepted program as Python wiring for hgraph, and reports what the
 target does not write yet. `hgl run` runs an application of the program
