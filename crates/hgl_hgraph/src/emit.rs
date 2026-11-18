@@ -2995,15 +2995,42 @@ impl Emitter<'_> {
         &mut self,
         function: &Function,
         callee: (usize, usize),
+        generics: &[GenericArgument],
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
         // A node keeps its configuration: a list, a tuple or a
         // dictionary is given to it inside an object hgraph keeps as
-        // it is.
+        // it is. What a parameter is of is read from the instance the
+        // call names, where the node is written by instance: a
+        // parameter declared a `T` is a list where `T` is one (GEN-2),
+        // and the node written for it takes the list out.
         let node = self.is_node(callee);
-        let kept = |parameter: &Parameter, value: String| {
-            if node && parameter.constant && held(&parameter.ty) {
+        let kept: Vec<bool> = {
+            let instances = self.instances;
+            let instance = instances
+                .instanced(self.program, callee.0, callee.1)
+                .then(|| instances.find(self.program, callee, generics))
+                .flatten();
+            let taken = instance.map_or(signature, |instance| &instance.signature);
+            signature
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let ty = taken
+                        .parameters
+                        .get(index)
+                        .map_or(&parameter.ty, |parameter| &parameter.ty);
+                    node && parameter.constant && held(ty)
+                })
+                .collect()
+        };
+        if kept.contains(&true) {
+            self.natives = true;
+        }
+        let kept = |index: usize, value: String| {
+            if kept[index] {
                 format!("_core.Held({value})")
             } else {
                 value
@@ -3012,13 +3039,10 @@ impl Emitter<'_> {
         let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
-                let parameter = signature.parameters.get(argument.parameter?)?;
+                let index = argument.parameter?;
+                let parameter = signature.parameters.get(index)?;
                 let value = self.expression(function, &argument.value);
-                Some(format!(
-                    "{}={}",
-                    name(&parameter.name),
-                    kept(parameter, value)
-                ))
+                Some(format!("{}={}", name(&parameter.name), kept(index, value)))
             })
             .collect();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -3029,20 +3053,8 @@ impl Emitter<'_> {
                 continue;
             }
             if let Some(value) = self.left_out(callee, index, parameter) {
-                written.push(format!(
-                    "{}={}",
-                    name(&parameter.name),
-                    kept(parameter, value)
-                ));
+                written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
             }
-        }
-        if node
-            && signature
-                .parameters
-                .iter()
-                .any(|parameter| parameter.constant && held(&parameter.ty))
-        {
-            self.natives = true;
         }
         written.join(", ")
     }
@@ -3579,7 +3591,13 @@ impl Emitter<'_> {
                 return "None".to_string();
             }
             self.natives = true;
-            let arguments = self.arguments(function, (module, declaration), signature, arguments);
+            let arguments = self.arguments(
+                function,
+                (module, declaration),
+                generics,
+                signature,
+                arguments,
+            );
             let called = format!("_core.{native}({arguments})");
             return self.native_result(signature.result.as_ref(), called);
         }
@@ -3619,7 +3637,13 @@ impl Emitter<'_> {
             // an error, which Python's own `+` would not make it: the
             // provider's function does.
             self.natives = true;
-            let arguments = self.arguments(function, (module, declaration), signature, arguments);
+            let arguments = self.arguments(
+                function,
+                (module, declaration),
+                generics,
+                signature,
+                arguments,
+            );
             let arguments: Vec<String> = [arguments]
                 .into_iter()
                 .filter(|written| !written.is_empty())
@@ -3633,7 +3657,13 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         let python = self.called_name((module, declaration), generics, at);
-        let arguments = self.arguments(function, (module, declaration), signature, arguments);
+        let arguments = self.arguments(
+            function,
+            (module, declaration),
+            generics,
+            signature,
+            arguments,
+        );
         format!("{python}({arguments})")
     }
 
@@ -3717,7 +3747,13 @@ impl Emitter<'_> {
         }
         let run = self.run_wired(call, ty);
         let target = self.called_name((*module, *declaration), generics, call.at);
-        let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        let arguments = self.arguments(
+            function,
+            (*module, *declaration),
+            generics,
+            signature,
+            arguments,
+        );
         let mut given = vec![target, run];
         if !arguments.is_empty() {
             given.push(arguments);

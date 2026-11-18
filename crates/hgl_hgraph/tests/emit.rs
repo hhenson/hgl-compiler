@@ -4408,6 +4408,71 @@ fn a_list_grows_through_cores_append_and_extend() {
     }
 }
 
+/// A generic node whose configuration is of its generic parameter:
+/// what `T` is at a call decides how the configuration is given.
+const KEPT: &str = concat!(
+    "module demo.kept\n",
+    "\n",
+    "fn tagged<T>(value: i64, const tag: T) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn optional<T>(value: i64, const tag: T? = null) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn wired(value: i64, const tags: list<i64>) -> i64 {\n",
+    "    return tagged<list<i64>>(value, tags)\n",
+    "}\n",
+    "fn defaulted(value: i64) -> i64 {\n",
+    "    return optional<list<i64>>(value)\n",
+    "}\n",
+    "\n",
+    "test kept {\n",
+    "    assert eval(wired(value: [7, _, 9], tags: [1, 2])) == [7, _, 9]\n",
+    "    assert eval(defaulted(value: [7])) == [7]\n",
+    "    assert eval(tagged<list<i64>>(value: [7], tag: [1, 2])) == [7]\n",
+    "    assert eval(tagged<dict<str, i64>>(value: [7], tag: [\"a\": 1])) == [7]\n",
+    "    assert eval(tagged<i64>(value: [7], tag: 1)) == [7]\n",
+    "    assert eval(optional<tuple<i64, str>>(value: [7])) == [7]\n",
+    "}\n",
+);
+
+/// GEN-2: a generic temporal function is written once for each set of
+/// generic arguments, and its configuration is of the type the
+/// arguments make it. A list, a tuple or a dictionary is given to a
+/// node inside the provider's `Held`, so a parameter declared a `T` is
+/// given inside one where `T` is a list, and as it is where `T` is an
+/// `i64`: by a graph's call, by an eval, and where a default stands in
+/// for an argument left out.
+#[test]
+fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
+    let emitted = emit(&[("kept.hgl", KEPT)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
+    for expected in [
+        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(tags))\n",
+        "    return _inst_optional__list_i64_(value=value, tag=_core.Held(None))\n",
+        // The node written for a list takes it out; the one for an
+        // `i64` has nothing to take out.
+        concat!(
+            "def _inst_tagged__list_i64_(value: _hg.TS[_py.int], tag: _py.object) -> _hg.TS[_py.int]:\n",
+            "    tag = tag.value\n",
+        ),
+        concat!(
+            "def _inst_tagged__i64(value: _hg.TS[_py.int], tag: _py.int) -> _hg.TS[_py.int]:\n",
+            "    return value.value\n",
+        ),
+        "value=[7], tag=_core.Held([1, 2]))",
+        "value=[7], tag=_core.Held({\"a\": 1}))",
+        "_harness.evaluate(_inst_tagged__i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=1)",
+        "_harness.evaluate(_inst_optional__tuple_i64__str_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=_core.Held(None))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -4883,6 +4948,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("places.hgl", PLACES));
     files.push(("nullable.hgl", NULLABLE));
     files.push(("lists.hgl", LISTS));
+    files.push(("kept.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4905,13 +4971,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        63,
+        64,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on configuration of a generic type, and one of each demo's"
     );
 }
 
