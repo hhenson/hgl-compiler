@@ -1018,3 +1018,64 @@ fn a_structs_operator_requirement_is_told_where_its_type_is_written() {
         ]
     );
 }
+
+/// GEN-2: "a generic value parameter that nothing says anything of
+/// takes its default". GEN-3: a `requires` is held to a default too,
+/// where the default names a constant (UNIT-13) or is an expression of
+/// constants: for a call, a construction and a written type, each of
+/// which leaves the parameter out.
+#[test]
+fn a_requires_is_held_to_a_default_that_names_a_constant() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const OFF: bool = false\n",
+        "const ON: bool = true\n",
+        "const TWO: i64 = 2\n",
+        "const fn pick<const enabled: bool = OFF>(value: i64) -> i64\n",
+        "    requires enabled == true => value\n",
+        "const fn keep<const enabled: bool = ON>(value: i64) -> i64\n",
+        "    requires enabled == true => value\n",
+        "const fn moded<const mode: Mode = SLOW>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn plus<const size: i64 = TWO + 1>(value: i64) -> i64 requires size == 2 => value\n",
+        "struct Flag<const on: bool = OFF> requires on == true { value: i64 }\n",
+        "struct Lit<const on: bool = ON> requires on == true { value: i64 }\n",
+        "struct Wide<const size: i64 = TWO + 1> requires size == 2 { value: i64 }\n",
+        "struct Exact<const size: i64> requires size == 2 { value: i64 }\n",
+        // Line 18: each of these does not hold.
+        "const fn a() -> i64 => pick(1)\n",
+        "const fn b() -> i64 => moded(1)\n",
+        "const fn c() -> i64 => plus(1)\n",
+        "const fn d() -> i64 => plus<TWO + 2>(1)\n",
+        "const fn e() -> i64 => plus(1, size: TWO * 2)\n",
+        "const fn f() -> i64 => Flag(value: 1).value\n",
+        "const fn g() -> i64 => Wide(value: 1).value\n",
+        "const fn h() -> i64 => Exact<TWO + 1>(value: 1).value\n",
+        "const fn i(held: Flag) -> i64 => 1\n",
+        "const fn j(held: Wide) -> i64 => 1\n",
+        "const fn k(held: Exact<TWO + 1>) -> i64 => 1\n",
+        "struct Holder { held: Flag }\n",
+        // Each of these holds.
+        "const fn fine(held: Lit, exact: Exact<TWO>, sum: Exact<1 + 1>) -> i64 =>\n",
+        "    keep(1) + pick(1, enabled: true) + pick<ON>(1) + plus<TWO>(1) + plus(1, size: TWO)\n",
+        "    + Lit(value: 1).value + Flag<ON>(value: 1).value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:24 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
+            "m.hgl:25:24 constraint/requires.unmet GEN-3",
+            "m.hgl:26:18 constraint/requires.unmet GEN-3",
+            "m.hgl:27:18 constraint/requires.unmet GEN-3",
+            "m.hgl:28:18 constraint/requires.unmet GEN-3",
+            "m.hgl:29:23 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
