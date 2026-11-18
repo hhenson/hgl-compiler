@@ -1539,6 +1539,27 @@ instances a program asks for, and an eval asks for these two, each for
 the type it is of. Core does not export them: a run wires them, and no
 module names them.
 
+A list is Python's, one object that every name of it sees change, and
+a value of HGL's does not change (LIST-3: "a value taken from the place
+before the call is as it was"). So the target shares a list and copies
+it only where it would otherwise be seen to change:
+
+| Where a `var`, a `state` or a `cache` of a list type is | What is written |
+| --- | --- |
+| Read by what may keep the list: a `let`, a `return`, an entry of a list or a field of a struct, a function whose result may hold it, a node | `_core.shared(entries)`: the list itself, marked as held by more than the place |
+| Read by what can keep nothing: the read of an element, a `const fn` or a native one with a scalar result or none and no `var` parameter | `entries`, unmarked. The list is lent for the call |
+| Given to a `var` parameter that is declared a list | `entries`, unmarked: the function grows the place's own list |
+| Given to a `var` parameter of another type, or given to two of them | `_core.shared(entries)`, and what is given back is marked too |
+| Written from anything but a list written out | `entries = _core.shared(value)`: what the value was read from may hold it |
+| An element or a field given to a `var` parameter | `_core.shared(_core.item(rows, 0))`: the value it is inside holds it |
+
+`append` and `extend` are the provider's. Each grows a list where it is
+while the list is the place's alone, a `Grown` whose `owned` holds, and
+takes a copy first where it is not. So a recording grows with no copy,
+a list passed to a function is not copied, and a `let` costs a copy
+only where the place grows after it. What the provider puts in a run's
+store it marks as shared itself.
+
 hgraph makes a value of its own of what it is given to keep, a node's
 configuration and what its global state holds, and has none for a tuple
 that holds a set's delta. An object of a class it does not know is kept
