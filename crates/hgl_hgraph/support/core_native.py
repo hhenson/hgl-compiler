@@ -38,6 +38,7 @@ import dataclasses as _dataclasses
 import datetime as _datetime
 import functools as _functools
 import math as _math
+import re as _re
 from fractions import Fraction as _Fraction
 
 from hgraph import Null as _Null
@@ -1099,7 +1100,7 @@ def floordiv__duration_duration(lhs, rhs, zero):
 # function here is named with what it gives too: `convert_i64_to_f64`
 # is `native impl const fn convert(value: i64) -> f64`.
 #
-# OPS-6 says what each yields. A number to and from text is not here.
+# OPS-6 says what each yields.
 
 
 def convert_i64_to_f64(value):
@@ -1229,6 +1230,101 @@ def convert_str_to_bool(value, invalid):
     if value == "false":
         return _converted(False, invalid)
     return _unconverted("the text is no `bool` literal", invalid)
+
+
+def convert_i64_to_str(value):
+    """OPS-6: "Its decimal digits, after a `-` where it is below zero"."""
+    return str(value)
+
+
+def convert_f64_to_str(value):
+    """OPS-6: "The shortest decimal text that reads back as the same
+    `f64`, always with a `.` or an exponent, after a `-` where its sign
+    is negative ... It has an exponent where the number is 1e16 or
+    more, or below 1e-4 and not zero, in size ... A NaN is `nan`, and
+    the infinities are `inf` and `-inf`".
+
+    Python's own text of a `float` is that shortest text, with an
+    exponent in the same two ranges. It writes the exponent with a
+    sign and two digits, `1e+21` and `1.5e-07`, where the language's
+    literal is `1e21` and `1.5e-7`.
+    """
+    if value != value:
+        return "nan"
+    if value in (_INFINITY, -_INFINITY):
+        return "inf" if value > 0 else "-inf"
+    text = repr(value)
+    if "e" not in text:
+        return text
+    digits, exponent = text.split("e")
+    return f"{digits}e{int(exponent)}"
+
+
+# The language's literals of a number (its LEX-22, LEX-23): a run of
+# digits with one `_` between two at most, `0x` and hexadecimal digits,
+# or `0b` and binary ones; and a float's, digits with a fraction, an
+# exponent, or both. The digits are ASCII's.
+_DIGITS = "[0-9](?:_?[0-9])*"
+_INTEGER_TEXT = _re.compile(f"0x[0-9A-Fa-f](?:_?[0-9A-Fa-f])*|0b[01](?:_?[01])*|{_DIGITS}")
+_EXPONENT = f"[eE][+-]?{_DIGITS}"
+_FLOAT_TEXT = _re.compile(f"{_DIGITS}(?:\\.{_DIGITS}(?:{_EXPONENT})?|{_EXPONENT})")
+
+
+def _integer_written(text):
+    """The integer the integer literal `text` writes, or None where the
+    text is no such literal."""
+    if _INTEGER_TEXT.fullmatch(text) is None:
+        return None
+    digits = text.replace("_", "")
+    if digits.startswith("0x"):
+        return int(digits[2:], 16)
+    if digits.startswith("0b"):
+        return int(digits[2:], 2)
+    return int(digits, 10)
+
+
+def convert_str_to_i64(value, invalid):
+    """OPS-6: "The number the text writes: an integer literal, after
+    one optional `-` ... A number outside `i64` fails". The text is all
+    of it: "nothing stands before or after it"."""
+    negative = value.startswith("-")
+    written = _integer_written(value[1:] if negative else value)
+    if written is None:
+        return _unconverted("the text is no integer", invalid)
+    number = -written if negative else written
+    if not _I64_MIN <= number <= _I64_MAX:
+        return _unconverted("the number the text writes is outside `i64`", invalid)
+    return _converted(number, invalid)
+
+
+def convert_str_to_f64(value, invalid):
+    """OPS-6: "The `f64` nearest the number the text writes, a tie to
+    the even one: a float or an integer literal, after one optional
+    `-` ... One that rounds to an infinity fails ... `"nan"` is a NaN,
+    and `"inf"` and `"-inf"` are the infinities"."""
+    if value == "nan":
+        return _converted(_NAN, invalid)
+    if value == "inf":
+        return _converted(_INFINITY, invalid)
+    if value == "-inf":
+        return _converted(-_INFINITY, invalid)
+    negative = value.startswith("-")
+    text = value[1:] if negative else value
+    if _FLOAT_TEXT.fullmatch(text) is not None:
+        # Python reads a decimal as the nearest `float`, a tie to the
+        # even one, and one too large as an infinity.
+        number = float(text.replace("_", ""))
+    else:
+        written = _integer_written(text)
+        if written is None:
+            return _unconverted("the text is no number", invalid)
+        try:
+            number = float(written)
+        except OverflowError:
+            number = _INFINITY
+    if number == _INFINITY:
+        return _unconverted("the number the text writes rounds to an infinity", invalid)
+    return _converted(-number if negative else number, invalid)
 
 
 def convert_bytes_to_str(value, invalid):

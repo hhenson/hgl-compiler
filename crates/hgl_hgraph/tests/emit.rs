@@ -5991,13 +5991,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        74,
+        76,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, one on a graph that sets the store, one on conversions, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, one on timed traces, one on a graph that sets the store, three on conversions, and one of each demo's"
     );
 }
 
@@ -6335,7 +6335,7 @@ fn a_graph_sets_the_store_where_it_is_built() {
 
 /// OPS-4: "`convert<T>(value)` converts a value to the type T." OPS-6
 /// says what each conversion yields, OPS-7 which can fail, and OPS-8
-/// their options. A number to and from text is not written yet.
+/// their options.
 const CONVERSIONS: &str = concat!(
     "module demo.converted\n",
     "const fn as_float(value: i64) -> f64 => convert<f64>(value)\n",
@@ -6410,6 +6410,59 @@ const CONVERSIONS: &str = concat!(
     "    assert eval(floats(value: [1, 2])) == [1.0, 2.0]\n",
     "    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]\n",
     "}\n",
+    // OPS-6: a number as text. An `i64` is its decimal digits after a
+    // `-`; an `f64` the shortest text that reads back, with a `.` or an
+    // exponent, the exponent from 1e16 up and below 1e-4.
+    "const fn again(text: str) -> str => convert<str>(convert<f64>(text, invalid: .fail))\n",
+    "fn shown(value: f64) -> str => convert<str>(value)\n",
+    "test numbers_as_text {\n",
+    "    assert convert<str>(42) == \"42\" && convert<str>(-3) == \"-3\"\n",
+    "    assert convert<str>(-9223372036854775807 - 1) == \"-9223372036854775808\"\n",
+    "    assert convert<str>(3.0) == \"3.0\" && convert<str>(-2.5) == \"-2.5\"\n",
+    "    assert convert<str>(0.1 + 0.2) == \"0.30000000000000004\"\n",
+    "    assert convert<str>(-0.0) == \"-0.0\"\n",
+    "    assert convert<str>(1000000000000000.0) == \"1000000000000000.0\"\n",
+    "    assert convert<str>(10000000000000000.0) == \"1e16\"\n",
+    "    assert convert<str>(1e21) == \"1e21\" && convert<str>(1.5e300) == \"1.5e300\"\n",
+    "    assert convert<str>(0.0001) == \"0.0001\" && convert<str>(0.00001) == \"1e-5\"\n",
+    "    assert convert<str>(1.5e-7) == \"1.5e-7\"\n",
+    "    assert convert<str>(0.0 /{zero: .nan} 0.0) == \"nan\"\n",
+    "    assert convert<str>(1.0 / 0.0) == \"inf\" && convert<str>(-1.0 / 0.0) == \"-inf\"\n",
+    "    assert eval(shown(value: [2.5, 1e21])) == [\"2.5\", \"1e21\"]\n",
+    "}\n",
+    // OPS-6: text as a number, a literal of the type after one `-`;
+    // OPS-7: any other text fails.
+    "test text_as_numbers {\n",
+    "    assert convert<i64>(\"42\", invalid: .fail) == 42\n",
+    "    assert convert<i64>(\"-3\", invalid: .fail) == -3\n",
+    "    assert convert<i64>(\"0x1F\", invalid: .fail) == 31\n",
+    "    assert convert<i64>(\"-0b101\", invalid: .fail) == -5\n",
+    "    assert convert<i64>(\"1_000\", invalid: .fail) == 1000\n",
+    "    assert convert<i64>(\"010\", invalid: .fail) == 10\n",
+    "    assert convert<i64>(\"-9223372036854775808\", invalid: .fail) == -9223372036854775807 - 1\n",
+    "    assert is_err(convert<i64>(\"9223372036854775808\"))\n",
+    "    assert is_err(convert<i64>(\"three\")) && is_err(convert<i64>(\"\"))\n",
+    "    assert is_err(convert<i64>(\" 3\")) && is_err(convert<i64>(\"3 \"))\n",
+    "    assert is_err(convert<i64>(\"+3\")) && is_err(convert<i64>(\"--3\"))\n",
+    "    assert is_err(convert<i64>(\"3.0\")) && is_err(convert<i64>(\"1__0\"))\n",
+    "    assert is_err(convert<i64>(\"0X1F\")) && is_err(convert<i64>(\"1_\"))\n",
+    "    assert convert<f64>(\"2.5\", invalid: .fail) == 2.5\n",
+    "    assert convert<f64>(\"-1e5\", invalid: .fail) == -100000.0\n",
+    "    assert convert<f64>(\"3\", invalid: .fail) == 3.0\n",
+    "    assert convert<f64>(\"1_0.5E1\", invalid: .fail) == 105.0\n",
+    "    assert convert<f64>(\"inf\", invalid: .fail) == 1.0 / 0.0\n",
+    "    assert convert<f64>(\"-inf\", invalid: .fail) == -1.0 / 0.0\n",
+    "    let nan = convert<f64>(\"nan\", invalid: .fail)\n",
+    "    assert nan != nan\n",
+    // "The text a number converts to converts back to that number".
+    "    assert again(\"0.30000000000000004\") == \"0.30000000000000004\"\n",
+    "    assert again(\"1e21\") == \"1e21\" && again(\"-0.0\") == \"-0.0\"\n",
+    "    assert again(\"nan\") == \"nan\" && again(\"-inf\") == \"-inf\"\n",
+    "    assert is_err(convert<f64>(\"1e999\")) && is_err(convert<f64>(\".5\"))\n",
+    "    assert is_err(convert<f64>(\"NaN\")) && is_err(convert<f64>(\"+inf\"))\n",
+    "    assert is_err(convert<f64>(\"2.5 \")) && is_err(convert<f64>(\"1e\"))\n",
+    "    assert is_err(convert<f64>(\"5.\")) && is_err(convert<f64>(\"-nan\"))\n",
+    "}\n",
 );
 
 /// OPS-4: core's candidates of `convert` take one type and give
@@ -6441,57 +6494,16 @@ fn a_conversion_is_the_providers_function_for_what_it_gives() {
         ),
         // FN-6: the lifted conversion reads the connection's value.
         "    return _core.convert_i64_to_f64(value=value.value)\n",
+        "    return _core.convert_f64_to_str(value=value.value)\n",
+        concat!(
+            "def again(text):\n",
+            "    return _core.convert_f64_to_str(",
+            "value=_core.convert_str_to_f64(value=text, invalid=\"fail\"))\n",
+        ),
     ] {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-}
-
-/// OPS-6 has a number's text "the text of the literal that denotes the
-/// value", and a minus is no part of a literal (LEX-7): what `-3` and
-/// `2.5` are as text is not said, so the target does not write a number
-/// to or from text.
-#[test]
-fn a_number_to_and_from_text_is_not_written_yet() {
-    let emitted = emit(&[(
-        "texts.hgl",
-        concat!(
-            "module demo.texts\n",
-            "const fn shown(value: i64) -> str => convert<str>(value)\n",
-            "const fn written(value: f64) -> str => convert<str>(value)\n",
-            "const fn read(text: str) -> result<i64, error> => convert<i64>(text)\n",
-            "const fn parsed(text: str) -> f64 => convert<f64>(text, invalid: .fail)\n",
-            "test shows { assert shown(3) == \"3\" }\n",
-            "test writes { assert written(2.5) == \"2.5\" }\n",
-            "test reads { assert is_ok(read(\"3\")) }\n",
-            "test parses { assert parsed(\"2.5\") == 2.5 }\n",
-        ),
-    )]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "texts.hgl:2:38 target.unsupported",
-            "texts.hgl:3:40 target.unsupported",
-            "texts.hgl:4:51 target.unsupported",
-            "texts.hgl:5:38 target.unsupported",
-        ]
-    );
-    for (test, candidate) in [
-        ("shows", "convert(i64) -> str"),
-        ("writes", "convert(f64) -> str"),
-        ("reads", "convert(str) -> i64"),
-        ("parses", "convert(str) -> f64"),
-    ] {
-        let blocked = emitted
-            .blocked(test)
-            .expect("the test reaches the conversion");
-        assert!(
-            blocked.ends_with(&format!(
-                "the hgraph target does not write the candidate `{candidate}` yet"
-            )),
-            "{blocked}"
         );
     }
 }
