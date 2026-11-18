@@ -1625,7 +1625,9 @@ impl Emitter<'_> {
                 other => self.unsupported(at_of(other, &body.locals), "this statement of a node"),
             }
         }
-        if has_out {
+        // TIME-7: "`inject out` exposes that same result": hgraph's own
+        // `_output`, which it gives the node and its `stop`.
+        let output = has_out.then(|| {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set.
             let annotation = match &result {
@@ -1635,8 +1637,11 @@ impl Emitter<'_> {
                 Some(result) => result.replacen("TS[", "TS_OUT[", 1),
                 None => "_py.object".to_string(),
             };
+            format!("_output: {annotation} = None")
+        });
+        if let Some(output) = &output {
             self.hgraph = true;
-            parameters.push(format!("_output: {annotation} = None"));
+            parameters.push(output.clone());
         }
         // TIME-4: what the handlers ask together.
         let active: Vec<usize> = inputs
@@ -1683,7 +1688,13 @@ impl Emitter<'_> {
                 .filter(|(parameter, _)| !parameter.constant)
                 .map(|(_, written)| written.clone()),
         );
-        stopping.extend_from_slice(&parameters[signature.parameters.len()..]);
+        if has_state {
+            stopping.push("_state: _hg.STATE = None".to_string());
+        }
+        // TIME-7: "`out` is read in a `when` and in `stop`".
+        if let Some(output) = output {
+            stopping.push(output);
+        }
         // A capability is given to the node, to its `start` and to its
         // `stop`, each for that one call.
         for (parameter, annotation) in &capabilities {
@@ -2376,10 +2387,11 @@ impl Emitter<'_> {
             // TIME-7: "`inject out` exposes that same result for reads,
             // assignment".
             LocalKind::Inject if declared.name == "out" => {
-                // Bare payload reads of `out` in lifecycle hooks are
-                // not lowered here.
-                if matches!(function.mode, Mode::Lifecycle | Mode::Stop) {
-                    self.unsupported(declared.at, "`out` in `stop`");
+                // "`start` neither reads nor writes it": the analyser
+                // rejects that (`out.lifecycle`), and `start` is given
+                // no output.
+                if function.mode == Mode::Lifecycle {
+                    self.unsupported(declared.at, "`out` in `start`");
                 }
                 "_output.value".to_string()
             }
@@ -2913,21 +2925,21 @@ impl Emitter<'_> {
                 inputs: Some(inputs),
             } if inputs.len() == 1 => {
                 let endpoint = &function.locals[inputs[0]];
-                // TIME-5 and TIME-7: start reads no endpoint. At stop
-                // an input can guard a payload read, and both the inputs
-                // and the read-only output expose their timestamp.
+                // At stop, validity guards payload reads of inputs and out,
+                // and both expose their last publication time (TIME-5, TIME-7).
                 let given = match function.mode {
                     Mode::Lifecycle => false,
                     Mode::Stop => {
-                        *operation == EndpointOperation::LastModified
-                            || (endpoint.kind != LocalKind::Inject
-                                && matches!(
-                                    operation,
-                                    EndpointOperation::Valid
-                                        | EndpointOperation::IsActive
-                                        | EndpointOperation::Activate
-                                        | EndpointOperation::Passivate
-                                ))
+                        matches!(
+                            operation,
+                            EndpointOperation::Valid | EndpointOperation::LastModified
+                        ) || (endpoint.kind != LocalKind::Inject
+                            && matches!(
+                                operation,
+                                EndpointOperation::IsActive
+                                    | EndpointOperation::Activate
+                                    | EndpointOperation::Passivate
+                            ))
                     }
                     _ => true,
                 };

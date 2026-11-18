@@ -1714,7 +1714,7 @@ fn a_form_not_written_yet_is_reported() {
         emitted.reported,
         [
             "m.hgl:6:12 target.unsupported",
-            "m.hgl:17:12 target.unsupported",
+            // `stopped`, whose `stop` reads `out`, is written (TIME-7).
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
             // A graph's `if`, the three of a struct, then what the test
@@ -3839,6 +3839,57 @@ const STOPS: &str = concat!(
     "    assert eval(ends_badly(value: [_, _])) == []\n",
     "}\n",
 );
+
+/// TIME-7: "`out` is read in a `when` and in `stop`". A node whose
+/// `stop` reads what it last published, under `valid(out)`: the run
+/// ends well only where that is `expected`, since the division is by
+/// zero where it is not.
+const OUT_IN_STOP: &str = concat!(
+    "module demo.ended\n",
+    "fn totalled(value: i64, const expected: i64) -> i64 {\n",
+    "    inject out\n",
+    "    state sum: i64 = 0\n",
+    "    state ended: i64 = 0\n",
+    "    when {\n",
+    "        sum += value\n",
+    "        out = sum\n",
+    "    }\n",
+    "    stop {\n",
+    "        if valid(out) { ended = 1 // (if out == expected { 1 } else { 0 }) }\n",
+    "    }\n",
+    "}\n",
+    "test reads_what_was_published {\n",
+    "    assert eval(totalled(value: [1, 2, 3], expected: 6)) == [1, 3, 6]\n",
+    // Nothing was published: `out` is not valid, and is not read.
+    "    assert eval(totalled(value: [_, _], expected: 6)) == []\n",
+    "}\n",
+    "test reads_no_other {\n",
+    "    assert eval(totalled(value: [1, 2, 3], expected: 7)) == [1, 3, 6]\n",
+    "}\n",
+);
+
+/// TIME-7: hgraph gives a node's `stop` the node's output where it
+/// names it, as it gives the node: `out` is `_output` there too.
+#[test]
+fn a_stop_is_given_the_nodes_output() {
+    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_ended/__init__.py");
+    let expected = concat!(
+        "@totalled.stop\n",
+        "def _stop_totalled(expected: _py.int, value: _hg.TS[_py.int], ",
+        "_state: _hg.STATE = None, _output: _hg.TS_OUT[_py.int] = None):\n",
+        "    if _output.valid:\n",
+    );
+    assert!(
+        python.contains(expected),
+        "the module has:\n{expected}\nin:\n{python}"
+    );
+    assert!(
+        python.contains("if _core.eq__i64_i64_f64_f64(lhs=_output.value, rhs=expected"),
+        "{python}"
+    );
+}
 
 /// TIME-6: a `cache`. TIME-8, core's CAP-1 to CAP-3 and CAP-6: a node
 /// injects `logger`, `clock` and `global_state`, reads a capability's
@@ -6624,6 +6675,50 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
             "endless failed live.hgl:30:9 timed out: it was still running after its limit of 3s",
             "after passed",
             "brief failed live.hgl:38:9 timed out: it was still running after its limit of 0.5s",
+        ]
+    );
+}
+
+/// TIME-7: a `stop` reads what the node last published. The run whose
+/// `stop` expects that value ends well, and the one whose `stop`
+/// expects another fails there: `out` is read, and is what was
+/// published. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_stop_reads_what_the_node_published() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_out_in_stop");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let described: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .map(|(test, ran)| match ran {
+            Ran::Passed => format!("{} passed", test.name),
+            // The message is hgraph's account of the node that failed,
+            // which holds the error's own text.
+            Ran::Failed { message, .. } => format!(
+                "{} failed: {}",
+                test.name,
+                if message.contains("numeric.division_by_zero: a division by zero") {
+                    "a division by zero"
+                } else {
+                    message.as_str()
+                }
+            ),
+            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
+        })
+        .collect();
+    assert_eq!(
+        described,
+        [
+            "reads_what_was_published passed",
+            "reads_no_other failed: a division by zero",
         ]
     );
 }
