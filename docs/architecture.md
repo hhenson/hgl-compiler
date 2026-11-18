@@ -1555,45 +1555,53 @@ module names them.
 
 A list and a dictionary are Python's, each one object that every name
 of it sees change, and a value of HGL's does not change (LIST-3: "a value
-taken from the place before the call is as it was"). So the target
-shares a collection and copies it only where it would otherwise be seen
-to change. A struct and a tuple are small: a change to one makes a new
-one.
+taken from the place before the call is as it was"). The target follows
+the owner's rule for it (issue 151): "all var mutations are mutations,
+not copies. The copies only occur when: 1. the value is passed to a
+function and the function also recieves a var reference to the item or
+items it contains, othewise they are safe to pass through. 2. let
+assignment". So a `var`, a `state` and a `cache` change what they hold
+where it is, with no check when the program runs, and the compiler says
+where a copy is made: where a reference is made to what a place holds
+and the place then changes, and where a reference is kept. A struct and
+a tuple are never changed: a change to one makes a new one.
 
-| Where a `var`, a `state` or a `cache` that is or holds a list or a dictionary is | What is written |
+| What is written | Where |
 | --- | --- |
-| Read by what may keep the list: a `let`, a `return`, an entry of a list or a field of a struct, a function whose result may hold it, a node | `_core.shared(entries)`: the list itself, marked as held by more than the place |
-| Read by what can keep nothing: the read of an element, and a `const fn` or a native one with no `var` parameter, which is given data alone (no capability, native value or value of a generic type to keep the collection in) and whose result cannot be or hold the collection: an `i64`, or the entry `get` gives of the dictionary it is given | `entries`, unmarked. The collection is lent for the call |
-| Assigned an element or an entry, `items[i] = value`, `book[key] = value`, in the function that declares it | `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)`: changed where it is while the place alone holds it, and copied once otherwise |
-| Assigned further in, `book.bids[price] = size`, `rows[key][0] = 2` | `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)`: the provider goes in, and changes each collection on the way where it is while it is its holder's alone. The value is asked for once the way in has been read |
-| Grown further in by a native function of core, `append(book.orders, order)` | `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))`, and then `book = _given[1]` |
-| Read out of the value by what may keep it, `let orders = book.orders`, `for row in rows` | `_core.shared(book.orders)`, `for row in _core.each(rows)`: the collection taken is marked, and the value copies it before it changes it |
-| Read through, `book.orders[0]`, or lent, `total(book.orders)` | `_core.item(book.orders, 0)`, `total(values=book.orders)`: unmarked |
-| Given to a `var` parameter that is declared a list | `entries`, unmarked: the function grows the place's own list |
-| Given to a `var` parameter of another type, or given to two of them | `_core.shared(entries)`, and what is given back is marked too |
-| Written from anything but a list written out | `entries = _core.shared(value)`: what the value was read from may hold it |
-| An element or a field given to a `var` parameter | `_core.shared(_core.item(rows, 0))`: the value it is inside holds it |
+| `entries`, as it is | An argument, the read of an element or a field, an operand: a reference, which the function is given and does not change |
+| `before = _core.copied(entries)` | A `let` of what a place holds, or of a value written with it, where the place is changed while the name is in scope: in the rest of the `let`'s block, or anywhere in a loop the `let` is inside. `hgl_hgraph`'s `copies` reads each body for it |
+| `last = _core.item(rows, 2)` | A `let` whose place changes no more in its scope: a reference into the place |
+| `for item in _core.copied(values):` | A loop whose own body changes the place it runs over. Any other loop reads each entry where it is |
+| `push_all(items=rows, more=_core.copied(rows))` | The owner's first case: an argument read from a place that the same call gives to a `var` parameter. A second `var` parameter given the same place takes a copy too, and the place is given them in the order of the parameters (FN-15) |
+| `mine = _core.copied(values)`, `rows = _core.set_entry(rows, "b", _core.copied(items))` | What a place keeps, assigned to it or into it: a copy, where something else holds the value. A value written out and what a function of the program returns are held by nothing else, and are kept as they are |
+| `_core.fn_append(values=rows, item=_core.copied(row))` | What a native function with a `var` parameter puts into its place, where the place may hold it: `append` keeps its item, and `extend(values, more)` keeps the numbers `more` holds and takes `more` as it is |
+| `return _core.copied(value)`, `return out` | A result is the caller's to keep: a copy of what the function was given, and its own `var` or `let` as it is |
+| `_output.value = _core.copied(...)`, `yield`, a hook's `return` of a `state` | What is published is the runtime's to keep. The provider copies what it puts in a run's store |
+| `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)` | An element or an entry assigned: the place's own collection, changed where it is. A `var` parameter is the caller's place, and is changed where it is too |
+| `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)` | A place further in: the provider goes in and changes each list and dictionary on the way where it is. The value is asked for once the way in has been read |
+| `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))` | A native function of core given a place further in, and then `book = _given[1]` |
 
-`append`, `extend`, `set_item` and `set_entry` are the provider's. Each
-changes a collection where it is while it is the place's alone, a
-`Grown` list or a `GrownDict` whose `owned` holds, and takes a copy first
-where it is not. The mark is the collection's own: a struct and a tuple
-carry none, so marking one marks the collections directly inside it, and
-a copy of a collection marks what the copy now holds too. A collection's
-mark is trusted only below holders that are themselves the place's
-alone, which is how the provider goes in (`_changed`): from the place,
-each list and dictionary on the way is copied first where it is not its
-holder's own. A `var` parameter's element is assigned by making a new
-list, so that a call that fails leaves the caller's as it was; a way in
-whose index is an expression after an element read is given new values
-too, so that the index is evaluated only once what it is an index of
-has been read. The provider reads the way in, then asks for the value,
-and only then changes anything: the value may hold a collection on the
-way in, `append(rows[0], rows)`, which asking for it marks as shared,
-and which is then copied and not changed. So a recording grows with no copy,
-a list passed to a function is not copied, and a `let` costs a copy
-only where the place grows after it. What the provider puts in a run's
-store it marks as shared itself.
+`_core.copied` shares no list and no dictionary with what it copies; a
+struct, a tuple and a result are made again only to hold the copies of
+what is inside them, and a value that holds no collection is given as it
+is. A way in whose index is an expression after an element read is
+given new values on the way, so that the index is evaluated only once
+what it is an index of has been read. The provider reads the way in,
+then asks for the value, and only then changes anything: the value may
+hold a collection on the way in, `append(rows[0], rows)`, of which the
+compiler gives a copy, taken before the change. So a recording grows
+with no copy, a list passed to a function is not copied, a function's
+own result is kept as it is, and a `let` costs a copy only where its
+place changes while it is in scope.
+
+FN-15: "A function that fails leaves the place holding what its
+parameter held when it failed: no change it had made is undone." A list
+and a dictionary are changed where they are, so what a function did to
+one stays where it fails. Left: a `var` parameter of any other type, an
+`i64` or a struct, is given back when the function returns, and is as
+it was where the function fails; and a struct of more than two scalar
+fields, which the owner's rule has changed where it is too, is still
+made again for each change.
 
 A `tenor` (TYPE-17) is the provider's `Tenor`: a count of months and a
 count of days, or a count of business days. Its literal is written by its
@@ -1606,16 +1614,6 @@ what it writes asks the program's own `business_day` and `roll`. The four
 parts that HGL is written with are the provider's too: `fn_moved`,
 `fn_business_days`, `fn_weekend` and `fn_same_month`. A tenor as the type
 of a temporal input or result is not written yet.
-
-Where a function with a `var` parameter fails, the target leaves each
-place as it was before the call. FN-15 now has the place hold "what its
-parameter held when it failed"; the target is brought to that with the
-owner's rule for copies (#151). Until then, a function of the
-program that is given a place's own list may have grown it where it is
-before it failed, so such a call is written inside a `try`: where it
-fails the place is given `_core.restored(entries, _was_1)`, the list
-as long as it was before the call, and the failure goes on. The
-provider's `append` and `extend` grow a list last, and need none.
 
 hgraph makes a value of its own of what it is given to keep, a node's
 configuration and what its global state holds, and has none for a tuple

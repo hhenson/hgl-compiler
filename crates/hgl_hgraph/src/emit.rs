@@ -26,6 +26,7 @@ use hgl_analyser::{
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
+use crate::copies::{self, Copies};
 use crate::instances::Instances;
 use crate::{codes, provided, python_module, test_function};
 
@@ -116,7 +117,6 @@ pub(crate) fn module(
         given_back: Vec::new(),
         place_call: false,
         held: Vec::new(),
-        unmarked: false,
         hoisted: Vec::new(),
         piece: Piece::default(),
         declared: Vec::new(),
@@ -225,6 +225,9 @@ struct Function<'a> {
     signature: Option<&'a Signature>,
     /// How its names are read.
     mode: Mode,
+    /// Which of its `let`s and loops take a copy of what they read,
+    /// and which are references into its places.
+    copies: Copies,
 }
 
 /// The words a generated module leaves to Python: its keywords. A
@@ -634,10 +637,6 @@ struct Emitter<'a> {
     /// written (EXPR-2). While an argument is evaluated, what its
     /// indices are of is here too.
     held: Vec<(Location, String)>,
-    /// True for the one expression that is written next where what
-    /// reads it keeps nothing of it (`borrowed`): a collection it
-    /// reads is then not marked as shared.
-    unmarked: bool,
     /// Lines to write before the statement being written: an index of
     /// a place the provider goes in to, evaluated once and held
     /// (`steps`).
@@ -1026,6 +1025,7 @@ impl Emitter<'_> {
             locals: &[],
             signature: None,
             mode: Mode::Value,
+            copies: Copies::default(),
         };
         self.propagates = false;
         let written = self.expression(&function, value);
@@ -1158,6 +1158,7 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Value,
+            copies: Copies::of(self.program, body),
         };
         // FN-15: "what it holds when the function returns is what the
         // place is given". Python has no place to give a value to, so
@@ -1297,7 +1298,7 @@ impl Emitter<'_> {
                             let held = format!("_in_{reads}");
                             // Read only to be read through: nothing of
                             // it is kept.
-                            let written = self.borrowed(function, of);
+                            let written = self.expression(function, of);
                             self.line(depth, &format!("{held} = {written}"));
                             self.held.push((of.at, held));
                             read_here.push(of.at);
@@ -1311,9 +1312,7 @@ impl Emitter<'_> {
                 }
                 let held = format!("_arg_{}", position + 1);
                 let written = if is_place(argument) {
-                    let in_place =
-                        given_in_place(self.program, function, signature, arguments, argument);
-                    self.given_place(function, &argument.value, in_place)
+                    self.given_place(function, &argument.value)
                 } else {
                     self.expression(function, &argument.value)
                 };
@@ -1326,51 +1325,16 @@ impl Emitter<'_> {
                 self.held.push((argument.value.at, held));
             }
         }
-        // What the target does where such a function fails: it
-        // raises, and each place is left as it was before the call.
-        // FN-15 has the place hold "what its parameter held when it
-        // failed", which the target is brought to with the rule for
-        // copies (#151).
-        // A function of the program that is given a place's own list
-        // may have grown it where it is before it failed: the list is
-        // then put back to the length it had. The provider's own
-        // `append` and `extend` grow a list last, and do not fail
-        // once they have.
-        let bodied = self.program.modules[*module]
-            .bodies
-            .get(*declaration)
-            .is_some_and(Option::is_some);
-        let mut grown_in_place: Vec<String> = Vec::new();
-        if bodied {
-            for argument in arguments.iter().filter(|argument| is_place(argument)) {
-                if let ExprKind::Local(local) = &argument.value.kind
-                    && given_in_place(self.program, function, signature, arguments, argument)
-                {
-                    grown_in_place.push(self.place(function, *local));
-                }
-            }
-        }
-        for (index, place) in grown_in_place.iter().enumerate() {
-            self.line(depth, &format!("_was_{} = _py.len({place})", index + 1));
-        }
+        // FN-15: "A function that fails leaves the place holding what
+        // its parameter held when it failed: no change it had made is
+        // undone." A list or a dictionary is changed where it is, so
+        // what the function did to one stays where it fails. A value
+        // of any other type is given back when the function returns,
+        // and is as it was where it does not.
         self.place_call = true;
         let called = self.expression(function, value);
         self.place_call = false;
-        if grown_in_place.is_empty() {
-            self.line(depth, &format!("_given = {called}"));
-        } else {
-            self.natives = true;
-            self.line(depth, "try:");
-            self.line(depth + 1, &format!("_given = {called}"));
-            self.line(depth, "except _py.BaseException:");
-            for (index, place) in grown_in_place.iter().enumerate() {
-                self.line(
-                    depth + 1,
-                    &format!("{place} = _core.restored({place}, _was_{})", index + 1),
-                );
-            }
-            self.line(depth + 1, "raise");
-        }
+        self.line(depth, &format!("_given = {called}"));
         for (position, parameter) in places.iter().enumerate() {
             let Some(argument) = arguments
                 .iter()
@@ -1378,21 +1342,9 @@ impl Emitter<'_> {
             else {
                 continue;
             };
-            let mut given = format!("_given[{}]", position + 1);
-            // A function whose parameter is not declared a list does
-            // not know it holds one, and may give back a list that
-            // something else holds: a local that holds a list of its
-            // own takes it marked as shared.
-            if let ExprKind::Local(local) = &argument.value.kind
-                && owns(self.program, function, *local)
-                && !signature
-                    .parameters
-                    .get(*parameter)
-                    .is_some_and(|parameter| matches!(parameter.ty, Type::List { .. }))
-            {
-                self.natives = true;
-                given = format!("_core.shared({given})");
-            }
+            // What the function gives back is its own: it has copied
+            // what it kept (see `kept`).
+            let given = format!("_given[{}]", position + 1);
             if let Some((target, assigned)) = self.assigned(function, &argument.value, given) {
                 self.hoist(depth);
                 self.line(depth, &format!("{target} = {assigned}"));
@@ -1451,6 +1403,14 @@ impl Emitter<'_> {
         for argument in rest {
             let parameter = signature.parameters.get(argument.parameter?)?;
             let value = self.expression(function, &argument.value);
+            // The function puts what it is given into the place: a
+            // copy, where something else holds it and the place may
+            // hold it.
+            let value = if may_hold(self.program, &first.value.ty, &argument.value.ty) {
+                self.copied(function, &argument.value, value)
+            } else {
+                value
+            };
             given.push(format!("{}={value}", name(&parameter.name)));
         }
         self.hoist(depth);
@@ -1604,6 +1564,7 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Node,
+            copies: Copies::of(self.program, body),
         };
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
         // The `const` parameters, as written for the node: a `start`
@@ -1998,11 +1959,13 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Lifecycle,
+            copies: Copies::of(self.program, body),
         };
         let stop_hook = Function {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Stop,
+            copies: Copies::of(self.program, body),
         };
         // `start`: the state's first values, then the hook's own
         // statements.
@@ -2154,6 +2117,7 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Source,
+            copies: Copies::of(self.program, body),
         };
         self.block(&yielding, &block, 1);
 
@@ -2203,6 +2167,7 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Lifecycle,
+            copies: Copies::of(self.program, body),
         };
         self.line(0, "");
         self.line(0, "");
@@ -2240,6 +2205,7 @@ impl Emitter<'_> {
                 locals: &body.locals,
                 signature: Some(signature),
                 mode: Mode::Stop,
+                copies: Copies::of(self.program, body),
             };
             self.line(0, "");
             self.line(0, "");
@@ -2279,6 +2245,7 @@ impl Emitter<'_> {
             locals: &body.locals,
             signature: Some(signature),
             mode: Mode::Graph,
+            copies: Copies::of(self.program, body),
         };
         let (parameters, result) = self.temporal_signature(declaration, signature);
         self.hgraph = true;
@@ -2308,6 +2275,7 @@ impl Emitter<'_> {
                         locals: &body.locals,
                         signature: None,
                         mode: Mode::Test,
+                        copies: Copies::of(self.program, body),
                     };
                     self.block(&function, &body.statements, 1);
                 }
@@ -2353,6 +2321,7 @@ impl Emitter<'_> {
                     locals: &body.locals,
                     signature: None,
                     mode: Mode::Lifecycle,
+                    copies: Copies::of(self.program, body),
                 };
                 // The `inject` is the function's parameter.
                 let puts: Vec<Stmt> = body
@@ -2381,6 +2350,7 @@ impl Emitter<'_> {
                     locals: &[],
                     signature: None,
                     mode: Mode::Test,
+                    copies: Copies::default(),
                 };
                 let line = self.text.matches('\n').count();
                 self.piece.statements.push((line, run.at));
@@ -2446,7 +2416,6 @@ impl Emitter<'_> {
             generics,
             signature,
             arguments,
-            None,
         );
         let real_time = if run.real_time { "True" } else { "False" };
         let mut given = vec![target, record, real_time.to_string()];
@@ -2477,48 +2446,76 @@ impl Emitter<'_> {
         self.text[before..].lines().count()
     }
 
-    /// `value` read by what keeps nothing of it: what reads through it
-    /// to an element or a field, and a function that is lent it. A
-    /// collection it reads, the one a local holds or one inside a
-    /// value, is then not marked as shared ([`owns`]).
-    fn borrowed(&mut self, function: &Function, value: &Expr) -> String {
-        self.unmarked = true;
-        self.expression(function, value)
+    /// True where nothing else holds what `value` gives
+    /// ([`copies::fresh`]), and in a graph, where a value is a
+    /// connection and nothing is changed where it is.
+    fn fresh(&self, function: &Function, value: &Expr) -> bool {
+        function.mode == Mode::Graph || copies::fresh(self.program, value)
     }
 
-    /// The read `read` of an element or a field, `value`, as what may
-    /// keep it takes it. A collection inside a value is held by that
-    /// value: what takes it out may keep it, so it is marked as shared
-    /// (`_core.shared`), and the value copies it before it changes it.
-    /// A read that keeps nothing (`unmarked`), one in a graph, and one
-    /// of a value that holds no collection are as they are.
-    fn taken(&mut self, function: &Function, value: &Expr, read: String, unmarked: bool) -> String {
-        if unmarked || function.mode == Mode::Graph || !holds_collection(self.program, &value.ty, 0)
-        {
-            return read;
+    /// `written`, the text of `value`, as what keeps it takes it: a
+    /// copy, where something else holds the value too (`fresh`). What
+    /// keeps a value is a place it is assigned to or into, a native
+    /// function that puts it in the place it is given, and the runtime
+    /// that is given it to publish.
+    fn copied(&mut self, function: &Function, value: &Expr, written: String) -> String {
+        if self.fresh(function, value) {
+            written
+        } else {
+            self.natives = true;
+            format!("_core.copied({written})")
         }
-        self.natives = true;
-        format!("_core.shared({read})")
+    }
+
+    /// What a `return` gives of `value`, written `written`.
+    ///
+    /// A value function's result is the caller's to keep, so it is the
+    /// function's own, or a copy: what is read from a `var` the body
+    /// declares is gone when the function returns and is given as it
+    /// is, and what is read from a parameter is the caller's already.
+    /// A hook's `return` publishes: the runtime keeps the value, and a
+    /// `state` or a `cache` it is read from goes on changing.
+    fn given_out(&mut self, function: &Function, value: &Expr, written: String) -> String {
+        let locals = function.locals;
+        let own = match function.mode {
+            Mode::Graph | Mode::Test => true,
+            Mode::Value => {
+                let parameters = function
+                    .signature
+                    .map_or(0, |signature| signature.parameters.len());
+                function.copies.own(locals, parameters, value)
+            }
+            Mode::Node | Mode::Lifecycle | Mode::Stop => !function
+                .copies
+                .places(self.program, locals, value)
+                .iter()
+                .any(|&place| matches!(locals[place].kind, LocalKind::State | LocalKind::Cache)),
+            Mode::Source => false,
+        };
+        if own {
+            written
+        } else {
+            self.copied(function, value, written)
+        }
     }
 
     /// What is written into the local `local` for `value`, which is
-    /// written `written`. Where the local holds a list of its own
-    /// ([`owns`]) the list is marked as shared, since whatever `value`
-    /// read it from may hold it too: the local copies it before it
-    /// grows. A list written out is held by nothing else, and one read
-    /// from another such local is marked where it is read.
+    /// written `written`.
+    ///
+    /// A `var`, a `state` and a `cache` keep what they are given: it
+    /// is copied, where something else holds it. A `let` is a
+    /// reference to what it reads, and takes a copy only where the
+    /// place it reads from is changed while the name is in scope
+    /// ([`Copies`]).
     fn kept(&mut self, function: &Function, local: usize, value: &Expr, written: String) -> String {
-        fn fresh(program: &Program, function: &Function, value: &Expr) -> bool {
-            match &value.kind {
-                ExprKind::Sequence(_) | ExprKind::Pairs(_) => true,
-                ExprKind::Local(local) => owns(program, function, *local),
-                ExprKind::Widen(inner) => fresh(program, function, inner),
-                _ => false,
-            }
-        }
-        if owns(self.program, function, local) && !fresh(self.program, function, value) {
+        if copies::is_place(function.locals, local) {
+            self.copied(function, value, written)
+        } else if function.copies.copied(local)
+            && function.mode != Mode::Graph
+            && holds_collection(self.program, &value.ty, 0)
+        {
             self.natives = true;
-            format!("_core.shared({written})")
+            format!("_core.copied({written})")
         } else {
             written
         }
@@ -2527,12 +2524,9 @@ impl Emitter<'_> {
     /// True where `base` is a list or a dictionary that a `var`, a
     /// `state` or a `cache` of this function holds itself ([`owns`]): an
     /// element or an entry of it is assigned where the collection is,
-    /// and no entry of it is copied for the change.
-    ///
-    /// A `var` parameter is no such place. What it is given is the
-    /// caller's own list, which a call that fails must leave as it was
-    /// (FN-15): an element of it is assigned by making a new list, and
-    /// the caller's is not touched.
+    /// and no entry of it is copied for the change. A `var` parameter
+    /// is such a place: what it is given is the caller's own
+    /// collection, which the function changes where it is (FN-15).
     fn changed_where_it_is(&self, function: &Function, base: &Expr) -> bool {
         let ExprKind::Local(local) = &base.kind else {
             return false;
@@ -2542,57 +2536,18 @@ impl Emitter<'_> {
         // (EXPR-15), and is written as one.
         function.mode != Mode::Graph
             && owns(self.program, function, *local)
-            && !self.given_back.contains(&name(&declared.name))
             && matches!(declared.ty, Type::List { .. } | Type::Dict { .. })
     }
 
-    /// What a `var` parameter is given for the place `value` (FN-15).
-    ///
-    /// `in_place` is true where the function may grow the list the
-    /// place holds where it is: its parameter is declared a list, the
-    /// place is a local that holds a list of its own, and no other
-    /// `var` parameter of the call is given that local. The list is
-    /// then given as it is. Any other place of a list type gives its
-    /// list marked as shared: an element or a field is held by
-    /// whatever else holds the value it is inside.
-    fn given_place(&mut self, function: &Function, value: &Expr, in_place: bool) -> String {
+    /// What a `var` parameter is given for the place `value` (FN-15):
+    /// what the place holds, as it is. The function changes a list or
+    /// a dictionary where it is, and gives back what the place is to
+    /// hold.
+    fn given_place(&mut self, function: &Function, value: &Expr) -> String {
         if let Some((_, held)) = self.held.iter().find(|(at, _)| *at == value.at) {
             return held.clone();
         }
-        match &value.kind {
-            ExprKind::Local(local) if in_place && owns(self.program, function, *local) => {
-                self.place(function, *local)
-            }
-            // A local that holds a list of its own marks it where it
-            // is read.
-            // A local, an element and a field each mark what they
-            // give, where it holds a collection.
-            _ => self.expression(function, value),
-        }
-    }
-
-    /// True where a call of `callee` has nowhere but its result to keep
-    /// what it is given: a `const fn`, or a native one, with no `var`
-    /// parameter, which is given data alone. It assigns no place of
-    /// the caller, and is handed nothing that outlives the call, a
-    /// run's store say, to put an argument in. Whether its result may
-    /// keep an argument is asked of each one ([`may_keep`]).
-    fn lends(
-        &self,
-        function: &Function,
-        callee: (usize, usize),
-        signature: &Signature,
-        arguments: &[Argument],
-    ) -> bool {
-        let declared = &self.program.modules[callee.0].declarations[callee.1];
-        // In a graph a call may be lifted to a node, which keeps its
-        // configuration.
-        function.mode != Mode::Graph
-            && declared.kind.role() == Some(Role::Value)
-            && signature.parameters.iter().all(|parameter| !parameter.var)
-            && arguments
-                .iter()
-                .all(|argument| data_alone(self.program, &argument.value.ty, 0))
+        self.expression(function, value)
     }
 
     /// What a local is written as where it is assigned or read as it
@@ -2697,6 +2652,11 @@ impl Emitter<'_> {
                     && Self::publishes_null(function, assigned)
                 {
                     self.published(value)
+                } else if declared.kind == LocalKind::Inject && declared.name == "out" {
+                    // TIME-7: the runtime keeps what is published, and
+                    // the hook may go on to change what it read it
+                    // from.
+                    self.copied(function, assigned, value)
                 } else {
                     self.kept(function, *local, assigned, value)
                 };
@@ -2731,7 +2691,7 @@ impl Emitter<'_> {
                             let held = format!("_in_{reads}");
                             // Read only to be read through: nothing of
                             // it is kept.
-                            let written = self.borrowed(function, of);
+                            let written = self.expression(function, of);
                             self.line(depth, &format!("{held} = {written}"));
                             self.held.push((of.at, held));
                             held_here.push(of.at);
@@ -2744,7 +2704,10 @@ impl Emitter<'_> {
                         held_here.push(index.at);
                     }
                 }
-                let value = self.expression(function, value);
+                // The place keeps what it is given: a copy, where
+                // something else holds it.
+                let written = self.expression(function, value);
+                let value = self.copied(function, value, written);
                 if let Some((target, value)) = self.assigned(function, place, value) {
                     self.hoist(depth);
                     self.line(depth, &format!("{target} = {value}"));
@@ -2771,6 +2734,7 @@ impl Emitter<'_> {
                     Some(result) => result,
                     None => self.expression(function, returned),
                 };
+                let value = self.given_out(function, returned, value);
                 // A node that publishes a nullable publishes its null.
                 let value =
                     if function.mode == Mode::Node && Self::publishes_null(function, returned) {
@@ -2858,6 +2822,9 @@ impl Emitter<'_> {
             } if function.mode == Mode::Source => {
                 let time = self.expression(function, time);
                 let value = self.expression(function, yielded);
+                // The runtime keeps what is published, and the source
+                // goes on after its `yield`.
+                let value = self.copied(function, yielded, value);
                 let value = if Self::publishes_null(function, yielded) {
                     self.published(value)
                 } else {
@@ -2934,33 +2901,30 @@ impl Emitter<'_> {
         depth: usize,
     ) {
         let over = self.expression(function, sequence);
+        // A loop runs over the value its sequence had where the loop
+        // began. Its names are references to the entries, and the loop
+        // takes a copy only where its own body changes the place the
+        // sequence is read from ([`Copies`]).
+        let over = if names
+            .first()
+            .is_some_and(|&first| function.copies.copied(first))
+            && function.mode != Mode::Graph
+        {
+            self.natives = true;
+            format!("_core.copied({over})")
+        } else {
+            over
+        };
         let bound: Vec<String> = names
             .iter()
             .map(|&local| self.place(function, local))
             .collect();
-        // The loop's name holds an entry that the collection holds too:
-        // one that holds a collection is marked as it is taken.
-        let program = self.program;
-        let marked = |ty: &Type| function.mode != Mode::Graph && holds_collection(program, ty, 0);
         match (&sequence.ty, bound.as_slice()) {
-            (Type::List { element, .. } | Type::Set(element), [item]) => {
-                if marked(element) {
-                    self.natives = true;
-                    self.line(depth, &format!("for {item} in _core.each({over}):"));
-                } else {
-                    self.line(depth, &format!("for {item} in {over}:"));
-                }
+            (Type::List { .. } | Type::Set(_), [item]) => {
+                self.line(depth, &format!("for {item} in {over}:"));
             }
-            (Type::Dict { value: of, .. }, [key, value]) => {
-                if marked(of) {
-                    self.natives = true;
-                    self.line(
-                        depth,
-                        &format!("for {key}, {value} in _core.each_entry({over}):"),
-                    );
-                } else {
-                    self.line(depth, &format!("for {key}, {value} in {over}.items():"));
-                }
+            (Type::Dict { .. }, [key, value]) => {
+                self.line(depth, &format!("for {key}, {value} in {over}.items():"));
             }
             _ => {
                 self.unsupported(at, "this loop");
@@ -3082,9 +3046,6 @@ impl Emitter<'_> {
     /// An expression as Python. One with no Python here yet is reported
     /// and written `None`.
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
-        // Whether this one expression is read by what keeps nothing of
-        // it. What it reads in turn is asked afresh.
-        let unmarked = std::mem::take(&mut self.unmarked);
         // In a graph a value may be a connection, and Python's `and`,
         // `not` and `if` would act on the port: only a name, a literal,
         // a member of an enum, a constant, a call and a widening are
@@ -3128,13 +3089,10 @@ impl Emitter<'_> {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
-                } else if owns(self.program, function, *local) && !unmarked {
-                    // LIST-3: what takes the collection a place holds
-                    // may keep it, so it is marked as shared: the
-                    // place copies it before it next changes.
-                    self.natives = true;
-                    format!("_core.shared({read})")
                 } else {
+                    // What a place holds is read as it is: a copy is
+                    // made where a reference to it is kept, and not
+                    // where it is read (see `kept`).
                     read
                 }
             }
@@ -3426,11 +3384,8 @@ impl Emitter<'_> {
                     self.unsupported(value.at, "this member");
                     return "None".to_string();
                 };
-                // The struct is only read through: what may be kept is
-                // the field, and a collection in it is marked.
-                let base = self.borrowed(function, base);
-                let read = format!("{base}.{}", name(&field.name));
-                self.taken(function, value, read, unmarked)
+                let base = self.expression(function, base);
+                format!("{base}.{}", name(&field.name))
             }
             // EXPR-7: "Brackets read an element of a list or a tuple by
             // an `i64` index, and the value a dictionary has for a
@@ -3442,10 +3397,9 @@ impl Emitter<'_> {
                     return "None".to_string();
                 };
                 self.natives = true;
-                let base = self.borrowed(function, base);
+                let base = self.expression(function, base);
                 let index = self.expression(function, index);
-                let read = format!("_core.{read}({base}, {index})");
-                self.taken(function, value, read, unmarked)
+                format!("_core.{read}({base}, {index})")
             }
             // ERR-2: "`ok(value)` constructs a success and
             // `err(value)` a failure."
@@ -3652,6 +3606,7 @@ impl Emitter<'_> {
             locals: &[],
             signature: None,
             mode: Mode::Value,
+            copies: Copies::default(),
         };
         self.expanding.push(key);
         let written = self.expression(&cold, value);
@@ -3721,10 +3676,7 @@ impl Emitter<'_> {
         loop {
             match &at.kind {
                 ExprKind::Local(local) => {
-                    let declared = &function.locals[*local];
-                    let root = function.mode != Mode::Graph
-                        && owns(self.program, function, *local)
-                        && !self.given_back.contains(&name(&declared.name));
+                    let root = function.mode != Mode::Graph && owns(self.program, function, *local);
                     return (root && collection && steps >= least).then_some(*local);
                 }
                 ExprKind::Field { base, member } => {
@@ -3826,7 +3778,7 @@ impl Emitter<'_> {
                 self.natives = true;
                 // The struct is read to make the new one of: nothing
                 // of it is kept that it does not hold already.
-                let held = self.borrowed(function, base);
+                let held = self.expression(function, base);
                 let value = format!("_core.with_field({held}, {}={value})", name(&field.name));
                 self.assigned_by_copy(function, base, value)
             }
@@ -3845,7 +3797,7 @@ impl Emitter<'_> {
                     }
                 };
                 self.natives = true;
-                let held = self.borrowed(function, base);
+                let held = self.expression(function, base);
                 let index = self.expression(function, index);
                 // The collection a `var`, a `state` or a `cache` holds
                 // itself is changed where it is; one inside another
@@ -3948,7 +3900,6 @@ impl Emitter<'_> {
         generics: &[GenericArgument],
         signature: &Signature,
         arguments: &[Argument],
-        result: Option<&Type>,
     ) -> String {
         // A node keeps its configuration: a list, a tuple or a
         // dictionary is given to it inside an object hgraph keeps as
@@ -3987,29 +3938,87 @@ impl Emitter<'_> {
                 value
             }
         };
-        let lends = self.lends(function, callee, signature, arguments);
+        // The owner's rule: an argument is a reference to what it
+        // names, and is copied in two cases alone.
+        //
+        // "the value is passed to a function and the function also
+        // recieves a var reference to the item or items it contains":
+        // an argument read from a place that the same call gives to a
+        // `var` parameter, itself or a part of it or what holds it.
+        //
+        // And one a native function keeps: a native function with a
+        // `var` parameter puts what it is given into that place, as
+        // `append` does its item, and what is kept is copied where
+        // something else holds it. A function of the program copies
+        // what it keeps itself, where it keeps it.
+        let places: Vec<usize> = arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index))
+                    .is_some_and(|parameter| parameter.var)
+            })
+            .filter_map(|argument| copies::place_of(function.locals, &argument.value))
+            .collect();
+        let native = self.program.modules[callee.0]
+            .bodies
+            .get(callee.1)
+            .is_none_or(Option::is_none);
+        // The types of the places such a function is given: what it
+        // keeps of another argument, it keeps in one of them.
+        let holders: Vec<&Type> = arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .parameter
+                    .and_then(|index| signature.parameters.get(index))
+                    .is_some_and(|parameter| native && parameter.var)
+            })
+            .map(|argument| &argument.value.ty)
+            .collect();
+        let mut given_places: Vec<usize> = Vec::new();
         let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
                 let index = argument.parameter?;
                 let parameter = signature.parameters.get(index)?;
+                let collection = function.mode != Mode::Graph
+                    && holds_collection(self.program, &argument.value.ty, 0);
                 let value = if parameter.var {
-                    // FN-15: the place itself, where the function may
-                    // grow its list where it is.
-                    let in_place =
-                        given_in_place(self.program, function, signature, arguments, argument);
-                    self.given_place(function, &argument.value, in_place)
-                } else if lends
-                    && !(signature.result.is_some()
-                        && result.is_none_or(|result| {
-                            may_keep(self.program, result, &argument.value.ty)
-                        }))
-                {
-                    // Lent: the function has nowhere to keep it, in a
-                    // result it has none of or in the one it gives.
-                    self.borrowed(function, &argument.value)
+                    // FN-15: the place itself. A second `var`
+                    // parameter given the same place takes a copy:
+                    // each has a value of its own, and the place is
+                    // given them "in the order of the parameters".
+                    let written = self.given_place(function, &argument.value);
+                    let place = copies::place_of(function.locals, &argument.value);
+                    let again = place.is_some_and(|place| given_places.contains(&place));
+                    given_places.extend(place);
+                    if again && collection {
+                        self.natives = true;
+                        format!("_core.copied({written})")
+                    } else {
+                        written
+                    }
                 } else {
-                    self.expression(function, &argument.value)
+                    let written = self.expression(function, &argument.value);
+                    let read_from =
+                        function
+                            .copies
+                            .places(self.program, function.locals, &argument.value);
+                    let shared = read_from.iter().any(|place| places.contains(place));
+                    if collection && shared {
+                        self.natives = true;
+                        format!("_core.copied({written})")
+                    } else if collection
+                        && holders
+                            .iter()
+                            .any(|holder| may_hold(self.program, holder, &argument.value.ty))
+                    {
+                        self.copied(function, &argument.value, written)
+                    } else {
+                        written
+                    }
                 };
                 Some(format!("{}={}", name(&parameter.name), kept(index, value)))
             })
@@ -4083,6 +4092,7 @@ impl Emitter<'_> {
                 locals: &[],
                 signature: None,
                 mode: Mode::Value,
+                copies: Copies::default(),
             };
             self.expanding.push(key);
             let value = self.expression(&cold, default);
@@ -4575,7 +4585,6 @@ impl Emitter<'_> {
                 generics,
                 signature,
                 arguments,
-                Some(&whole.ty),
             );
             let called = format!("_core.{native}({arguments})");
             return self.native_result(signature.result.as_ref(), called);
@@ -4622,7 +4631,6 @@ impl Emitter<'_> {
                 generics,
                 signature,
                 arguments,
-                Some(&whole.ty),
             );
             let arguments: Vec<String> = [arguments]
                 .into_iter()
@@ -4643,7 +4651,6 @@ impl Emitter<'_> {
             generics,
             signature,
             arguments,
-            Some(&whole.ty),
         );
         format!("{python}({arguments})")
     }
@@ -4741,7 +4748,6 @@ impl Emitter<'_> {
             generics,
             signature,
             arguments,
-            None,
         );
         let mut given = vec![target, run];
         if !arguments.is_empty() {
@@ -5129,152 +5135,15 @@ fn goes_through_a_collection(place: &Expr) -> bool {
     false
 }
 
-/// True where a function's result, of type `result`, may be or may
-/// hold the value it was given, of type `given`, which holds a
-/// collection a place changes ([`holds_collection`]). For a list or a
-/// dictionary: the result has a collection of that kind somewhere in
-/// it. For a struct, a tuple or another value that holds one: the
-/// result has a struct or a tuple in it. And in either case: the result
-/// has a part whose type does not say what it holds. A function that
-/// gives an `i64`, or an entry of the dictionary it is given, cannot
-/// keep the dictionary; one that gives a list may be giving the list it
-/// was given. What a function gives of the inside of what it was given
-/// it marks itself, where it reads it.
-fn may_keep(program: &Program, result: &Type, given: &Type) -> bool {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Kind {
-        List,
-        Dict,
-        Other,
-    }
-    fn holds(ty: &Type, kind: Kind) -> bool {
-        match ty {
-            Type::Scalar(scalar) => *scalar == Scalar::Any,
-            Type::Named {
-                kind: NamedKind::Enum,
-                ..
-            }
-            | Type::Error => false,
-            Type::Nullable(inner) | Type::Set(inner) => holds(inner, kind),
-            Type::List { element, .. } => kind == Kind::List || holds(element, kind),
-            Type::Dict { key, value } => {
-                kind == Kind::Dict || holds(key, kind) || holds(value, kind)
-            }
-            Type::Tuple(elements) => {
-                kind == Kind::Other || elements.iter().any(|element| holds(element, kind))
-            }
-            Type::Result { value, error } => holds(value, kind) || holds(error, kind),
-            // A struct, a native value, a generic parameter and any
-            // other type may hold anything.
-            _ => true,
-        }
-    }
-    let mut given = given;
-    while let Type::Nullable(inner) = given {
-        given = inner;
-    }
-    let kind = match given {
-        Type::List { .. } => Kind::List,
-        Type::Dict { .. } => Kind::Dict,
-        _ if holds_collection(program, given, 0) => Kind::Other,
-        // What is given holds no collection a place changes: there is
-        // nothing to keep.
-        _ => return false,
-    };
-    holds(result, kind)
-}
-
-/// True for a type whose values are data alone: a scalar, an enum, and
-/// a list, a set, a tuple, a dictionary, a nullable or a struct of
-/// those. A value of any other type may be something that outlives a
-/// call, a capability say, or may hold one: a native type, a generic
-/// parameter, `any`, and a struct that another struct inherits from,
-/// whose value may be of that other struct.
-fn data_alone(program: &Program, ty: &Type, depth: usize) -> bool {
-    // A struct may hold itself inside a list: a type this deep is not
-    // followed further.
-    if depth > 8 {
-        return false;
-    }
-    let all = |types: &[&Type]| types.iter().all(|ty| data_alone(program, ty, depth + 1));
-    match ty {
-        Type::Scalar(scalar) => *scalar != Scalar::Any,
-        Type::Named {
-            kind: NamedKind::Enum,
-            ..
-        } => true,
-        Type::Named {
-            module,
-            declaration,
-            kind: NamedKind::Struct,
-            ..
-        } => {
-            !inherited(program, *module, *declaration)
-                && match program.modules[*module].details.get(*declaration) {
-                    Some(Detail::Struct(read)) => read
-                        .members
-                        .iter()
-                        .all(|member| data_alone(program, &member.ty, depth + 1)),
-                    _ => false,
-                }
-        }
-        Type::Nullable(inner) | Type::Set(inner) => all(&[inner]),
-        Type::List { element, .. } => all(&[element]),
-        Type::Tuple(elements) => elements
-            .iter()
-            .all(|element| data_alone(program, element, depth + 1)),
-        Type::Dict { key, value } => all(&[key, value]),
-        _ => false,
-    }
-}
-
-/// True where the `var` parameter `argument` is given may have its
-/// list grown where it is: the parameter is declared a list, so its
-/// function knows it for one; the place is a local that holds a list of
-/// its own ([`owns`]); and no other `var` parameter of the call is
-/// given the same local.
-fn given_in_place(
-    program: &Program,
-    function: &Function,
-    signature: &Signature,
-    arguments: &[Argument],
-    argument: &Argument,
-) -> bool {
-    let place = |argument: &Argument| match (&argument.value.kind, argument.parameter) {
-        (ExprKind::Local(local), Some(index)) => signature
-            .parameters
-            .get(index)
-            .filter(|parameter| parameter.var)
-            .map(|parameter| (*local, parameter)),
-        _ => None,
-    };
-    let Some((local, parameter)) = place(argument) else {
-        return false;
-    };
-    // The local is declared a list too: one declared `list<T>?` may
-    // hold a null.
-    matches!(parameter.ty, Type::List { .. })
-        && owns(program, function, local)
-        && matches!(function.locals[local].ty, Type::List { .. })
-        && arguments
-            .iter()
-            .filter(|other| place(other).is_some_and(|(given, _)| given == local))
-            .count()
-            == 1
-}
-
 /// True for a local that holds a list or a dictionary of its own: a
 /// `var`, a `var` parameter, a `state` or a `cache` of such a type,
 /// which is no connection.
 ///
 /// LIST-3: "a value taken from the place before the call is as it
 /// was". Python's list is one object that every name of it sees
-/// change. So a `let`, a parameter and whatever else is given the list
-/// such a local holds is given the list itself, with no copy, and the
-/// list is marked as shared; `append` and `extend` grow a list where
-/// it is while it is not shared, and copy it once where it is. What
-/// only reads the list, an element read or a function that can keep
-/// nothing, leaves it unmarked.
+/// change. So the collection such a local holds is changed where it
+/// is, and is the local's alone: what is kept of it elsewhere, and a
+/// name that outlives a change of it, is a copy (`Emitter::kept`).
 fn owns(program: &Program, function: &Function, local: usize) -> bool {
     let declared = &function.locals[local];
     matches!(
@@ -5290,7 +5159,7 @@ fn owns(program: &Program, function: &Function, local: usize) -> bool {
 /// A generic parameter, `any` and a struct that another inherits from
 /// may hold anything. A scalar, an enum and a struct of those are
 /// simple: they are copied, and nothing in them is changed.
-fn holds_collection(program: &Program, ty: &Type, depth: usize) -> bool {
+pub(crate) fn holds_collection(program: &Program, ty: &Type, depth: usize) -> bool {
     // A struct may hold itself inside a list, which is a collection.
     if depth > 8 {
         return true;
@@ -5330,6 +5199,82 @@ fn holds_collection(program: &Program, ty: &Type, depth: usize) -> bool {
         Type::Result { value, error } => any(&[value, error]),
         _ => true,
     }
+}
+
+/// The types of what a value of `ty` holds directly: a list's element,
+/// a dictionary's key and value, a tuple's and a struct's parts. `None`
+/// for a type that does not say: a generic parameter, `any`, a native
+/// type, a struct with generic parameters or one that another inherits
+/// from.
+fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
+    match ty {
+        Type::Scalar(scalar) => (*scalar != Scalar::Any).then(Vec::new),
+        Type::Named {
+            kind: NamedKind::Enum,
+            ..
+        }
+        | Type::Error => Some(Vec::new()),
+        Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } => match program.modules[*module].details.get(*declaration) {
+            Some(Detail::Struct(read))
+                if read.generics.is_empty() && !inherited(program, *module, *declaration) =>
+            {
+                Some(read.members.iter().map(|member| &member.ty).collect())
+            }
+            _ => None,
+        },
+        Type::Nullable(inner) | Type::Set(inner) => Some(vec![inner]),
+        Type::List { element, .. } => Some(vec![element]),
+        Type::Dict { key, value } => Some(vec![key, value]),
+        Type::Tuple(elements) => Some(elements.iter().collect()),
+        Type::Result { value, error } => Some(vec![value, error]),
+        _ => None,
+    }
+}
+
+/// True where a value of type `holder` may come to hold a value of type
+/// `given`, or a part of one, that is or holds a list or a dictionary:
+/// a `list<list<i64>>` may hold a `list<i64>`, and a `list<i64>` holds
+/// nothing of another `list<i64>` but its numbers. What a native
+/// function puts into the place it is given is copied only where this
+/// holds: `append(rows, row)` keeps `row`, and `extend(values, more)`
+/// keeps the numbers `more` holds.
+fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
+    // Every type inside `ty`, itself left out; `None` where a part of
+    // it does not say what it holds. A struct may hold itself inside a
+    // list: a type this deep is not followed further.
+    fn inside<'a>(
+        program: &'a Program,
+        ty: &'a Type,
+        depth: usize,
+        into: &mut Vec<&'a Type>,
+    ) -> Option<()> {
+        if depth > 8 {
+            return None;
+        }
+        for part in held_types(program, ty)? {
+            if !into.contains(&part) {
+                into.push(part);
+                inside(program, part, depth + 1, into)?;
+            }
+        }
+        Some(())
+    }
+    let mut holds = Vec::new();
+    if inside(program, holder, 0, &mut holds).is_none() {
+        return true;
+    }
+    let mut parts = vec![given];
+    if inside(program, given, 0, &mut parts).is_none() {
+        return true;
+    }
+    parts
+        .iter()
+        .any(|part| holds_collection(program, part, 0) && holds.contains(part))
 }
 
 /// True where another struct of the program inherits from the struct

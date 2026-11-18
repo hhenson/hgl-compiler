@@ -4434,7 +4434,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
         ),
         // A place inside a value: its root is given a new value.
         concat!(
-            "    _given = set_first(items=_core.shared(book.orders), value=5)\n",
+            "    _given = set_first(items=book.orders, value=5)\n",
             "    book = _core.with_field(book, orders=_given[1])\n",
             "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
             "    book = _core.set_at(book, ((\"f\", \"orders\"), (\"i\", 1),), lambda: _given[1])\n",
@@ -4699,8 +4699,10 @@ const ENTRIES: &str = concat!(
     "    assert items == [1, 10, 3]\n",
     "    replaced(items, 7)\n",
     "    assert items == [7, 10, 3]\n",
+    // FN-15: "A function that fails leaves the place holding what its
+    // parameter held when it failed: no change it had made is undone."
     "    assert raises(\"numeric.division_by_zero\") { failing(items, 0) }\n",
-    "    assert items == [7, 10, 3]\n",
+    "    assert items == [9, 10, 3]\n",
     // A collection inside another is given a new value, and what
     // took it before is as it was.
     "    var rows: dict<str, list<i64>> = [\"a\": [1]]\n",
@@ -4709,7 +4711,7 @@ const ENTRIES: &str = concat!(
     "    rows[\"b\"] = items\n",
     "    items[0] = 0\n",
     "    assert row == [1]\n",
-    "    assert rows == [\"a\": [2], \"b\": [7, 10, 3]]\n",
+    "    assert rows == [\"a\": [2], \"b\": [9, 10, 3]]\n",
     "}\n",
 );
 
@@ -4717,9 +4719,9 @@ const ENTRIES: &str = concat!(
 /// of the dictionary, and an element of the list, that a `var` of the
 /// function holds itself is assigned where the collection is,
 /// `_core.set_entry` and `_core.set_item`: no entry is copied for it.
-/// The collection is shared and copied as a list that grows is: a
-/// `let` takes it marked, and a function whose result cannot be the
-/// collection is lent it unmarked.
+/// The collection is copied as a list that grows is: by a `let` of
+/// what then changes, and where it is kept. A function is given it as
+/// it is.
 #[test]
 fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
     let emitted = emit(&[("entries.hgl", ENTRIES)]);
@@ -4730,23 +4732,26 @@ fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
         // dictionary; then assigned where it is.
         "        counts = _core.set_entry(counts, name, _core.add__i64_i64(lhs=count_of(counts=counts, name=name), rhs=1))\n",
         "    found = _core.get_dict_K__T__K(store=counts, key=name)\n",
-        // A `let` takes the dictionary itself, marked.
+        // A `let` of a dictionary that then changes takes a copy.
         concat!(
-            "    before = _core.shared(book)\n",
+            "    before = _core.copied(book)\n",
             "    book = _core.set_entry(book, \"b\", 2)\n",
         ),
-        // A function that may give back what it is given.
-        "    through = same(value=_core.shared(book))\n",
+        // A function is given the dictionary as it is, and gives back
+        // a copy of what it was given.
+        "    through = same(value=book)\n",
+        "def same(value):\n    return _core.copied(value)\n",
         // An element of a list, and a compound assignment of one.
         "    items = _core.set_item(items, 1, 9)\n",
         "    items = _core.set_item(items, 1, _core.add__i64_i64(lhs=_core.item(items, 1), rhs=1))\n",
-        // A `var` parameter's element: a new list.
-        "    items = _core.with_item(items, 0, value)\n",
+        // A `var` parameter's element: the caller's list, changed
+        // where it is.
+        "    items = _core.set_item(items, 0, value)\n",
         // An entry that is a list: the dictionary is changed where it
         // is, and the list inside it is given a new value.
         "    rows = _core.set_at(rows, ((\"k\", \"a\"), (\"i\", 0),), lambda: 2)\n",
-        // What a dictionary keeps is marked.
-        "    rows = _core.set_entry(rows, \"b\", _core.shared(items))\n",
+        // What a dictionary keeps of another place's list is a copy.
+        "    rows = _core.set_entry(rows, \"b\", _core.copied(items))\n",
     ] {
         assert!(
             python.contains(expected),
@@ -4898,9 +4903,9 @@ const INSIDE: &str = concat!(
 /// the function holds, with a collection on the way, the provider goes
 /// in: `_core.set_at` for an assignment, and `_core.given_at` for a
 /// native function of core that is given the place (LIST-1, FN-15).
-/// Each collection on the way is changed where it is while it is its
-/// holder's alone. A collection read out of a value by what may keep
-/// it is marked as shared, and one read through, or lent, is not.
+/// Each collection on the way is changed where it is. A collection read
+/// out of a value is read as it is, and is copied where it is kept: by
+/// a `let` of what then changes, and by a result.
 #[test]
 fn a_collection_inside_a_value_is_changed_where_it_is() {
     let emitted = emit(&[("inside.hgl", INSIDE)]);
@@ -4927,13 +4932,16 @@ fn a_collection_inside_a_value_is_changed_where_it_is() {
         "total(values=_state.book.orders)",
         "_core.entry(_state.book.bids, value.value)",
         "    taken = orders_of(book=book)\n",
-        // Taken by what may keep it: marked.
-        "    before = _core.shared(book)\n",
-        "    orders = _core.shared(book.orders)\n",
-        "    group = _core.shared(_core.entry(groups, \"a\"))\n",
-        "    return _core.shared(book.orders)\n",
-        // A loop's entries are marked as they are taken.
-        "    for row in _core.each(rows):\n",
+        // A `let` of what its place then changes takes a copy.
+        "    before = _core.copied(book)\n",
+        "    orders = _core.copied(book.orders)\n",
+        "    group = _core.copied(_core.entry(groups, \"a\"))\n",
+        // A result is the caller's to keep: a copy of a part of what
+        // the function was given.
+        "    return _core.copied(book.orders)\n",
+        // A loop whose body changes nothing of what it runs over reads
+        // each entry where it is.
+        "    for row in rows:\n",
         // A field that is no collection: a new struct.
         "    book = _core.with_field(book, name=\"b\")\n",
     ] {
@@ -5000,22 +5008,17 @@ fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
         ),
         // The list's candidate is given the place's own list.
         concat!(
-            "    _was_1 = _py.len(entries)\n",
-            "    try:\n",
-            "        _given = _impl_push_list_i64__i64(values=entries, item=2)\n",
-            "    except _py.BaseException:\n",
-            "        entries = _core.restored(entries, _was_1)\n",
-            "        raise\n",
+            "    _given = _impl_push_list_i64__i64(values=entries, item=2)\n",
             "    entries = _given[1]\n",
         ),
         // The dictionary's candidate, selected by the argument's type.
         concat!(
-            "    _given = _impl_push_dict_str__i64__str(values=_core.shared(seen), item=\"a\")\n",
-            "    seen = _core.shared(_given[1])\n",
+            "    _given = _impl_push_dict_str__i64__str(values=seen, item=\"a\")\n",
+            "    seen = _given[1]\n",
         ),
         // A place inside a value.
         concat!(
-            "    _given = _impl_push_list_i64__i64(values=_core.shared(book.orders), item=2)\n",
+            "    _given = _impl_push_list_i64__i64(values=book.orders, item=2)\n",
             "    book = _core.with_field(book, orders=_given[1])\n",
         ),
     ] {
@@ -5323,9 +5326,8 @@ const SHARED: &str = concat!(
     // One that does not know its place holds a list.
     "const fn keep<T>(var slot: T, value: T) { slot = value }\n",
     "const fn push(var items: list<i64>, item: i64) { append(items, item) }\n",
-    // What the target does: a function that fails leaves the place as
-    // it was, though it grew the place's list before it failed. FN-15
-    // now has the place keep what was grown (#151).
+    // FN-15: a function that fails leaves the place holding what it
+    // had made of it: the list it grew before it failed stays grown.
     "const fn failing(var items: list<i64>, zero: i64) {\n",
     "    append(items, 2)\n",
     "    let quotient = 1 //{zero: .fail} zero\n",
@@ -5415,77 +5417,83 @@ const SHARED: &str = concat!(
     "    var kept: list<i64> = [0]\n",
     "    append(kept, 1)\n",
     "    assert raises(\"numeric.division_by_zero\") { failing(kept, 0) }\n",
-    "    assert kept == [0, 1]\n",
-    "    failing(kept, 1)\n",
     "    assert kept == [0, 1, 2]\n",
+    "    failing(kept, 1)\n",
+    "    assert kept == [0, 1, 2, 2]\n",
     "    assert eval(saving(value: [7])) == [1]\n",
     "}\n",
 );
 
-/// LIST-3 on hgraph. A list is read from a `var` as it is, with no
-/// copy. What may keep it marks it as shared, `_core.shared`: a
-/// `let`, a function whose result may hold it, a value that is made
-/// of it. What can keep nothing is lent it unmarked: the read of an
-/// element, and a `const fn` with a scalar result and no `var`
-/// parameter. `append` grows a list where it is while it is unmarked.
+/// LIST-3 on hgraph, by the owner's rule (the compiler's issue 151):
+/// "all var mutations are mutations, not copies." A `var` changes its
+/// list where it is, with no check and no copy. A copy is made where a
+/// reference is made to what a place holds and the place then changes,
+/// a `let` and a loop; where a call gives a place to a `var` parameter
+/// and what it holds to another; and where a reference is kept: by a
+/// place, by a native function that puts it in one, and by a result.
+/// What is written out, and a function's own result, is copied
+/// nowhere.
 #[test]
-fn a_list_is_shared_and_copied_only_where_it_then_grows() {
+fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
     let emitted = emit(&[("shared.hgl", SHARED)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_shared/__init__.py");
     for expected in [
-        // A `let` takes the list itself, marked.
+        // A `let` of a list its `var` then grows takes a copy.
         concat!(
-            "    before = _core.shared(entries)\n",
+            "    before = _core.copied(entries)\n",
             "    _given = _core.fn_append(values=entries, item=3)\n",
             "    entries = _given[1]\n",
         ),
-        // Lent: a scalar result, and no `var` parameter.
+        // An argument is a reference: nothing is copied for a call.
         "total(values=entries)",
         "longer(values=entries)",
         "_core.eq__T_T(lhs=entries, rhs=[1, 2, 3])",
-        // A `var` written from what the function was lent.
-        "    mine = _core.shared(values)\n",
-        // A result that may hold what it is given.
-        "    through = same(value=_core.shared(entries))\n",
-        // A place whose parameter is not declared a list: marked
-        // where it is given, and where it is given back.
+        "    through = same(value=entries)\n",
+        "save(store=_store, values=_state.seen)",
+        // A `var` keeps what it is given: a copy of its parameter.
+        "    mine = _core.copied(values)\n",
+        // A result is the caller's to keep: a copy of what the
+        // function was given, and its own `var` as it is.
+        "def same(value):\n    return _core.copied(value)\n",
+        "    return out\n",
+        // A `var` parameter is the place itself, and what the function
+        // keeps in it is a copy.
+        "def keep(slot, value):\n    slot = _core.copied(value)\n",
         concat!(
-            "    _given = keep(slot=_core.shared(slot), value=source)\n",
-            "    slot = _core.shared(_given[1])\n",
+            "    _given = keep(slot=slot, value=source)\n",
+            "    slot = _given[1]\n",
         ),
-        // A place inside a value is held by that value too.
+        // A `let` of an element of a list that then changes.
+        "    row = _core.copied(_core.item(rows, 0))\n",
+        // A place inside a value is changed where it is.
         concat!(
             "    _given = _core.given_at(rows, ((\"i\", 0),), _core.fn_append, \"values\", lambda: _py.dict(item=2))\n",
             "    rows = _given[1]\n",
         ),
-        // What a list and a struct keep.
-        "    _given = _core.fn_append(values=rows, item=_core.shared(entries))\n",
-        "    held = Holder(items=_core.shared(entries))\n",
-        // A loop runs over the list as it was.
-        "    for item in _core.shared(values):\n",
-        "    _given = _core.fn_extend(values=twice, items=_core.shared(twice))\n",
-        // A result is the function's own list, which the caller may
-        // keep.
-        "    return _core.shared(out)\n",
-        // FN-15: a function of the program that is given the place's
-        // own list may grow it and then fail: the list is put back.
+        // What a list and a struct keep of another place's list.
+        "    _given = _core.fn_append(values=rows, item=_core.copied(entries))\n",
+        "    held = _core.copied(Holder(items=entries))\n",
+        // A loop over a list its own body grows runs over a copy.
+        "    for item in _core.copied(values):\n",
+        // The owner's first case: the call has a `var` reference to
+        // what it is also given.
+        "    _given = _core.fn_extend(values=twice, items=_core.copied(twice))\n",
+        // FN-15: a function that fails leaves what it had done, and
+        // nothing is put back.
         concat!(
-            "    _was_1 = _py.len(kept)\n",
-            "    try:\n",
-            "        _given = failing(items=kept, zero=1)\n",
-            "    except _py.BaseException:\n",
-            "        kept = _core.restored(kept, _was_1)\n",
-            "        raise\n",
-            "    kept = _given[1]\n",
+            "        _given = failing(items=kept, zero=0)\n",
+            "        kept = _given[1]\n",
         ),
-        // A function handed a run's store is not lent the list.
-        "save(store=_store, values=_core.shared(_state.seen))",
     ] {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
         );
+    }
+    // No mark is kept at run time, and nothing is put back.
+    for gone in ["_core.shared", "_core.each", "_core.restored", "_was_"] {
+        assert!(!python.contains(gone), "the module has `{gone}`:\n{python}");
     }
 }
 
@@ -6024,6 +6032,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("wrapped.hgl", WRAPPED));
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
+    files.push(("copies.hgl", COPIES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6169,6 +6178,57 @@ fn an_application_runs_on_hgraph() {
 /// END-4 and TIME-3: a transition to invalid wakes an active node, but no
 /// publication occurred. Explicit modification guards are checked at evaluation.
 const NOTIFIED: &str = include_str!("fixtures/notification_guards.hgl");
+
+/// The owner's rule for a `var`, where it copies and where it does
+/// not.
+const COPIES: &str = include_str!("fixtures/copies.hgl");
+
+/// "all var mutations are mutations, not copies. The copies only occur
+/// when: 1. the value is passed to a function and the function also
+/// recieves a var reference to the item or items it contains ... 2. let
+/// assignment". And: "It is only when the list could be modified in
+/// the scope of the let / parameter that we need to make a copy", "If
+/// a parameter or let is retained, then it needs to make the copy."
+#[test]
+fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
+    let emitted = emit(&[("copies.hgl", COPIES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_copies/__init__.py");
+    for expected in [
+        // A result: the function's own `var` and its own `let` as they
+        // are, and a copy of what it was given, read through a name or
+        // not.
+        "    return out\n",
+        "    return fresh\n",
+        "    return _core.copied(_core.item(rows, 0))\n",
+        "    return _core.copied(named)\n",
+        // What a native function keeps in the place it is given.
+        "        _given = _core.fn_append(values=items, item=_core.copied(row))\n",
+        // A `let` in a loop whose body changes the place it reads.
+        "        last = _core.copied(_core.item(rows, i))\n",
+        // A `let` of one of two places, each of which then changes.
+        "    picked = _core.copied((left if flag else right))\n",
+        // A `let` whose place changes no more in its scope, and a loop
+        // whose body changes nothing of what it runs over: references.
+        "    last = _core.item(rows, 2)\n",
+        "    for row in rows:\n",
+        // What a place keeps: a value written out that holds a name's
+        // list, and an entry.
+        "    book = _core.copied(Book(orders=source, name=\"a\"))\n",
+        "    books = _core.set_entry(books, \"a\", _core.copied(source))\n",
+        // A function's own result is kept as it is.
+        "    mine = built(count=2)\n",
+        // The owner's first case: a place given to a `var` parameter,
+        // and given again.
+        "    _given = push_all(items=rows, more=_core.copied(rows))\n",
+        "    _given = both(left=twice, right=_core.copied(twice))\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
 
 /// TIME-9, core's CAP-4 and CAP-5: nodes that a scheduler or an alarm
 /// wakes, with inputs and with none.
