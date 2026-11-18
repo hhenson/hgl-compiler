@@ -366,8 +366,13 @@ fn time_fields(time: ClockTime) -> String {
 
 /// A capability a node injects (TIME-8), as hgraph gives one to a node
 /// and to its `start` and `stop`: the parameter the target writes for
-/// it, and that parameter's annotation. `None` for one that is not
-/// written yet: `scheduler` and `alarm`.
+/// it, and that parameter's annotation. `None` for a name that is no
+/// capability's.
+///
+/// Core's CAP-5: "An alarm is a cheaper scheduler". hgraph has one
+/// scheduler for a node and no cheaper one, so a node that injects
+/// `alarm` is given it too; the provider's functions keep the alarm to
+/// what an alarm does.
 ///
 /// hgraph gives a capability for one call and no longer, so each of
 /// the three functions names the ones the node injects. That is the
@@ -378,8 +383,20 @@ fn capability(injected: &str) -> Option<(&'static str, &'static str)> {
         "clock" => Some(("_clock", "_hg.EvaluationClock")),
         "logger" => Some(("_logger", "_hg.LOGGER")),
         "global_state" => Some(("_store", "_hg.GlobalState")),
+        "scheduler" | "alarm" => Some(("_scheduler", "_hg.SCHEDULER")),
         _ => None,
     }
+}
+
+/// What wakes a node beside its inputs (TIME-9): the scheduler or the
+/// alarm it injects.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Timer {
+    /// `inject scheduler`: `scheduled()` is its `is_scheduled_now`.
+    Scheduler,
+    /// `inject alarm`: `scheduled()` "holds where the node is evaluated
+    /// and no temporal input has ticked".
+    Alarm,
 }
 
 /// A type as part of a native function's name: `i64` as it is, and any
@@ -454,6 +471,13 @@ struct Handler<'a> {
     required: Vec<usize>,
     /// Predicates checked when the node runs, including explicit modification guards.
     conditions: Vec<&'a Expr>,
+    /// True where its header has `scheduled()`, alone or as a top-level
+    /// conjunct: a wake by the node's scheduler or alarm runs it
+    /// (TIME-3).
+    scheduled: bool,
+    /// True where its header writes a `modified` selector. One that
+    /// writes none "subscribes to every temporal input".
+    selects: bool,
     /// Its statements.
     body: &'a [Stmt],
 }
@@ -488,6 +512,19 @@ impl<'a> Handler<'a> {
         let mut subscribed: Option<Vec<usize>> = None;
         let mut required: Option<Vec<usize>> = None;
         let mut conditions = Vec::new();
+        let mut scheduled = false;
+        // TIME-3: "A header that is `scheduled()` alone is the
+        // exception: it requires no input to be valid".
+        let alone = matches!(
+            conjuncts.as_slice(),
+            [Expr {
+                kind: ExprKind::Endpoint {
+                    operation: EndpointOperation::Scheduled,
+                    ..
+                },
+                ..
+            }]
+        );
         let add = |set: &mut Option<Vec<usize>>, named: &Option<Vec<usize>>| {
             let set = set.get_or_insert_with(Vec::new);
             for &local in named.as_deref().unwrap_or(inputs) {
@@ -514,13 +551,22 @@ impl<'a> Handler<'a> {
                     operation: EndpointOperation::Valid,
                     inputs: named,
                 } => add(&mut required, named),
+                // The node says what `scheduled()` is: it depends on
+                // which of the scheduler and the alarm it injects.
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Scheduled,
+                    ..
+                } => scheduled = true,
                 _ => conditions.push(conjunct),
             }
         }
+        let selects = subscribed.is_some();
         Handler {
             subscribed: subscribed.unwrap_or_else(|| inputs.to_vec()),
-            required: required.unwrap_or_else(|| inputs.to_vec()),
+            required: required.unwrap_or_else(|| if alone { Vec::new() } else { inputs.to_vec() }),
             conditions,
+            scheduled,
+            selects,
             body,
         }
     }
@@ -1583,6 +1629,8 @@ impl Emitter<'_> {
         // TIME-8: the capabilities the node injects, each as hgraph
         // gives it.
         let mut capabilities: Vec<(&str, &str)> = Vec::new();
+        // TIME-9: the scheduler or the alarm, where it injects one.
+        let mut timer: Option<Timer> = None;
         for statement in &body.statements {
             match statement {
                 // TIME-6: "Cache is reconstructible node-local value
@@ -1622,7 +1670,19 @@ impl Emitter<'_> {
                     if injected == "out" {
                         has_out = true;
                     } else if let Some(written) = capability(injected) {
-                        capabilities.push(written);
+                        let injects = match injected.as_str() {
+                            "scheduler" => Some(Timer::Scheduler),
+                            "alarm" => Some(Timer::Alarm),
+                            _ => None,
+                        };
+                        if injects.is_some() && timer.is_some() {
+                            // Core's CAP-5: "A node injects it in place
+                            // of `scheduler`".
+                            self.unsupported(*at, "a node that injects a scheduler and an alarm");
+                        } else {
+                            timer = timer.or(injects);
+                            capabilities.push(written);
+                        }
                     } else {
                         self.unsupported(*at, &format!("an `inject` of `{injected}`"));
                     }
@@ -1710,11 +1770,105 @@ impl Emitter<'_> {
         }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
-        if !handlers.is_empty() && active.is_empty() {
-            // TIME-3: "`modified([])` subscribes to no input: the node's
-            // scheduler or alarm is then what wakes the handler."
+        if !handlers.is_empty() && active.is_empty() && timer.is_none() {
+            // TIME-3: with no scheduler and no alarm "nothing wakes it:
+            // the node is dormant".
             self.unsupported(declaration.at, "a node that no input wakes");
         }
+        // hgraph takes no node without an input. One with none, which
+        // its scheduler or its alarm wakes, is given one it is never
+        // woken by: the node is written under another name, and a graph
+        // of the function's own name gives it a constant.
+        let hidden = inputs.is_empty() && timer.is_some();
+        let exposed = python;
+        let node_name = if hidden {
+            format!("_node_{python}")
+        } else {
+            python.to_string()
+        };
+        let python = node_name.as_str();
+        // The function's own parameters, as the graph that stands for
+        // a node with a hidden input takes them.
+        let declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
+        // TIME-9: what says that the scheduler or the alarm woke the
+        // node. A scheduler's wake is due "whether or not a temporal
+        // input has ticked". An alarm's is told from the inputs: it
+        // "holds where the node is evaluated and no temporal input has
+        // ticked". hgraph's scheduler is asked too, since it evaluates
+        // a node at a wake that was since withdrawn.
+        //
+        // An input has ticked where it published or was invalidated:
+        // hgraph's `modified` is of a publication alone, and its
+        // `invalidated` of the cycle the input lost its value (END-4:
+        // "The transition to invalid notifies active subscribers").
+        let ticked: Vec<String> = inputs
+            .iter()
+            .map(|&local| {
+                let input = name(&body.locals[local].name);
+                format!("{input}.modified or {input}.invalidated")
+            })
+            .collect();
+        let timer_woke = timer.map(|timer| match timer {
+            Timer::Alarm if !ticked.is_empty() => format!(
+                "_scheduler.is_scheduled_now and not ({})",
+                ticked.join(" or ")
+            ),
+            _ => "_scheduler.is_scheduled_now".to_string(),
+        });
+        // That an input woke the node: one that is active published or
+        // became invalid. Where the node passivates none, each input a
+        // handler subscribes to is active.
+        let mut passivates = false;
+        hgl_analyser::hir::walk_statements(&body.statements, &mut |part| {
+            passivates |= matches!(
+                part.kind,
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Passivate,
+                    ..
+                }
+            );
+        });
+        let input_woke = {
+            let woke: Vec<String> = inputs
+                .iter()
+                .map(|&local| {
+                    let input = name(&body.locals[local].name);
+                    if passivates {
+                        format!("(({input}.modified or {input}.invalidated) and {input}.active)")
+                    } else {
+                        format!("{input}.modified or {input}.invalidated")
+                    }
+                })
+                .collect();
+            match woke.as_slice() {
+                // One term that is in parentheses of its own.
+                [one] if passivates => one.clone(),
+                _ => format!("({})", woke.join(" or ")),
+            }
+        };
+        // What woke the node is read where the node is entered, and
+        // not again where a later handler asks: a handler before it
+        // may passivate the input that woke the node, or ask its
+        // scheduler for another wake under the tag that is due, and
+        // neither changes what woke this evaluation. A node with one
+        // handler has none before it, and reads it in place.
+        let timed = |handler: &Handler| handler.scheduled || handler.subscribed.is_empty();
+        let several = handlers.len() > 1;
+        let holds_timer = several && timer.is_some() && handlers.iter().any(timed);
+        let holds_input = several
+            && timer.is_some()
+            && handlers
+                .iter()
+                .any(|handler| !timed(handler) && !handler.selects);
+        let timer_guard = match &timer_woke {
+            Some(_) if holds_timer => Some("_timer_woke".to_string()),
+            other => other.clone(),
+        };
+        let input_guard = if holds_input {
+            "_input_woke".to_string()
+        } else {
+            input_woke.clone()
+        };
         let names = |locals: &[usize]| -> String {
             let named: Vec<String> = locals
                 .iter()
@@ -1723,11 +1877,18 @@ impl Emitter<'_> {
             tuple(&named)
         };
         let mut options = Vec::new();
-        if active.len() != inputs.len() && !handlers.is_empty() {
-            options.push(format!("active={}", names(&active)));
-        }
-        if valid.len() != inputs.len() && !handlers.is_empty() {
-            options.push(format!("valid={}", names(&valid)));
+        if hidden {
+            // The hidden input wakes the node at no time, and need not
+            // be valid.
+            options.push("active=()".to_string());
+            options.push("valid=()".to_string());
+        } else {
+            if active.len() != inputs.len() && !handlers.is_empty() {
+                options.push(format!("active={}", names(&active)));
+            }
+            if valid.len() != inputs.len() && !handlers.is_empty() {
+                options.push(format!("valid={}", names(&valid)));
+            }
         }
         let decorator = if result.is_some() {
             "compute_node"
@@ -1742,13 +1903,23 @@ impl Emitter<'_> {
         } else {
             self.line(0, &format!("@_hg.{decorator}({})", options.join(", ")));
         }
+        let publishes = result.is_some();
         let returns = result.map_or(String::new(), |result| format!(" -> {result}"));
+        if hidden {
+            parameters.insert(0, "_begin: _hg.TS[_py.bool]".to_string());
+        }
         self.line(
             0,
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
         let before = self.text.len();
         self.unheld(signature);
+        if let (true, Some(woke)) = (holds_timer, &timer_woke) {
+            self.line(1, &format!("_timer_woke = {woke}"));
+        }
+        if holds_input {
+            self.line(1, &format!("_input_woke = {input_woke}"));
+        }
         // An endpoint as the node's code names it: an input by its
         // name, and the node's own output as hgraph's `_output`.
         let endpoint = |local: usize| {
@@ -1761,9 +1932,24 @@ impl Emitter<'_> {
         };
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
-            if handler.subscribed.is_empty() && !active.is_empty() {
-                self.unsupported(declaration.at, "a handler that no input wakes");
-                continue;
+            // TIME-3: "A wake by the scheduler or alarm wakes the
+            // handlers that subscribe to no input and those whose
+            // header has `scheduled()` ... Such a wake alone runs no
+            // other handler: one with no `modified` selector
+            // subscribes to every temporal input, and is run by an
+            // input's wake."
+            if timed(handler) {
+                match &timer_guard {
+                    Some(woke) => guards.push(woke.clone()),
+                    None => {
+                        if !active.is_empty() {
+                            self.unsupported(declaration.at, "a handler that no input wakes");
+                        }
+                        continue;
+                    }
+                }
+            } else if timer.is_some() && !handler.selects {
+                guards.push(input_guard.clone());
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {
@@ -1854,6 +2040,24 @@ impl Emitter<'_> {
             self.unheld(signature);
             self.block(&stop_hook, stop, 1);
         }
+        if hidden {
+            // The graph a call names: the node, given the constant its
+            // hidden input is never woken by.
+            let mut given = vec!["_begin=_hg.const(True)".to_string()];
+            given.extend(signature.parameters.iter().map(|parameter| {
+                let python = name(&parameter.name);
+                format!("{python}={python}")
+            }));
+            self.line(0, "");
+            self.line(0, "");
+            self.line(0, "@_hg.graph");
+            self.line(
+                0,
+                &format!("def {exposed}({}){returns}:", declared.join(", ")),
+            );
+            let gives = if publishes { "return " } else { "" };
+            self.line(1, &format!("{gives}{python}({})", given.join(", ")));
+        }
     }
 
     /// A source (SOURCE-1): "a node that produces its output and has no
@@ -1911,6 +2115,15 @@ impl Emitter<'_> {
                 Stmt::Inject { local, at } => {
                     let injected = &body.locals[*local].name;
                     match capability(injected) {
+                        // A source is resumed by hgraph's scheduler,
+                        // which is the one a node is given: a source
+                        // that injects one of its own is not written.
+                        Some(_) if matches!(injected.as_str(), "scheduler" | "alarm") => {
+                            self.unsupported(
+                                *at,
+                                &format!("an `inject` of `{injected}` in a source"),
+                            );
+                        }
                         Some(written) => capabilities.push(written),
                         None => self.unsupported(*at, &format!("an `inject` of `{injected}`")),
                     }

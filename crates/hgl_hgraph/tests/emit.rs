@@ -1568,10 +1568,13 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
             "m.hgl",
             concat!(
                 "module m\n",
-                // `inject scheduler` is not written yet.
-                "export fn waits() -> i64 {\n",
-                "    inject scheduler\n",
-                "    when { return 1 }\n",
+                "fn one() -> i64 {\n",
+                "    yield 1s: 1\n",
+                "}\n",
+                // An `if` in a graph is not written yet.
+                "export fn waits(const flag: bool = true) -> i64 {\n",
+                "    if flag { return one() }\n",
+                "    return one()\n",
                 "}\n",
             ),
         ),
@@ -1584,7 +1587,7 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
         panic!("one application is written");
     };
     let blocked = application.blocked.as_ref().expect("it is blocked");
-    assert_eq!(emitted.place(blocked.primary), "m.hgl:3:12");
+    assert_eq!(emitted.place(blocked.primary), "m.hgl:6:5");
 }
 
 /// Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
@@ -1712,8 +1715,8 @@ fn a_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:6:12 target.unsupported",
-            // `stopped`, whose `stop` reads `out`, is written (TIME-7).
+            // `gated`, which injects a scheduler, and `stopped`, whose
+            // `stop` reads `out`, are written (TIME-9, TIME-7).
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
             // A graph's `if`, the three of a struct, then what the test
@@ -4018,40 +4021,6 @@ fn a_cache_and_a_capability_are_the_nodes_own() {
     );
 }
 
-/// TIME-8: `scheduler` and `alarm` are not written yet, and are
-/// reported where they are injected.
-#[test]
-fn a_capability_that_is_not_written_is_reported() {
-    let emitted = emit(&[(
-        "wakes.hgl",
-        concat!(
-            "module demo.wakes\n",
-            "fn woken(value: i64) -> i64 {\n",
-            "    inject scheduler\n",
-            "    when {\n",
-            "        schedule(scheduler, 1s)\n",
-            "        return value\n",
-            "    }\n",
-            "}\n",
-            "test wakes {\n",
-            "    let seen = eval(woken(value: [1]))\n",
-            "}\n",
-        ),
-    )]);
-    assert!(
-        emitted
-            .reported
-            .contains(&"wakes.hgl:3:12 target.unsupported".to_string()),
-        "{:?}",
-        emitted.reported
-    );
-    let blocked = emitted.blocked("wakes").expect("the test is not run");
-    assert!(
-        blocked.ends_with("the hgraph target does not write an `inject` of `scheduler` yet"),
-        "{blocked}"
-    );
-}
-
 /// SOURCE-1 to SOURCE-4: sources. One with no declaration and no hook;
 /// one with both hooks and its yields in a block; one that keeps a
 /// `cache` from one `yield` to the next; targets that are durations and
@@ -6054,6 +6023,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("timed.hgl", TIMED));
     files.push(("wrapped.hgl", WRAPPED));
     files.push(("converted.hgl", CONVERSIONS));
+    files.push(("timers.hgl", TIMERS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6199,6 +6169,78 @@ fn an_application_runs_on_hgraph() {
 /// END-4 and TIME-3: a transition to invalid wakes an active node, but no
 /// publication occurred. Explicit modification guards are checked at evaluation.
 const NOTIFIED: &str = include_str!("fixtures/notification_guards.hgl");
+
+/// TIME-9, core's CAP-4 and CAP-5: nodes that a scheduler or an alarm
+/// wakes, with inputs and with none.
+const TIMERS: &str = include_str!("fixtures/timers.hgl");
+
+/// TIME-9: `scheduled()` is the scheduler's `is_scheduled_now`, one
+/// `if` over its handler, since "a wake asked of the scheduler is due
+/// in this evaluation, whether or not a temporal input has ticked".
+/// With an alarm it "holds where the node is evaluated and no temporal
+/// input has ticked". TIME-3: a header that is `scheduled()` alone
+/// requires no input to be valid, so the node requires none, and a
+/// handler with no `modified` selector is run by an input's wake.
+#[test]
+fn a_timer_wakes_its_own_handlers() {
+    let emitted = emit(&[("timers.hgl", TIMERS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_timers/__init__.py");
+    for expected in [
+        // A scheduler: the node requires no input valid, and each
+        // handler is under its own guard.
+        concat!(
+            "@_hg.compute_node(valid=())\n",
+            "def sampled(price: _hg.TS[_py.float], every: _dt.timedelta, ",
+            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.float]:\n",
+            // What woke the node is read where it is entered: a
+            // handler before the one that asks may change it.
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
+            "    if price.valid and price.modified:\n",
+            "        _state.last = price.value\n",
+            "    if _timer_woke:\n",
+        ),
+        // An alarm: no input has ticked, where it published or was
+        // invalidated.
+        "    _timer_woke = _scheduler.is_scheduled_now and not (price.modified or price.invalidated)\n",
+        // A handler with no `modified` selector, in a node a scheduler
+        // wakes too: an input woke the node.
+        concat!(
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
+            "    _input_woke = (value.modified or value.invalidated)\n",
+            "    if _input_woke and value.valid:\n",
+            "        _state.seen = _core.add__i64_i64(lhs=_state.seen, rhs=1)\n",
+        ),
+        // An input that woke the node is one that was active when the
+        // node was entered.
+        "    _input_woke = ((value.modified or value.invalidated) and value.active)\n",
+        // The scheduler's operations and properties are the
+        // provider's.
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False)",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=every)",
+        "_core.fn_un_schedule(scheduler=_scheduler, tag=None)",
+        "_core.Scheduler_is_scheduled(_scheduler)",
+        // hgraph takes no node without an input: one with none is
+        // given one that never wakes it, and a graph of the function's
+        // name gives it a constant.
+        concat!(
+            "@_hg.compute_node(active=(), valid=())\n",
+            "def _node_beats(_begin: _hg.TS[_py.bool], every: _dt.timedelta, times: _py.int, ",
+            "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    if _scheduler.is_scheduled_now:\n",
+        ),
+        concat!(
+            "@_hg.graph\n",
+            "def beats(every: _dt.timedelta, times: _py.int) -> _hg.TS[_py.int]:\n",
+            "    return _node_beats(_begin=_hg.const(True), every=every, times=times)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
 
 #[test]
 fn notification_and_publication_have_distinct_guards() {

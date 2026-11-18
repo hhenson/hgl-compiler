@@ -420,6 +420,87 @@ def fn_log(logger, level, message):
     logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
 
 
+def Scheduler_next_scheduled_time(scheduler):
+    """CAP-4: "The time of the earliest pending wake; null with none".
+    hgraph gives its earliest time where none is pending."""
+    return scheduler.next_scheduled_time if scheduler.is_scheduled else None
+
+
+def Scheduler_is_scheduled(scheduler):
+    """CAP-4: "True while a wake is pending"."""
+    return scheduler.is_scheduled
+
+
+def Scheduler_is_scheduled_now(scheduler):
+    """CAP-4: "whether a wake asked of the scheduler is due in the
+    current evaluation, whether or not an input has ticked in it"."""
+    return scheduler.is_scheduled_now
+
+
+def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
+    """CAP-4: "With a `duration`, a wake that long after the current
+    evaluation time". hgraph counts a `timedelta` from then, and "a wake
+    asked for under a tag replaces the pending wake of that tag"."""
+    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+
+
+def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
+    """CAP-4: "with a `datetime`, a wake then"."""
+    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+
+
+def fn_un_schedule(scheduler, tag):
+    """CAP-4: "`un_schedule(scheduler)` and `un_schedule(scheduler, tag:
+    name)` cancel a pending wake": the earliest, or the one asked for
+    under `name`."""
+    if tag is None:
+        scheduler.un_schedule()
+    else:
+        scheduler.un_schedule(tag)
+
+
+def fn_reset(scheduler):
+    """CAP-4: "`reset(scheduler)` every one"."""
+    scheduler.reset()
+
+
+# The tags an alarm's wake is kept under in hgraph's scheduler: the one
+# pending wake, and one just asked for while its instant is read.
+_ALARM = "_hgl_alarm"
+_ASKED = "_hgl_asked"
+
+
+def _alarm(scheduler, at):
+    """CAP-5: "`schedule(alarm, at)` asks for a wake ... asking again
+    keeps the earliest." A node that injects an alarm is given hgraph's
+    scheduler, which keeps each wake asked for: the alarm's one wake is
+    kept under a tag of its own, and is the earlier of the one pending
+    and the one asked for.
+
+    `at` is an instant, or a duration from the current evaluation time.
+    hgraph says which instant a duration comes to where it is asked
+    for: it is asked under a second tag, and the tag is taken back.
+    """
+    # In the evaluation a wake is due in, hgraph still holds it: it is
+    # the alarm's own wake, taken now, and no longer one that is
+    # pending.
+    due = scheduler.next_scheduled_time if scheduler.is_scheduled_now else None
+    scheduler.schedule(at, tag=_ASKED)
+    asked = scheduler.pop_tag(_ASKED)
+    pending = scheduler.pop_tag(_ALARM, None)
+    if pending is not None and pending == due:
+        pending = None
+    scheduler.schedule(asked if pending is None or asked < pending else pending, tag=_ALARM)
+
+
+def schedule_Alarm_duration(capability, at):
+    _alarm(capability, at)
+
+
+def schedule_Alarm_datetime(capability, at):
+    _alarm(capability, at)
+
+
 class Held:
     """A value given to hgraph to keep as it is.
 
