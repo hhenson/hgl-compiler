@@ -3990,6 +3990,14 @@ const PLACES: &str = concat!(
     "    index = 1\n",
     "    item = 9\n",
     "}\n",
+    // EXPR-2: the first argument fails first, though the second's
+    // index is held before the call.
+    "const fn apply(value: i64, var item: i64) { item = value }\n",
+    "const fn ordered(zero: i64, indices: dict<str, i64>) -> i64 {\n",
+    "    var items: list<i64> = [5, 6]\n",
+    "    apply(1 //{zero: .fail} zero, items[indices[\"missing\"]])\n",
+    "    return items[0]\n",
+    "}\n",
     "const fn moved() -> i64 {\n",
     "    var i: i64 = 0\n",
     "    var items: list<i64> = [5, 6]\n",
@@ -4008,6 +4016,9 @@ const PLACES: &str = concat!(
     "    bump(count, 4)\n",
     "    assert count == 5\n",
     "    assert moved() == 961\n",
+    "    assert raises(\"numeric.division_by_zero\") { ordered(0, [\"a\": 1]) }\n",
+    "    assert raises(\"value.missing_key\") { ordered(1, [\"a\": 1]) }\n",
+    "    assert ordered(1, [\"missing\": 1]) == 5\n",
     "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
     "}\n",
 );
@@ -4070,12 +4081,21 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    a = _given[1]\n",
             "    b = _given[2]\n",
         ),
-        // An index of a place is evaluated once, before the call.
+        // An index of a place is evaluated once, before the call, and
+        // every argument with it, each in the order written (EXPR-2).
         concat!(
+            "    _arg_1 = i\n",
             "    _at_1 = i\n",
-            "    _given = change(index=i, item=_core.item(items, _at_1))\n",
+            "    _arg_2 = _core.item(items, _at_1)\n",
+            "    _given = change(index=_arg_1, item=_arg_2)\n",
             "    i = _given[1]\n",
             "    items = _core.with_item(items, _at_1, _given[2])\n",
+        ),
+        concat!(
+            "    _arg_1 = _core.floordiv__i64_i64(lhs=1, rhs=zero, zero=\"fail\")\n",
+            "    _at_1 = _core.entry(indices, \"missing\")\n",
+            "    _arg_2 = _core.item(items, _at_1)\n",
+            "    _given = apply(value=_arg_1, item=_arg_2)\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(
