@@ -1451,6 +1451,7 @@ only where the program reaches it, at core's source.
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
 | `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
+| `if flag { a } else { b }`, `switch route { ... }` in a graph, over a connection (CTRL-13 to CTRL-15) | `_hg.switch_(flag, {True: _case_0_0, False: _case_0_1}, value=value)`: a `@_hg.graph` for each branch, written before the statement, that takes the connections the branches read. hgraph starts a branch's graph where its key is selected and stops it where another is. A branch that returns takes the rest of the block for the other branch; branches that assign a `var` give it, and it is assigned what `switch_` gives. Over an ordinary value an `if` is Python's own |
 | `inject scheduler`, `inject alarm` (TIME-9, CAP-4, CAP-5) | `_scheduler: _hg.SCHEDULER = None` for either: hgraph has one scheduler for a node, and no cheaper one. `schedule`, `un_schedule` and `reset` are the provider's functions on it, and an alarm's one wake is kept under a tag of its own, the earlier of the one pending and the one asked for |
 | `when scheduled() { ... }`, `when modified([]) { ... }` (TIME-3) | One `if` over the handler: `if _scheduler.is_scheduled_now:` with a scheduler, and `if _scheduler.is_scheduled_now and not (price.modified or price.invalidated):` with an alarm, which is told from the inputs. A header that is `scheduled()` alone requires no input valid, so the node is `valid=()` and every other handler is under its own guard. One with no `modified` selector is run by an input's wake: `if (price.modified or price.invalidated) and price.valid:`. In a node with more than one handler, what woke it is read once where the node is entered, `_timer_woke = _scheduler.is_scheduled_now`, and each handler asks that: a handler before it may passivate the input that woke the node, or ask again under the tag that is due |
 | A node with no temporal input that a scheduler or an alarm wakes | hgraph takes no node without an input. The node is `_node_name`, with an input `_begin` that never wakes it, `active=()`, and `name` is a graph that gives it `_hg.const(True)` |
@@ -1647,8 +1648,9 @@ candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 a bare payload read of `out` in `stop`;
-in a graph, an `if`
-and any expression but a name, a literal and a call; a pack in a lifted
+in a graph, any expression but a name, a literal and a call, an `if`
+that is not a whole statement or the whole value of a `let` or a
+`return`, and branches that assign more than one `var`; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
 a zoned datetime, a zoned time and a time zone; a `result` or an `error` as the type of an input or an output;

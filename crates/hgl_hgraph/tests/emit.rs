@@ -1571,9 +1571,9 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
                 "fn one() -> i64 {\n",
                 "    yield 1s: 1\n",
                 "}\n",
-                // An `if` in a graph is not written yet.
-                "export fn waits(const flag: bool = true) -> i64 {\n",
-                "    if flag { return one() }\n",
+                // A loop in a graph is not written yet.
+                "export fn waits() -> i64 {\n",
+                "    for item in [1, 2] { let seen = one() }\n",
                 "    return one()\n",
                 "}\n",
             ),
@@ -1719,9 +1719,9 @@ fn a_form_not_written_yet_is_reported() {
             // `stop` reads `out`, are written (TIME-9, TIME-7).
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
-            // A graph's `if`, the three of a struct, then what the test
-            // holds.
-            "m.hgl:32:5 target.unsupported",
+            // `chosen`, a graph with an `if` over a connection, is
+            // written (CTRL-13). The three of a struct, then what the
+            // test holds.
             "m.hgl:37:11 target.unsupported",
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
