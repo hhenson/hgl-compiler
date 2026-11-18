@@ -9,6 +9,14 @@ struct Book {
     name: str
 }
 
+# A field left out takes its default, here a constant's list: the one
+# value every read of the constant has.
+const standard: list<i64> = [1, 2]
+struct Basket {
+    name: str
+    items: list<i64> = standard
+}
+
 # A result that is the function's own, and one that is a part of what it
 # was given.
 const fn built(count: i64) -> list<i64> {
@@ -101,6 +109,13 @@ test what_is_kept_is_a_copy {
     books["a"] = source
     append(books["a"], 1)
     assert source == [7, 8] && books == ["a": [7, 8, 1]]
+}
+
+test a_default_is_not_the_constants_own_list {
+    var basket = Basket(name: "a")
+    append(basket.items, 3)
+    assert basket.items == [1, 2, 3] && standard == [1, 2]
+    assert Basket(name: "b").items == [1, 2]
 }
 
 test a_reference_is_copied_where_its_place_changes {
