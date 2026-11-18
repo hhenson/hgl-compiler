@@ -1701,7 +1701,8 @@ fn a_form_not_written_yet_is_reported() {
             "    }\n",
             "    return value\n",
             "}\n",
-            // A struct as a temporal input, and one made in a graph.
+            // A struct as a temporal input, which is written (TYPE-9),
+            // and one made in a graph, which is not.
             "fn quoted(quote: Quote) -> f64 {\n",
             "    when { return quote.bid }\n",
             "}\n",
@@ -1710,6 +1711,10 @@ fn a_form_not_written_yet_is_reported() {
             // function's own generic parameters.
             "struct Held<T> { value: T }\n",
             "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
+            // A tuple as a temporal input (TYPE-9).
+            "fn paired(pair: tuple<f64, f64>) -> f64 {\n",
+            "    when { return pair[0] }\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
@@ -1720,11 +1725,11 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
             // `chosen`, a graph with an `if` over a connection, is
-            // written (CTRL-13). The three of a struct, then what the
-            // test holds.
-            "m.hgl:37:11 target.unsupported",
+            // written (CTRL-13). The two of a struct, a tuple's, then
+            // what the test holds.
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
+            "m.hgl:43:11 target.unsupported",
             // A node called in a test, outside an eval. The timed
             // traces of the line before it are written.
             "m.hgl:28:17 target.unsupported",
@@ -6033,6 +6038,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
     files.push(("copies.hgl", COPIES));
+    files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -7246,4 +7252,50 @@ fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
     let python = emitted.text("_hgl/_m_payload/__init__.py");
     assert!(python.contains("def _lift_0_keep(value: _hg.TS[_py.int | None])"));
     assert!(python.contains("def _lift_1_from_members(values: _hg.TSS[_py.int])"));
+}
+
+/// TYPE-9: "Temporalization recursively maps tuples/structs to child
+/// fields ... `atomic<V>` stops expansion at a complete ordinary V".
+/// TYPE-16: a struct's delta has "a property for each field".
+const TEMPORAL_STRUCTS: &str = include_str!("fixtures/temporal_structs.hgl");
+
+/// A temporal struct is hgraph's bundle over a schema the provider
+/// makes beside the struct's class, each field temporalized in turn;
+/// `atomic<Quote>` is a `TS` of the class. A field is the field's port
+/// in a graph and in a hook, and a struct's delta is a `dict` of the
+/// fields that changed.
+#[test]
+fn a_temporal_struct_is_a_bundle_of_its_fields() {
+    let emitted = emit(&[("temporal_structs.hgl", TEMPORAL_STRUCTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_bundles/__init__.py");
+    let quote = concat!(
+        "_hg.TSB[_core.schema(Quote, ",
+        "{\"bid\": _hg.TS[_py.int], \"ask\": _hg.TS[_py.int]})]"
+    );
+    for expected in [
+        format!("def quoted(bid: _hg.TS[_py.int], ask: _hg.TS[_py.int]) -> {quote}:"),
+        "    return _core.bundled(Quote(bid=bid.value, ask=ask.value))".to_string(),
+        "        return _core.struct_delta(bid=price.value)".to_string(),
+        format!(
+            "_output: _hg.TSB_OUT[{}] = None",
+            &quote["_hg.TSB[".len()..quote.len() - 1]
+        ),
+        "    return _core.sub__i64_i64(lhs=quote.ask.value, rhs=quote.bid.value)".to_string(),
+        "    held = Quote(bid=quote.bid.value, ask=quote.ask.value)".to_string(),
+        "    bid = _core.changed(quote.delta_value, \"bid\")".to_string(),
+        format!("\"quote\": {quote}, \"size\": _hg.TS[_py.int]"),
+        "    return order.quote.bid.value".to_string(),
+        "-> _hg.TS[Quote]:".to_string(),
+        "    return quote.value.ask".to_string(),
+        "    return moved(is_bid=is_bid, price=price).ask".to_string(),
+        "    return ordered(bid=bid, size=size).quote.bid".to_string(),
+        "    return _hg.getattr_[_hg.SCALAR: _py.int](snapshot(bid=bid, ask=ask), \"ask\")"
+            .to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
 }

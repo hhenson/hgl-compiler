@@ -10744,15 +10744,27 @@ impl<'a> Typer<'a> {
             Type::Delta(of) => return self.delta_property(base.clone(), &name, of),
             _ => {}
         }
+        // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
+        // V": an `atomic<Quote>` holds whole quotes, and its field is
+        // the field of each, itself an atomic of the field's type, as
+        // complete as the quote it is read from.
+        let (whole, atomic) = match &base.ty {
+            Type::Atomic(payload) => (&**payload, true),
+            other => (other, false),
+        };
         let Type::Named {
             module,
             declaration,
             arguments,
+            kind,
             ..
-        } = &base.ty
+        } = whole
         else {
             return (ExprKind::Unread, Type::Unknown);
         };
+        if atomic && *kind != NamedKind::Struct {
+            return (ExprKind::Unread, Type::Unknown);
+        }
         // NATIVE-6: "`value.property` reads one as an ordinary value."
         if let Some(Detail::Native(native)) = program.modules[*module].details.get(*declaration) {
             let Some(member) = native
@@ -10800,6 +10812,7 @@ impl<'a> Typer<'a> {
         let ty = substitute_within(&read.members[member].ty, &map);
         let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
         let ty = placed(ty, &own);
+        let ty = if atomic { Type::atomic(ty) } else { ty };
         let kind = ExprKind::Field {
             base: Box::new(base),
             member,
