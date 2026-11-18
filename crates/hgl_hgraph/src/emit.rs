@@ -2831,11 +2831,18 @@ impl Emitter<'_> {
                 // connection among them, or as the value, is lowered with
                 // what follows it. Where one of them returns, what
                 // follows the `let` is written in each branch too.
+                // A branch's value that is itself an `if` with a `return`
+                // in it needs what follows too.
+                let returning_value = |value: Option<&Expr>| {
+                    value.is_some_and(|value| may_return(&[Stmt::Expr(value.clone())]))
+                };
                 let ends = declared.is_some()
-                    && branch_statements
+                    && (branch_statements
                         .iter()
                         .flatten()
-                        .any(|statements| nested_return(statements));
+                        .any(|statements| nested_return(statements))
+                        || returning_value(then_value)
+                        || other.is_some_and(|(_, value)| returning_value(value)));
                 let gives = |value: Option<&Expr>| -> Option<Stmt> {
                     let value = value?.clone();
                     let at = value.at;

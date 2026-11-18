@@ -384,3 +384,24 @@ test an_absent_value_comes_before_the_rest {
     assert eval(returned_with_no_else(price: [1, 2], wide: false, narrow: false)) == []
     assert eval(returned_with_no_else(price: [1, 2], wide: true, narrow: false)) == [1, 2]
 }
+
+# A returning `if` in a branch's value, itself a wiring-time `if`: what
+# follows the `let` is carried into it.
+fn returned_in_a_value_if(flag: bool, price: i64, const wide: bool, const narrow: bool) -> i64 {
+    let taken = if wide {
+        if narrow {
+            if flag { return price }
+            price
+        } else {
+            price
+        }
+    } else {
+        price
+    }
+    return taken + 1
+}
+
+test a_return_in_a_nested_value {
+    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: true, narrow: true)) == [1, 3]
+    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: false, narrow: true)) == [2, 3]
+}
