@@ -21,8 +21,8 @@ use hgl_analyser::hir::{
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
-    FieldRef, LocalKind, Member, NamedKind, Parameter, Phase, Program, Role, Scalar, Signature,
-    Type,
+    FieldRef, LocalKind, Member, NamedKind, OperatorRef, Parameter, Phase, Program, Role, Scalar,
+    Signature, Type,
 };
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
@@ -396,6 +396,55 @@ fn mangled(ty: &Type) -> String {
             }
         })
         .collect()
+}
+
+/// What a candidate gives, for the name of its provider's function: its
+/// result, or the T of a `result<T, error>`. A candidate that can fail
+/// is declared once for each value of its policy (NUM-9, OPS-8), and
+/// the provider has one function for the two, which takes the policy.
+fn given(signature: &Signature) -> Option<&Type> {
+    match signature.result.as_ref()? {
+        Type::Result { value, .. } => Some(value),
+        other => Some(other),
+    }
+}
+
+/// True when core's native candidates of `operator` are told apart by
+/// what they give: two of them take the same types and give different
+/// ones, as `convert(value: i64) -> f64` and `convert(value: i64) ->
+/// bool` do (OPS-4). The provider's function of each such candidate is
+/// named with what it gives.
+fn told_apart_by_result(program: &Program, operator: OperatorRef) -> bool {
+    let Some(core) = program.core() else {
+        return false;
+    };
+    let module = &program.modules[core];
+    // What each candidate read so far takes and gives.
+    let mut read: Vec<(Vec<&Type>, Option<&Type>)> = Vec::new();
+    for (position, declared) in module.declarations.iter().enumerate() {
+        if declared.kind != DeclarationKind::NativeCandidate(Role::Value, Some(operator))
+            && declared.kind != DeclarationKind::NativeCandidate(Role::Temporal, Some(operator))
+        {
+            continue;
+        }
+        let Some(Detail::Callable(signature)) = module.details.get(position) else {
+            continue;
+        };
+        let takes: Vec<&Type> = signature
+            .parameters
+            .iter()
+            .map(|parameter| &parameter.ty)
+            .collect();
+        let gives = given(signature);
+        if read
+            .iter()
+            .any(|(other, result)| *other == takes && *result != gives)
+        {
+            return true;
+        }
+        read.push((takes, gives));
+    }
+    false
 }
 
 /// One `when` of a node: what its header asks, and its body.
@@ -4283,13 +4332,22 @@ impl Emitter<'_> {
                 .iter()
                 .map(|parameter| mangled(&parameter.ty))
                 .collect();
-            let native = format!("{}_{}", declared.name, types.join("_"));
+            let mut native = format!("{}_{}", declared.name, types.join("_"));
+            let mut shown = format!("{}({})", declared.name, types.join(", "));
+            // OPS-4: "`convert<T>(value)` converts a value to the type
+            // T": core's candidates of `convert` take the same type and
+            // give different ones, so the provider's function is named
+            // with what it gives too, `convert_i64_to_f64`.
+            if let DeclarationKind::NativeCandidate(_, Some(operator)) = declared.kind
+                && told_apart_by_result(program, operator)
+                && let Some(given) = given(signature)
+            {
+                native = format!("{native}_to_{}", mangled(given));
+                shown = format!("{shown} -> {given}");
+            }
             let core = Some(module) == program.core();
             if !core || !provided().any(|provided| provided == native) {
-                self.unsupported(
-                    at,
-                    &format!("the candidate `{}({})`", declared.name, types.join(", ")),
-                );
+                self.unsupported(at, &format!("the candidate `{shown}`"));
                 return "None".to_string();
             }
             Some(native)
