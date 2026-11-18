@@ -607,6 +607,24 @@ def _changed(holder, steps, at, change):
     return holder
 
 
+def _read_in(holder, steps):
+    """What `steps` leads to inside `holder`, read and not changed. A
+    step that fails, an index outside a list or a key a dictionary has
+    not, fails here, as it does where a place is read."""
+    for kind, key in steps:
+        if kind == "f":
+            holder = getattr(holder, key)
+        elif kind == "k":
+            if key not in holder:
+                raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
+            holder = holder[key]
+        else:
+            if not 0 <= key < len(holder):
+                raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
+            holder = holder[key]
+    return holder
+
+
 def set_at(root, steps, value, /):
     """`place = value` where the place is inside the value a `var`, a
     `state` or a `cache` holds, more than one step in: `book.bids[price]
@@ -621,12 +639,16 @@ def set_at(root, steps, value, /):
     `value` gives the value when it is called. It is called once the
     way in has been read, so that a step that fails does so before the
     value is evaluated, as in any assignment; what it gives is kept, and
-    is marked as shared.
+    is marked as shared. Only then is anything changed: the value may
+    be, or hold, a collection on the way in, `tree.kids[0].kids[0] =
+    tree`, which evaluating it marks as shared, and which is then
+    copied and not changed.
     """
     kind, key = steps[-1]
+    _read_in(root, steps[:-1])
+    new = shared(value())
 
     def assign(holder):
-        new = shared(value())
         if kind == "f":
             return _dataclasses.replace(holder, **{key: new})
         if kind == "k":
@@ -652,13 +674,18 @@ def given_at(root, steps, function, place, arguments, /):
     The function is given the value `steps` leads to, which it changes
     where it is while that is its holder's alone. `arguments` gives its
     other arguments, by name, when it is called: once the way in has
-    been read, as they are written after the place. This gives the
-    function's result and then what `root` is to be.
+    been read, as they are written after the place. Only then is
+    anything changed: an argument may be, or hold, a collection on the
+    way in, `append(tree.kids[0].kids, tree)`, which evaluating it
+    marks as shared, and which is then copied and not changed. This
+    gives the function's result and then what `root` is to be.
     """
+    _read_in(root, steps)
+    others = arguments()
     result = []
 
     def change(target):
-        given = function(**{place: target}, **arguments())
+        given = function(**{place: target}, **others)
         result.append(given[0])
         return given[1]
 

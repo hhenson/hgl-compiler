@@ -4500,6 +4500,24 @@ const INSIDE: &str = concat!(
     "    return 1\n",
     "}\n",
     "\n",
+    // What is put in holds a collection on the way in: the value the
+    // place had, and not the one it is given. Evaluating the argument
+    // marks `rows`, after the way in has been read and before anything
+    // is changed.
+    "const fn grafted() -> bool {\n",
+    "    var rows: list<list<any>> = [[1]]\n",
+    "    append(rows[0], 2)\n",
+    "    append(rows[0], rows)\n",
+    "    return rows == [[1, 2, [[1, 2]]]]\n",
+    "}\n",
+    "\n",
+    "const fn planted() -> bool {\n",
+    "    var rows: list<list<any>> = [[1]]\n",
+    "    append(rows[0], 2)\n",
+    "    rows[0][0] = rows\n",
+    "    return rows == [[[[1, 2]], 2]]\n",
+    "}\n",
+    "\n",
     // A node's `state` that is a struct of collections.
     "fn gathered(value: i64) -> i64 {\n",
     "    state book: Book = Book(bids: [], orders: [], name: \"s\")\n",
@@ -4542,6 +4560,8 @@ const INSIDE: &str = concat!(
     "    assert group == [1]\n",
     "    assert groups == [\"a\": [9, 2], \"b\": [1, 5]]\n",
     "    assert rows_kept()\n",
+    "    assert grafted()\n",
+    "    assert planted()\n",
     "    assert raises(\"value.missing_key\") { missing(0) }\n",
     "    assert built(3) == Book(bids: [0: 0, 1: 2, 2: 4], orders: [0, 1, 2], name: \"a\")\n",
     "    assert grouped(5) == [0: [0, 2, 4], 1: [1, 3]]\n",

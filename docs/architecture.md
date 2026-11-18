@@ -1573,7 +1573,10 @@ holder's own. A `var` parameter's element is assigned by making a new
 list, so that a call that fails leaves the caller's as it was; a way in
 whose index is an expression after an element read is given new values
 too, so that the index is evaluated only once what it is an index of
-has been read. So a recording grows with no copy,
+has been read. The provider reads the way in, then asks for the value,
+and only then changes anything: the value may hold a collection on the
+way in, `append(rows[0], rows)`, which asking for it marks as shared,
+and which is then copied and not changed. So a recording grows with no copy,
 a list passed to a function is not copied, and a `let` costs a copy
 only where the place grows after it. What the provider puts in a run's
 store it marks as shared itself.
