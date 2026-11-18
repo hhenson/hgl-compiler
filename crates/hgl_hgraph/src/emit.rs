@@ -3094,16 +3094,16 @@ impl Emitter<'_> {
                 // TIME-7: an assignment to `out` publishes, a null
                 // among what it may publish.
                 let declared = &function.locals[*local];
-                let value = if declared.kind == LocalKind::Inject
-                    && declared.name == "out"
-                    && Self::publishes_null(function, assigned)
-                {
-                    self.published(value)
-                } else if declared.kind == LocalKind::Inject && declared.name == "out" {
+                let value = if declared.kind == LocalKind::Inject && declared.name == "out" {
                     // TIME-7: the runtime keeps what is published, and
                     // the hook may go on to change what it read it
-                    // from.
-                    self.copied(function, assigned, value)
+                    // from: a copy, a nullable one among them.
+                    let value = self.copied(function, assigned, value);
+                    if Self::publishes_null(function, assigned) {
+                        self.published(value)
+                    } else {
+                        value
+                    }
                 } else {
                     self.kept(function, *local, assigned, value)
                 };

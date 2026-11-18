@@ -367,7 +367,30 @@ pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
         ExprKind::Pairs(entries) => entries
             .iter()
             .all(|(key, entry)| fresh(program, key) && fresh(program, entry)),
-        ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => arguments
+        // A field left out takes its default, which may be a constant
+        // of a module: the one value every read of it has. A struct
+        // written with fewer fields than it has is fresh only where
+        // none of those left out can hold a collection.
+        ExprKind::Construct {
+            module,
+            declaration,
+            arguments,
+        } => {
+            let complete = match program.modules[*module].details.get(*declaration) {
+                Some(Detail::Struct(of)) => of.members.iter().enumerate().all(|(index, member)| {
+                    arguments
+                        .iter()
+                        .any(|argument| argument.parameter == Some(index))
+                        || !holds_collection(program, &member.ty, 0)
+                }),
+                _ => false,
+            };
+            complete
+                && arguments
+                    .iter()
+                    .all(|argument| fresh(program, &argument.value))
+        }
+        ExprKind::Delta { arguments } => arguments
             .iter()
             .all(|argument| fresh(program, &argument.value)),
         ExprKind::Tagged { payload: inner, .. } | ExprKind::Widen(inner) => fresh(program, inner),
