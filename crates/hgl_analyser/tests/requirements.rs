@@ -669,8 +669,6 @@ fn a_call_records_what_answers_each_requirement() {
         "const fn twice<T>(value: T) -> T requires join(T, T) -> T => join(value, value)\n",
         "const fn whole() -> i64 => twice(1)\n",
         "const fn text() -> str => twice(\"a\")\n",
-        // No candidate takes two `bool`: nothing answers.
-        "const fn neither() -> bool => twice(true)\n",
         // Two requirements, and the body's calls of each.
         "const fn both<T>(value: T) -> T requires neg_(T) -> T && (join(T, T) -> T) =>\n",
         "    join(neg_(value), value)\n",
@@ -683,7 +681,6 @@ fn a_call_records_what_answers_each_requirement() {
     assert_eq!(answers(&checked, "twice"), ["requirement 0"]);
     assert_eq!(answers(&checked, "whole"), ["join(i64, i64)"]);
     assert_eq!(answers(&checked, "text"), ["join(str, str)"]);
-    assert_eq!(answers(&checked, "neither"), ["unread"]);
     // The call of `join` is met before its argument's call of `neg_`.
     assert_eq!(
         answers(&checked, "both"),
@@ -767,4 +764,426 @@ fn a_graph_answers_a_temporal_candidates_requirement() {
     assert_eq!(answers(&checked, "identity_sum"), ["stated 0"]);
     assert_eq!(answers(&checked, "wired"), ["add_(f64, f64)"]);
     assert_eq!(answers(&checked, "texts"), ["add_(str, str)"]);
+}
+
+/// GEN-3: "A call of a function whose `requires` does not hold with
+/// the generic arguments the call resolves is rejected". The condition
+/// is a membership of a type, a comparison of a generic value
+/// parameter, given or left to its default, or a named operator
+/// requirement (GEN-16), and it is reported at the call. Nothing
+/// answers the requirement of such a call.
+#[test]
+fn a_call_that_does_not_meet_its_callees_requires_is_rejected() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const fn twice<T>(value: T) -> T requires add_(T, T) -> T => value + value\n",
+        "const fn numeric<T>(value: T) -> T requires T in {i64, f64} => value\n",
+        "const fn exact<T>(value: T) -> T requires T == i64 => value\n",
+        "const fn pick<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn eager<const mode: Mode = .slow>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        // Each holds.
+        "const fn fine() -> i64 =>\n",
+        "    twice(2) + numeric(3) + exact(4) + pick(5) + pick(6, mode: .fast) + eager(7, mode: .fast)\n",
+        "const fn real() -> f64 => numeric(1.5)\n",
+        // No value `add_` takes two `bool`.
+        "const fn neither() -> bool => twice(true)\n",
+        "const fn text() -> str => numeric(\"x\")\n",
+        "const fn inexact() -> f64 => exact(1.5)\n",
+        "const fn slow() -> i64 => pick(1, mode: .slow)\n",
+        // The default is the value where the call gives none.
+        "const fn defaulted() -> i64 => eager(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:31 constraint/requires.unmet GEN-3",
+            "m.hgl:14:27 constraint/requires.unmet GEN-3",
+            "m.hgl:15:30 constraint/requires.unmet GEN-3",
+            "m.hgl:16:27 constraint/requires.unmet GEN-3",
+            "m.hgl:17:32 constraint/requires.unmet GEN-3",
+        ]
+    );
+    assert_eq!(answers(&checked, "neither"), ["unread"]);
+}
+
+/// GEN-3: "and so is an application of a struct whose `requires` does
+/// not hold with its arguments": where the struct is constructed, its
+/// arguments written or found from its fields (GEN-2), and where a type
+/// that applies it is written, at any depth.
+#[test]
+fn an_application_that_does_not_meet_a_structs_requires_is_rejected() {
+    let checked = module(concat!(
+        "struct Sized<T> requires T in {i64, f64} { value: T }\n",
+        "struct Summed<T> requires add_(T, T) -> T { value: T }\n",
+        "const fn made() -> Sized<i64> => Sized(value: 1)\n",
+        "const fn written() -> Sized<f64> => Sized<f64>(value: 1.5)\n",
+        "const fn summed() -> Summed<i64> => Summed(value: 1)\n",
+        "const fn found() -> bool {\n",
+        "    let held = Sized(value: \"x\")\n",
+        "    return true\n",
+        "}\n",
+        "const fn given() -> bool {\n",
+        "    let held = Sized<str>(value: \"x\")\n",
+        "    return true\n",
+        "}\n",
+        "const fn taken(held: Sized<str>) -> bool => true\n",
+        "const fn nested(held: list<Sized<bool>>) -> bool => true\n",
+        // A named operator requirement is told where the struct is
+        // constructed.
+        "const fn unsummed() -> bool {\n",
+        "    let held = Summed(value: true)\n",
+        "    return true\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:16 constraint/requires.unmet GEN-3",
+            "m.hgl:12:16 constraint/requires.unmet GEN-3",
+            "m.hgl:15:22 constraint/requires.unmet GEN-3",
+            "m.hgl:16:23 constraint/requires.unmet GEN-3",
+            "m.hgl:18:16 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-7: "A generic body is checked under its stated requirements". A
+/// call there whose types name the body's own generic parameter meets a
+/// named operator requirement where the body states it, and does not
+/// where it states none. A membership of such a parameter is not told:
+/// it is no one type.
+#[test]
+fn a_call_in_a_generic_body_meets_what_the_body_states() {
+    let checked = module(concat!(
+        "const fn twice<T>(value: T) -> T requires add_(T, T) -> T => value + value\n",
+        "const fn numeric<T>(value: T) -> T requires T in {i64, f64} => value\n",
+        "const fn stated<U>(value: U) -> U requires add_(U, U) -> U => twice(value)\n",
+        "const fn unstated<U>(value: U) -> U => twice(value)\n",
+        "const fn member<U>(value: U) -> U => numeric(value)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:5:40 constraint/requires.unmet GEN-3"]
+    );
+}
+
+/// GEN-8: "A call may supply its generic arguments as a generic
+/// constructor does ... The value a call gives a generic value
+/// parameter is a compile-time constant: a literal, an enum member
+/// however it is written (TYPE-7), `Zero.nan` or `.nan`, a constant
+/// (UNIT-13) ... or a constant expression of those". GEN-3: a
+/// `requires` is held to the value however it is written and wherever
+/// it is given: after the callee's name or by name, in a call, a
+/// construction and a type.
+#[test]
+fn a_requires_is_held_to_a_generic_value_however_it_is_written() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const OFF: bool = false\n",
+        "const fn pick<const enabled: bool>(value: i64) -> i64 requires enabled == true => value\n",
+        "const fn moded<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn sized<const size: i64>(value: i64) -> i64 requires size in {2, 3} => value\n",
+        "const fn named<const label: str>(value: i64) -> i64 requires label == \"a\" => value\n",
+        "const fn real<const scale: f64>(value: i64) -> i64 requires scale == 1.5 => value\n",
+        "struct Flag<const on: bool> requires on == true { value: i64 }\n",
+        "struct Moded<const mode: Mode> requires mode == .fast { value: i64 }\n",
+        // Line 13: each of these does not hold.
+        "const fn a() -> i64 => pick<false>(1)\n",
+        "const fn b() -> i64 => pick(1, enabled: false)\n",
+        "const fn c() -> i64 => moded<.slow>(1)\n",
+        "const fn d() -> i64 => moded<Mode.slow>(1)\n",
+        "const fn e() -> i64 => moded<SLOW>(1)\n",
+        "const fn f() -> i64 => moded(1, mode: SLOW)\n",
+        "const fn g() -> i64 => sized<4>(1)\n",
+        "const fn h() -> i64 => sized<1 + 3>(1)\n",
+        "const fn i() -> i64 => named<\"b\">(1)\n",
+        "const fn j() -> i64 => real<2.5>(1)\n",
+        "const fn k() -> i64 => real(1, scale: 2.5)\n",
+        "const fn l() -> i64 => pick<OFF>(1)\n",
+        "const fn m(held: Flag<false>) -> i64 => 1\n",
+        "const fn n(held: Moded<.slow>) -> i64 => 1\n",
+        "const fn o(held: Moded<Mode.slow>) -> i64 => 1\n",
+        "const fn p(held: list<Flag<false>>) -> i64 => 1\n",
+        "const fn q(held: Moded<SLOW>) -> i64 => 1\n",
+        "const fn r() -> i64 {\n",
+        "    let held = Flag<false>(value: 1)\n",
+        "    return 1\n",
+        "}\n",
+        "const fn s() -> i64 {\n",
+        "    let held = Moded<SLOW>(value: 1)\n",
+        "    return 1\n",
+        "}\n",
+        // Each of these holds.
+        "const fn fine(x: Flag<true>, y: Moded<.fast>, z: Moded<Mode.fast>) -> i64 =>\n",
+        "    pick<true>(1) + moded<.fast>(1) + moded<Mode.fast>(1) + moded(1) + sized<2>(1)\n",
+        "    + named<\"a\">(1) + real<1.5>(1) + Flag<true>(value: 1).value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:24 constraint/requires.unmet GEN-3",
+            "m.hgl:14:24 constraint/requires.unmet GEN-3",
+            "m.hgl:15:24 constraint/requires.unmet GEN-3",
+            "m.hgl:16:24 constraint/requires.unmet GEN-3",
+            "m.hgl:17:24 constraint/requires.unmet GEN-3",
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:24 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
+            "m.hgl:25:18 constraint/requires.unmet GEN-3",
+            "m.hgl:26:18 constraint/requires.unmet GEN-3",
+            "m.hgl:27:18 constraint/requires.unmet GEN-3",
+            "m.hgl:28:18 constraint/requires.unmet GEN-3",
+            "m.hgl:29:18 constraint/requires.unmet GEN-3",
+            "m.hgl:31:16 constraint/requires.unmet GEN-3",
+            "m.hgl:35:16 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-3: a function, and a struct, with no generic parameter may
+/// state a `requires` of types it names itself, and a call, a
+/// construction and a written type are held to it.
+#[test]
+fn a_requires_with_no_generic_parameter_is_held_too() {
+    let checked = module(concat!(
+        "const fn blocked(value: i64) -> i64 requires add_(bool, bool) -> bool => value\n",
+        "const fn open(value: i64) -> i64 requires add_(i64, i64) -> i64 => value + value\n",
+        "fn node_blocked(value: i64) -> i64 requires add_(bool, bool) -> bool {\n",
+        "    when { return value }\n",
+        "}\n",
+        "struct Shut requires add_(bool, bool) -> bool { value: i64 }\n",
+        "struct Ajar requires add_(i64, i64) -> i64 { value: i64 }\n",
+        // Line 9.
+        "const fn a() -> i64 => blocked(1)\n",
+        "const fn b() -> i64 => open(1)\n",
+        "fn c(value: i64) -> i64 => node_blocked(value)\n",
+        "const fn d() -> i64 => Shut(value: 1).value\n",
+        "const fn e() -> i64 => Ajar(value: 1).value\n",
+        "const fn f(held: Shut, other: Ajar) -> i64 => 1\n",
+        "test g {\n",
+        "    let seen = eval(node_blocked(value: [1]))\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:24 constraint/requires.unmet GEN-3",
+            "m.hgl:11:28 constraint/requires.unmet GEN-3",
+            "m.hgl:12:24 constraint/requires.unmet GEN-3",
+            "m.hgl:14:18 constraint/requires.unmet GEN-3",
+            "m.hgl:16:21 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-3, GEN-16: a struct's named operator requirement is told
+/// wherever a type that applies it is written: in a function's
+/// signature, a struct's field, an operator's and a native function's
+/// parameters. GEN-7: where its argument is a generic parameter of the
+/// declaration that writes it, it holds where that declaration states
+/// it.
+#[test]
+fn a_structs_operator_requirement_is_told_where_its_type_is_written() {
+    let checked = module(concat!(
+        "struct Summed<T> requires add_(T, T) -> T { value: T }\n",
+        // Each of these holds.
+        "const fn whole(held: Summed<i64>) -> i64 => 1\n",
+        "const fn stated<U>(held: Summed<U>) -> i64 requires add_(U, U) -> U => 1\n",
+        "struct Stated<U> requires add_(U, U) -> U { held: Summed<U> }\n",
+        // Line 6: each of these does not.
+        "const fn flags(held: Summed<bool>) -> i64 => 1\n",
+        "const fn unstated<U>(held: Summed<U>) -> i64 => 1\n",
+        "struct Holder { held: Summed<bool> }\n",
+        "struct Unstated<U> { held: Summed<U> }\n",
+        "operator through(held: Summed<bool>) -> bool\n",
+        "native const fn outside(held: Summed<bool>) -> bool\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:22 constraint/requires.unmet GEN-3",
+            "m.hgl:7:28 constraint/requires.unmet GEN-3",
+            "m.hgl:8:23 constraint/requires.unmet GEN-3",
+            "m.hgl:9:28 constraint/requires.unmet GEN-3",
+            "m.hgl:10:24 constraint/requires.unmet GEN-3",
+            "m.hgl:11:31 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-2: "a generic value parameter that nothing says anything of
+/// takes its default". GEN-3: a `requires` is held to a default too,
+/// where the default names a constant (UNIT-13) or is an expression of
+/// constants: for a call, a construction and a written type, each of
+/// which leaves the parameter out.
+#[test]
+fn a_requires_is_held_to_a_default_that_names_a_constant() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const OFF: bool = false\n",
+        "const ON: bool = true\n",
+        "const TWO: i64 = 2\n",
+        "const fn pick<const enabled: bool = OFF>(value: i64) -> i64\n",
+        "    requires enabled == true => value\n",
+        "const fn keep<const enabled: bool = ON>(value: i64) -> i64\n",
+        "    requires enabled == true => value\n",
+        "const fn moded<const mode: Mode = SLOW>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn plus<const size: i64 = TWO + 1>(value: i64) -> i64 requires size == 2 => value\n",
+        "struct Flag<const on: bool = OFF> requires on == true { value: i64 }\n",
+        "struct Lit<const on: bool = ON> requires on == true { value: i64 }\n",
+        "struct Wide<const size: i64 = TWO + 1> requires size == 2 { value: i64 }\n",
+        "struct Exact<const size: i64> requires size == 2 { value: i64 }\n",
+        // Line 18: each of these does not hold.
+        "const fn a() -> i64 => pick(1)\n",
+        "const fn b() -> i64 => moded(1)\n",
+        "const fn c() -> i64 => plus(1)\n",
+        "const fn d() -> i64 => plus<TWO + 2>(1)\n",
+        "const fn e() -> i64 => plus(1, size: TWO * 2)\n",
+        "const fn f() -> i64 => Flag(value: 1).value\n",
+        "const fn g() -> i64 => Wide(value: 1).value\n",
+        "const fn h() -> i64 => Exact<TWO + 1>(value: 1).value\n",
+        "const fn i(held: Flag) -> i64 => 1\n",
+        "const fn j(held: Wide) -> i64 => 1\n",
+        "const fn k(held: Exact<TWO + 1>) -> i64 => 1\n",
+        "struct Holder { held: Flag }\n",
+        // Each of these holds.
+        "const fn fine(held: Lit, exact: Exact<TWO>, sum: Exact<1 + 1>) -> i64 =>\n",
+        "    keep(1) + pick(1, enabled: true) + pick<ON>(1) + plus<TWO>(1) + plus(1, size: TWO)\n",
+        "    + Lit(value: 1).value + Flag<ON>(value: 1).value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:24 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
+            "m.hgl:25:24 constraint/requires.unmet GEN-3",
+            "m.hgl:26:18 constraint/requires.unmet GEN-3",
+            "m.hgl:27:18 constraint/requires.unmet GEN-3",
+            "m.hgl:28:18 constraint/requires.unmet GEN-3",
+            "m.hgl:29:23 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// GEN-2: "A struct application supplies all or none". A type that
+/// writes a struct's generic value is held to what it writes, however
+/// that is spelled, and never to the parameter's default; one that
+/// writes none is held to the default. Each application in a type is
+/// read for itself.
+#[test]
+fn a_written_argument_of_a_type_is_not_taken_for_the_default() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const SLOW: Mode = .slow\n",
+        "const FAST: Mode = .fast\n",
+        "const TWO: i64 = 2\n",
+        "struct Pick<const mode: Mode = SLOW> requires mode == .fast { value: i64 }\n",
+        "struct Wide<const size: i64 = TWO + 1> requires size == 2 { value: i64 }\n",
+        // Each of these holds: what is written is what counts.
+        "const fn a(held: Pick<Mode.fast>) -> i64 => 1\n",
+        "const fn b(held: Pick<.fast>) -> i64 => 1\n",
+        "const fn c(held: Pick<FAST>) -> i64 => 1\n",
+        "const fn d(held: Wide<TWO>) -> i64 => 1\n",
+        "const fn e(held: tuple<Pick<FAST>, Wide<2>>) -> i64 => 1\n",
+        // Line 13: each of these does not.
+        "const fn f(held: Pick) -> i64 => 1\n",
+        "const fn g(held: Pick<Mode.slow>) -> i64 => 1\n",
+        "const fn h(held: Pick<SLOW>) -> i64 => 1\n",
+        "const fn i(held: Wide) -> i64 => 1\n",
+        "const fn j(held: Wide<TWO + 1>) -> i64 => 1\n",
+        "const fn k(held: tuple<Pick<FAST>, Pick>) -> i64 => 1\n",
+        "const fn l(held: tuple<Pick, Pick<FAST>>) -> i64 => 1\n",
+        // TYPE-7: an enum's member "however it is written", its
+        // constructor among the ways.
+        "const fn m(held: Pick<Mode(\"slow\")>) -> i64 => 1\n",
+        "const fn n(held: Pick<Mode(1)>) -> i64 => 1\n",
+        "const fn o(held: Pick<(Mode.slow)>) -> i64 => 1\n",
+        "const fn p(held: list<Pick<Mode(\"slow\")>>) -> i64 => 1\n",
+        "const fn q() -> i64 => Pick<Mode(\"slow\")>(value: 1).value\n",
+        "const fn fine(held: Pick<Mode(\"fast\")>, other: Pick<Mode(0)>) -> i64 =>\n",
+        "    Pick<Mode(\"fast\")>(value: 1).value\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:18 constraint/requires.unmet GEN-3",
+            "m.hgl:14:18 constraint/requires.unmet GEN-3",
+            "m.hgl:15:18 constraint/requires.unmet GEN-3",
+            "m.hgl:16:18 constraint/requires.unmet GEN-3",
+            "m.hgl:17:18 constraint/requires.unmet GEN-3",
+            "m.hgl:18:18 constraint/requires.unmet GEN-3",
+            "m.hgl:19:18 constraint/requires.unmet GEN-3",
+            "m.hgl:20:18 constraint/requires.unmet GEN-3",
+            "m.hgl:21:18 constraint/requires.unmet GEN-3",
+            "m.hgl:22:18 constraint/requires.unmet GEN-3",
+            "m.hgl:23:18 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
+        ]
+    );
+}
+
+/// UNIT-13: a constant "names one ordinary value". TYPE-7: an enum's
+/// member is one "however it is written". A constant of an enum is the
+/// member its expression names, read where the constant is declared:
+/// `Mode.slow`, `Mode("slow")`, `Mode(1)`, or another constant, which
+/// is followed. GEN-3: a `requires` is held to it wherever the constant
+/// is given.
+#[test]
+fn a_requires_is_held_to_a_constant_however_its_value_is_written() {
+    let checked = module(concat!(
+        "enum Mode { fast, slow }\n",
+        "const A: Mode = Mode.slow\n",
+        "const B: Mode = Mode(\"slow\")\n",
+        "const C: Mode = Mode(1)\n",
+        "const D: Mode = A\n",
+        "const E: Mode = (Mode.slow)\n",
+        "const OFF: bool = false\n",
+        "const STILL_OFF: bool = OFF\n",
+        "const F1: Mode = Mode.fast\n",
+        "const F2: Mode = Mode(\"fast\")\n",
+        "const F3: Mode = F1\n",
+        "const fn pick<const mode: Mode = .fast>(value: i64) -> i64\n",
+        "    requires mode == .fast => value\n",
+        "const fn flag<const on: bool>(value: i64) -> i64 requires on == true => value\n",
+        "struct Pick<const mode: Mode = A> requires mode == .fast { value: i64 }\n",
+        // Line 17: each of these does not hold.
+        "const fn a() -> i64 => pick<A>(1)\n",
+        "const fn b() -> i64 => pick<B>(1)\n",
+        "const fn c() -> i64 => pick<C>(1)\n",
+        "const fn d() -> i64 => pick<D>(1)\n",
+        "const fn e() -> i64 => pick(1, mode: E)\n",
+        "const fn f() -> i64 => flag<STILL_OFF>(1)\n",
+        "const fn g(held: Pick<B>) -> i64 => 1\n",
+        "const fn h(held: Pick) -> i64 => 1\n",
+        // Each of these holds.
+        "const fn fine(held: Pick<F2>) -> i64 => pick<F1>(1) + pick<F2>(1) + pick(1, mode: F3)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:17:24 constraint/requires.unmet GEN-3",
+            "m.hgl:18:24 constraint/requires.unmet GEN-3",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:20:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 constraint/requires.unmet GEN-3",
+            "m.hgl:22:24 constraint/requires.unmet GEN-3",
+            "m.hgl:23:18 constraint/requires.unmet GEN-3",
+            "m.hgl:24:18 constraint/requires.unmet GEN-3",
+        ]
+    );
 }

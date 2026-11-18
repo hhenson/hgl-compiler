@@ -661,6 +661,17 @@ def sub__date_date(lhs, rhs):
     return _duration(_microseconds(lhs - rhs))
 
 
+def add__date_duration(lhs, rhs):
+    """OPS-10: a `date` with a `duration` added or taken away "is the
+    `civil_datetime` that far from the start of the date, whatever the
+    duration"."""
+    return _moved(_datetime.datetime.combine(lhs, _datetime.time()), rhs)
+
+
+def sub__date_duration(lhs, rhs):
+    return _moved(_datetime.datetime.combine(lhs, _datetime.time()), -rhs)
+
+
 def neg__i64(value):
     return _i64(-value)
 

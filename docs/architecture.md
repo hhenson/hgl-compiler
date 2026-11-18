@@ -1095,11 +1095,34 @@ written, counting the constraint calls that hold wherever its
 | --- | --- | --- |
 | `Candidate` | One most-specific value candidate takes the types (GEN-5). It has its own requirements answered with it | `sum(1.5, 2.5)` records core's `add_(f64, f64)` |
 | `Stated(n)` | The types name a generic parameter of the declaration the call is written in, which states the same requirement as its `n`th (GEN-7) | Inside `fn twice<U>(v: U) -> U requires add_(U, U) -> U`, `sum(v, v)` records `Stated(0)`: a call of `twice` says which candidate |
-| `Unread` | A predicate, a requirement supplied with what is no type, or one for which no one candidate is told to be selected | `sum(true, false)`: a function's requirement that does not hold has no diagnostic to be reported with (hgl_spec issue 101) |
+| `Unread` | A predicate, a requirement supplied with what is no type, or one for which no one candidate is told to be selected | `sum(true, false)`, which is rejected: the requirement does not hold (`requires.unmet`, GEN-3) |
 
 A `Callee::Required` in the body carries the same position, so the
 candidate it calls for one call of the declaration is that call's
 answer at that position.
+
+A `requires` that does not hold with the generic arguments it is given
+is `requires.unmet` (GEN-3), reported where the function is called or
+the struct applied:
+
+| Where | What is told there |
+| --- | --- |
+| A call of a function | A membership or an equality of a type, a generic value parameter compared with constants, and a named operator requirement |
+| A construction of a struct, its arguments written or found from its fields | The same |
+| A type written that applies a struct, at any depth, in any declaration: a signature, a body, a struct's field, a constant's type | The same |
+
+A function and a struct with no generic parameter are held to a
+`requires` they state too. Nothing is reported where it cannot be told.
+A generic parameter of the declaration a call is written in is no one
+type, so a membership of it is not told; a named operator requirement
+of it is, by what that declaration states (GEN-7), a struct's as a
+function's. A generic value is read however it is written (GEN-8): a
+literal of any kind, an enum's member in any spelling, a constant's
+name, after the callee's name or by name. One reader does that for a
+call, a construction and a written type, so a spelling means the same
+in each. A type that writes a struct's arguments is held to them, and
+one that writes none to the defaults (GEN-2), which are read where the
+struct is declared.
 
 `Program::instance` puts the two together for a target with no generics
 of its own. Given a declaration, the generic arguments of one call of
