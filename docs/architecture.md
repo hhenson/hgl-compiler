@@ -597,7 +597,9 @@ hook is a `Stmt::Hook` with its condition and its statements.
 | `delta_value(value)`, `last_modified(value)` | The endpoint's `delta<T>` and its retained publication time as a `datetime?`, respectively | TIME-9, END-3, END-6 |
 | `is_active(input)` | A bool for a direct temporal input. In a guard it adds no subscription or validity requirement | TIME-9, END-5 |
 | `valid()`, `valid(a, b)`, `valid([])` | A selector of a `when` header: every temporal input, those named, none | TIME-3 |
-| `modified()`, `modified(a, b)`, `modified([])` | A selector of a `when` header: a subscription to every temporal input, to those named, to none | TIME-3 |
+| No `modified` selector | Subscribes to every temporal input. An active invalidation can wake the node and reach a handler whose other conditions hold | TIME-3 |
+| `modified()`, `modified(a, b)` | Subscribes to every temporal input or to the named inputs, respectively. At least one selected input must have published this cycle | TIME-3 |
+| `modified([])` | Subscribes to no temporal input and selects a scheduler or alarm wake | TIME-3 |
 | `out` | The node's result: read, or assigned | TIME-7 |
 | `return`, `return value` | Ends the evaluation; the value is of the result's type and is published | FN-7 |
 | A call | Of a value function or an operator's value candidate | FN-3 |
@@ -1431,7 +1433,7 @@ only where the program reaches it, at core's source.
 | --- | --- |
 | `const fn` | A plain function |
 | A node, a `fn` with a `when` | `@_hg.compute_node`, or `@_hg.sink_node` where it has no result. hgraph is imported as `_hg` |
-| A `when` header's selectors | The node's `active=` is every input a handler subscribes to and its `valid=` the inputs every handler requires (TIME-3, TIME-4). A handler is guarded by what it asks beyond those: that one of its own inputs ticked, that the inputs only it requires are valid, and the rest of its condition. Handlers are tried in the order written |
+| A `when` header's selectors | The node's `active=` is the union of handler subscriptions and its `valid=` holds the validity requirements common to all handlers (TIME-3, TIME-4). In source order, each handler checks its remaining validity requirements and condition. Explicit `modified()` and `modified(a, b)` read the current `valid` and `modified` flags on each selected input. A publication on any selected input satisfies the guard. An omitted selector adds no publication check |
 | `inject out` | `_output: _hg.TS_OUT[type] = None`: `out` is `_output.value`, `valid(out)` is `_output.valid`, and `invalidate(out)` is `_output.invalidate()` |
 | A graph | `@_hg.graph` |
 | In a graph, a value function or a candidate of core given a connection (FN-6) | A node of its own, `_lift_N_name`, written before the graph: an input `name: _hg.TS[type]` for each connection, a scalar parameter for each ordinary argument, and a default left out written where the node calls. An input whose parameter has a default is not required valid, `valid=(...)`, and is read as `(name.value if name.valid else default)` (FN-11). The same lifting twice in one graph is one node |

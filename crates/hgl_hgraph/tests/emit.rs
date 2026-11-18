@@ -358,8 +358,8 @@ const ENDPOINTS: &str = concat!(
     "}\n",
 );
 
-/// TIME-3: a selector in a `when` header sets what wakes the handler
-/// and what it requires valid. TIME-4: "Aggregate subscriptions cover
+/// TIME-3: a modification selector subscribes its node and guards its handler.
+/// A validity selector says which inputs the handler requires valid. TIME-4: "Aggregate subscriptions cover
 /// every handler. Node-wide validity includes only requirements common
 /// to executable handlers; other guards stay per-handler." TIME-7 and
 /// END-4: `inject out` is the node's output, which `invalidate` clears.
@@ -387,7 +387,7 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
         concat!(
             "@_hg.compute_node(valid=(\"b\",))\n",
             "def two_handlers(a: _hg.TS[_py.int], b: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
-            "    if a.modified and a.valid and _core.gt__T_T(lhs=a.value, rhs=5):\n",
+            "    if a.valid and a.modified and _core.gt__T_T(lhs=a.value, rhs=5):\n",
             "        return a.value\n",
             "    if b.modified:\n",
             "        return b.value\n",
@@ -559,10 +559,6 @@ fn a_headers_selectors_add_up() {
         concat!(
             "@_hg.compute_node\n",
             "def repeated(a: _hg.TS[_py.int], b: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
-            "    if a.modified:\n",
-            "        return a.value\n",
-            "    if b.modified:\n",
-            "        return b.value\n",
         ),
         concat!(
             "    if _output.valid and _core.gt__T_T(lhs=command.value, rhs=0):\n",
@@ -4556,7 +4552,7 @@ fn a_nullable_is_a_value_that_may_be_unset() {
         ),
         "def read_back(value: _hg.TS[_py.int | None]) -> _hg.TS[_py.int]:\n",
         // TYPE-16: `delta_value` of a nullable is hgraph's own delta.
-        "def recorded(value: _hg.TS[_py.int | None]) -> _hg.TS[_py.int | None]:\n    return value.delta_value\n",
+        "def recorded(value: _hg.TS[_py.int | None]) -> _hg.TS[_py.int | None]:\n    if value.modified:\n        return value.delta_value\n",
         "    change = value.delta_value\n",
         "_core.unpublished(change)",
         // `delta<i64?>()` is a published null.
@@ -6073,86 +6069,29 @@ fn an_application_runs_on_hgraph() {
     assert!(live.iter().all(|(at, _)| at.as_str() > "2000-"), "{live:?}");
 }
 
-/// END-4: "Invalidation clears validity, modification, payload, and
-/// delta. The transition to invalid notifies active subscribers." A
-/// handler that subscribes to an input and does not require it valid
-/// is woken by the input's invalidation, whatever else the node's
-/// other handlers subscribe to; and `modified(input)` is false in that
-/// cycle, in a node that injects something as in one that does not.
-const NOTIFIED: &str = concat!(
-    "module demo.notified\n",
-    "fn produced(command: i64) -> i64 {\n",
-    "    inject out\n",
-    "    when {\n",
-    "        if command == 0 { invalidate(out) }\n",
-    "        else { return command }\n",
-    "    }\n",
-    "}\n",
-    "fn watch_one(watched: i64, probe: bool) -> bool {\n",
-    "    when modified(watched) && valid([]) { return valid(watched) }\n",
-    "}\n",
-    // A second handler, on an input that never ticks.
-    "fn watch_two(watched: i64, probe: bool) -> bool {\n",
-    "    when modified(watched) && valid([]) { return valid(watched) }\n",
-    "    when modified(probe) && valid([]) { return true }\n",
-    "}\n",
-    // `modified` as a value, in a node that injects a capability.
-    "fn was_modified(watched: i64, probe: bool) -> bool {\n",
-    "    inject clock\n",
-    "    when modified(watched) && valid([]) { return modified(watched) }\n",
-    "}\n",
-    "fn alone(command: i64, probe: bool) -> bool => watch_one(produced(command), probe)\n",
-    "fn beside(command: i64, probe: bool) -> bool => watch_two(produced(command), probe)\n",
-    "fn asked(command: i64, probe: bool) -> bool => was_modified(produced(command), probe)\n",
-    "test an_invalidation_wakes_its_subscriber {\n",
-    "    assert eval(alone(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
-    "    assert eval(beside(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
-    // The other handler is woken by its own input, and by no other's.
-    "    assert eval(beside(command: [7, _, 0], probe: [_, true, _])) == [true, true, false]\n",
-    "    assert eval(asked(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
-    "}\n",
-);
+/// END-4 and TIME-3: a transition to invalid wakes an active node, but no
+/// publication occurred. Explicit modification guards are checked at evaluation.
+const NOTIFIED: &str = include_str!("fixtures/notification_guards.hgl");
 
-/// A node whose handlers are woken by different inputs keeps whether
-/// each input it must see invalidated was valid when it last looked
-/// (END-4), and its `modified` as a value is held to the input being
-/// valid.
 #[test]
-fn a_handler_is_woken_by_its_inputs_invalidation() {
+fn notification_and_publication_have_distinct_guards() {
     let emitted = emit(&[("notified.hgl", NOTIFIED)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_notified/__init__.py");
     for expected in [
-        // One handler: the node is woken by what wakes it.
+        "@_hg.compute_node(valid=())\ndef on_publication(",
+        "@_hg.compute_node(valid=())\ndef on_notification(",
+        "@_hg.compute_node(valid=())\ndef watch_both(",
+        "    if (watched.modified and watched.valid):\n        return True",
+        "return (watched.modified and watched.valid)",
         concat!(
-            "@_hg.compute_node(active=(\"watched\",), valid=())\n",
-            "def watch_one(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool]) -> _hg.TS[_py.bool]:\n",
-            "    return watched.valid\n",
+            "    if ((left.modified and left.valid) or (right.modified and right.valid)) ",
+            "and (probe.modified and probe.valid):\n        return True"
         ),
-        // Two: each is told what woke it.
-        concat!(
-            "@_hg.compute_node(valid=())\n",
-            "def watch_two(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool], ",
-            "_state: _hg.STATE = None) -> _hg.TS[_py.bool]:\n",
-            "    _woke_watched = watched.modified or (_state._valid_watched and not watched.valid)\n",
-            "    _state._valid_watched = watched.valid\n",
-            "    _woke_probe = probe.modified or (_state._valid_probe and not probe.valid)\n",
-            "    _state._valid_probe = probe.valid\n",
-            "    if _woke_watched:\n",
-            "        return watched.valid\n",
-            "    if _woke_probe:\n",
-            "        return True\n",
-            "\n\n",
-            "@watch_two.start\n",
-            "def _start_watch_two(_state: _hg.STATE = None):\n",
-            "    _state._valid_watched = False\n",
-            "    _state._valid_probe = False\n",
-        ),
-        "    return (watched.modified and watched.valid)\n",
     ] {
         assert!(
             python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
+            "missing {expected} in:\n{python}"
         );
     }
 }
@@ -6635,7 +6574,7 @@ fn a_failure_names_the_statement_that_failed() {
 /// input itself. Once a node is running, a publication can satisfy the
 /// data handler even if another input woke the node.
 #[test]
-fn changing_activity_preserves_each_handlers_subscription() {
+fn changing_input_activity_preserves_a_modified_guard() {
     let emitted = emit(&[(
         "activity.hgl",
         concat!(
@@ -6653,7 +6592,7 @@ fn changing_activity_preserves_each_handlers_subscription() {
     for expected in [
         "data.make_active()",
         "data.make_passive()",
-        "if data.modified and data.valid:",
+        "if data.valid and data.modified:",
     ] {
         assert!(python.contains(expected), "{python}");
     }
