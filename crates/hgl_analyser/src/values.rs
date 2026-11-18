@@ -1404,6 +1404,33 @@ impl<'a> Typer<'a> {
                 self.undriven.push(selector);
             }
         }
+        // TIME-9: "`scheduled()` is the handler selector for a wake by
+        // the node's scheduler or alarm ... A node that injects neither
+        // rejects it". With a scheduler it is the scheduler's
+        // `is_scheduled_now`, and with an alarm it holds where no
+        // temporal input has ticked: with neither it asks nothing.
+        if operation == EndpointOperation::Scheduled {
+            let wakes = self.locals.iter().any(|local| {
+                local.kind == LocalKind::Inject
+                    && (local.name == "scheduler" || local.name == "alarm")
+            });
+            if !wakes {
+                // The selector: `scheduled()`, its name to its `)`.
+                let selector = list.parent().map_or(at, |call| self.at(&call));
+                self.diagnostics.emit(
+                    error(
+                        Category::Injectable,
+                        codes::INJECT_NO_SCHEDULER,
+                        selector,
+                        "`scheduled()` asks the node's scheduler or its alarm, and this node \
+                         injects neither"
+                            .to_string(),
+                        "TIME-9",
+                    )
+                    .with_note("`inject scheduler` or `inject alarm` gives the node one"),
+                );
+            }
+        }
         let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
             None
         } else if none {

@@ -185,6 +185,9 @@ pub mod codes {
     pub const CAPABILITY_AS_VALUE: &str = "capability.as_value";
     /// `alarm` and `scheduler` injected in one node (TIME-8).
     pub const INJECT_ALARM_AND_SCHEDULER: &str = "inject.alarm_and_scheduler";
+    /// `scheduled()` in a node that injects neither `scheduler` nor
+    /// `alarm` (TIME-9).
+    pub const INJECT_NO_SCHEDULER: &str = "inject.no_scheduler";
     /// `endpoint<T>` other than as the whole type of a native value
     /// function's parameter (TYPE-12).
     pub const ENDPOINT_POSITION: &str = "endpoint.position";

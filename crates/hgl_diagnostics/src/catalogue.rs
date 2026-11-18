@@ -71,6 +71,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Injectable, "inject.out_without_result"),
     (Category::Injectable, "capability.as_value"),
     (Category::Injectable, "inject.alarm_and_scheduler"),
+    (Category::Injectable, "inject.no_scheduler"),
     (Category::Injectable, "store.reserved_key"),
     (Category::Phase, "node.nested"),
     (Category::Phase, "node.in_value_function"),
