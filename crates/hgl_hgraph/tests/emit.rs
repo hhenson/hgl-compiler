@@ -247,7 +247,7 @@ fn cores_scalar_eval_cases_are_written_whole() {
     let python = emitted.text("_hgl/_m_conformance/__init__.py");
     for expected in [
         "def pass_i64(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n",
-        "    if (a.valid and a.modified):\n        return a.delta_value\n",
+        "    if (a.valid and (a.modified and a.valid)):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
         "    if not (_harness.same(_harness.evaluate(pass_i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[None, 7, None, None]), [None, 7])):\n",
@@ -5866,6 +5866,8 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
+    files.push(("notified.hgl", NOTIFIED));
+    files.push(("compound.hgl", COMPOUND));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -5886,13 +5888,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        69,
+        71,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on lists that are shared, one on tenors, one on entries assigned where they are, one on collections inside values, one on candidates that take a place, one on configuration of a generic type, one on an invalidation's notification, one on a compound assignment, and one of each demo's"
     );
 }
 
@@ -5998,6 +6000,154 @@ fn an_application_runs_on_hgraph() {
     let values: Vec<&str> = live.iter().map(|(_, value)| value.as_str()).collect();
     assert_eq!(values, ["1", "2", "3", "4"]);
     assert!(live.iter().all(|(at, _)| at.as_str() > "2000-"), "{live:?}");
+}
+
+/// END-4: "Invalidation clears validity, modification, payload, and
+/// delta. The transition to invalid notifies active subscribers." A
+/// handler that subscribes to an input and does not require it valid
+/// is woken by the input's invalidation, whatever else the node's
+/// other handlers subscribe to; and `modified(input)` is false in that
+/// cycle, in a node that injects something as in one that does not.
+const NOTIFIED: &str = concat!(
+    "module demo.notified\n",
+    "fn produced(command: i64) -> i64 {\n",
+    "    inject out\n",
+    "    when {\n",
+    "        if command == 0 { invalidate(out) }\n",
+    "        else { return command }\n",
+    "    }\n",
+    "}\n",
+    "fn watch_one(watched: i64, probe: bool) -> bool {\n",
+    "    when modified(watched) && valid([]) { return valid(watched) }\n",
+    "}\n",
+    // A second handler, on an input that never ticks.
+    "fn watch_two(watched: i64, probe: bool) -> bool {\n",
+    "    when modified(watched) && valid([]) { return valid(watched) }\n",
+    "    when modified(probe) && valid([]) { return true }\n",
+    "}\n",
+    // `modified` as a value, in a node that injects a capability.
+    "fn was_modified(watched: i64, probe: bool) -> bool {\n",
+    "    inject clock\n",
+    "    when modified(watched) && valid([]) { return modified(watched) }\n",
+    "}\n",
+    "fn alone(command: i64, probe: bool) -> bool => watch_one(produced(command), probe)\n",
+    "fn beside(command: i64, probe: bool) -> bool => watch_two(produced(command), probe)\n",
+    "fn asked(command: i64, probe: bool) -> bool => was_modified(produced(command), probe)\n",
+    "test an_invalidation_wakes_its_subscriber {\n",
+    "    assert eval(alone(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
+    "    assert eval(beside(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
+    // The other handler is woken by its own input, and by no other's.
+    "    assert eval(beside(command: [7, _, 0], probe: [_, true, _])) == [true, true, false]\n",
+    "    assert eval(asked(command: [7, 0, 0, 7], probe: [])) == [true, false, _, true]\n",
+    "}\n",
+);
+
+/// A node whose handlers are woken by different inputs keeps whether
+/// each input it must see invalidated was valid when it last looked
+/// (END-4), and its `modified` as a value is held to the input being
+/// valid.
+#[test]
+fn a_handler_is_woken_by_its_inputs_invalidation() {
+    let emitted = emit(&[("notified.hgl", NOTIFIED)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_notified/__init__.py");
+    for expected in [
+        // One handler: the node is woken by what wakes it.
+        concat!(
+            "@_hg.compute_node(active=(\"watched\",), valid=())\n",
+            "def watch_one(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool]) -> _hg.TS[_py.bool]:\n",
+            "    return watched.valid\n",
+        ),
+        // Two: each is told what woke it.
+        concat!(
+            "@_hg.compute_node(valid=())\n",
+            "def watch_two(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool], ",
+            "_state: _hg.STATE = None) -> _hg.TS[_py.bool]:\n",
+            "    _woke_watched = watched.modified or (_state._valid_watched and not watched.valid)\n",
+            "    _state._valid_watched = watched.valid\n",
+            "    _woke_probe = probe.modified or (_state._valid_probe and not probe.valid)\n",
+            "    _state._valid_probe = probe.valid\n",
+            "    if _woke_watched:\n",
+            "        return watched.valid\n",
+            "    if _woke_probe:\n",
+            "        return True\n",
+            "\n\n",
+            "@watch_two.start\n",
+            "def _start_watch_two(_state: _hg.STATE = None):\n",
+            "    _state._valid_watched = False\n",
+            "    _state._valid_probe = False\n",
+        ),
+        "    return (watched.modified and watched.valid)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// EXPR-3: "A compound assignment reads the place first". EXPR-2: an
+/// expression written once is evaluated once: the index of a compound
+/// assignment's place is the index of its read and of its write.
+const COMPOUND: &str = concat!(
+    "module demo.compound\n",
+    // Each call gives the next number, from 0.
+    "const fn next_slot(store: GlobalState) -> i64 {\n",
+    "    if has(store, \"lookups\") {\n",
+    "        let previous: i64 = get(store, \"lookups\")\n",
+    "        put(store, \"lookups\", previous + 1)\n",
+    "        return previous\n",
+    "    }\n",
+    "    put(store, \"lookups\", 1)\n",
+    "    return 0\n",
+    "}\n",
+    "fn compound(trigger: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        var items: list<i64> = [10, 50]\n",
+    "        items[next_slot(global_state)] += 1\n",
+    "        return items[0]\n",
+    "    }\n",
+    "}\n",
+    // Two indices, each evaluated once and in the order written: the
+    // row 0 and then its element 1.
+    "fn nested(trigger: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        var rows: list<list<i64>> = [[1, 2], [30, 40]]\n",
+    "        rows[next_slot(global_state)][next_slot(global_state)] += 5\n",
+    "        return rows[0][1]\n",
+    "    }\n",
+    "}\n",
+    "test a_compound_assignment_looks_up_once {\n",
+    "    assert eval(compound(trigger: [1])) == [11]\n",
+    "    assert eval(nested(trigger: [1])) == [7]\n",
+    "}\n",
+);
+
+/// A compound assignment's index that is more than a name is evaluated
+/// once, before the statement, and read and written through what it
+/// came to (EXPR-2, EXPR-3).
+#[test]
+fn a_compound_assignment_evaluates_its_place_once() {
+    let emitted = emit(&[("compound.hgl", COMPOUND)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_compound/__init__.py");
+    assert!(
+        python.contains(concat!(
+            "    _at_1 = next_slot(store=_store)\n",
+            "    items = _core.set_item(items, _at_1, ",
+            "_core.add__i64_i64(lhs=_core.item(items, _at_1), rhs=1))\n",
+        )),
+        "{python}"
+    );
+    // One call of `next_slot` for each index written.
+    let nested = python
+        .split("def nested(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n\n").next())
+        .expect("the node is written");
+    assert_eq!(nested.matches("next_slot(").count(), 2, "{nested}");
 }
 
 /// TST-17: "An integration test ... is a named test that may run in

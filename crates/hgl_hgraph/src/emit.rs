@@ -1173,35 +1173,6 @@ impl Emitter<'_> {
         // as it is in any read: in `rows[key][index]` a `rows` with no
         // such key fails before `index` is evaluated.
 
-        /// Whether reading `place` reads an element of a list or an
-        /// entry of a dictionary, which may fail.
-        fn reads_an_element(mut place: &Expr) -> bool {
-            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
-                if matches!(place.kind, ExprKind::Index { .. }) {
-                    return true;
-                }
-                place = base;
-            }
-            false
-        }
-        /// The indices of a place that are evaluated, from its root
-        /// outward as they are written. Each is with what it is an
-        /// index of, where reading that may fail.
-        fn indices_of(argument: &Argument) -> Vec<(Option<&Expr>, &Expr)> {
-            let mut place = &argument.value;
-            let mut indices = Vec::new();
-            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
-                if let ExprKind::Index { index, .. } = &place.kind
-                    && !matches!(index.kind, ExprKind::Literal(_))
-                {
-                    let of = reads_an_element(base).then_some(&**base);
-                    indices.push((of, &**index));
-                }
-                place = base;
-            }
-            indices.reverse();
-            indices
-        }
         let is_place = |argument: &Argument| {
             argument
                 .parameter
@@ -1209,7 +1180,7 @@ impl Emitter<'_> {
         };
         let holds = arguments
             .iter()
-            .any(|argument| is_place(argument) && !indices_of(argument).is_empty());
+            .any(|argument| is_place(argument) && !indices_of(&argument.value).is_empty());
         if holds {
             let (mut indices, mut reads) = (0, 0);
             for (position, argument) in arguments.iter().enumerate() {
@@ -1217,7 +1188,7 @@ impl Emitter<'_> {
                 // written.
                 let mut read_here = Vec::new();
                 if is_place(argument) {
-                    for (of, index) in indices_of(argument) {
+                    for (of, index) in indices_of(&argument.value) {
                         if let Some(of) = of {
                             reads += 1;
                             let held = format!("_in_{reads}");
@@ -1612,7 +1583,60 @@ impl Emitter<'_> {
             self.hgraph = true;
             parameters.push(format!("_output: {annotation} = None"));
         }
-        let has_state = !states.is_empty();
+        // TIME-4: what the handlers ask together.
+        let active: Vec<usize> = inputs
+            .iter()
+            .copied()
+            .filter(|input| {
+                handlers
+                    .iter()
+                    .any(|handler| handler.subscribed.contains(input))
+            })
+            .collect();
+        // The inputs whose invalidation a handler is to be woken by,
+        // and told apart from another input's notification: those a
+        // handler subscribes to and does not require valid, where the
+        // handler is woken by fewer inputs than the node is.
+        //
+        // END-4: "Invalidation clears validity, modification, payload,
+        // and delta. The transition to invalid notifies active
+        // subscribers." So such a handler is woken by a notification
+        // that is no modification, and hgraph's `modified` of an input
+        // in the cycle it is invalidated is not one thing: it is true
+        // to a node that injects something and false to one that does
+        // not. The node keeps what it needs itself: whether each such
+        // input was valid when it last looked. An input woke the
+        // handler where it published, or was valid then and is not
+        // now. A handler that requires the input valid is not woken
+        // by its invalidation, and asks only whether it published.
+        let watched: Vec<usize> = inputs
+            .iter()
+            .copied()
+            .filter(|input| {
+                handlers.iter().any(|handler| {
+                    handler.subscribed.contains(input)
+                        && !handler.required.contains(input)
+                        && active
+                            .iter()
+                            .any(|other| !handler.subscribed.contains(other))
+                })
+            })
+            .collect();
+        // The node's validity is what every handler requires. A node
+        // that watches an input is evaluated at each notification, to
+        // see the input's validity change, so it requires none: each
+        // handler is then guarded by all it requires.
+        let valid: Vec<usize> = inputs
+            .iter()
+            .copied()
+            .filter(|input| {
+                watched.is_empty()
+                    && handlers
+                        .iter()
+                        .all(|handler| handler.required.contains(input))
+            })
+            .collect();
+        let has_state = !states.is_empty() || !watched.is_empty();
         if has_state {
             parameters.push("_state: _hg.STATE = None".to_string());
             lifecycle.push("_state: _hg.STATE = None".to_string());
@@ -1649,25 +1673,6 @@ impl Emitter<'_> {
         }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
-        // TIME-4: what the handlers ask together.
-        let active: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .any(|handler| handler.subscribed.contains(input))
-            })
-            .collect();
-        let valid: Vec<usize> = inputs
-            .iter()
-            .copied()
-            .filter(|input| {
-                handlers
-                    .iter()
-                    .all(|handler| handler.required.contains(input))
-            })
-            .collect();
         if !handlers.is_empty() && active.is_empty() {
             // TIME-3: "`modified([])` subscribes to no input: the node's
             // scheduler or alarm is then what wakes the handler."
@@ -1717,6 +1722,18 @@ impl Emitter<'_> {
                 name(&declared.name)
             }
         };
+        // Whether each watched input woke the node in this cycle, and
+        // then what the node keeps of it for the next.
+        for &local in &watched {
+            let input = name(&body.locals[local].name);
+            self.line(
+                1,
+                &format!(
+                    "_woke_{input} = {input}.modified or (_state._valid_{input} and not {input}.valid)"
+                ),
+            );
+            self.line(1, &format!("_state._valid_{input} = {input}.valid"));
+        }
         for handler in &handlers {
             // What this handler asks beyond what the node does. It is
             // woken by fewer inputs than the node where one the node is
@@ -1733,7 +1750,16 @@ impl Emitter<'_> {
                 let ticked: Vec<String> = handler
                     .subscribed
                     .iter()
-                    .map(|&local| format!("{}.modified", endpoint(local)))
+                    .map(|&local| {
+                        // An input the handler requires valid woke it
+                        // where it published; one it does not, where
+                        // it published or became invalid.
+                        if watched.contains(&local) && !handler.required.contains(&local) {
+                            format!("_woke_{}", name(&body.locals[local].name))
+                        } else {
+                            format!("{}.modified", endpoint(local))
+                        }
+                    })
                     .collect();
                 guards.push(match ticked.as_slice() {
                     [one] => one.clone(),
@@ -1778,6 +1804,11 @@ impl Emitter<'_> {
             self.line(0, &format!("def _start_{python}({lifecycle}):"));
             let before = self.text.len();
             self.unheld(signature);
+            // No watched input has published when the node starts.
+            for &local in &watched {
+                let input = name(&body.locals[local].name);
+                self.line(1, &format!("_state._valid_{input} = False"));
+            }
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
@@ -2408,12 +2439,50 @@ impl Emitter<'_> {
             // EXPR-3: "An assignment may name a place inside a value, at
             // any depth". A compound assignment's value is already the
             // symbol with the place as its left operand.
-            Stmt::AssignPlace { place, value, .. } => {
+            Stmt::AssignPlace {
+                place,
+                operator,
+                value,
+                ..
+            } => {
+                // EXPR-3: "A compound assignment reads the place
+                // first". The place is written once, so each index of
+                // it is evaluated once (EXPR-2), and is the index of
+                // the read and of the write: `items[next()] += 1`
+                // reads and writes one element. An index that is more
+                // than a name is so held, with what it is an index of
+                // where reading that may fail, each in the order
+                // written, as a call that assigns a place holds them.
+                let mut held_here = Vec::new();
+                let indices = indices_of(place);
+                if operator.is_some() && indices.iter().any(|(_, index)| !self.simple_index(index))
+                {
+                    let (mut held_indices, mut reads) = (0, 0);
+                    for (of, index) in indices {
+                        if let Some(of) = of {
+                            reads += 1;
+                            let held = format!("_in_{reads}");
+                            // Read only to be read through: nothing of
+                            // it is kept.
+                            let written = self.borrowed(function, of);
+                            self.line(depth, &format!("{held} = {written}"));
+                            self.held.push((of.at, held));
+                            held_here.push(of.at);
+                        }
+                        held_indices += 1;
+                        let held = format!("_at_{held_indices}");
+                        let written = self.expression(function, index);
+                        self.line(depth, &format!("{held} = {written}"));
+                        self.held.push((index.at, held));
+                        held_here.push(index.at);
+                    }
+                }
                 let value = self.expression(function, value);
                 if let Some((target, value)) = self.assigned(function, place, value) {
                     self.hoist(depth);
                     self.line(depth, &format!("{target} = {value}"));
                 }
+                self.held.retain(|(at, _)| !held_here.contains(at));
             }
             // FN-7: a `return` with a value publishes it and ends the
             // evaluation; with none, and where a body ends, nothing is
@@ -2814,7 +2883,15 @@ impl Emitter<'_> {
                 };
                 match operation {
                     EndpointOperation::Valid => format!("{input}.valid"),
-                    EndpointOperation::Modified => format!("{input}.modified"),
+                    // END-4: "Invalidation clears validity,
+                    // modification, payload, and delta." hgraph's own
+                    // `modified` of an input in the cycle it is
+                    // invalidated is true to a node that injects
+                    // something, so it is held to the input being
+                    // valid.
+                    EndpointOperation::Modified => {
+                        format!("({input}.modified and {input}.valid)")
+                    }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
                     EndpointOperation::Invalidate => format!("{input}.invalidate()"),
@@ -4687,6 +4764,36 @@ fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
         } => Some((*module, *declaration, arguments)),
         _ => None,
     }
+}
+
+/// Whether reading `place` reads an element of a list or an entry of
+/// a dictionary, which may fail.
+fn reads_an_element(mut place: &Expr) -> bool {
+    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
+        if matches!(place.kind, ExprKind::Index { .. }) {
+            return true;
+        }
+        place = base;
+    }
+    false
+}
+
+/// The indices of a place that are evaluated, from its root outward as
+/// they are written. Each is with what it is an index of, where reading
+/// that may fail.
+fn indices_of(mut place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
+    let mut indices = Vec::new();
+    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
+        if let ExprKind::Index { index, .. } = &place.kind
+            && !matches!(index.kind, ExprKind::Literal(_))
+        {
+            let of = reads_an_element(base).then_some(&**base);
+            indices.push((of, &**index));
+        }
+        place = base;
+    }
+    indices.reverse();
+    indices
 }
 
 /// True where the way to `place` from its root reads an element of a
