@@ -1560,6 +1560,18 @@ a list passed to a function is not copied, and a `let` costs a copy
 only where the place grows after it. What the provider puts in a run's
 store it marks as shared itself.
 
+A `tenor` (TYPE-17) is the provider's `Tenor`: a count of months and a
+count of days, or a count of business days. Its literal is written by its
+counts, `_core.Tenor(18, 0)` for `1Y6M` and `_core.Tenor(business=2)` for
+`2B`. Its own sum, order and text are the provider's functions (core's
+TEN-2, TEN-3, TEN-9). `date + tenor` is core's HGL, in
+`<core>/core/calendar.hgl`: the target writes it as it writes any generic
+value function, once for each calendar and rolling rule a call gives, and
+what it writes asks the program's own `business_day` and `roll`. The four
+parts that HGL is written with are the provider's too: `fn_moved`,
+`fn_business_days`, `fn_weekend` and `fn_same_month`. A tenor as the type
+of a temporal input or result is not written yet.
+
 FN-15: a function that fails "assigns nothing". A function of the
 program that is given a place's own list may have grown it where it is
 before it failed, so such a call is written inside a `try`: where it

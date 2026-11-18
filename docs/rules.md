@@ -157,8 +157,8 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | TYPE-15 | analyser | partial | `list<f64?>` and `list<f64>?` are two types. Left: a present null is data, distinct from an invalid input |
 | TYPE-16 | analyser | partial | `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a `dict<i64, delta<V>>` for a list, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a set, a dictionary and a struct. A `ref` and a `signal` have none (`delta.unsupported_shape`). Each delta that is a type of its own has its properties: a set's `added` and `removed`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`). It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`). A `delta<V>` is a value where a `delta<V?>` is expected, and null is not. Left: a constructor written for a delta that is no type of its own, a list's or a tuple's, which is not judged |
 | TYPE-16 | transpiler | partial | hgraph: a set's delta, made from its properties, is hgraph's own set delta, in a node, in a trace and as a value. A nullable's is hgraph's own too: `Null` for a published null, and the value otherwise; `delta<i64?>()` and `delta<i64?>(value: v)` make one, and its `value` is read through the provider. Left: a dictionary's and a struct's delta |
-| TYPE-17 | analyser | partial | `tenor` is a scalar type of its own, and a tenor literal is one: its count of months and of days, or of business days, so `1Y` and `12M` are one value. Left: a tenor's operators, which core gives |
-| TYPE-17 | transpiler | planned | hgraph: a tenor and its literal are reported as not written |
+| TYPE-17 | analyser | done | `tenor` is a scalar type of its own, and a tenor literal is one: its count of months and of days, or of business days, so `1Y` and `12M` are one value. Its operators are core's (TEN-1) |
+| TYPE-17 | transpiler | partial | hgraph: a tenor is the provider's `Tenor`, by its counts; its literal is written by them. Left: a tenor as the type of a temporal input or result, which is reported |
 
 ## Expressions and bindings
 
@@ -485,6 +485,18 @@ the same numeric rules the transpiler rows give.
 | LIST-2 | analyser | done | `extend` is core's native function, typed as any call; its list is a `var` parameter (FN-15) |
 | LIST-2 | transpiler | done | hgraph: `extend(values, items)` is the provider's, which puts each entry of `items` after the list's last, in order, and gives the list back |
 | LIST-3 | transpiler | done | hgraph: a `let`, a parameter and whatever else is given the list of a `var`, a `state` or a `cache` is given the list itself, with no copy. What may keep it marks it as shared: a `let`, a `return`, a value made of it, a function whose result may hold it. The read of an element and a `const fn` with a scalar result and no `var` parameter, given data alone, are lent it unmarked. `append` and `extend` grow a list where it is while it is unmarked, and copy it once where it is marked, so what took the list keeps it as it was. A call of the program's own function that fails puts the list back to the length it had (FN-15) |
+| TEN-1 | analyser | done | The pairings are core's candidates, found as any operator's are: `date ± tenor`, `tenor ± tenor`, scaling in either order, negation, the order and `<=>`. A tenor on the left of a date, an instant that is no date, and a division are `operator.no_candidate` |
+| TEN-1 | transpiler | done | hgraph: a tenor's own candidates are the provider's functions, and `date ± tenor` core's HGL, written as any generic value function is |
+| TEN-2 | transpiler | done | hgraph: a sum, a difference, a negation and a scaling are count by count; the two forms have no sum (`tenor.mixed_units`), and a count outside the i64 range is `numeric.out_of_range` |
+| TEN-3 | transpiler | done | hgraph: the order is count by count; `<=>` gives `unordered` for two tenors that differ both ways or are of different forms, and `<`, `<=`, `>`, `>=` are false for those |
+| TEN-4 | transpiler | done | hgraph: the provider's `moved`: the months first, to the last day of a shorter month, then the days; a date outside the years 1 to 9999 is `numeric.out_of_range` |
+| TEN-5 | analyser | done | `calendar` is an option of `+` and `-`, an argument of the candidate that takes it (EXPR-10); a calendar is a value `business_day` has a candidate for, and one that has none finds no candidate |
+| TEN-5 | transpiler | done | hgraph: core's functions are written for the calendar they are given, and ask its `business_day`, the program's own included; `Weekdays()` where none is given |
+| TEN-6 | transpiler | done | hgraph: core's HGL, as written: on to a business day, or back to one, and then the count |
+| TEN-7 | analyser | done | `rolling_rule` is an option of `+` and `-`, with `calendar` or alone; a rolling rule is a value `roll` has a candidate for |
+| TEN-7 | transpiler | done | hgraph: the candidate that takes a rolling rule is written for the rule and the calendar, and gives `roll` the moved date |
+| TEN-8 | transpiler | done | hgraph: core's `roll` for `Rolling`, as written: each rule looks only the way it needs |
+| TEN-9 | transpiler | done | hgraph: `convert<str>(tenor)` is the provider's: the largest units, `0D` for no move, and `-` before the units of a count below zero |
 | END-1 | transpiler | planned | A publication sets validity and the retained value |
 | END-2 | transpiler | planned | A publication marks modified, an equal one included |
 | END-3 | analyser | partial | `delta_value(x)` is a `delta<T>` for an input of T, the value itself for a scalar. For a nullable scalar it is the optional TYPE-16 gives it. Left: proof that `x` is valid and modified |

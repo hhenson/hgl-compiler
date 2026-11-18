@@ -16,7 +16,8 @@ use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
-    ErrorPart, Expr, ExprKind, Hook, Local, Stmt, Temporal, UnaryOperator, Value, ValueCategory,
+    ErrorPart, Expr, ExprKind, Hook, Local, Stmt, Temporal, Tenor, UnaryOperator, Value,
+    ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
@@ -3128,11 +3129,16 @@ impl Emitter<'_> {
                 format!("_dt.timedelta(microseconds={microseconds})")
             }
             Value::Temporal(parts) => self.temporal(parts, at),
-            // TYPE-17: "The core contract gives a tenor's operators".
-            // Until the target has them a tenor is not written.
-            Value::Tenor(_) => {
-                self.unsupported(at, "a tenor");
-                "None".to_string()
+            // LEX-28, TYPE-17: a tenor literal is its counts, which the
+            // analyser has made of its parts: the provider's `Tenor`.
+            // TEN-1: its operators are the provider's functions.
+            Value::Tenor(Tenor::Moves { months, days }) => {
+                self.natives = true;
+                format!("_core.Tenor({months}, {days})")
+            }
+            Value::Tenor(Tenor::BusinessDays(count)) => {
+                self.natives = true;
+                format!("_core.Tenor(business={count})")
             }
         }
     }
