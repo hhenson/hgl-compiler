@@ -1653,7 +1653,9 @@ module, was left out; it then carries the first such report.
 
 `hgl_hgraph::run` runs the tests that are not blocked. hgraph is run
 from Python, so the host is a Python interpreter that has hgraph:
-`--python PATH`, or `python3` (`python` on Windows). The program is
+`--python PATH`, or the one the environment variable
+`HGL_HGRAPH_PYTHON` names, or `python3` (`python` on Windows). The
+program is
 written to a temporary directory, or to the one `--keep DIR` names, and
 the interpreter is started once, with `-B` so that it writes no
 bytecode files, on a driver the target carries, `_hgl/_run_tests.py`.
@@ -1694,8 +1696,47 @@ replayed then and compared as the run's start plus an offset.
 
 #### An application
 
-`hgl run ROOT... [--application PATH]` runs an application (UNIT-14) on
-hgraph: the program's one application, or the one named.
+`hgl run ROOT... [--application PATH] [--arg NAME=VALUE]... [--config
+FIELD=VALUE]...` runs an application (UNIT-14) on hgraph: the program's
+one application, or the one named.
+
+What starts an application "may replace an argument of its entry or a
+field of its configuration with a constant checked against the type it
+replaces, and what the application writes is the default" (RUN-2).
+`--arg` replaces an argument and `--config` a field. The value is HGL,
+one expression on one line. `hgl_cli`'s `replace` puts it, in
+parentheses, in the text of the application's run statement: in place
+of the value the application wrote for that parameter or field, or as
+an argument by name where it wrote none. The program is then read and
+checked again as if the application had written that, so the analyser
+holds a replacement to every rule it holds a written argument to, and
+no stage knows of replacements.
+
+```text
+eval(counted(upto: 3))                         the application
+--arg upto=5 --config length=10s               what starts it
+eval(counted(upto: (5)), RunConfig(length: (10s)))
+```
+
+A name the entry or the configuration has not, a name given twice, and
+a value that is not one expression are refused before the second read.
+The value is read as it is put, between its parentheses, where `.buy`
+is a member of the enum the place expects; `3, 4` and `3) + (4` are not
+one expression there. An error of the second read is reported in the
+application's file, with the statement as it was checked. The type a
+replacement is checked against is the one it replaces. The generic
+arguments an entry's call infers, `<i64>` for `echo(value: 3)`, are
+written after the entry's name for the second read, so a replacement
+is read as the argument it replaces was expected: `.sell` is a member
+of the enum the call made `T`, `3` is the `f64` it made it, and
+`"text"` is no `i64`. They are written as a message writes a type,
+which the application's file may have no name for: they are left out
+where the application, with them written and nothing replaced, does not
+read as it did. In either case, where the call with the replacements is
+of another entry than the application's, or of the same one with other
+generic arguments, the program is rejected. A configuration that is not written as
+`RunConfig(...)`, a constant's name, has its fields replaced by nothing
+yet.
 
 | Step | What does it |
 | --- | --- |
@@ -1731,12 +1772,11 @@ second one of any run, end the run at once with no output.
 | Exit status of `hgl run` | When |
 | --- | --- |
 | 0 | The run ended |
-| 1 | The program is rejected, or the run failed |
-| 2 | No application was chosen, the target does not write all it needs, or the host did not run it |
+| 1 | The program is rejected, as written or with the replacements given, or the run failed |
+| 2 | No application was chosen, a replacement names nothing or is not one expression, the target does not write all it needs, or the host did not run it |
 
-Not written: what starts an application replacing an argument or a field
-of the configuration (RUN-2), outside events in real time, and a view of
-the output while the run goes.
+Not written: outside events in real time, and a view of the output
+while the run goes.
 
 The crate's tests compare the Python written for a small module with
 what is expected, check that core's dense scalar eval cases are written
