@@ -522,7 +522,8 @@ struct Emitter<'a> {
     /// under: an index or a key of a place, which is evaluated once so
     /// that the place read and the place assigned are one (FN-15), and
     /// then each argument, so that they are evaluated in the order
-    /// written (EXPR-2).
+    /// written (EXPR-2). While an argument is evaluated, what its
+    /// indices are of is here too.
     held: Vec<(Location, String)>,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
@@ -1135,18 +1136,36 @@ impl Emitter<'_> {
         // written order". Holding an index evaluates it before the
         // call, so where one is held every argument is: each in the
         // order written, an index just before the argument it is of.
-        fn indices_of(argument: &Argument) -> Vec<&Expr> {
+        // What an index is of is read before the index is evaluated,
+        // as it is in any read: in `rows[key][index]` a `rows` with no
+        // such key fails before `index` is evaluated.
+
+        /// Whether reading `place` reads an element of a list or an
+        /// entry of a dictionary, which may fail.
+        fn reads_an_element(mut place: &Expr) -> bool {
+            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
+                if matches!(place.kind, ExprKind::Index { .. }) {
+                    return true;
+                }
+                place = base;
+            }
+            false
+        }
+        /// The indices of a place that are evaluated, from its root
+        /// outward as they are written. Each is with what it is an
+        /// index of, where reading that may fail.
+        fn indices_of(argument: &Argument) -> Vec<(Option<&Expr>, &Expr)> {
             let mut place = &argument.value;
             let mut indices = Vec::new();
             while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
                 if let ExprKind::Index { index, .. } = &place.kind
                     && !matches!(index.kind, ExprKind::Literal(_))
                 {
-                    indices.push(&**index);
+                    let of = reads_an_element(base).then_some(&**base);
+                    indices.push((of, &**index));
                 }
                 place = base;
             }
-            // From the root outward, as they are written.
             indices.reverse();
             indices
         }
@@ -1159,10 +1178,21 @@ impl Emitter<'_> {
             .iter()
             .any(|argument| is_place(argument) && !indices_of(argument).is_empty());
         if holds {
-            let mut indices = 0;
+            let (mut indices, mut reads) = (0, 0);
             for (position, argument) in arguments.iter().enumerate() {
+                // What this argument's indices are of, by where each is
+                // written.
+                let mut read_here = Vec::new();
                 if is_place(argument) {
-                    for index in indices_of(argument) {
+                    for (of, index) in indices_of(argument) {
+                        if let Some(of) = of {
+                            reads += 1;
+                            let held = format!("_in_{reads}");
+                            let written = self.expression(function, of);
+                            self.line(depth, &format!("{held} = {written}"));
+                            self.held.push((of.at, held));
+                            read_here.push(of.at);
+                        }
                         indices += 1;
                         let held = format!("_at_{indices}");
                         let written = self.expression(function, index);
@@ -1173,6 +1203,11 @@ impl Emitter<'_> {
                 let held = format!("_arg_{}", position + 1);
                 let written = self.expression(function, &argument.value);
                 self.line(depth, &format!("{held} = {written}"));
+                // An index is held until the place is assigned. What it
+                // is of is not: an earlier place's assignment may have
+                // given the root another value, and the assignment
+                // reads what is there then.
+                self.held.retain(|(at, _)| !read_here.contains(at));
                 self.held.push((argument.value.at, held));
             }
         }

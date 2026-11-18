@@ -4701,6 +4701,10 @@ impl<'a> Typer<'a> {
             .collect();
         let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
         let mut reports = Vec::new();
+        // The places the call assigns: the local each is rooted in,
+        // where it is written, and whether it is inside the local's
+        // value.
+        let mut assigned: Vec<(LocalId, Location, bool)> = Vec::new();
         for argument in arguments {
             let Some(parameter) = argument
                 .parameter
@@ -4777,6 +4781,24 @@ impl<'a> Typer<'a> {
                             )
                             .with_related(declared.at, "declared here"),
                         );
+                    } else if let Some((what, rule)) = Self::read_only_inside(&argument.value) {
+                        // NATIVE-6, TYPE-16: a property of a native
+                        // value or of a delta is read-only whatever
+                        // holds the value, as an assignment has it.
+                        reports.push(error(
+                            Category::Name,
+                            codes::BINDING_IMMUTABLE,
+                            at,
+                            format!(
+                                "this is a property of {what}, and a property is read and not assigned, as {takes} is"
+                            ),
+                            rule,
+                        ));
+                    } else {
+                        // The call assigns the place, and is held to
+                        // what an assignment there is.
+                        let inside = !matches!(&argument.value.kind, ExprKind::Local(_));
+                        assigned.push((*local, at, inside));
                     }
                 }
                 ExprKind::Constant { .. } => reports.push(error(
@@ -4804,6 +4826,34 @@ impl<'a> Typer<'a> {
         }
         for report in reports {
             self.diagnostics.emit(report);
+        }
+        // In a graph an assignment is held to more (CTRL-14, CTRL-15),
+        // and so is a call that assigns: a `var` declared outside a
+        // loop that makes a child for each member is not carried, and
+        // one that holds an ordinary value is not assigned in a branch
+        // selected at runtime. What the call gives the place is an
+        // ordinary value: the function is not lifted.
+        if !self.graph {
+            return;
+        }
+        for (local, at, inside) in assigned {
+            if self.dynamic.is_some_and(|outside| local < outside) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::LOOP_CARRIED,
+                        at,
+                        format!(
+                            "`{}` is declared outside this loop, which makes one child for each member: nothing is carried from one child to the next",
+                            self.locals[local].name
+                        ),
+                        "CTRL-15",
+                    )
+                    .with_related(self.locals[local].at, "declared here"),
+                );
+            } else {
+                self.assigned_category(local, (ValueCategory::Value, at), inside);
+            }
         }
     }
 

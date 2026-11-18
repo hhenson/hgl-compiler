@@ -3998,6 +3998,20 @@ const PLACES: &str = concat!(
     "    apply(1 //{zero: .fail} zero, items[indices[\"missing\"]])\n",
     "    return items[0]\n",
     "}\n",
+    // What an index is of is read before the index is evaluated: a
+    // missing `key` fails before the division does.
+    "const fn deep(key: str, zero: i64) -> i64 {\n",
+    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
+    "    bump(rows[key][1 //{zero: .fail} zero], 1)\n",
+    "    return rows[\"a\"][1]\n",
+    "}\n",
+    // Two places inside one root: each assignment reads the root as
+    // the one before it left it.
+    "const fn crossed(key: str, i: i64, j: i64) -> i64 {\n",
+    "    var rows: dict<str, list<i64>> = [\"a\": [5, 6]]\n",
+    "    both(rows[key][i], rows[key][j])\n",
+    "    return rows[\"a\"][0] * 10 + rows[\"a\"][1]\n",
+    "}\n",
     "const fn moved() -> i64 {\n",
     "    var i: i64 = 0\n",
     "    var items: list<i64> = [5, 6]\n",
@@ -4019,6 +4033,10 @@ const PLACES: &str = concat!(
     "    assert raises(\"numeric.division_by_zero\") { ordered(0, [\"a\": 1]) }\n",
     "    assert raises(\"value.missing_key\") { ordered(1, [\"a\": 1]) }\n",
     "    assert ordered(1, [\"missing\": 1]) == 5\n",
+    "    assert raises(\"value.missing_key\") { deep(\"b\", 0) }\n",
+    "    assert raises(\"numeric.division_by_zero\") { deep(\"a\", 0) }\n",
+    "    assert deep(\"a\", 1) == 7\n",
+    "    assert crossed(\"a\", 0, 1) == 65\n",
     "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
     "}\n",
 );
@@ -4096,6 +4114,17 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _at_1 = _core.entry(indices, \"missing\")\n",
             "    _arg_2 = _core.item(items, _at_1)\n",
             "    _given = apply(value=_arg_1, item=_arg_2)\n",
+        ),
+        // What an index is of is read, and held, before the index is
+        // evaluated. Where the place is assigned it is read again.
+        concat!(
+            "    _at_1 = key\n",
+            "    _in_1 = _core.entry(rows, _at_1)\n",
+            "    _at_2 = _core.floordiv__i64_i64(lhs=1, rhs=zero, zero=\"fail\")\n",
+            "    _arg_1 = _core.item(_in_1, _at_2)\n",
+            "    _arg_2 = 1\n",
+            "    _given = bump(count=_arg_1, by=_arg_2)\n",
+            "    rows = _core.with_entry(rows, _at_1, _core.with_item(_core.entry(rows, _at_1), _at_2, _given[1]))\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(

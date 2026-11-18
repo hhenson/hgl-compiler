@@ -315,3 +315,69 @@ fn a_place_is_of_the_var_parameters_type() {
         ]
     );
 }
+
+/// FN-15: "A call assigns the place". So a call is held to what an
+/// assignment of the place is. NATIVE-6, TYPE-16: a property of a
+/// native value or of a delta is read and not assigned, whatever holds
+/// the value. CTRL-14: in a graph a `var` that holds an ordinary value
+/// is not assigned in a branch selected at runtime. CTRL-15: one
+/// declared outside a loop that makes a child for each member is not
+/// carried into it.
+#[test]
+fn a_call_that_assigns_a_place_is_held_to_what_an_assignment_is() {
+    let checked = module(concat!(
+        "native type Handle {\n",
+        "    size: i64\n",
+        "}\n",
+        "native const fn made() -> Handle\n",
+        "const fn bump(var count: i64, by: i64) { count += by }\n",
+        "const fn property() -> i64 {\n",
+        "    var handle: Handle = made()\n",
+        "    bump(handle.size, 1)\n",
+        "    return 1\n",
+        "}\n",
+        "const fn keep(var members: set<i64>) { let one = 1 }\n",
+        // Inside a list, and a delta's own property.
+        "const fn changed(change: delta<set<i64>>) -> i64 {\n",
+        "    var held: delta<set<i64>> = change\n",
+        "    var handles: list<Handle> = [made()]\n",
+        "    bump(handles[0].size, 1)\n",
+        "    keep(held.added)\n",
+        "    return 1\n",
+        "}\n",
+        "fn passes(value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        // Line 23: assigned where the graph is built, which is fine.
+        "fn built(value: i64) -> i64 {\n",
+        "    var n: i64 = 0\n",
+        "    bump(n, 1)\n",
+        "    return passes(value)\n",
+        "}\n",
+        "fn branched(rising: bool, value: i64) -> i64 {\n",
+        "    var n: i64 = 0\n",
+        "    var rows: list<i64> = [0]\n",
+        "    if rising {\n",
+        "        bump(n, 1)\n",
+        "        bump(rows[0], 1)\n",
+        "    }\n",
+        "    return passes(value)\n",
+        "}\n",
+        "fn looped(values: set<i64>, value: i64) -> i64 {\n",
+        "    var n: i64 = 0\n",
+        "    for member in values { bump(n, 1) }\n",
+        "    return passes(value)\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:9:10 name/binding.immutable NATIVE-6",
+            "m.hgl:16:10 name/binding.immutable NATIVE-6",
+            "m.hgl:17:10 name/binding.immutable TYPE-16",
+            "m.hgl:32:14 type/binding.category CTRL-14",
+            "m.hgl:33:14 type/binding.category CTRL-14",
+            "m.hgl:39:33 phase/loop.carried CTRL-15",
+        ]
+    );
+}
