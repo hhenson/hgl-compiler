@@ -40,6 +40,27 @@ fn counted(value: i64) -> i64 {
     when scheduled() { return seen }
 }
 
+# What woke the node is what woke it when it was entered: a handler that
+# passivates the input that woke it, or asks again under the tag that is
+# due, leaves the handlers after it to run as they were to.
+fn passivated(value: i64) -> i64 {
+    inject scheduler
+    start { schedule(scheduler, 10s, tag: "late") }
+    when modified(value) { passivate(value) }
+    when { return value }
+}
+
+fn asked_again() -> i64 {
+    state wakes: i64 = 0
+    inject scheduler
+    start { schedule(scheduler, 1s, tag: "beat") }
+    when scheduled() && wakes < 2 {
+        wakes += 1
+        schedule(scheduler, 1s, tag: "beat")
+    }
+    when scheduled() { return wakes }
+}
+
 # Core's CAP-4: the scheduler's properties, and `un_schedule`.
 fn pending(value: i64) -> bool {
     inject scheduler
@@ -109,6 +130,11 @@ test an_alarm_is_told_from_the_inputs {
 
 test a_wake_alone_runs_only_its_handlers {
     assert eval(counted(value: [0s: 1, 500ms: 2]), RunConfig(length: 1500ms)) == [1s: 2]
+}
+
+test what_woke_the_node_is_read_once {
+    assert eval(passivated(value: [7, 8]), RunConfig(length: 1s)) == [7]
+    assert eval(asked_again(), RunConfig(length: 3500ms)) == [1s: 1, 2s: 2, 3s: 2]
 }
 
 test a_scheduler_says_what_is_pending {

@@ -1840,7 +1840,34 @@ impl Emitter<'_> {
                     }
                 })
                 .collect();
-            format!("({})", woke.join(" or "))
+            match woke.as_slice() {
+                // One term that is in parentheses of its own.
+                [one] if passivates => one.clone(),
+                _ => format!("({})", woke.join(" or ")),
+            }
+        };
+        // What woke the node is read where the node is entered, and
+        // not again where a later handler asks: a handler before it
+        // may passivate the input that woke the node, or ask its
+        // scheduler for another wake under the tag that is due, and
+        // neither changes what woke this evaluation. A node with one
+        // handler has none before it, and reads it in place.
+        let timed = |handler: &Handler| handler.scheduled || handler.subscribed.is_empty();
+        let several = handlers.len() > 1;
+        let holds_timer = several && timer.is_some() && handlers.iter().any(timed);
+        let holds_input = several
+            && timer.is_some()
+            && handlers
+                .iter()
+                .any(|handler| !timed(handler) && !handler.selects);
+        let timer_guard = match &timer_woke {
+            Some(_) if holds_timer => Some("_timer_woke".to_string()),
+            other => other.clone(),
+        };
+        let input_guard = if holds_input {
+            "_input_woke".to_string()
+        } else {
+            input_woke.clone()
         };
         let names = |locals: &[usize]| -> String {
             let named: Vec<String> = locals
@@ -1887,6 +1914,12 @@ impl Emitter<'_> {
         );
         let before = self.text.len();
         self.unheld(signature);
+        if let (true, Some(woke)) = (holds_timer, &timer_woke) {
+            self.line(1, &format!("_timer_woke = {woke}"));
+        }
+        if holds_input {
+            self.line(1, &format!("_input_woke = {input_woke}"));
+        }
         // An endpoint as the node's code names it: an input by its
         // name, and the node's own output as hgraph's `_output`.
         let endpoint = |local: usize| {
@@ -1905,8 +1938,8 @@ impl Emitter<'_> {
             // other handler: one with no `modified` selector
             // subscribes to every temporal input, and is run by an
             // input's wake."
-            if handler.scheduled || handler.subscribed.is_empty() {
-                match &timer_woke {
+            if timed(handler) {
+                match &timer_guard {
                     Some(woke) => guards.push(woke.clone()),
                     None => {
                         if !active.is_empty() {
@@ -1916,7 +1949,7 @@ impl Emitter<'_> {
                     }
                 }
             } else if timer.is_some() && !handler.selects {
-                guards.push(input_woke.clone());
+                guards.push(input_guard.clone());
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {

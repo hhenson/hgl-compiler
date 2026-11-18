@@ -6193,19 +6193,27 @@ fn a_timer_wakes_its_own_handlers() {
             "@_hg.compute_node(valid=())\n",
             "def sampled(price: _hg.TS[_py.float], every: _dt.timedelta, ",
             "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.float]:\n",
+            // What woke the node is read where it is entered: a
+            // handler before the one that asks may change it.
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
             "    if price.valid and price.modified:\n",
             "        _state.last = price.value\n",
-            "    if _scheduler.is_scheduled_now:\n",
+            "    if _timer_woke:\n",
         ),
         // An alarm: no input has ticked, where it published or was
         // invalidated.
-        "    if _scheduler.is_scheduled_now and not (price.modified or price.invalidated):\n",
+        "    _timer_woke = _scheduler.is_scheduled_now and not (price.modified or price.invalidated)\n",
         // A handler with no `modified` selector, in a node a scheduler
         // wakes too: an input woke the node.
         concat!(
-            "    if (value.modified or value.invalidated) and value.valid:\n",
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
+            "    _input_woke = (value.modified or value.invalidated)\n",
+            "    if _input_woke and value.valid:\n",
             "        _state.seen = _core.add__i64_i64(lhs=_state.seen, rhs=1)\n",
         ),
+        // An input that woke the node is one that was active when the
+        // node was entered.
+        "    _input_woke = ((value.modified or value.invalidated) and value.active)\n",
         // The scheduler's operations and properties are the
         // provider's.
         "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False)",
