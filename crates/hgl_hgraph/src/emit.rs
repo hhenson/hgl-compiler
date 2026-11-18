@@ -1096,19 +1096,10 @@ impl Emitter<'_> {
     /// The `var` parameters of what `value` calls, by their positions,
     /// where it is a call of a function that declares any (FN-15).
     fn places_of(&self, value: &Expr) -> Vec<usize> {
-        let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    ..
-                },
-            ..
-        } = &value.kind
-        else {
+        let Some((module, declaration, _)) = called(value) else {
             return Vec::new();
         };
-        match self.program.modules[*module].details.get(*declaration) {
+        match self.program.modules[module].details.get(declaration) {
             Some(Detail::Callable(signature)) => signature
                 .parameters
                 .iter()
@@ -1135,19 +1126,11 @@ impl Emitter<'_> {
         if places.is_empty() {
             return None;
         }
-        let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    ..
-                },
-            arguments,
-            ..
-        } = &value.kind
-        else {
-            return None;
-        };
+        // A function of the program, or the candidate of an operator
+        // the call resolved to: the candidate says which of its
+        // parameters is `var` (FN-15, GEN-6).
+        let (module, declaration, arguments) = called(value)?;
+        let (module, declaration) = (&module, &declaration);
         let Some(Detail::Callable(signature)) =
             self.program.modules[*module].details.get(*declaration)
         else {
@@ -4549,6 +4532,31 @@ fn held(ty: &Type) -> bool {
         Type::Nullable(inner) => held(inner),
         Type::List { .. } | Type::Tuple(_) | Type::Dict { .. } => true,
         _ => false,
+    }
+}
+
+/// What a call calls, and its arguments: a function of the program, or
+/// the candidate of an operator the call resolved to. `None` for any
+/// other expression, and for a call of what is not yet known.
+fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
+    let ExprKind::Call {
+        callee, arguments, ..
+    } = &value.kind
+    else {
+        return None;
+    };
+    match callee {
+        Callee::Function {
+            module,
+            declaration,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            ..
+        } => Some((*module, *declaration, arguments)),
+        _ => None,
     }
 }
 

@@ -25,10 +25,11 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
 }
 
 /// FN-15: "A value function, a `const fn` or a native one, may mark a
-/// parameter `var` ... Its type is an ordinary value type, and no
-/// capability's (TIME-8) or `endpoint<T>` (TIME-9), which no place
-/// holds ... A temporal `fn`, an operator, and a candidate declare none
-/// (`parameter.var`)." Each is reported at the `var`.
+/// parameter `var` ... So may a value candidate of an operator (GEN-6).
+/// Its type is an ordinary value type, and no capability's (TIME-8) or
+/// `endpoint<T>` (TIME-9), which no place holds ... A temporal `fn`, a
+/// temporal candidate, and an operator declare none (`parameter.var`)".
+/// Each is reported at the `var`.
 fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
     for module in &program.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
@@ -43,11 +44,16 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
             let declares_none = match declaration.kind {
                 DeclarationKind::Function(Role::Value)
                 | DeclarationKind::NativeFunction(Role::Value)
-                | DeclarationKind::NativeImplementation(Role::Value) => None,
+                | DeclarationKind::NativeImplementation(Role::Value)
+                | DeclarationKind::NativeCandidateImplementation(Role::Value) => None,
+                // "an operator gives the parameters every candidate
+                // takes, and each candidate says which of its own is
+                // `var`".
+                kind if matches!(kind.candidate(), Some((Role::Value, _))) => None,
                 DeclarationKind::Operator => Some("an operator"),
-                kind if kind.candidate().is_some() => Some("a candidate of an operator"),
+                kind if kind.candidate().is_some() => Some("a temporal candidate of an operator"),
                 DeclarationKind::NativeCandidateImplementation(_) => {
-                    Some("a candidate of an operator")
+                    Some("a temporal candidate of an operator")
                 }
                 _ => Some("a temporal function"),
             };
@@ -77,7 +83,7 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
                 };
                 let message = match (declares_none, no_place) {
                     (Some(what), _) => format!(
-                        "`{}` is a `var` parameter of {what}: only a `const fn` or a native value function declares one",
+                        "`{}` is a `var` parameter of {what}: only a `const fn`, a native value function or a value candidate declares one",
                         parameter.name
                     ),
                     (None, Some(what)) => format!(

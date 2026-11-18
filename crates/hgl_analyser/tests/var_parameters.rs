@@ -199,10 +199,10 @@ fn what_is_no_place_is_not_given_to_a_var_parameter() {
 
 /// FN-15: "Its type is an ordinary value type, and no capability's
 /// (TIME-8) or `endpoint<T>` (TIME-9), which no place holds
-/// (`parameter.var`) ... A temporal `fn`, an operator, and a candidate
-/// declare none (`parameter.var`)."
+/// (`parameter.var`) ... A temporal `fn`, a temporal candidate, and an
+/// operator declare none (`parameter.var`)."
 #[test]
-fn only_a_value_function_declares_a_var_parameter() {
+fn only_a_value_function_or_candidate_declares_a_var_parameter() {
     let checked = module(concat!(
         "fn ticking(var value: i64) -> i64 {\n",
         "    when { return value }\n",
@@ -210,6 +210,8 @@ fn only_a_value_function_declares_a_var_parameter() {
         "fn wired(var value: i64) -> i64 => value\n",
         "operator joined(var lhs: i64, rhs: i64) -> i64\n",
         "operator plain(lhs: i64, rhs: i64) -> i64\n",
+        // Line 8: a value candidate may: the operator marks none, and
+        // the candidate says which of its own is `var`.
         "impl const fn plain(var lhs: i64, rhs: i64) -> i64 => lhs\n",
         "native fn outside(var value: i64) -> i64\n",
         "const fn logged(var logger: Logger) -> i64 => 1\n",
@@ -223,7 +225,6 @@ fn only_a_value_function_declares_a_var_parameter() {
             "m.hgl:2:12 function-kind/parameter.var FN-15",
             "m.hgl:5:10 function-kind/parameter.var FN-15",
             "m.hgl:6:17 function-kind/parameter.var FN-15",
-            "m.hgl:8:21 function-kind/parameter.var FN-15",
             "m.hgl:9:19 function-kind/parameter.var FN-15",
             "m.hgl:10:17 function-kind/parameter.var FN-15",
         ]
@@ -425,6 +426,69 @@ fn cores_append_and_extend_take_a_place() {
             "m.hgl:16:12 type/argument.place FN-15",
             "m.hgl:21:12 name/binding.immutable FN-15",
             "m.hgl:26:21 type/type.mismatch EXPR-5",
+        ]
+    );
+}
+
+/// FN-15: "So may a value candidate of an operator (GEN-6) ... A
+/// temporal `fn`, a temporal candidate, and an operator declare none
+/// (`parameter.var`): an operator gives the parameters every candidate
+/// takes, and each candidate says which of its own is `var`. The mark
+/// takes no part in selecting a candidate (GEN-5): a call of an
+/// operator is resolved as any other, and the candidate it resolves to
+/// says which of its arguments are places." GEN-16: "A candidate that
+/// marks a parameter `var` (FN-15) answers no requirement".
+#[test]
+fn a_value_candidate_says_which_of_its_arguments_are_places() {
+    let checked = module(concat!(
+        "operator push<C, V>(values: C, item: V)\n",
+        "impl const fn push(var values: list<i64>, item: i64) { append(values, item) }\n",
+        "impl const fn push(var values: dict<str, i64>, item: str) { values[item] = 1 }\n",
+        "const fn used() -> i64 {\n",
+        "    var entries: list<i64> = [1]\n",
+        "    push(entries, 2)\n",
+        "    var seen: dict<str, i64> = []\n",
+        "    push(seen, \"a\")\n",
+        "    return entries[1]\n",
+        "}\n",
+        // Line 12: the candidate is selected by the types of the
+        // arguments, and then says its first is a place.
+        "const fn refused() -> i64 {\n",
+        "    let fixed = [1]\n",
+        "    push([1], 2)\n",
+        "    push(fixed, 2)\n",
+        "    return 1\n",
+        "}\n",
+        // Line 18: an operator, and a temporal candidate, declare none.
+        "operator poke<C>(var values: C)\n",
+        "operator tick<T>(value: T) -> T\n",
+        "impl fn tick(var value: i64) -> i64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        // Line 23: a requirement supplies types, and no place.
+        "const fn filled<C>(values: C) -> i64 requires push(C, i64) { return 1 }\n",
+        "const fn asks() -> i64 => filled([1])\n",
+        // Line 25: a `var` parameter is always given, though its type
+        // is written `T?`: the candidate is selected, and then asks for
+        // it.
+        "operator clear(value: i64?)\n",
+        "impl const fn clear(var value: i64?) { value = null }\n",
+        "const fn cleared() -> i64 {\n",
+        "    var count: i64? = 1\n",
+        "    clear(count)\n",
+        "    clear()\n",
+        "    return 1\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:10 type/argument.place FN-15",
+            "m.hgl:15:10 name/binding.immutable FN-15",
+            "m.hgl:18:18 function-kind/parameter.var FN-15",
+            "m.hgl:20:14 function-kind/parameter.var FN-15",
+            "m.hgl:24:27 constraint/requires.unmet GEN-3",
+            "m.hgl:30:5 type/argument.missing FN-15",
         ]
     );
 }

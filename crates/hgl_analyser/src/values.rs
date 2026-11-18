@@ -4501,7 +4501,7 @@ impl<'a> Typer<'a> {
         if selected.len() == 1
             && let Some(chosen) = selected.pop()
         {
-            return self.called(operator, chosen, given, symbol.form);
+            return self.called(operator, chosen, given, (symbol.form, symbol.at));
         }
         // `i64` and `f64`, and after them what the configuration gives:
         // `zero: .nan`.
@@ -7974,7 +7974,7 @@ impl<'a> Typer<'a> {
         let Some(chosen) = selected.pop() else {
             return (self.unselected(given, Form::Named), Type::Unknown);
         };
-        self.called(operator, chosen, given, Form::Named)
+        self.called(operator, chosen, given, (Form::Named, at))
     }
 
     /// The declarations the name of `node` is bound to, when it is a
@@ -8580,7 +8580,7 @@ impl<'a> Typer<'a> {
         operator: OperatorRef,
         chosen: Chosen,
         given: Vec<Given>,
-        form: Form,
+        (form, at): (Form, Location),
     ) -> (ExprKind, Type) {
         let Chosen {
             module,
@@ -8598,6 +8598,25 @@ impl<'a> Typer<'a> {
             Some(Detail::Callable(public)) => bound(signature, public, &given).unwrap_or_default(),
             _ => Vec::new(),
         };
+        // FN-15: a `var` parameter "is always given: it has no default,
+        // and is not left out where its type is written `T?`". The mark
+        // takes no part in selecting the candidate, which admits a call
+        // that leaves a `T?` out (UNIT-8): it is asked for here, of the
+        // candidate the call resolved to.
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            if parameter.var && !bound.contains(&Place::Parameter(index)) {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::ARGUMENT_MISSING,
+                    at,
+                    format!(
+                        "`{}` is given no `{}`, a `var` parameter, which is always given a place",
+                        program.modules[module].declarations[declaration].name, parameter.name
+                    ),
+                    "FN-15",
+                ));
+            }
+        }
         let arguments = given
             .into_iter()
             .enumerate()
@@ -9176,6 +9195,14 @@ impl<'a> Typer<'a> {
                     .kind
                     .candidate(),
                 Some((Role::Value, _))
+            )
+            // GEN-16: "A candidate that marks a parameter `var`
+            // (FN-15) answers no requirement: a requirement supplies
+            // types, and no place."
+            && !matches!(
+                program.modules[module].details.get(declaration),
+                Some(Detail::Callable(signature))
+                    if signature.parameters.iter().any(|parameter| parameter.var)
             )
         });
         if unreadable(public, &candidates) {
