@@ -24,6 +24,7 @@
 //! | `delta<set<i64>>(added: [1], removed: [2])` | `_hg.set_delta(added=..., removed=..., tp=_py.int)` |
 //! | A native candidate of core | A function of `_hgl._core_native` |
 //! | A `state` and a `cache` | Fields of the node's `STATE`, given their values in its `start` |
+//! | A source, a `fn` with a `yield` | A Python generator, a node that resumes it, and a graph that wakes the node as it starts |
 //! | `inject clock`, `logger`, `global_state` | hgraph's `EvaluationClock`, `LOGGER` and `GlobalState`, given to the node, its `start` and its `stop` |
 //! | `impl const fn` with a body | A function, `_impl_add__f64_i64` |
 //! | `impl fn` with a body | A node or a graph, `_impl_join__i64_i64` |

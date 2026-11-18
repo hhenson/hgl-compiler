@@ -183,6 +183,12 @@ enum Mode {
     /// the node's configuration, its state and its inputs, and not its
     /// output.
     Stop,
+    /// A source's statements (SOURCE-1): the body of a Python
+    /// generator, which is resumed in an evaluation of the source's
+    /// node. A `cache` and a `state` are fields of the node's state,
+    /// and so is a capability, which the node puts there for the
+    /// evaluation it is resumed in.
+    Source,
     /// A graph: a temporal parameter is a port, passed on as it is.
     Graph,
     /// A named test: ordinary values, and evals.
@@ -197,7 +203,7 @@ impl Mode {
     fn runs(self) -> bool {
         matches!(
             self,
-            Mode::Value | Mode::Node | Mode::Lifecycle | Mode::Stop
+            Mode::Value | Mode::Node | Mode::Lifecycle | Mode::Stop | Mode::Source
         )
     }
 }
@@ -788,6 +794,11 @@ impl Emitter<'_> {
         let program = self.program;
         let module = &program.modules[self.module];
         match module.phases.get(index).copied().flatten() {
+            // SOURCE-1: "A temporal `fn` whose body has a `yield` is a
+            // source".
+            Some(Phase::Node) if yields(&body.statements) => {
+                self.source(index, python, signature, body)
+            }
             Some(Phase::Node) => self.node(index, python, signature, body),
             Some(Phase::Graph) => self.graph(index, python, signature, body),
             None => self.unsupported(module.declarations[index].at, "this function"),
@@ -1400,6 +1411,194 @@ impl Emitter<'_> {
         }
     }
 
+    /// A source (SOURCE-1): "a node that produces its output and has no
+    /// temporal parameters". It is written as three functions and a
+    /// graph that wires them, `python`:
+    ///
+    /// - `_yields_python`, a Python generator that holds the source's
+    ///   statements, each `yield time: value` a `yield (time, value)`;
+    /// - `_source_python`, a node that resumes the generator and
+    ///   publishes what it is due. hgraph takes no node without an
+    ///   input, so it has one, `_begin`, which the graph gives a
+    ///   constant: that wakes it once, when the graph starts
+    ///   (SOURCE-2: "The first evaluation begins the body"), and its
+    ///   own scheduler wakes it after;
+    /// - its `start`, which gives each `cache` and `state` its value,
+    ///   makes the generator and runs the source's `start`, and its
+    ///   `stop`, the source's `stop`: "`stop`, where present, always
+    ///   runs when the node ends, whatever state the generator is in".
+    ///
+    /// hgraph's own generator node is not used: it has no `start` and
+    /// no `stop`, and publishes a target that has passed where
+    /// SOURCE-3 skips it. The provider's `resume` holds a target to
+    /// SOURCE-2 and SOURCE-3.
+    fn source(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
+        let program = self.program;
+        let declaration = &program.modules[self.module].declarations[index];
+        let (parameters, result) = self.temporal_signature(declaration, signature);
+        // What the body is made of: the declarations, the hooks, and
+        // the statements that yield.
+        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
+        let mut start: Option<&[Stmt]> = None;
+        let mut stop: Option<&[Stmt]> = None;
+        let mut capabilities: Vec<(&str, &str)> = Vec::new();
+        let mut block: Vec<Stmt> = Vec::new();
+        for statement in &body.statements {
+            match statement {
+                Stmt::Declare { local, value }
+                    if matches!(
+                        body.locals[*local].kind,
+                        LocalKind::State | LocalKind::Cache
+                    ) =>
+                {
+                    states.push((*local, value));
+                }
+                Stmt::Hook {
+                    hook: Hook::Start,
+                    body,
+                    ..
+                } => start = Some(body),
+                Stmt::Hook {
+                    hook: Hook::Stop,
+                    body,
+                    ..
+                } => stop = Some(body),
+                Stmt::Inject { local, at } => {
+                    let injected = &body.locals[*local].name;
+                    match capability(injected) {
+                        Some(written) => capabilities.push(written),
+                        None => self.unsupported(*at, &format!("an `inject` of `{injected}`")),
+                    }
+                }
+                other => block.push(other.clone()),
+            }
+        }
+        // The configuration by name, as the generator and the node are
+        // given it.
+        let names: Vec<String> = signature
+            .parameters
+            .iter()
+            .map(|parameter| name(&parameter.name))
+            .collect();
+        let generator = format!("_yields_{python}");
+        let node = format!("_source_{python}");
+        self.hgraph = true;
+        self.natives = true;
+
+        // The statements that yield: a generator, given the
+        // configuration and the node's state.
+        let mut given = names.clone();
+        given.push("_state".to_string());
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, &format!("def {generator}({}):", given.join(", ")));
+        let yielding = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Source,
+        };
+        self.block(&yielding, &block, 1);
+
+        // The node. The clock and the scheduler are the target's own
+        // here: the clock says what the current evaluation time is,
+        // which a duration is counted from, and the scheduler wakes
+        // the node at the next target.
+        let mut hooks: Vec<String> = parameters.clone();
+        hooks.push("_state: _hg.STATE = None".to_string());
+        for (parameter, annotation) in &capabilities {
+            hooks.push(format!("{parameter}: {annotation} = None"));
+        }
+        let mut node_parameters = vec!["_begin: _hg.TS[_py.bool]".to_string()];
+        node_parameters.extend(hooks.iter().cloned());
+        if !capabilities
+            .iter()
+            .any(|(parameter, _)| *parameter == "_clock")
+        {
+            node_parameters.push("_clock: _hg.EvaluationClock = None".to_string());
+        }
+        node_parameters.push("_scheduler: _hg.SCHEDULER = None".to_string());
+        let returns = result
+            .as_ref()
+            .map_or(String::new(), |result| format!(" -> {result}"));
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, "@_hg.compute_node");
+        self.line(
+            0,
+            &format!("def {node}({}){returns}:", node_parameters.join(", ")),
+        );
+        // A capability is good for one call: the generator reads the
+        // ones of the evaluation it is resumed in.
+        for (parameter, _) in &capabilities {
+            self.line(1, &format!("_state.{parameter} = {parameter}"));
+        }
+        self.line(
+            1,
+            "_published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)",
+        );
+        self.line(1, "if _published is not None:");
+        self.line(2, "return _published[0]");
+
+        // `start`: the first values, the hook, and the generator.
+        let hooks = hooks.join(", ");
+        let lifecycle_hook = Function {
+            locals: &body.locals,
+            signature: Some(signature),
+            mode: Mode::Lifecycle,
+        };
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, &format!("@{node}.start"));
+        self.line(0, &format!("def _start_{node}({hooks}):"));
+        for (local, value) in &states {
+            let field = name(&body.locals[*local].name);
+            let value = match value {
+                Some(value) => self.expression(&lifecycle_hook, value),
+                None => "None".to_string(),
+            };
+            self.line(1, &format!("_state.{field} = {value}"));
+        }
+        // The generator is made before the source's `start` runs: a
+        // `return` there ends the hook, and must not leave the node
+        // with nothing to resume. Making it runs none of the source's
+        // statements: Python begins a generator where it is first
+        // resumed.
+        self.line(
+            1,
+            &format!(
+                "_state._source = _core.Source({generator}({}))",
+                given.join(", ")
+            ),
+        );
+        if let Some(start) = start {
+            self.statements(&lifecycle_hook, start, 1);
+        }
+        if let Some(stop) = stop {
+            let stop_hook = Function {
+                locals: &body.locals,
+                signature: Some(signature),
+                mode: Mode::Stop,
+            };
+            self.line(0, "");
+            self.line(0, "");
+            self.line(0, &format!("@{node}.stop"));
+            self.line(0, &format!("def _stop_{node}({hooks}):"));
+            self.block(&stop_hook, stop, 1);
+        }
+
+        // The graph a call names: the node, woken once as it starts.
+        let mut wired = vec!["_hg.const(True)".to_string()];
+        wired.extend(names);
+        self.line(0, "");
+        self.line(0, "");
+        self.line(0, "@_hg.graph");
+        self.line(
+            0,
+            &format!("def {python}({}){returns}:", parameters.join(", ")),
+        );
+        self.line(1, &format!("return {node}({})", wired.join(", ")));
+    }
+
     /// A graph: `@graph`, whose body wires the nodes it calls.
     fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
@@ -1486,6 +1685,13 @@ impl Emitter<'_> {
             // TIME-8: a capability is the parameter hgraph gives it
             // as.
             LocalKind::Inject => match capability(&declared.name) {
+                // A source's statements are resumed in one evaluation
+                // after another, each with capabilities of its own:
+                // the node puts them in its state for the statements
+                // to read.
+                Some((parameter, _)) if function.mode == Mode::Source => {
+                    format!("_state.{parameter}")
+                }
                 Some((parameter, _)) => parameter.to_string(),
                 None => {
                     self.unsupported(declared.at, "this injected capability");
@@ -1607,13 +1813,36 @@ impl Emitter<'_> {
                     },
                 ..
             }) => self.if_statement(function, condition, then, otherwise.as_deref(), depth),
+            // SOURCE-1: the one block that holds every `yield` may be
+            // `{ ... }`: its statements, one after another, and then
+            // the expression it ends with, where it ends with one. A
+            // source's block gives no value, so that is a statement
+            // too.
+            Stmt::Expr(Expr {
+                kind: ExprKind::Block { statements, value },
+                ..
+            }) if function.mode == Mode::Source => {
+                self.statements(function, statements, depth);
+                if let Some(value) = value {
+                    self.statement(function, &Stmt::Expr((**value).clone()), depth);
+                }
+            }
             Stmt::Expr(value) => {
                 let value = self.expression(function, value);
                 self.line(depth, &value);
             }
+            // SOURCE-2: "Yield evaluates its time once, then payload
+            // once, before target validation." Python evaluates a
+            // tuple's entries in order, and the provider validates the
+            // target where the generator is resumed.
+            Stmt::Yield { time, value, .. } if function.mode == Mode::Source => {
+                let time = self.expression(function, time);
+                let value = self.expression(function, value);
+                self.line(depth, &format!("yield ({time}, {value})"));
+            }
             // CTRL-12: "`while condition { ... }` repeats its body while
             // the condition holds". The form with no condition is a
-            // source's.
+            // source's (SOURCE-4: "omitted condition is unbounded").
             Stmt::While {
                 condition: Some(condition),
                 body,
@@ -1621,6 +1850,14 @@ impl Emitter<'_> {
             } if function.mode.runs() => {
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("while {condition}:"));
+                self.block(function, body, depth + 1);
+            }
+            Stmt::While {
+                condition: None,
+                body,
+                ..
+            } if function.mode == Mode::Source => {
+                self.line(depth, "while True:");
                 self.block(function, body, depth + 1);
             }
             Stmt::For {
@@ -3259,6 +3496,34 @@ fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Me
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True when `statements` hold a `yield`, at any depth: in a loop, a
+/// `switch`, an `if` or a block. SOURCE-1: "A temporal `fn` whose body
+/// has a `yield` is a source".
+fn yields(statements: &[Stmt]) -> bool {
+    fn within(value: &Expr) -> bool {
+        match &value.kind {
+            // A block ends with an expression where its last statement
+            // is one: an `if` that yields, say.
+            ExprKind::Block { statements, value } => {
+                yields(statements) || value.as_deref().is_some_and(within)
+            }
+            ExprKind::If {
+                then, otherwise, ..
+            } => within(then) || otherwise.as_deref().is_some_and(within),
+            _ => false,
+        }
+    }
+    statements.iter().any(|statement| match statement {
+        Stmt::Yield { .. } => true,
+        Stmt::For { body, .. } | Stmt::While { body, .. } => yields(body),
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|case| yields(&case.body)) || default.as_deref().is_some_and(yields)
+        }
+        Stmt::Expr(value) => within(value),
+        _ => false,
+    })
 }
 
 /// Where a statement is written. A declaration is where its local is.

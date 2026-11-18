@@ -301,11 +301,11 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | CTRL-15 | analyser | done | In a graph: a `switch` over an ordinary value or over a connection, its labels constants (`connection.as_constant`); what a `for` binds by what it loops over, and a loop that makes one child for each member carrying nothing (`loop.carried`); a `while` with an ordinary condition (`connection.as_constant`, `while.condition`) |
 | CTRL-15 | transpiler | planned | One case, or one child for each member; a wiring-time loop unrolled |
 | SOURCE-1 | analyser | done | A source's shape: no temporal parameter (`source.input`), no `when` (`source.when`), no `var`, and no `inject` of `out`, `scheduler` or `alarm` (`source.statement`). One with a declaration or a hook has its declarations, `start`, one block that holds every `yield` (`{ }`, `while` or `for`), and `stop`, in that order and nothing else: a statement outside the block, a second block, a hook out of order and a `yield` in a hook are `source.statement`. Its declarations and hooks stand in its body itself and each hook once, as a node's do (TIME-5). Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type |
-| SOURCE-1 | transpiler | planned | A `cache` rebuilt on every start and a `state` recorded; `stop` runs when the node ends, whatever state the generator is in |
-| SOURCE-2 | transpiler | planned | Yield evaluates its time, then its payload; target validation |
-| SOURCE-3 | transpiler | planned | Targets strictly increase; skip, publish or suspend |
+| SOURCE-1 | transpiler | partial | hgraph: a source is a Python generator that holds its statements, a node that resumes it, and a graph that wakes the node once as it starts; a `cache` and a `state` are fields of the node's state, given their values in its `start`, which then runs the source's `start`; the source's `stop` is the node's, and runs when the node ends whatever the generator has done. A capability is put in the node's state for the evaluation the generator is resumed in. Left: recording a `state`; `inject` of anything but `clock`, `logger` and `global_state`, which a source injects no other of |
+| SOURCE-2 | transpiler | done | hgraph: `yield time: value` gives the time, then the value; a duration is counted from the evaluation the source is resumed in, with checked arithmetic, and an instant is taken as it is; a negative duration is `yield.negative_duration` |
+| SOURCE-3 | transpiler | done | hgraph: a target not after the one before it, a skipped one among them, is `yield.non_increasing_time`; a past target is skipped, a current one published at once, and a future one keeps its payload until the node's scheduler wakes it there |
 | SOURCE-4 | analyser | planned | A valued return and a `yield` inside a value expression rejected |
-| SOURCE-4 | transpiler | planned | Completion, suspension and restore of a source |
+| SOURCE-4 | transpiler | partial | hgraph: a bare `return` and the end of the statements finish the generator; a `while` with no condition is unbounded. Left: restoring a source |
 
 ## Native boundaries
 

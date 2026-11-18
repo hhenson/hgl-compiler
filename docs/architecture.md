@@ -1443,6 +1443,7 @@ only where the program reaches it, at core's source.
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
 | `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
+| A source, a `fn` with a `yield` (SOURCE-1) | Three functions and a graph. `_yields_name(config, _state)` is a Python generator that holds the source's statements, each `yield time: value` a `yield (time, value)`. `_source_name` is a `@_hg.compute_node` that resumes it, `_core.resume(_state._source, _clock.evaluation_time, _scheduler)`, and returns what is due. Its `start` gives each `cache` and `state` its value, runs the source's `start` and makes the generator; its `stop` is the source's. `name`, a `@_hg.graph`, is what a call names: the node, given `_hg.const(True)`. hgraph takes no node without an input, so the constant is its one input, and wakes it once as the graph starts; its own scheduler wakes it after |
 | `clock.evaluation_time`, `logger.level` (CAP-1) | `_core.Clock_evaluation_time(_clock)`, and `_core.member(LogLevel, _core.Logger_level(_logger))`: a property of a native type is the provider's to read, named for the type and the property |
 | `log(logger, .info, message)`, a native function of core (NATIVE-7) | `_core.fn_log(logger=_logger, level=LogLevel["info"], message=message)`: the provider's function, `fn_` and the name it binds |
 | `get<i64>(global_state, "key")`, `has(...)`, `put(...)` (CAP-6) | Core's candidates for the store, the provider's as any native candidate: `_core.get_GlobalState_str(store=_store, key="key")` |
@@ -1492,6 +1493,22 @@ It is written when a module calls a function of it, and whenever the
 harness is written: the harness imports it, to know an HGL error by its
 class.
 
+hgraph has a generator node of its own, which is not what a source is
+written as:
+
+| | hgraph's `@generator` | A source (SOURCE-1 to SOURCE-4) |
+| --- | --- | --- |
+| `start` and `stop` | It has neither | Both, and `stop` always runs |
+| A target that has passed | Published at once | Skipped |
+| A target not after the one before | "Python generator output times must be strictly increasing" | `yield.non_increasing_time` |
+| A negative duration | Not checked | `yield.negative_duration` |
+
+So the provider resumes the generator itself, `resume`, and holds each
+target to the rules. hgraph 0.9.0 gives a capability to one call and
+refuses it afterwards, so the generator, which lives across
+evaluations, reads the clock, the logger and the store from the node's
+state, where the node puts the ones of the evaluation it is resumed in.
+
 `_hgl/_harness.py` holds `evaluate`, which runs a target with a dense trace
 for each input through hgraph's own `eval_node` and ends the result at
 its last publication (TST-6). It also holds `same`, the comparison of two
@@ -1518,7 +1535,7 @@ candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` read in `stop`, which hgraph gives no lifecycle hook;
-the `inject` of `scheduler` or `alarm`, and sources; in a graph, an `if`
+the `inject` of `scheduler` or `alarm`; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
