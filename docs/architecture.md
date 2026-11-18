@@ -1720,8 +1720,14 @@ eval(counted(upto: (5)), RunConfig(length: (10s)))
 
 A name the entry or the configuration has not, a name given twice, and
 a value that is not one expression are refused before the second read.
-An error of the second read is reported in the application's file, with
-the statement as it was checked. A configuration that is not written as
+The value is read as it is put, between its parentheses, where `.buy`
+is a member of the enum the place expects; `3, 4` and `3) + (4` are not
+one expression there. An error of the second read is reported in the
+application's file, with the statement as it was checked. The type a
+replacement is checked against is the one it replaces: where the call
+with the replacements is of another entry than the application's, or
+of the same one with other generic arguments, `echo<str>` for
+`echo<i64>`, the program is rejected. A configuration that is not written as
 `RunConfig(...)`, a constant's name, has its fields replaced by nothing
 yet.
 

@@ -877,6 +877,7 @@ fn run(arguments: &RunArgs) -> ExitCode {
             }
         };
         let name = sources.file(file).name().to_string();
+        let written = replace::entry(&program, &chosen);
         let Parsed {
             sources: read_again,
             files: parsed,
@@ -891,6 +892,32 @@ fn run(arguments: &RunArgs) -> ExitCode {
         if found.has_errors() {
             println!("not run: the program is rejected with the replacements given");
             return report(&sources, found);
+        }
+        // "a constant checked against the type it replaces": the types
+        // of the entry's parameters are those of the entry the
+        // application calls, with the generic arguments its call comes
+        // to. A replacement that makes the call another entry, or the
+        // same one with other generic arguments, is of another type.
+        let replaced = replace::entry(&program, &chosen);
+        if replaced != written {
+            println!("not run: the program is rejected with the replacements given");
+            let shown = |entry: &Option<String>| match entry {
+                // What tells two candidates apart is left out of what
+                // is printed.
+                Some(entry) => entry
+                    .split(" (declaration ")
+                    .next()
+                    .unwrap_or(entry)
+                    .to_string(),
+                None => "no entry".to_string(),
+            };
+            eprintln!(
+                "hgl: a replacement is of the type it replaces: `{chosen}` runs `{}`, \
+                 and with the replacements given it would run `{}`",
+                shown(&written),
+                shown(&replaced)
+            );
+            return ExitCode::from(EXIT_REJECTED);
         }
     }
     // What the target does not write yet is no error of the program:

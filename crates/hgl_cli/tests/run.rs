@@ -180,7 +180,8 @@ fn a_replacement_is_checked_before_the_application_is_run() {
     let output = run(&["--arg", "upto=3, every: 2s"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        text(&output.stderr).starts_with("hgl: the value of `upto`, `3, every: 2s`, is not HGL"),
+        text(&output.stderr)
+            .starts_with("hgl: the value of `upto`, `3, every: 2s`, is not one HGL expression"),
         "{}",
         text(&output.stderr)
     );
@@ -223,6 +224,66 @@ fn a_replacement_is_checked_before_the_application_is_run() {
     );
 }
 
+/// A module with an entry that takes an enum, and a generic one.
+const SIDES: &str = concat!(
+    "module demo.sides\n",
+    "\n",
+    "export enum Side { buy, sell }\n",
+    "\n",
+    "export fn sided(const side: Side, const upto: i64 = 2) -> i64 {\n",
+    "    cache count: i64 = 0\n",
+    "    while count < upto {\n",
+    "        count += 1\n",
+    "        yield 1s: if side == .buy { count } else { -count }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "export fn echo<T>(const value: T) -> T {\n",
+    "    yield 1s: value\n",
+    "}\n",
+);
+
+/// An application of the enum's entry, and one of the generic one,
+/// whose `T` its argument makes an `i64`.
+const SIDED: &str = concat!(
+    "application demo.sides.sided\n",
+    "\n",
+    "use demo.sides::{sided}\n",
+    "\n",
+    "eval(sided(side: .buy))\n",
+);
+const ECHOED: &str = concat!(
+    "application demo.sides.echoed\n",
+    "\n",
+    "use demo.sides::{echo}\n",
+    "\n",
+    "eval(echo(value: 3))\n",
+);
+
+/// RUN-2: "a constant checked against the type it replaces". The type
+/// of a generic entry's parameter is the one the application's call
+/// makes it: `echo(value: 3)` runs `echo<i64>`, and text given for
+/// `value` would make it `echo<str>`, another entry with another
+/// output. It is rejected: status 1.
+#[test]
+fn a_replacement_does_not_change_what_the_entry_is() {
+    let root = scratch("replacements_generic");
+    write(&root, "sides.hgl", SIDES);
+    write(&root, "echoed.hgl", ECHOED);
+    let output = hgl(&["run", &argument(&root), "--arg", "value=\"text\""]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stdout),
+        "not run: the program is rejected with the replacements given\n"
+    );
+    assert_eq!(
+        text(&output.stderr),
+        "hgl: a replacement is of the type it replaces: `demo.sides.echoed` runs \
+         `demo.sides::echo<i64>`, and with the replacements given it would run \
+         `demo.sides::echo<str>`\n"
+    );
+}
+
 /// RUN-2: the replaced argument and the replaced field are what the
 /// application runs with, "and what the application writes is the
 /// default". The interpreter is the one `HGL_HGRAPH_PYTHON` names
@@ -258,8 +319,54 @@ fn an_application_runs_with_what_starts_it_replaces() {
         text(&output.stderr)
     );
     assert_eq!(output.status.code(), Some(0));
+    // A member of the enum the parameter is, as the application may
+    // write it (TYPE-7), and a generic entry given another value of
+    // the type its argument is.
+    write(&root, "sides.hgl", SIDES);
+    write(&root, "sided.hgl", SIDED);
+    write(&root, "echoed.hgl", ECHOED);
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--application",
+        "demo.sides.sided",
+        "--arg",
+        "side=.sell",
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  -1\n",
+            "1970-01-01T00:00:02.000001Z  -2\n",
+            "ran demo.sides.sided on hgraph: 2 publications\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--application",
+        "demo.sides.echoed",
+        "--arg",
+        "value=4 + 1",
+    ]);
+    assert_eq!(
+        text(&output.stdout),
+        concat!(
+            "1970-01-01T00:00:01.000001Z  5\n",
+            "ran demo.sides.echoed on hgraph: 1 publication\n",
+        ),
+        "{}",
+        text(&output.stderr)
+    );
     // With nothing replaced it runs as it is written.
-    let output = hgl(&["run", &argument(&root)]);
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--application",
+        "demo.ticks.backtest",
+    ]);
     assert_eq!(
         text(&output.stdout),
         concat!(

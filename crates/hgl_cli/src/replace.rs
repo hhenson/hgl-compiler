@@ -63,11 +63,16 @@ pub(crate) fn replacement(written: &str) -> Result<Replacement, String> {
 /// Checks that `value` is one HGL expression on one line with no
 /// comment: text that can stand between parentheses where an argument
 /// is written and be that argument and nothing more.
+///
+/// What is read is the value as it is put in the run statement,
+/// between its parentheses: there `.buy`, a member of the enum the
+/// place expects (TYPE-7), is an expression, which it is not where a
+/// statement begins.
 fn one_expression(replacement: &Replacement, limits: Limits) -> Result<(), String> {
     let Replacement { name, value } = replacement;
     let mut sources = SourceMap::new();
     let file = sources
-        .add(format!("the value of `{name}`"), value.as_str())
+        .add(format!("the value of `{name}`"), format!("({value})"))
         .map_err(|error| error.to_string())?;
     let mut diagnostics = Diagnostics::new();
     let tokens = lex(&sources, file, &mut diagnostics);
@@ -82,13 +87,22 @@ fn one_expression(replacement: &Replacement, limits: Limits) -> Result<(), Strin
     );
     if let Some(first) = diagnostics.as_slice().first() {
         return Err(format!(
-            "the value of `{name}`, `{value}`, is not HGL: {}",
+            "the value of `{name}`, `{value}`, is not one HGL expression: {}",
             first.message
         ));
     }
     let root = parse.syntax();
     let statements: Vec<SyntaxNode> = root.children().collect();
-    let expression = statements.len() == 1 && statements[0].kind() == SyntaxKind::ExprStmt;
+    // The statement is the parentheses and what they hold, and no
+    // more: `3) + (4` between them is a sum of two, and `3, 4` a tuple
+    // (written `(3, 4)`, it is one value, a tuple).
+    let expression = match statements.as_slice() {
+        [statement] if statement.kind() == SyntaxKind::ExprStmt => {
+            let parts: Vec<SyntaxNode> = statement.children().collect();
+            parts.len() == 1 && parts[0].kind() == SyntaxKind::ParenExpr
+        }
+        _ => false,
+    };
     // A line comment would take the rest of the line the value is put
     // on, and a line break could end a statement there.
     let one_line = root
@@ -106,7 +120,7 @@ fn one_expression(replacement: &Replacement, limits: Limits) -> Result<(), Strin
         });
     if !expression || !one_line {
         return Err(format!(
-            "the value of `{name}`, `{value}`, is not one expression"
+            "the value of `{name}`, `{value}`, is not one HGL expression"
         ));
     }
     Ok(())
@@ -199,6 +213,57 @@ impl Written<'_> {
         }
         Ok(())
     }
+}
+
+/// What the application `path` of `program` runs: the entry its run
+/// statement calls, with the generic arguments the call comes to,
+/// written `echo<i64>`. `None` where the program has no such
+/// application, or its call is not one of a function.
+///
+/// RUN-2: a replacement is "a constant checked against the type it
+/// replaces". The types of an entry's parameters are fixed by which
+/// function the entry is and by its generic arguments, so a
+/// replacement that leaves this as it was is checked against those
+/// types, and one that changes it, `"text"` where `echo(value: 3)`
+/// made `T` an `i64`, is of another type than it replaces.
+pub(crate) fn entry(program: &Program, path: &str) -> Option<String> {
+    let run = program
+        .modules
+        .iter()
+        .find(|module| module.path == path)?
+        .run_body
+        .as_ref()?;
+    let ExprKind::Call { callee, .. } = &run.call.kind else {
+        return None;
+    };
+    let (Callee::Function {
+        module,
+        declaration,
+        generics,
+        ..
+    }
+    | Callee::Candidate {
+        module,
+        declaration,
+        generics,
+        ..
+    }) = callee
+    else {
+        return None;
+    };
+    let declared = &program.modules[*module];
+    let written: Vec<String> = generics.iter().map(|given| given.to_string()).collect();
+    let generics = if written.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", written.join(", "))
+    };
+    // Two candidates of one operator have one name: the place of the
+    // declaration tells them apart.
+    Some(format!(
+        "{}::{}{generics} (declaration {declaration})",
+        declared.path, declared.declarations[*declaration].name
+    ))
 }
 
 /// The text of the application `path` of `program` with its run
@@ -459,6 +524,15 @@ mod tests {
             .unwrap(),
             "eval(counted((if 1 == 1 { 2 } else { 3 })))"
         );
+        // A member of the enum the place expects, and a tuple.
+        assert_eq!(
+            rewritten("eval(counted(3))", &["upto=.most"], &[]).unwrap(),
+            "eval(counted((.most)))"
+        );
+        assert_eq!(
+            rewritten("eval(counted(3))", &["upto=(1, 2)"], &[]).unwrap(),
+            "eval(counted(((1, 2))))"
+        );
         // With none given the text is as it was.
         assert_eq!(
             rewritten("eval(counted(3))", &[], &[]).unwrap(),
@@ -526,17 +600,28 @@ mod tests {
             (
                 &["upto=3, every: 2s"],
                 &[],
-                "the value of `upto`, `3, every: 2s`, is not HGL: expected a line break, found `,`",
+                "the value of `upto`, `3, every: 2s`, is not one HGL expression: expected `,` or `)`, found `:`",
+            ),
+            // A tuple with no parentheses of its own, and two values.
+            (
+                &["upto=3, 4"],
+                &[],
+                "the value of `upto`, `3, 4`, is not one HGL expression",
+            ),
+            (
+                &["upto=3) + (4"],
+                &[],
+                "the value of `upto`, `3) + (4`, is not one HGL expression",
             ),
             (
                 &["upto=3 # three"],
                 &[],
-                "the value of `upto`, `3 # three`, is not one expression",
+                "the value of `upto`, `3 # three`, is not one HGL expression: expected `)`, found end of file",
             ),
             (
                 &["upto=let x = 3"],
                 &[],
-                "the value of `upto`, `let x = 3`, is not one expression",
+                "the value of `upto`, `let x = 3`, is not one HGL expression: expected an expression, found `let`",
             ),
         ] {
             assert_eq!(
