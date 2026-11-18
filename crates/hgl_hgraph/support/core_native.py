@@ -462,10 +462,20 @@ class Grown(list):
     owned = False
 
 
+class GrownDict(dict):
+    """A dictionary that a place changes where it is: what a `var`, a
+    `state` or a `cache` holds once an entry of it has been assigned.
+    It is marked and copied as a `Grown` list is."""
+
+    # One made in any other way than by `_own_dict` is not a place's own.
+    owned = False
+
+
 def shared(values):
     """`values`, marked as held by more than the place it was read
-    from. A value that is no list a place grows is given as it is."""
-    if type(values) is Grown:
+    from. A value that is no list or dictionary a place changes is
+    given as it is."""
+    if type(values) is Grown or type(values) is GrownDict:
         values.owned = False
     return values
 
@@ -478,6 +488,41 @@ def _own(values):
     grown = Grown(values)
     grown.owned = True
     return grown
+
+
+def _own_dict(values):
+    """The dictionary a place changes: `values` itself where the place
+    alone holds it, and a copy otherwise."""
+    if type(values) is GrownDict and values.owned:
+        return values
+    grown = GrownDict(values)
+    grown.owned = True
+    return grown
+
+
+def set_item(sequence, index, value, /):
+    """`place[index] = value` where the place is an element of the list
+    a `var`, a `state` or a `cache` holds itself (EXPR-3). The list is
+    changed where it is while the place alone holds it, and copied
+    once otherwise (`Grown`); it keeps `value`, which is marked as
+    shared. "An index outside a list fails where it is evaluated", and
+    the list is then as it was."""
+    if not 0 <= index < len(sequence):
+        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    sequence = _own(sequence)
+    sequence[index] = shared(value)
+    return sequence
+
+
+def set_entry(dictionary, key, value, /):
+    """`place[key] = value` where the place is an entry of the
+    dictionary a `var`, a `state` or a `cache` holds itself (EXPR-3).
+    "A key the dictionary has not is added." The dictionary is changed
+    where it is while the place alone holds it, and copied once
+    otherwise (`GrownDict`)."""
+    dictionary = _own_dict(dictionary)
+    dictionary[key] = shared(value)
+    return dictionary
 
 
 def restored(values, length):
