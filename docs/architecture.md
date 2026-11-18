@@ -1547,7 +1547,7 @@ it only where it would otherwise be seen to change:
 | Where a `var`, a `state` or a `cache` of a list type is | What is written |
 | --- | --- |
 | Read by what may keep the list: a `let`, a `return`, an entry of a list or a field of a struct, a function whose result may hold it, a node | `_core.shared(entries)`: the list itself, marked as held by more than the place |
-| Read by what can keep nothing: the read of an element, a `const fn` or a native one with a scalar result or none and no `var` parameter | `entries`, unmarked. The list is lent for the call |
+| Read by what can keep nothing: the read of an element, and a `const fn` or a native one with a scalar result or none and no `var` parameter, which is given data alone: no capability, native value or value of a generic type to keep the list in | `entries`, unmarked. The list is lent for the call |
 | Given to a `var` parameter that is declared a list | `entries`, unmarked: the function grows the place's own list |
 | Given to a `var` parameter of another type, or given to two of them | `_core.shared(entries)`, and what is given back is marked too |
 | Written from anything but a list written out | `entries = _core.shared(value)`: what the value was read from may hold it |
@@ -1559,6 +1559,13 @@ takes a copy first where it is not. So a recording grows with no copy,
 a list passed to a function is not copied, and a `let` costs a copy
 only where the place grows after it. What the provider puts in a run's
 store it marks as shared itself.
+
+FN-15: a function that fails "assigns nothing". A function of the
+program that is given a place's own list may have grown it where it is
+before it failed, so such a call is written inside a `try`: where it
+fails the place is given `_core.restored(entries, _was_1)`, the list
+as long as it was before the call, and the failure goes on. The
+provider's `append` and `extend` grow a list last, and need none.
 
 hgraph makes a value of its own of what it is given to keep, a node's
 configuration and what its global state holds, and has none for a tuple

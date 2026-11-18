@@ -4496,6 +4496,28 @@ const SHARED: &str = concat!(
     // One that does not know its place holds a list.
     "const fn keep<T>(var slot: T, value: T) { slot = value }\n",
     "const fn push(var items: list<i64>, item: i64) { append(items, item) }\n",
+    // FN-15: a function that fails assigns nothing, though it grew the
+    // place's list before it failed.
+    "const fn failing(var items: list<i64>, zero: i64) {\n",
+    "    append(items, 2)\n",
+    "    let quotient = 1 //{zero: .fail} zero\n",
+    "}\n",
+    // A function handed a run's store may keep there what it is given.
+    "const fn save(store: GlobalState, values: list<i64>) {\n",
+    "    put(store, \"saved\", [values])\n",
+    "}\n",
+    "fn saving(value: i64) -> i64 {\n",
+    "    cache seen: list<i64> = []\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        append(seen, value)\n",
+    "        save(global_state, seen)\n",
+    "        append(seen, value)\n",
+    "        let saved: list<list<i64>> = get(global_state, \"saved\")\n",
+    "        if saved[0] == [value] { return 1 }\n",
+    "        return 0\n",
+    "    }\n",
+    "}\n",
     // A `var` of the function's own, written from what it was lent.
     "const fn longer(values: list<i64>) -> i64 {\n",
     "    var mine: list<i64> = values\n",
@@ -4562,6 +4584,13 @@ const SHARED: &str = concat!(
     "    append(grown, 9)\n",
     "    assert grown == [0, 1, 9]\n",
     "    assert built(4) == [0, 1, 2, 3]\n",
+    "    var kept: list<i64> = [0]\n",
+    "    append(kept, 1)\n",
+    "    assert raises(\"numeric.division_by_zero\") { failing(kept, 0) }\n",
+    "    assert kept == [0, 1]\n",
+    "    failing(kept, 1)\n",
+    "    assert kept == [0, 1, 2]\n",
+    "    assert eval(saving(value: [7])) == [1]\n",
     "}\n",
 );
 
@@ -4611,6 +4640,19 @@ fn a_list_is_shared_and_copied_only_where_it_then_grows() {
         // A result is the function's own list, which the caller may
         // keep.
         "    return _core.shared(out)\n",
+        // FN-15: a function of the program that is given the place's
+        // own list may grow it and then fail: the list is put back.
+        concat!(
+            "    _was_1 = _py.len(kept)\n",
+            "    try:\n",
+            "        _given = failing(items=kept, zero=1)\n",
+            "    except _py.BaseException:\n",
+            "        kept = _core.restored(kept, _was_1)\n",
+            "        raise\n",
+            "    kept = _given[1]\n",
+        ),
+        // A function handed a run's store is not lent the list.
+        "save(store=_store, values=_core.shared(_state.seen))",
     ] {
         assert!(
             python.contains(expected),

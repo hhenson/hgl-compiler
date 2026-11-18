@@ -479,6 +479,23 @@ def _own(values):
     return grown
 
 
+def restored(values, length):
+    """What a place holds once a call that was given its list has
+    failed (the language's FN-15: a function that fails "assigns
+    nothing"): the list as long as it was before the call.
+
+    A list the place alone holds is cut back where it is. One that
+    something took while the call ran stays as that took it, and the
+    place holds a list of its first entries.
+    """
+    if len(values) <= length:
+        return values
+    if type(values) is Grown and values.owned:
+        del values[length:]
+        return values
+    return values[:length]
+
+
 def fn_append(values, item):
     """LIST-1: `append(values, item)` "gives the place `values` the list
     it held with `item` after its last entry".

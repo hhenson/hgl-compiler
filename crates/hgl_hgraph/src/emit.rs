@@ -1217,7 +1217,7 @@ impl Emitter<'_> {
                 }
                 let held = format!("_arg_{}", position + 1);
                 let written = if is_place(argument) {
-                    let in_place = given_in_place(signature, arguments, argument);
+                    let in_place = given_in_place(function, signature, arguments, argument);
                     self.given_place(function, &argument.value, in_place)
                 } else {
                     self.expression(function, &argument.value)
@@ -1231,10 +1231,47 @@ impl Emitter<'_> {
                 self.held.push((argument.value.at, held));
             }
         }
+        // FN-15: "A function that fails raises, and assigns nothing."
+        // A function of the program that is given a place's own list
+        // may have grown it where it is before it failed: the list is
+        // then put back to the length it had. The provider's own
+        // `append` and `extend` grow a list last, and do not fail
+        // once they have.
+        let bodied = self.program.modules[*module]
+            .bodies
+            .get(*declaration)
+            .is_some_and(Option::is_some);
+        let mut grown_in_place: Vec<String> = Vec::new();
+        if bodied {
+            for argument in arguments.iter().filter(|argument| is_place(argument)) {
+                if let ExprKind::Local(local) = &argument.value.kind
+                    && given_in_place(function, signature, arguments, argument)
+                {
+                    grown_in_place.push(self.place(function, *local));
+                }
+            }
+        }
+        for (index, place) in grown_in_place.iter().enumerate() {
+            self.line(depth, &format!("_was_{} = _py.len({place})", index + 1));
+        }
         self.place_call = true;
         let called = self.expression(function, value);
         self.place_call = false;
-        self.line(depth, &format!("_given = {called}"));
+        if grown_in_place.is_empty() {
+            self.line(depth, &format!("_given = {called}"));
+        } else {
+            self.natives = true;
+            self.line(depth, "try:");
+            self.line(depth + 1, &format!("_given = {called}"));
+            self.line(depth, "except _py.BaseException:");
+            for (index, place) in grown_in_place.iter().enumerate() {
+                self.line(
+                    depth + 1,
+                    &format!("{place} = _core.restored({place}, _was_{})", index + 1),
+                );
+            }
+            self.line(depth + 1, "raise");
+        }
         for (position, parameter) in places.iter().enumerate() {
             let Some(argument) = arguments
                 .iter()
@@ -2021,17 +2058,27 @@ impl Emitter<'_> {
     /// True where a call of `callee` keeps nothing of what it is
     /// given past its return, so that a list is lent to it as it is:
     /// a `const fn`, or a native one, with no result or a scalar one
-    /// and no `var` parameter. Such a function has nowhere to keep an
-    /// argument: its result holds no list, it assigns no place of the
-    /// caller, and what the provider puts in a run's store it marks as
-    /// shared itself.
-    fn lends(&self, function: &Function, callee: (usize, usize), signature: &Signature) -> bool {
+    /// and no `var` parameter, which is given data alone. Such a
+    /// function has nowhere to keep an argument: its result holds no
+    /// list, it assigns no place of the caller, and it is handed
+    /// nothing that outlives the call, a run's store say, to put one
+    /// in.
+    fn lends(
+        &self,
+        function: &Function,
+        callee: (usize, usize),
+        signature: &Signature,
+        arguments: &[Argument],
+    ) -> bool {
         let declared = &self.program.modules[callee.0].declarations[callee.1];
         // In a graph a call may be lifted to a node, which keeps its
         // configuration.
         function.mode != Mode::Graph
             && declared.kind.role() == Some(Role::Value)
             && signature.parameters.iter().all(|parameter| !parameter.var)
+            && arguments
+                .iter()
+                .all(|argument| data_alone(self.program, &argument.value.ty, 0))
             && signature.result.as_ref().is_none_or(|result| {
                 scalar(result).is_some()
                     || matches!(
@@ -3175,7 +3222,7 @@ impl Emitter<'_> {
                 value
             }
         };
-        let lends = self.lends(function, callee, signature);
+        let lends = self.lends(function, callee, signature, arguments);
         let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
@@ -3184,7 +3231,7 @@ impl Emitter<'_> {
                 let value = if parameter.var {
                     // FN-15: the place itself, where the function may
                     // grow its list where it is.
-                    let in_place = given_in_place(signature, arguments, argument);
+                    let in_place = given_in_place(function, signature, arguments, argument);
                     self.given_place(function, &argument.value, in_place)
                 } else if lends {
                     self.borrowed(function, &argument.value)
@@ -4209,11 +4256,69 @@ fn grows(ty: &Type) -> bool {
     }
 }
 
+/// True for a type whose values are data alone: a scalar, an enum, and
+/// a list, a set, a tuple, a dictionary, a nullable or a struct of
+/// those. A value of any other type may be something that outlives a
+/// call, a capability say, or may hold one: a native type, a generic
+/// parameter, `any`, and a struct that another struct inherits from,
+/// whose value may be of that other struct.
+fn data_alone(program: &Program, ty: &Type, depth: usize) -> bool {
+    // A struct may hold itself inside a list: a type this deep is not
+    // followed further.
+    if depth > 8 {
+        return false;
+    }
+    let all = |types: &[&Type]| types.iter().all(|ty| data_alone(program, ty, depth + 1));
+    match ty {
+        Type::Scalar(scalar) => *scalar != Scalar::Any,
+        Type::Named {
+            kind: NamedKind::Enum,
+            ..
+        } => true,
+        Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } => {
+            let inherited = program.modules.iter().any(|module_of| {
+                module_of.details.iter().any(|detail| {
+                    matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
+                        matches!(parent, Type::Named { module: parent_module, declaration: parent_declaration, .. }
+                            if parent_module == module && parent_declaration == declaration)
+                    }))
+                })
+            });
+            !inherited
+                && match program.modules[*module].details.get(*declaration) {
+                    Some(Detail::Struct(read)) => read
+                        .members
+                        .iter()
+                        .all(|member| data_alone(program, &member.ty, depth + 1)),
+                    _ => false,
+                }
+        }
+        Type::Nullable(inner) | Type::Set(inner) => all(&[inner]),
+        Type::List { element, .. } => all(&[element]),
+        Type::Tuple(elements) => elements
+            .iter()
+            .all(|element| data_alone(program, element, depth + 1)),
+        Type::Dict { key, value } => all(&[key, value]),
+        _ => false,
+    }
+}
+
 /// True where the `var` parameter `argument` is given may have its
 /// list grown where it is: the parameter is declared a list, so its
-/// function knows it for one, and no other `var` parameter of the call
-/// is given the same local.
-fn given_in_place(signature: &Signature, arguments: &[Argument], argument: &Argument) -> bool {
+/// function knows it for one; the place is a local that holds a list of
+/// its own ([`owns`]); and no other `var` parameter of the call is
+/// given the same local.
+fn given_in_place(
+    function: &Function,
+    signature: &Signature,
+    arguments: &[Argument],
+    argument: &Argument,
+) -> bool {
     let place = |argument: &Argument| match (&argument.value.kind, argument.parameter) {
         (ExprKind::Local(local), Some(index)) => signature
             .parameters
@@ -4225,7 +4330,11 @@ fn given_in_place(signature: &Signature, arguments: &[Argument], argument: &Argu
     let Some((local, parameter)) = place(argument) else {
         return false;
     };
+    // The local is declared a list too: one declared `list<T>?` may
+    // hold a null.
     matches!(parameter.ty, Type::List { .. })
+        && owns(function, local)
+        && matches!(function.locals[local].ty, Type::List { .. })
         && arguments
             .iter()
             .filter(|other| place(other).is_some_and(|(given, _)| given == local))
