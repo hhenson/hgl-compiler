@@ -1247,6 +1247,35 @@ impl Emitter<'_> {
                 format!("_py.frozenset[{element}]")
             });
         }
+        // TYPE-14: "`T?` denotes an ordinary value that is either a T
+        // or null". hgraph has a value that holds one `T` or is unset
+        // where the type under `TS[...]` is `T | None`, and a tick of
+        // it may be the unset one: a published null.
+        if let Type::Nullable(inner) = ty {
+            // As a temporal value only a scalar or an enum may be
+            // unset this way: it publishes whole. A set publishes its
+            // changes, which hgraph's `TS` of a set that may be unset
+            // would not gather, so a nullable set is not written.
+            let whole = scalar(inner).is_some()
+                || matches!(
+                    &**inner,
+                    Type::Named {
+                        kind: NamedKind::Enum,
+                        ..
+                    }
+                );
+            if temporal && !whole {
+                self.unsupported(at, &format!("the type `{ty}`"));
+                return None;
+            }
+            let inner = self.annotation(inner, false, at)?;
+            return Some(if temporal {
+                self.hgraph = true;
+                format!("_hg.TS[{inner} | None]")
+            } else {
+                format!("{inner} | None")
+            });
+        }
         let python = match (scalar(ty), ty) {
             (Some(python), _) => {
                 self.datetime |= python.starts_with("_dt.");
@@ -1946,10 +1975,25 @@ impl Emitter<'_> {
             }
             // A compound assignment's value is already the symbol with
             // the target as its left operand.
-            Stmt::Assign { local, value, .. } => {
-                let value = match self.place_call(function, value, depth) {
+            Stmt::Assign {
+                local,
+                value: assigned,
+                ..
+            } => {
+                let value = match self.place_call(function, assigned, depth) {
                     Some(result) => result,
-                    None => self.expression(function, value),
+                    None => self.expression(function, assigned),
+                };
+                // TIME-7: an assignment to `out` publishes, a null
+                // among what it may publish.
+                let declared = &function.locals[*local];
+                let value = if declared.kind == LocalKind::Inject
+                    && declared.name == "out"
+                    && Self::publishes_null(function, assigned)
+                {
+                    self.published(value)
+                } else {
+                    value
                 };
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
@@ -1976,12 +2020,20 @@ impl Emitter<'_> {
                 self.line(depth, &format!("return {given}"));
             }
             Stmt::Return {
-                value: Some(value), ..
+                value: Some(returned),
+                ..
             } => {
-                let value = match self.place_call(function, value, depth) {
+                let value = match self.place_call(function, returned, depth) {
                     Some(result) => result,
-                    None => self.expression(function, value),
+                    None => self.expression(function, returned),
                 };
+                // A node that publishes a nullable publishes its null.
+                let value =
+                    if function.mode == Mode::Node && Self::publishes_null(function, returned) {
+                        self.published(value)
+                    } else {
+                        value
+                    };
                 let given = self.returned(&value);
                 self.line(depth, &format!("return {given}"));
             }
@@ -2055,9 +2107,18 @@ impl Emitter<'_> {
             // once, before target validation." Python evaluates a
             // tuple's entries in order, and the provider validates the
             // target where the generator is resumed.
-            Stmt::Yield { time, value, .. } if function.mode == Mode::Source => {
+            Stmt::Yield {
+                time,
+                value: yielded,
+                ..
+            } if function.mode == Mode::Source => {
                 let time = self.expression(function, time);
-                let value = self.expression(function, value);
+                let value = self.expression(function, yielded);
+                let value = if Self::publishes_null(function, yielded) {
+                    self.published(value)
+                } else {
+                    value
+                };
                 self.line(depth, &format!("yield ({time}, {value})"));
             }
             // CTRL-12: "`while condition { ... }` repeats its body while
@@ -2216,6 +2277,19 @@ impl Emitter<'_> {
     }
 
     // ---- Expressions ----
+
+    /// True when what the function being written publishes of `value`
+    /// may be a null that is Python's `None`: its result's type is
+    /// written `T?`, and `value` is a value of it. A value that is the
+    /// nullable's delta is hgraph's own already, `Null` or the value
+    /// (TYPE-16).
+    fn publishes_null(function: &Function, value: &Expr) -> bool {
+        function
+            .signature
+            .and_then(|signature| signature.result.as_ref())
+            .is_some_and(is_nullable)
+            && !matches!(&value.ty, Type::Delta(of) if is_nullable(of))
+    }
 
     /// True when `local` is a temporal input of the node being written:
     /// a parameter that is not `const`.
@@ -2446,7 +2520,7 @@ impl Emitter<'_> {
                 let trace = self.expression(function, trace);
                 format!("_harness.publications({trace})")
             }
-            ExprKind::Trace(cells) => self.trace(function, cells, value.at),
+            ExprKind::Trace(cells) => self.trace(function, cells, &value.ty, value.at),
             ExprKind::TraceCompare {
                 left,
                 right,
@@ -2530,6 +2604,14 @@ impl Emitter<'_> {
                             "None".to_string()
                         }
                     };
+                }
+                // TYPE-16: a nullable's delta has one property, `value`,
+                // "null for a published null". hgraph's delta of that
+                // is `Null`.
+                if matches!(&base.ty, Type::Delta(of) if is_nullable(of)) && *member == 0 {
+                    self.natives = true;
+                    let base = self.expression(function, base);
+                    return format!("_core.unpublished({base})");
                 }
                 let Some(field) = field_of(self.program, &base.ty, *member) else {
                     // A property of a delta.
@@ -3168,6 +3250,10 @@ impl Emitter<'_> {
             Lifts::Native(..) => self.native_result(signature.result.as_ref(), call),
             Lifts::Function(_) => call,
         };
+        let call = match result {
+            Some(result) if is_nullable(result) => self.published(call),
+            _ => call,
+        };
         let (decorator, after) = match (result, returns) {
             (Some(_), returns) => (
                 "compute_node",
@@ -3595,8 +3681,25 @@ impl Emitter<'_> {
 
     /// TYPE-16: `delta<set<i64>>(added: [1, 2], removed: [3])`, a set's
     /// delta made from its properties, as hgraph's own set delta. A
-    /// property left out is empty.
+    /// property left out is empty. And a nullable's, `delta<i64?>()`.
     fn delta(&mut self, function: &Function, value: &Expr, arguments: &[Argument]) -> String {
+        // TYPE-16: "A nullable's delta is an optional: it holds what
+        // was published, a null among them ... `delta<i64?>()` is a
+        // published null", and `delta<i64?>(value: 7)` a published 7.
+        // It is hgraph's own delta of such a value: `Null`, or the
+        // value.
+        if matches!(&value.ty, Type::Delta(of) if is_nullable(of)) {
+            return match arguments.first() {
+                Some(argument) => {
+                    let value = self.expression(function, &argument.value);
+                    self.published(value)
+                }
+                None => {
+                    self.hgraph = true;
+                    "_hg.Null".to_string()
+                }
+            };
+        }
         let element = match &value.ty {
             Type::Delta(of) => match &**of {
                 Type::Set(element) => Some(&**element),
@@ -3637,29 +3740,53 @@ impl Emitter<'_> {
     /// A dense trace written out: a list with `None` where it has `_`
     /// (TST-6: "Dense position i denotes the simulation start plus i
     /// minimum engine steps").
-    fn trace(&mut self, function: &Function, cells: &[Cell], at: Location) -> String {
+    fn trace(&mut self, function: &Function, cells: &[Cell], ty: &Type, at: Location) -> String {
         if cells.iter().any(|cell| cell.time.is_some()) {
             self.unsupported(at, "a timed trace");
             return "None".to_string();
         }
+        // A trace of a nullable: a cell may be a published null. A
+        // cell is the delta of what is published (TST-5).
+        let nullable = matches!(
+            ty,
+            Type::Trace { cell, .. }
+                if is_nullable(cell) || matches!(&**cell, Type::Delta(of) if is_nullable(of))
+        );
         let written: Vec<String> = cells
             .iter()
             .map(|cell| match &cell.value {
+                // `_`: nothing is published.
                 None => "None".to_string(),
-                // hgraph's harness has `None` for no publication, so a
-                // published null would read as silence.
+                // A published null is hgraph's `Null`, the tick of a
+                // value that is unset: `None` in a trace is silence.
                 Some(Expr {
                     kind: ExprKind::Literal(Value::Null),
-                    at,
                     ..
                 }) => {
-                    self.unsupported(*at, "a published null in a trace");
-                    "None".to_string()
+                    self.hgraph = true;
+                    "_hg.Null".to_string()
+                }
+                // A cell that may be null where the test runs: a
+                // value of the nullable type, and not a literal of
+                // its payload's or the delta it is published as.
+                Some(value) if nullable && is_nullable(&value.ty) => {
+                    let value = self.expression(function, value);
+                    self.published(value)
                 }
                 Some(value) => self.expression(function, value),
             })
             .collect();
         format!("[{}]", written.join(", "))
+    }
+
+    /// What publishes `value`, of a nullable type: the value, or
+    /// hgraph's `Null` where it is null. To hgraph a node that returns
+    /// `None` publishes nothing, and one that returns `Null` publishes
+    /// a value that is unset (TIME-7: "`return null` for an `i64?`
+    /// result [publishes] a null").
+    fn published(&mut self, value: String) -> String {
+        self.natives = true;
+        format!("_core.published({value})")
     }
 }
 
@@ -3782,6 +3909,11 @@ fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Me
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True for a type written `T?` (TYPE-14).
+fn is_nullable(ty: &Type) -> bool {
+    matches!(ty, Type::Nullable(_))
 }
 
 /// True when `statements` hold a `yield`, at any depth: in a loop, a

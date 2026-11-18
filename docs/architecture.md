@@ -1480,6 +1480,8 @@ only where the program reaches it, at core's source.
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
 | A trace given to a `const fn` (TST-16) | `_harness.publications(trace)`: a list with a tuple for each publication, its instant and what was published |
 | `assert raises("code") { ... }` (TST-10, TST-11) | A `try` around the block. Its handler calls `_harness.raised(error, "code")`, which lets the error out again unless it is an HGL error with that code, or has one as its cause, as a node's failure in an `eval` has; its `else` calls `_harness.not_raised("code")`, which fails the test |
+| A temporal `i64?`; a `const` one (TYPE-14) | `_hg.TS[_py.int \| None]`, hgraph's value that holds one `int` or is unset; `_py.int \| None`. A null is `None` as a value. Where it is published it is hgraph's `Null`: a node that returns `None` publishes nothing, and one that returns `Null` ticks a value that is unset. So a `return`, a `yield` and an assignment to `out` of a nullable result go through `_core.published(value)`, and `null` in a trace is `_hg.Null` where `_` is `None` |
+| `delta<i64?>()`, `delta<i64?>(value: v)`, `change.value` (TYPE-16) | `_hg.Null`, `_core.published(v)`, `_core.unpublished(change)`: a nullable's delta is hgraph's own, `Null` or the value, so `delta_value(input)` is `input.delta_value` as it is |
 | A temporal `set<i64>`; a `const` one (TYPE-9) | `_hg.TSS[_py.int]`, and `_hg.TSS_OUT[_py.int]` for the node's own output; `_py.frozenset[_py.int]` |
 | `delta<set<i64>>(added: [1, 2], removed: [3])` (TYPE-16) | `_hg.set_delta(added=_py.frozenset((1, 2)), removed=_py.frozenset((3,)), tp=_py.int)`: hgraph's own set delta, in a node, in a trace and as a value. The properties are given by name in the order they are written, so that they are evaluated in it (EXPR-13), and one left out is an empty `_py.frozenset()` |
 | A name | Itself, but where Python or the target would take it. A Python keyword, and one with any number of `_` after it, gets one more `_`. Every name the target makes up starts with `_`, and a test is `test_name`, so a name that starts with `_` or `test_`, under any number of `hgl_`, gets one more `hgl_`. No two names give one |
@@ -1505,7 +1507,7 @@ written as:
 | A negative duration | Not checked | `yield.negative_duration` |
 
 So the provider resumes the generator itself, `resume`, and holds each
-target to the rules. hgraph 0.9.0 gives a capability to one call and
+target to the rules. hgraph gives a capability to one call and
 refuses it afterwards, so the generator, which lives across
 evaluations, reads the clock, the logger and the store from the node's
 state, where the node puts the ones of the evaluation it is resumed in.
@@ -1553,7 +1555,8 @@ instant is a `datetime` in UTC that names no zone, as hgraph has them.
 
 Reported as not written yet (`target.unsupported`): as the type of an
 input, an output or configuration, any but the four scalars above, an
-enum and a set of one of those, a nullable and a struct among them; a
+enum, a set of one of those and a nullable scalar or enum, a struct
+among them; a
 delta that is not a set's; a struct made in a graph;
 a generic struct made in a function generic in its arguments;
 a native declaration of a program,
@@ -1571,8 +1574,7 @@ call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
 an application's run statement;
 a run in real time;
-a zoned datetime, a zoned time and a time zone; timed traces and a published null in a
-trace; a `result` or an `error` as the type of an input or an output;
+a zoned datetime, a zoned time and a time zone; timed traces; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 
 A module is written a piece at a time: each declaration, then each
@@ -1609,19 +1611,20 @@ whole, and check which tests of a program with unwritten forms are
 blocked. Tests that run on hgraph need a Python that has it, named by
 the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
-hgraph 0.9.0. With it,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes 19 of
-the 24 tests of the pinned core's conformance cases and fails none:
+hgraph 0.9.1, the first with a value that may be unset (its RFC 0050),
+which a published null needs. With it,
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes all 24
+tests of the pinned core's conformance cases:
 
-| File | Tests | Pass | Not run, and why |
-| --- | --- | --- | --- |
-| `scalar_eval.hgl` | 8 | 8 | |
-| `scalar_endpoints.hgl` | 6 | 5 | 1: the type `i64?` |
-| `record_eval.hgl` | 2 | 2 | |
-| `mixed_eval.hgl` | 1 | 1 | |
-| `set_endpoints.hgl` | 1 | 1 | |
-| `identity_arithmetic.hgl` | 5 | 1 | 4: a published null in a trace |
-| `failure_eval.hgl` | 1 | 1 | |
+| File | Tests | Pass |
+| --- | --- | --- |
+| `scalar_eval.hgl` | 8 | 8 |
+| `scalar_endpoints.hgl` | 6 | 6 |
+| `record_eval.hgl` | 2 | 2 |
+| `mixed_eval.hgl` | 1 | 1 |
+| `set_endpoints.hgl` | 1 | 1 |
+| `identity_arithmetic.hgl` | 5 | 5 |
+| `failure_eval.hgl` | 1 | 1 |
 
 That is a run by hand, and no conformance claim.
 
