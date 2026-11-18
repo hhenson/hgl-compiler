@@ -877,7 +877,10 @@ fn run(arguments: &RunArgs) -> ExitCode {
             }
         };
         let name = sources.file(file).name().to_string();
-        let written = replace::entry(&program, &chosen);
+        let written = replace::EntryCall::of(&program, &chosen);
+        let written_as = written
+            .as_ref()
+            .map_or("no entry".to_string(), |entry| entry.shown(&program));
         let Parsed {
             sources: read_again,
             files: parsed,
@@ -898,24 +901,22 @@ fn run(arguments: &RunArgs) -> ExitCode {
         // application calls, with the generic arguments its call comes
         // to. A replacement that makes the call another entry, or the
         // same one with other generic arguments, is of another type.
-        let replaced = replace::entry(&program, &chosen);
+        let replaced = replace::EntryCall::of(&program, &chosen);
         if replaced != written {
             println!("not run: the program is rejected with the replacements given");
-            let shown = |entry: &Option<String>| match entry {
-                // What tells two candidates apart is left out of what
-                // is printed.
-                Some(entry) => entry
-                    .split(" (declaration ")
-                    .next()
-                    .unwrap_or(entry)
-                    .to_string(),
-                None => "no entry".to_string(),
+            let replaced_as = replaced
+                .as_ref()
+                .map_or("no entry".to_string(), |entry| entry.shown(&program));
+            // Two types of one name, each of its own module, are
+            // written alike.
+            let alike = if replaced_as == written_as {
+                ", whose generic arguments are other types of the same names"
+            } else {
+                ""
             };
             eprintln!(
-                "hgl: a replacement is of the type it replaces: `{chosen}` runs `{}`, \
-                 and with the replacements given it would run `{}`",
-                shown(&written),
-                shown(&replaced)
+                "hgl: a replacement is of the type it replaces: `{chosen}` runs `{written_as}`, \
+                 and with the replacements given it would run `{replaced_as}`{alike}"
             );
             return ExitCode::from(EXIT_REJECTED);
         }

@@ -284,6 +284,63 @@ fn a_replacement_does_not_change_what_the_entry_is() {
     );
 }
 
+/// UNIT-4: "Types have module-qualified nominal identity". Two modules
+/// each have a `Side`, and a replacement of one with a member of the
+/// other is of another type, though both are written `Side`: it is
+/// rejected. A member of the same enum is not, and the run then gets
+/// as far as its host, which here is no interpreter: status 2.
+#[test]
+fn a_type_of_the_same_name_is_another_type() {
+    let root = scratch("replacements_same_name");
+    write(&root, "sides.hgl", SIDES);
+    write(
+        &root,
+        "left.hgl",
+        "module demo.left\n\nexport enum Side { buy, sell }\n",
+    );
+    write(
+        &root,
+        "right.hgl",
+        "module demo.right\n\nexport enum Side { buy, sell }\n",
+    );
+    write(
+        &root,
+        "app.hgl",
+        concat!(
+            "application demo.app\n",
+            "\n",
+            "use demo.sides::{echo}\n",
+            "use demo.left as left\n",
+            "use demo.right as right\n",
+            "\n",
+            "eval(echo(value: left::Side.buy))\n",
+        ),
+    );
+    let output = hgl(&["run", &argument(&root), "--arg", "value=right::Side.sell"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    assert_eq!(
+        text(&output.stderr),
+        "hgl: a replacement is of the type it replaces: `demo.app` runs \
+         `demo.sides::echo<Side>`, and with the replacements given it would run \
+         `demo.sides::echo<Side>`, whose generic arguments are other types of the same names\n"
+    );
+    let missing = root.join("no-such-python");
+    let output = hgl(&[
+        "run",
+        &argument(&root),
+        "--arg",
+        "value=left::Side.sell",
+        "--python",
+        &argument(&missing),
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stderr).contains("was not run"),
+        "{}",
+        text(&output.stderr)
+    );
+}
+
 /// RUN-2: the replaced argument and the replaced field are what the
 /// application runs with, "and what the application writes is the
 /// default". The interpreter is the one `HGL_HGRAPH_PYTHON` names

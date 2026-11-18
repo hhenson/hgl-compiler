@@ -21,7 +21,7 @@
 //! ```
 
 use hgl_analyser::hir::{Argument, Callee, ExprKind};
-use hgl_analyser::{Detail, ParsedFile, Program};
+use hgl_analyser::{Argument as GenericArgument, Detail, ParsedFile, Program};
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::{lex, literal};
 use hgl_parser::{Entry, Limits, SyntaxKind, SyntaxNode};
@@ -215,10 +215,8 @@ impl Written<'_> {
     }
 }
 
-/// What the application `path` of `program` runs: the entry its run
-/// statement calls, with the generic arguments the call comes to,
-/// written `echo<i64>`. `None` where the program has no such
-/// application, or its call is not one of a function.
+/// What an application runs: the entry its run statement calls, and
+/// the generic arguments the call comes to.
 ///
 /// RUN-2: a replacement is "a constant checked against the type it
 /// replaces". The types of an entry's parameters are fixed by which
@@ -226,44 +224,79 @@ impl Written<'_> {
 /// replacement that leaves this as it was is checked against those
 /// types, and one that changes it, `"text"` where `echo(value: 3)`
 /// made `T` an `i64`, is of another type than it replaces.
-pub(crate) fn entry(program: &Program, path: &str) -> Option<String> {
-    let run = program
-        .modules
-        .iter()
-        .find(|module| module.path == path)?
-        .run_body
-        .as_ref()?;
-    let ExprKind::Call { callee, .. } = &run.call.kind else {
-        return None;
-    };
-    let (Callee::Function {
-        module,
-        declaration,
-        generics,
-        ..
+///
+/// Two are equal where they are one declaration with the same generic
+/// arguments, each a type by its own declaration and not by its name:
+/// two modules may each have a `Side`. The program is read twice from
+/// the same files in the same order, so a declaration has one place in
+/// both readings.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EntryCall {
+    /// The position of the entry's module in `Program::modules`.
+    module: usize,
+    /// The position of the entry in that module's declarations. Two
+    /// candidates of one operator have one name, and two places.
+    declaration: usize,
+    /// The generic arguments the call comes to.
+    generics: Vec<GenericArgument>,
+}
+
+impl EntryCall {
+    /// The call of the application `path` of `program`. `None` where
+    /// the program has no such application, or its run statement calls
+    /// no function.
+    pub(crate) fn of(program: &Program, path: &str) -> Option<EntryCall> {
+        let run = program
+            .modules
+            .iter()
+            .find(|module| module.path == path)?
+            .run_body
+            .as_ref()?;
+        let ExprKind::Call { callee, .. } = &run.call.kind else {
+            return None;
+        };
+        let (Callee::Function {
+            module,
+            declaration,
+            generics,
+            ..
+        }
+        | Callee::Candidate {
+            module,
+            declaration,
+            generics,
+            ..
+        }) = callee
+        else {
+            return None;
+        };
+        Some(EntryCall {
+            module: *module,
+            declaration: *declaration,
+            generics: generics.clone(),
+        })
     }
-    | Callee::Candidate {
-        module,
-        declaration,
-        generics,
-        ..
-    }) = callee
-    else {
-        return None;
-    };
-    let declared = &program.modules[*module];
-    let written: Vec<String> = generics.iter().map(|given| given.to_string()).collect();
-    let generics = if written.is_empty() {
-        String::new()
-    } else {
-        format!("<{}>", written.join(", "))
-    };
-    // Two candidates of one operator have one name: the place of the
-    // declaration tells them apart.
-    Some(format!(
-        "{}::{}{generics} (declaration {declaration})",
-        declared.path, declared.declarations[*declaration].name
-    ))
+
+    /// The entry as a message names it: `demo.sides::echo<i64>`. Two
+    /// that are not equal may be named alike, where their generic
+    /// arguments are types of one name.
+    pub(crate) fn shown(&self, program: &Program) -> String {
+        let declared = &program.modules[self.module];
+        let written: Vec<String> = self
+            .generics
+            .iter()
+            .map(|given| given.to_string())
+            .collect();
+        let generics = if written.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", written.join(", "))
+        };
+        format!(
+            "{}::{}{generics}",
+            declared.path, declared.declarations[self.declaration].name
+        )
+    }
 }
 
 /// The text of the application `path` of `program` with its run
