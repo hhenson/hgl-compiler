@@ -3201,6 +3201,24 @@ impl Emitter<'_> {
                 value,
                 ..
             } => {
+                // A field of a temporal struct's `out` is a port of its
+                // own (TYPE-9), which is not assigned yet.
+                let mut root = place;
+                while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
+                    root = base;
+                }
+                if let ExprKind::Local(local) = root.kind
+                    && Self::is_out(function, local)
+                    && matches!(
+                        function.locals[local].ty,
+                        Type::Named {
+                            kind: NamedKind::Struct,
+                            ..
+                        }
+                    )
+                {
+                    self.unsupported(place.at, "an assignment to a field of a temporal struct");
+                }
                 // EXPR-3: "A compound assignment reads the place
                 // first". The place is written once, so each index of
                 // it is evaluated once (EXPR-2), and is the index of
@@ -3557,8 +3575,14 @@ impl Emitter<'_> {
         function
             .signature
             .and_then(|signature| signature.result.as_ref())
-            .is_some_and(is_nullable)
+            .is_some_and(publishes_whole_null)
             && !matches!(&value.ty, Type::Delta(of) if is_nullable(of))
+    }
+
+    /// True when `local` is the node's `inject out` (TIME-7).
+    fn is_out(function: &Function, local: usize) -> bool {
+        let declared = &function.locals[local];
+        declared.kind == LocalKind::Inject && declared.name == "out"
     }
 
     /// True when `local` is a temporal input of the node being written:
@@ -3617,6 +3641,12 @@ impl Emitter<'_> {
                     && Self::is_input(function, *local)
                 {
                     self.port_value(&function.locals[*local].ty, &read)
+                } else if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && Self::is_out(function, *local)
+                {
+                    // `out` read whole: a struct's value is made from
+                    // its bundle's fields (TYPE-9), as an input's is.
+                    self.port_value(&function.locals[*local].ty, "_output")
                 } else if function.mode == Mode::Lifecycle && Self::is_input(function, *local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
@@ -4804,6 +4834,8 @@ impl Emitter<'_> {
             ExprKind::Local(local) if Self::is_input(function, *local) => {
                 Some(name(&function.locals[*local].name))
             }
+            // The node's own output, hgraph's `_output`.
+            ExprKind::Local(local) if Self::is_out(function, *local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
@@ -5026,7 +5058,7 @@ impl Emitter<'_> {
             Lifts::Function(_) => call,
         };
         let call = match result {
-            Some(result) if is_nullable(result) => self.published(call),
+            Some(result) if publishes_whole_null(result) => self.published(call),
             Some(result) => self.bundle_of(result, at, call),
             _ => call,
         };
@@ -6030,6 +6062,16 @@ fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
 /// True for a type written `T?` (TYPE-14).
 fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
+}
+
+/// True for a temporal type whose null is published whole, as hgraph's
+/// `Null`: a `T?`, and an `atomic<T?>` (TYPE-9: "`atomic<V>` stops
+/// expansion at a complete ordinary V").
+fn publishes_whole_null(ty: &Type) -> bool {
+    match ty {
+        Type::Atomic(payload) => is_nullable(payload),
+        other => is_nullable(other),
+    }
 }
 
 /// True when `statements` hold a `yield`, at any depth: in a loop, a
