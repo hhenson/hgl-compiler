@@ -42,12 +42,13 @@ use crate::hir::{
     ValueCategory,
 };
 use crate::program::{
-    Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
+    Binding, Declaration, DeclarationKind, LocalKind, Module, NameUse, OperatorRef, Phase, Program,
+    Role,
 };
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
-    NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type,
+    NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type, WrittenType,
 };
 use crate::{RESULT_FORMS, codes, error, warning};
 
@@ -572,7 +573,26 @@ impl<'a> Typer<'a> {
             let mut found = Vec::new();
             struct_applications(&written.ty, &mut found);
             for (struct_, arguments) in found {
-                self.requires_met(written.at, struct_, &arguments, (&[], &[]));
+                // A generic value the type holds as a name: a
+                // constant's, or the default's.
+                let values = crate::read::ConstantValues::default();
+                let program = self.program;
+                let named = |index: usize| {
+                    named_argument(
+                        program,
+                        module,
+                        written,
+                        struct_,
+                        (index, &arguments),
+                        &values,
+                    )
+                };
+                let given = Supplied {
+                    written: &[],
+                    defaulted: &[],
+                    named: &named,
+                };
+                self.requires_met(written.at, struct_, &arguments, &given);
             }
         }
     }
@@ -6610,7 +6630,7 @@ impl<'a> Typer<'a> {
             // generic parameters this pass does not resolve.
             if generics.is_empty() && self.diagnostics.len() == reported {
                 let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
-                self.requires_met(at, (module, declaration), &[], (&[], &[]));
+                self.requires_met(at, (module, declaration), &[], &Supplied::NOTHING);
             }
             let requirements = if generics.is_empty() {
                 self.answers(module, declaration, &[])
@@ -6761,7 +6781,12 @@ impl<'a> Typer<'a> {
             let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
             let mut written = written_generics(list);
             written.extend(named.iter().cloned());
-            self.requires_met(at, (module, declaration), &resolved, (&written, &defaulted));
+            let given = Supplied {
+                written: &written,
+                defaulted: &defaulted,
+                named: &|_| None,
+            };
+            self.requires_met(at, (module, declaration), &resolved, &given);
         }
         let requirements = self.answers(module, declaration, &resolved);
         let callee = Callee::Function {
@@ -7798,7 +7823,37 @@ impl<'a> Typer<'a> {
         {
             return Some(value);
         }
-        constant_of(node)
+        constant_of(node).or_else(|| self.folded_in(self.file, node))
+    }
+
+    /// The integer or duration a constant expression written in `file`
+    /// comes to, each constant it names followed to its value (GEN-8:
+    /// "a constant expression of those"): `TWO + 1`.
+    fn folded_in(&self, file: FileId, node: &SyntaxNode) -> Option<OptionValue> {
+        constant_value(&crate::constant::fold(node, &|name| {
+            let bound =
+                name_token(name).and_then(|token| self.binding_at(file, token.span().start));
+            match bound {
+                Some(Binding::Declarations {
+                    module,
+                    declarations,
+                }) => match declarations.as_slice() {
+                    [declaration]
+                        if self.program.modules[*module].declarations[*declaration].kind
+                            == DeclarationKind::Constant =>
+                    {
+                        crate::read::constant_value(
+                            self.program,
+                            *module,
+                            *declaration,
+                            &self.constant_values,
+                        )
+                    }
+                    _ => ConstantValue::Unevaluated,
+                },
+                _ => ConstantValue::Unevaluated,
+            }
+        }))
     }
 
     /// The value of the constant of a module that `node` names, for a
@@ -7824,8 +7879,8 @@ impl<'a> Typer<'a> {
     /// with.
     ///
     /// A default is written in its declaration's file, which may not be
-    /// the one being read, so no name in it is looked up here. An enum
-    /// member written in full, `Zero.ieee`, is known for one by the
+    /// the one being read, so a name in it is looked up in that file. An
+    /// enum member written in full, `Zero.ieee`, is known for one by the
     /// option's type being an enum: a member of any other would not be
     /// a value of it.
     fn default_value(
@@ -7883,7 +7938,21 @@ impl<'a> Typer<'a> {
                 .member_name(module, declaration, &one_by_position(node)?)
                 .map(OptionValue::Member);
         }
-        constant_of(node)
+        // UNIT-13: a constant read by its name, which is looked up in
+        // `file`, where the default is written.
+        if matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType)
+            && let Some(name) = name_token(node)
+            && let Some(Binding::Declarations {
+                module,
+                declarations,
+            }) = self.binding_at(file, name.span().start)
+            && let [declaration] = declarations.as_slice()
+            && let Some(value) =
+                constant_declared(self.program, (*module, *declaration), &self.constant_values)
+        {
+            return Some(value);
+        }
+        constant_of(node).or_else(|| self.folded_in(file, node))
     }
 
     /// True when an expression is a compile-time constant (GEN-8): "a
@@ -8502,11 +8571,9 @@ impl<'a> Typer<'a> {
     }
 
     /// Reports a `requires` that does not hold where a function is
-    /// called, or a struct constructed, with `generics` for its generic
-    /// parameters. `at` is the call. `named` is the generic value
-    /// parameters it writes, by name or after the callee's name, each
-    /// with where it is written, and `defaulted` those that took their
-    /// defaults, each by its position among the declaration's.
+    /// called, or a struct applied, with `generics` for its generic
+    /// parameters. `at` is the call or the type, and `given` what it
+    /// says of the generic value parameters.
     ///
     /// GEN-3: "A call of a function whose `requires` does not hold with
     /// the generic arguments the call resolves is rejected, and so is
@@ -8520,7 +8587,7 @@ impl<'a> Typer<'a> {
         at: Location,
         (module, declaration): (usize, usize),
         generics: &[Argument],
-        (named, defaulted): (&[(usize, SyntaxNode)], &[usize]),
+        given: &Supplied,
     ) {
         let program = self.program;
         let Some((parameters, condition)) = required(program, (module, declaration)) else {
@@ -8545,14 +8612,16 @@ impl<'a> Typer<'a> {
         // (TYPE-7) ... a constant (UNIT-13)").
         let this = &*self;
         let value_of = |index: usize| -> Option<OptionValue> {
-            let written = named
+            let written = given
+                .written
                 .iter()
                 .find(|(position, _)| *position == index)
-                .and_then(|(_, node)| this.option_value(node));
+                .and_then(|(_, node)| this.option_value(node))
+                .or_else(|| (given.named)(index));
             if written.is_some() {
                 return written;
             }
-            if !defaulted.contains(&index) {
+            if !given.defaulted.contains(&index) {
                 return None;
             }
             let generic = &parameters[index];
@@ -9796,12 +9865,12 @@ impl<'a> Typer<'a> {
         {
             let at = Location::new(self.file, Span::new(name.span().start, list.span().end));
             let written = written_generics(list);
-            self.requires_met(
-                at,
-                (module, declaration),
-                applied,
-                (&written, &defaulted_values),
-            );
+            let given = Supplied {
+                written: &written,
+                defaulted: &defaulted_values,
+                named: &|_| None,
+            };
+            self.requires_met(at, (module, declaration), applied, &given);
         }
         // TST-3: a trace "is stored in no field", bare or inside a
         // value given to one.
@@ -11730,6 +11799,114 @@ fn constant_declared(
     constant_of(&written)
 }
 
+/// What a call, a construction or a written type says of the generic
+/// value parameters of what it names, for [`Typer::requires_met`].
+struct Supplied<'g> {
+    /// The ones written, by name or after the callee's name, each with
+    /// its position among the declaration's and where it is written.
+    written: &'g [(usize, SyntaxNode)],
+    /// The ones that took their defaults, by their positions.
+    defaulted: &'g [usize],
+    /// The value of one a written type holds as a name, by its
+    /// position: see [`named_argument`].
+    named: &'g dyn Fn(usize) -> Option<OptionValue>,
+}
+
+impl Supplied<'_> {
+    /// Of a declaration that has no generic parameter.
+    const NOTHING: Supplied<'static> = Supplied {
+        written: &[],
+        defaulted: &[],
+        named: &|_| None,
+    };
+}
+
+/// The value of the generic value parameter at `index` of the struct
+/// `struct_`, where a type written at `written` of `module` applies it
+/// with `arguments` and holds that one as a name. `None` for one not
+/// held so, and for a name that is no constant read here.
+///
+/// A name the type writes is among the names it uses, and is the
+/// constant it is bound to there. Any other is the parameter's default
+/// (GEN-2), a name where the struct is declared, and is the constant it
+/// is bound to there.
+fn named_argument(
+    program: &Program,
+    module: &Module,
+    written: &WrittenType,
+    (struct_module, struct_declaration): (usize, usize),
+    (index, arguments): (usize, &[Argument]),
+    values: &crate::read::ConstantValues,
+) -> Option<OptionValue> {
+    let Argument::Constant(constant) = arguments.get(index)? else {
+        return None;
+    };
+    if !matches!(constant.value, ConstantValue::Unevaluated) {
+        return None;
+    }
+    let bound = |used: &NameUse| -> Option<OptionValue> {
+        let Binding::Declarations {
+            module,
+            declarations,
+        } = &used.binding
+        else {
+            return None;
+        };
+        let [declaration] = declarations.as_slice() else {
+            return None;
+        };
+        constant_declared(program, (*module, *declaration), values)
+    };
+    // `alias::NAME` uses the name `NAME`.
+    let wanted = constant.text.rsplit("::").next()?.trim();
+    let used = module.uses.iter().find(|used| {
+        used.name == wanted
+            && used.at.file == written.at.file
+            && used.at.span.start >= written.at.span.start
+            && used.at.span.end <= written.at.span.end
+    });
+    if let Some(used) = used {
+        return bound(used);
+    }
+    let declared_in = &program.modules[struct_module];
+    let declared = &declared_in.declarations[struct_declaration];
+    let (parameters, _) = required(program, (struct_module, struct_declaration))?;
+    let mut default = generic_default(&declared.syntax, parameters.get(index)?)?;
+    while default.kind() == SyntaxKind::ParenExpr {
+        default = default.children().next()?;
+    }
+    let file = declared_in.files[declared.file].file;
+    let used_at = |name: &SyntaxNode| -> Option<&NameUse> {
+        let start = name_token(name)?.span().start;
+        declared_in
+            .uses
+            .iter()
+            .find(|used| used.at.file == file && used.at.span.start == start)
+    };
+    if matches!(default.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType) {
+        return bound(used_at(&default)?);
+    }
+    // An expression of constants, `TWO + 1`: an integer or a duration.
+    constant_value(&crate::constant::fold(
+        &default,
+        &|name| match used_at(name).map(|used| &used.binding) {
+            Some(Binding::Declarations {
+                module,
+                declarations,
+            }) => match declarations.as_slice() {
+                [declaration]
+                    if program.modules[*module].declarations[*declaration].kind
+                        == DeclarationKind::Constant =>
+                {
+                    crate::read::constant_value(program, *module, *declaration, values)
+                }
+                _ => ConstantValue::Unevaluated,
+            },
+            _ => ConstantValue::Unevaluated,
+        },
+    ))
+}
+
 /// The generic arguments a call writes after its callee's name,
 /// `pick<false>(1)`, each with its position among them. `list` is the
 /// call's argument list.
@@ -11961,33 +12138,17 @@ pub(crate) fn applications(program: &Program, diagnostics: &mut Diagnostics) {
                 let Some((_, condition)) = required(program, struct_) else {
                     continue;
                 };
-                // A generic value written as a constant's name is held
-                // as that name. The name is one the type uses, and is
-                // followed to the constant it is bound to there.
-                let value_of = |index: usize| -> Option<OptionValue> {
-                    let Argument::Constant(constant) = arguments.get(index)? else {
-                        return None;
-                    };
-                    if !matches!(constant.value, ConstantValue::Unevaluated) {
-                        return None;
-                    }
-                    let used = module.uses.iter().find(|used| {
-                        used.name == constant.text
-                            && used.at.file == written.at.file
-                            && used.at.span.start >= written.at.span.start
-                            && used.at.span.end <= written.at.span.end
-                    })?;
-                    let Binding::Declarations {
+                // A generic value the type holds as a name: a
+                // constant's, or the default's.
+                let value_of = |index: usize| {
+                    named_argument(
+                        program,
                         module,
-                        declarations,
-                    } = &used.binding
-                    else {
-                        return None;
-                    };
-                    let [declaration] = declarations.as_slice() else {
-                        return None;
-                    };
-                    constant_declared(program, (*module, *declaration), &values)
+                        written,
+                        struct_,
+                        (index, &arguments),
+                        &values,
+                    )
                 };
                 let held = requires_holds(
                     program,
