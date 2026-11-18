@@ -475,6 +475,12 @@ pub struct Test {
     /// True for an integration test (TST-17): one that may run in real
     /// time, and "is run only when it is asked for".
     pub integration: bool,
+    /// The time limit `@timeout(5s)` gives an integration test, in
+    /// microseconds (TST-17: "the duration `@timeout(5s)` gives on the
+    /// line before it, or one minute where none is written"). `None`
+    /// where none is written, and where what is written is no valid
+    /// duration, which the lexer has reported.
+    pub timeout: Option<i64>,
     /// Where the name is written.
     pub at: Location,
     /// The position of its file in [`Module::files`].

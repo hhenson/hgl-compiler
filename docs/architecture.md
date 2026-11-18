@@ -1672,9 +1672,9 @@ starts on, so the failure is reported at that statement in the source:
 such as an `i64` result out of range (NUM-2), is reported the same way
 with its text.
 
-An integration test (TST-17) is held to a time limit: a minute, where it
-gives none of its own, which the language has no way to write yet
-(hhenson/hgl_spec#110). The driver runs such a test on a thread of its
+An integration test (TST-17) is held to a time limit: the duration
+`@timeout(5s)` gives on the line before it, or a minute where it writes
+none. The driver runs such a test on a thread of its
 own and waits for it no longer than its limit. One still running then
 has failed, at the statement it was at: its run in real time is asked to
 stop, which ends it as its end does, and the test goes on to its own

@@ -127,6 +127,8 @@ pub struct Test {
     /// True for an integration test (TST-17), which may run in real
     /// time and is held to a time limit ([`Test::limit`]).
     pub integration: bool,
+    /// The limit `@timeout(...)` gives the test, where it writes one.
+    pub timeout: Option<Duration>,
     /// The first form the test needs that the target does not write
     /// yet, in the test or in a function it reaches. `None` for a test
     /// that can be run.
@@ -145,18 +147,17 @@ impl Test {
     /// How long the test may run, by the host clock, before it is
     /// stopped and fails. `None` for one with no limit.
     ///
-    /// Owner decision, 2026-11-18 (hhenson/hgl_spec#110): "integration
-    /// tests are alway time-bound. The test itself you provide a
-    /// time-out or the default timeout of 1 minute is applied." The
-    /// language has no way to write a test's own limit yet, so every
-    /// integration test has the default.
+    /// TST-17: an integration test "is time-bound: it runs within a
+    /// time limit by the host clock, the duration `@timeout(5s)` gives
+    /// on the line before it, or one minute where none is written."
     pub fn limit(&self) -> Option<Duration> {
-        self.integration.then_some(INTEGRATION_LIMIT)
+        self.integration
+            .then(|| self.timeout.unwrap_or(INTEGRATION_LIMIT))
     }
 }
 
-/// The time limit of an integration test that gives none of its own:
-/// one minute (TST-17, hhenson/hgl_spec#110).
+/// The time limit of an integration test that writes none: one minute
+/// (TST-17).
 pub const INTEGRATION_LIMIT: Duration = Duration::from_secs(60);
 
 impl Test {
@@ -330,6 +331,10 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
                 module: module.path.clone(),
                 name: test.name.clone(),
                 integration: test.integration,
+                // A duration literal is never negative (LEX-7).
+                timeout: test
+                    .timeout
+                    .map(|micros| Duration::from_micros(micros.unsigned_abs())),
                 blocked: blocked(&modules, piece),
                 statements: piece.statements.clone(),
             });

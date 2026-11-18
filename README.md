@@ -67,7 +67,8 @@ installed; a test that needs a form the target does not write yet is
 reported `not run`, with the form. An `integration_test` is left out
 unless `--integration` asks for them or `--test NAME` names it; its
 `run(...)` is a run in real time, and it has failed if it is still
-running after a minute.
+running after the limit `@timeout(5s)` gives on the line before it, or
+after a minute where it writes none.
 `hgl emit --out DIR` writes an
 accepted program as Python wiring for hgraph, and reports what the
 target does not write yet. `hgl run` runs an application of the program

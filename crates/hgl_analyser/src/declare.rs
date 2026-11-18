@@ -282,6 +282,9 @@ impl Walk<'_> {
                     self.tests.push(Test {
                         name: name.text().to_string(),
                         integration: test.is_integration(),
+                        timeout: test.timeout().and_then(|written| {
+                            hgl_lexer::literal::decode_duration(written.text()).ok()
+                        }),
                         at: Location::new(file, name.span()),
                         file: index,
                         syntax,

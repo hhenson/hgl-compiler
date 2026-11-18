@@ -235,6 +235,7 @@ test everything {
     assert raises("value.missing_key") { lookup(key) }
 }
 
+@timeout(5s)
 integration_test live {
     let seen = run(arrow(x: [1]), RunConfig())
 }
