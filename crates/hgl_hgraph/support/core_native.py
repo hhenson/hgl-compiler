@@ -317,8 +317,10 @@ def changed(delta, field):
 def bundled(value):
     """What a temporal struct publishes for a whole value of it (TYPE-9):
     each field, as hgraph's bundle takes it. The compiler gives it only
-    a struct whose fields each publish whole."""
-    return {field: getattr(value, field) for field in value._hgl_fields}
+    a struct whose fields each publish whole. A field that is null is
+    published as a null, hgraph's `Null` (see `published`): `None` would
+    leave the field as it was."""
+    return {field: published(getattr(value, field)) for field in value._hgl_fields}
 
 
 def item(sequence, index):

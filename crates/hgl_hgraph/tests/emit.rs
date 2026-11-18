@@ -7292,6 +7292,11 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
         "    return ordered(bid=bid, size=size).quote.bid".to_string(),
         "    return _hg.getattr_[_hg.SCALAR: _py.int](snapshot(bid=bid, ask=ask), \"ask\")"
             .to_string(),
+        // A source's yield, and a lifted helper's argument and result.
+        "    yield (_dt.timedelta(microseconds=1), _core.bundled(Quote(bid=1, ask=2)))".to_string(),
+        "    return width(quote=Quote(bid=quote.bid.value, ask=quote.ask.value))".to_string(),
+        "    return _core.bundled(widened(quote=Quote(bid=quote.bid.value, ask=quote.ask.value)))"
+            .to_string(),
     ] {
         assert!(
             python.contains(&expected),

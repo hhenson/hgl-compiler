@@ -69,6 +69,32 @@ fn snapshot_ask(quote: atomic<Quote>) -> i64 {
     when { return quote.ask }
 }
 
+# A nullable field published null by a whole value (TYPE-14).
+struct Level {
+    price: i64?
+}
+
+fn leveled(price: i64) -> Level {
+    when {
+        if price < 0 { return Level(price: null) }
+        return Level(price: price)
+    }
+}
+
+fn level_set(at: Level) -> bool {
+    when { return at.price != null }
+}
+
+# A source that yields whole structs (SOURCE-1).
+fn two_quotes() -> Quote {
+    yield 1us: Quote(bid: 1, ask: 2)
+    yield 1us: Quote(bid: 3, ask: 5)
+}
+
+# Value helpers lifted over a temporal struct, taking and giving one (FN-6).
+const fn width(quote: Quote) -> i64 => quote.ask - quote.bid
+const fn widened(quote: Quote) -> Quote => Quote(bid: quote.bid - 1, ask: quote.ask + 1)
+
 fn spread_of(bid: i64, ask: i64) -> i64 => spread(quoted(bid, ask))
 fn whole_spread_of(bid: i64, ask: i64) -> i64 => whole_spread(quoted(bid, ask))
 fn ask_of(is_bid: bool, price: i64) -> i64 => moved(is_bid, price).ask
@@ -78,7 +104,14 @@ fn nested_bid_of(bid: i64, size: i64) -> i64 => ordered(bid, size).quote.bid
 fn atomic_ask_of(bid: i64, ask: i64) -> i64 => snapshot(bid, ask).ask
 fn atomic_read_of(bid: i64, ask: i64) -> i64 => snapshot_ask(snapshot(bid, ask))
 
+fn level_set_of(price: i64) -> bool => level_set(leveled(price))
+fn source_width() -> i64 => width(two_quotes())
+fn widened_width(bid: i64, ask: i64) -> i64 => width(widened(quoted(bid, ask)))
+
 test struct_fields_tick_as_their_own {
+    assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
+    assert eval(source_width()) == [_, 1, 2]
+    assert eval(widened_width(bid: [1, _], ask: [5, 9])) == [6, 10]
     assert eval(spread_of(bid: [1, 2, _], ask: [5, _, 9])) == [4, 3, 7]
     assert eval(whole_spread_of(bid: [1, 2], ask: [5, _])) == [4, 3]
     assert eval(ask_of(is_bid: [false, true, false], price: [7, 3, 8])) == [7, _, 8]

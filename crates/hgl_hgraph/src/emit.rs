@@ -3355,6 +3355,7 @@ impl Emitter<'_> {
                 // The runtime keeps what is published, and the source
                 // goes on after its `yield`.
                 let value = self.copied(function, yielded, value);
+                let value = self.bundled(function, yielded, value);
                 let value = if Self::publishes_null(function, yielded) {
                     self.published(value)
                 } else {
@@ -4752,15 +4753,22 @@ impl Emitter<'_> {
         let result = function
             .signature
             .and_then(|signature| signature.result.as_ref());
-        if function.mode != Mode::Node || result != Some(&value.ty) {
+        if !matches!(function.mode, Mode::Node | Mode::Source) || result != Some(&value.ty) {
             return written;
         }
+        self.bundle_of(&value.ty, value.at, written)
+    }
+
+    /// `written`, a whole value of `ty`, as a temporal value of `ty`
+    /// publishes it: a struct's fields as hgraph's bundle takes them
+    /// (TYPE-9), and any other value as it is.
+    fn bundle_of(&mut self, ty: &Type, at: Location, written: String) -> String {
         let Type::Named {
             module,
             declaration,
             kind: NamedKind::Struct,
             ..
-        } = &value.ty
+        } = ty
         else {
             return written;
         };
@@ -4778,7 +4786,7 @@ impl Emitter<'_> {
         };
         if nested {
             self.unsupported(
-                value.at,
+                at,
                 "a whole struct published where a field is a temporal struct",
             );
             return written;
@@ -4960,12 +4968,15 @@ impl Emitter<'_> {
                         .annotation(ty, true, at)
                         .unwrap_or_else(|| "_py.object".to_string());
                     parameters.push(format!("{python}: {annotation}"));
+                    // What the input holds, a struct's value made
+                    // from its bundle's fields (TYPE-9).
+                    let read = self.port_value(ty, &python);
                     match self.left_out(target, index, parameter) {
                         Some(fallback) => passed.push(format!(
-                            "{python}=({python}.value if {python}.valid else {fallback})"
+                            "{python}=({read} if {python}.valid else {fallback})"
                         )),
                         None => {
-                            passed.push(format!("{python}={python}.value"));
+                            passed.push(format!("{python}={read}"));
                             required.push(python);
                         }
                     }
@@ -5016,6 +5027,7 @@ impl Emitter<'_> {
         };
         let call = match result {
             Some(result) if is_nullable(result) => self.published(call),
+            Some(result) => self.bundle_of(result, at, call),
             _ => call,
         };
         let (decorator, after) = match (result, returns) {
