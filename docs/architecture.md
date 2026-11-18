@@ -1118,7 +1118,11 @@ type, so a membership of it is not told; a named operator requirement
 of it is, by what that declaration states (GEN-7), a struct's as a
 function's. A generic value is read however it is written (GEN-8): a
 literal of any kind, an enum's member in any spelling, a constant's
-name, after the callee's name or by name.
+name, after the callee's name or by name. One reader does that for a
+call, a construction and a written type, so a spelling means the same
+in each. A type that writes a struct's arguments is held to them, and
+one that writes none to the defaults (GEN-2), which are read where the
+struct is declared.
 
 `Program::instance` puts the two together for a target with no generics
 of its own. Given a declaration, the generic arguments of one call of

@@ -32,7 +32,6 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_lexer::literal::{
     decode_duration, decode_float, decode_integer, decode_string, decode_temporal,
 };
-use hgl_parser::ast::AstNode;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
@@ -48,7 +47,7 @@ use crate::program::{
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
-    NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type, WrittenType,
+    NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type,
 };
 use crate::{RESULT_FORMS, codes, error, warning};
 
@@ -556,14 +555,18 @@ impl<'a> Typer<'a> {
     }
 
     /// GEN-3: each type written in the declaration being read is held
-    /// to the `requires` of the structs it applies. [`applications`]
-    /// has told what needs no body; here a named operator requirement
-    /// is told too (GEN-16), and one of a generic parameter of this
-    /// declaration by what it states (GEN-7).
+    /// to the `requires` of the structs it applies, at any depth.
+    ///
+    /// The type is read as it is written. GEN-2: "A struct application
+    /// supplies all or none". Where it writes generic arguments each is
+    /// read where it stands, as a call's is; where it writes none each
+    /// parameter has its default. An argument that is written is never
+    /// taken for the default.
     fn applications(&mut self) {
         let within = self.declaration.syntax.span();
         let module = self.module;
         let file = self.file;
+        let program = self.program;
         let written = module.written.iter().filter(|written| {
             written.at.file == file
                 && written.at.span.start >= within.start
@@ -572,30 +575,72 @@ impl<'a> Typer<'a> {
         for written in written {
             let mut found = Vec::new();
             struct_applications(&written.ty, &mut found);
+            if !found
+                .iter()
+                .any(|(struct_, _)| required(program, *struct_).is_some())
+            {
+                continue;
+            }
+            // The type as it is written: a type, or the name and the
+            // generic arguments a construction writes.
+            let at = written.at.span;
+            let node = self.declaration.syntax.descendants().find(|node| {
+                let span = node.span();
+                span.start == at.start
+                    && (span == at && is_type(node.kind())
+                        || child(node, SyntaxKind::GenericArgs)
+                            .is_some_and(|list| list.span().end == at.end))
+            });
             for (position, (struct_, arguments)) in found.iter().enumerate() {
-                let (struct_, occurrence) = (*struct_, occurrence_of(&found, position));
-                // A generic value the type holds as it is written: a
-                // constant's name, or the default's.
-                let values = crate::read::ConstantValues::default();
-                let program = self.program;
-                let named = |index: usize| {
-                    named_argument(
-                        program,
-                        module,
-                        written,
-                        struct_,
-                        (index, arguments, occurrence),
-                        &values,
-                    )
-                };
+                let application = node.as_ref().and_then(|node| {
+                    self.applied_at(node, *struct_, occurrence_of(&found, position))
+                });
+                let (values, defaulted): (Vec<(usize, SyntaxNode)>, Vec<usize>) =
+                    match application.map(|node| child(&node, SyntaxKind::GenericArgs)) {
+                        Some(Some(list)) => (
+                            list.children()
+                                .filter(|argument| argument.kind() != SyntaxKind::Error)
+                                .enumerate()
+                                .collect(),
+                            Vec::new(),
+                        ),
+                        Some(None) => (Vec::new(), (0..arguments.len()).collect()),
+                        None => (Vec::new(), Vec::new()),
+                    };
                 let given = Supplied {
-                    written: &[],
-                    defaulted: &[],
-                    named: &named,
+                    written: &values,
+                    defaulted: &defaulted,
                 };
-                self.requires_met(written.at, struct_, arguments, &given);
+                self.requires_met(written.at, *struct_, arguments, &given);
             }
         }
+    }
+
+    /// Where the type written at `node` applies the struct `struct_`:
+    /// the `occurrence`th such place, in the order written. It is a
+    /// type that names the struct, or `node` itself where that is a
+    /// construction of it.
+    fn applied_at(
+        &self,
+        node: &SyntaxNode,
+        (struct_module, struct_declaration): (usize, usize),
+        occurrence: usize,
+    ) -> Option<SyntaxNode> {
+        node.descendants()
+            .filter(|candidate| {
+                (candidate == node || candidate.kind() == SyntaxKind::NamedType)
+                    && name_token(candidate)
+                        .and_then(|name| self.bindings.get(&(self.file, name.span().start)))
+                        .is_some_and(|binding| {
+                            matches!(
+                                binding,
+                                Binding::Declarations { module, declarations }
+                                    if *module == struct_module
+                                        && declarations.contains(&struct_declaration)
+                            )
+                        })
+            })
+            .nth(occurrence)
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {
@@ -6785,7 +6830,6 @@ impl<'a> Typer<'a> {
             let given = Supplied {
                 written: &written,
                 defaulted: &defaulted,
-                named: &|_| None,
             };
             self.requires_met(at, (module, declaration), &resolved, &given);
         }
@@ -8617,8 +8661,7 @@ impl<'a> Typer<'a> {
                 .written
                 .iter()
                 .find(|(position, _)| *position == index)
-                .and_then(|(_, node)| this.option_value(node))
-                .or_else(|| (given.named)(index));
+                .and_then(|(_, node)| this.option_value(node));
             if written.is_some() {
                 return written;
             }
@@ -9869,7 +9912,6 @@ impl<'a> Typer<'a> {
             let given = Supplied {
                 written: &written,
                 defaulted: &defaulted_values,
-                named: &|_| None,
             };
             self.requires_met(at, (module, declaration), applied, &given);
         }
@@ -11803,14 +11845,12 @@ fn constant_declared(
 /// What a call, a construction or a written type says of the generic
 /// value parameters of what it names, for [`Typer::requires_met`].
 struct Supplied<'g> {
-    /// The ones written, by name or after the callee's name, each with
-    /// its position among the declaration's and where it is written.
+    /// The ones written, by name or after the name of what is called
+    /// or applied, each with its position among the declaration's and
+    /// where it is written.
     written: &'g [(usize, SyntaxNode)],
     /// The ones that took their defaults, by their positions.
     defaulted: &'g [usize],
-    /// The value of one a written type holds as a name, by its
-    /// position: see [`named_argument`].
-    named: &'g dyn Fn(usize) -> Option<OptionValue>,
 }
 
 impl Supplied<'_> {
@@ -11818,134 +11858,7 @@ impl Supplied<'_> {
     const NOTHING: Supplied<'static> = Supplied {
         written: &[],
         defaulted: &[],
-        named: &|_| None,
     };
-}
-
-/// The value of the generic value parameter at `index` of the struct
-/// `struct_`, where a type written at `written` of `module` applies it
-/// with `arguments` and holds that one as it is written and not as a
-/// value. `occurrence` says which of the type's applications of the
-/// struct it is, in the order written. `None` for one not held so, and
-/// for what is no constant read here.
-///
-/// The type is read as it is written. GEN-2: "A struct application
-/// supplies all or none". Where it writes arguments the one at `index`
-/// is read where it stands. Where it writes none the parameter has its
-/// default, which is read where the struct is declared. An argument
-/// that is written is never taken for the default.
-fn named_argument(
-    program: &Program,
-    module: &Module,
-    written: &WrittenType,
-    (struct_module, struct_declaration): (usize, usize),
-    (index, arguments, occurrence): (usize, &[Argument], usize),
-    values: &crate::read::ConstantValues,
-) -> Option<OptionValue> {
-    let Argument::Constant(constant) = arguments.get(index)? else {
-        return None;
-    };
-    if !matches!(constant.value, ConstantValue::Unevaluated) {
-        return None;
-    }
-    let file = written.at.file;
-    let root = module
-        .files
-        .iter()
-        .find(|part| part.file == file)?
-        .syntax
-        .syntax();
-    let ty = root
-        .descendants()
-        .find(|node| is_type(node.kind()) && node.span() == written.at.span)?;
-    // Each place the type applies the struct, in the order written.
-    let applies = |node: &SyntaxNode| -> bool {
-        node.kind() == SyntaxKind::NamedType
-            && name_token(node).is_some_and(|name| {
-                let start = name.span().start;
-                module.uses.iter().any(|used| {
-                    used.at.file == file
-                        && used.at.span.start == start
-                        && matches!(
-                            &used.binding,
-                            Binding::Declarations { module, declarations }
-                                if *module == struct_module
-                                    && declarations.contains(&struct_declaration)
-                        )
-                })
-            })
-    };
-    let application = ty.descendants().filter(applies).nth(occurrence)?;
-    if let Some(list) = child(&application, SyntaxKind::GenericArgs) {
-        let argument = list
-            .children()
-            .filter(|argument| argument.kind() != SyntaxKind::Error)
-            .nth(index)?;
-        return written_constant(program, module, file, &argument, values);
-    }
-    let declared_in = &program.modules[struct_module];
-    let declared = &declared_in.declarations[struct_declaration];
-    let (parameters, _) = required(program, (struct_module, struct_declaration))?;
-    let default = generic_default(&declared.syntax, parameters.get(index)?)?;
-    written_constant(
-        program,
-        declared_in,
-        declared_in.files[declared.file].file,
-        &default,
-        values,
-    )
-}
-
-/// The value of the constant expression `node`, written in `file` of
-/// `module`: a constant's name (UNIT-13), followed to the constant it
-/// is bound to there; a literal, or a `.member`; or an expression of
-/// those that comes to an integer or a duration, `TWO + 1`. `None` for
-/// any other.
-fn written_constant(
-    program: &Program,
-    module: &Module,
-    file: FileId,
-    node: &SyntaxNode,
-    values: &crate::read::ConstantValues,
-) -> Option<OptionValue> {
-    let mut node = node.clone();
-    while node.kind() == SyntaxKind::ParenExpr {
-        node = node.children().next()?;
-    }
-    // The one constant a name is bound to in this file.
-    let named = |name: &SyntaxNode| -> Option<(usize, usize)> {
-        let start = name_token(name)?.span().start;
-        let used = module
-            .uses
-            .iter()
-            .find(|used| used.at.file == file && used.at.span.start == start)?;
-        match &used.binding {
-            Binding::Declarations {
-                module,
-                declarations,
-            } => match declarations.as_slice() {
-                [declaration]
-                    if program.modules[*module].declarations[*declaration].kind
-                        == DeclarationKind::Constant =>
-                {
-                    Some((*module, *declaration))
-                }
-                _ => None,
-            },
-            Binding::Local { .. } => None,
-        }
-    };
-    if matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType) {
-        return constant_declared(program, named(&node)?, values);
-    }
-    constant_of(&node).or_else(|| {
-        constant_value(&crate::constant::fold(&node, &|name| match named(name) {
-            Some((module, declaration)) => {
-                crate::read::constant_value(program, module, declaration, values)
-            }
-            None => ConstantValue::Unevaluated,
-        }))
-    })
 }
 
 /// The generic arguments a call writes after its callee's name,
@@ -12168,55 +12081,6 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(error, found);
         }
         Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {}
-    }
-}
-
-/// GEN-3: "an application of a struct whose `requires` does not hold
-/// with its arguments" is rejected. Each type the program writes is
-/// read for the structs it applies, at any depth, and reported where
-/// the type is written, the one a construction names included. A
-/// construction is checked where it is read too ([`Typer::construct`]).
-///
-/// A named operator requirement of a struct is not told here, where no
-/// body is being read: it is told where the struct is constructed.
-pub(crate) fn applications(program: &Program, diagnostics: &mut Diagnostics) {
-    let values = crate::read::ConstantValues::default();
-    for module in &program.modules {
-        for written in &module.written {
-            let mut found = Vec::new();
-            struct_applications(&written.ty, &mut found);
-            for (position, (struct_, arguments)) in found.iter().enumerate() {
-                let (struct_, occurrence) = (*struct_, occurrence_of(&found, position));
-                let Some((_, condition)) = required(program, struct_) else {
-                    continue;
-                };
-                // A generic value the type holds as it is written: a
-                // constant's name, or the default's.
-                let value_of = |index: usize| {
-                    named_argument(
-                        program,
-                        module,
-                        written,
-                        struct_,
-                        (index, arguments, occurrence),
-                        &values,
-                    )
-                };
-                let held = requires_holds(
-                    program,
-                    struct_,
-                    arguments,
-                    &condition,
-                    &Told {
-                        value_of: &value_of,
-                        callable: &|_| None,
-                    },
-                );
-                if held == Some(false) {
-                    diagnostics.emit(unmet(program, struct_, written.at, &condition));
-                }
-            }
-        }
     }
 }
 

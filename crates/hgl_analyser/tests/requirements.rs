@@ -1108,6 +1108,15 @@ fn a_written_argument_of_a_type_is_not_taken_for_the_default() {
         "const fn j(held: Wide<TWO + 1>) -> i64 => 1\n",
         "const fn k(held: tuple<Pick<FAST>, Pick>) -> i64 => 1\n",
         "const fn l(held: tuple<Pick, Pick<FAST>>) -> i64 => 1\n",
+        // TYPE-7: an enum's member "however it is written", its
+        // constructor among the ways.
+        "const fn m(held: Pick<Mode(\"slow\")>) -> i64 => 1\n",
+        "const fn n(held: Pick<Mode(1)>) -> i64 => 1\n",
+        "const fn o(held: Pick<(Mode.slow)>) -> i64 => 1\n",
+        "const fn p(held: list<Pick<Mode(\"slow\")>>) -> i64 => 1\n",
+        "const fn q() -> i64 => Pick<Mode(\"slow\")>(value: 1).value\n",
+        "const fn fine(held: Pick<Mode(\"fast\")>, other: Pick<Mode(0)>) -> i64 =>\n",
+        "    Pick<Mode(\"fast\")>(value: 1).value\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1119,6 +1128,11 @@ fn a_written_argument_of_a_type_is_not_taken_for_the_default() {
             "m.hgl:17:18 constraint/requires.unmet GEN-3",
             "m.hgl:18:18 constraint/requires.unmet GEN-3",
             "m.hgl:19:18 constraint/requires.unmet GEN-3",
+            "m.hgl:20:18 constraint/requires.unmet GEN-3",
+            "m.hgl:21:18 constraint/requires.unmet GEN-3",
+            "m.hgl:22:18 constraint/requires.unmet GEN-3",
+            "m.hgl:23:18 constraint/requires.unmet GEN-3",
+            "m.hgl:24:24 constraint/requires.unmet GEN-3",
         ]
     );
 }
