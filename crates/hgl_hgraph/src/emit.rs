@@ -349,6 +349,24 @@ fn time_fields(time: ClockTime) -> String {
     )
 }
 
+/// A capability a node injects (TIME-8), as hgraph gives one to a node
+/// and to its `start` and `stop`: the parameter the target writes for
+/// it, and that parameter's annotation. `None` for one that is not
+/// written yet: `scheduler` and `alarm`.
+///
+/// hgraph gives a capability for one call and no longer, so each of
+/// the three functions names the ones the node injects. That is the
+/// language's rule too: a capability "is used within the node that
+/// injects it and is not retained".
+fn capability(injected: &str) -> Option<(&'static str, &'static str)> {
+    match injected {
+        "clock" => Some(("_clock", "_hg.EvaluationClock")),
+        "logger" => Some(("_logger", "_hg.LOGGER")),
+        "global_state" => Some(("_store", "_hg.GlobalState")),
+        _ => None,
+    }
+}
+
 /// A type as part of a native function's name: `i64` as it is, and any
 /// other character than a letter or a digit as `_`.
 fn mangled(ty: &Type) -> String {
@@ -1130,9 +1148,22 @@ impl Emitter<'_> {
         let mut stop: Option<&[Stmt]> = None;
         let mut handlers: Vec<Handler> = Vec::new();
         let mut has_out = false;
+        // TIME-8: the capabilities the node injects, each as hgraph
+        // gives it.
+        let mut capabilities: Vec<(&str, &str)> = Vec::new();
         for statement in &body.statements {
             match statement {
-                Stmt::Declare { local, value } if body.locals[*local].kind == LocalKind::State => {
+                // TIME-6: "Cache is reconstructible node-local value
+                // data, initialized on every start". hgraph's `STATE`
+                // is the node's own and is recorded nowhere, so a
+                // `state` and a `cache` are both fields of it, given
+                // their values in `start`, in the order written.
+                Stmt::Declare { local, value }
+                    if matches!(
+                        body.locals[*local].kind,
+                        LocalKind::State | LocalKind::Cache
+                    ) =>
+                {
                     states.push((*local, value));
                 }
                 Stmt::Hook {
@@ -1152,13 +1183,16 @@ impl Emitter<'_> {
                     ..
                 } => handlers.push(Handler::of(condition.as_ref(), body, &inputs)),
                 Stmt::Declare { local, .. } => {
-                    self.unsupported(body.locals[*local].at, "a `cache`");
+                    self.unsupported(body.locals[*local].at, "this declaration of a node");
                 }
                 Stmt::Inject { local, at } => {
-                    if body.locals[*local].name == "out" {
+                    let injected = &body.locals[*local].name;
+                    if injected == "out" {
                         has_out = true;
+                    } else if let Some(written) = capability(injected) {
+                        capabilities.push(written);
                     } else {
-                        self.unsupported(*at, "an `inject` of a capability");
+                        self.unsupported(*at, &format!("an `inject` of `{injected}`"));
                     }
                 }
                 other => self.unsupported(at_of(other, &body.locals), "this statement of a node"),
@@ -1203,6 +1237,14 @@ impl Emitter<'_> {
         );
         if has_state {
             stopping.push("_state: _hg.STATE = None".to_string());
+        }
+        // A capability is given to the node, to its `start` and to its
+        // `stop`, each for that one call.
+        for (parameter, annotation) in &capabilities {
+            let written = format!("{parameter}: {annotation} = None");
+            parameters.push(written.clone());
+            lifecycle.push(written.clone());
+            stopping.push(written);
         }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
@@ -1430,7 +1472,7 @@ impl Emitter<'_> {
     fn place(&mut self, function: &Function, local: usize) -> String {
         let declared = &function.locals[local];
         match declared.kind {
-            LocalKind::State => format!("_state.{}", name(&declared.name)),
+            LocalKind::State | LocalKind::Cache => format!("_state.{}", name(&declared.name)),
             // TIME-7: "`inject out` exposes that same result for reads,
             // assignment".
             LocalKind::Inject if declared.name == "out" => {
@@ -1441,10 +1483,15 @@ impl Emitter<'_> {
                 }
                 "_output.value".to_string()
             }
-            LocalKind::Cache | LocalKind::Inject => {
-                self.unsupported(declared.at, "a `cache` or an injected capability");
-                "None".to_string()
-            }
+            // TIME-8: a capability is the parameter hgraph gives it
+            // as.
+            LocalKind::Inject => match capability(&declared.name) {
+                Some((parameter, _)) => parameter.to_string(),
+                None => {
+                    self.unsupported(declared.at, "this injected capability");
+                    "None".to_string()
+                }
+            },
             _ => name(&declared.name),
         }
     }
@@ -1990,8 +2037,40 @@ impl Emitter<'_> {
             } => self.construct(function, (*module, *declaration), arguments, value),
             // TYPE-3: a struct's fields are public, and read by name.
             ExprKind::Field { base, member } => {
+                // CAP-1: a property of a capability "is read as an
+                // ordinary value". It is the provider's to read, as a
+                // native function is: `_core.Clock_evaluation_time`.
+                if let Type::Named {
+                    name: native,
+                    module,
+                    declaration,
+                    kind: NamedKind::Native,
+                    ..
+                } = &base.ty
+                {
+                    let program = self.program;
+                    let property = match program.modules[*module].details.get(*declaration) {
+                        Some(Detail::Native(read)) => read.properties.get(*member),
+                        _ => None,
+                    };
+                    let read = property.map(|property| format!("{native}_{}", property.name));
+                    let core = Some(*module) == program.core();
+                    return match (property, read) {
+                        (Some(property), Some(read))
+                            if core && provided().any(|provided| provided == read) =>
+                        {
+                            self.natives = true;
+                            let base = self.expression(function, base);
+                            self.native_result(Some(&property.ty), format!("_core.{read}({base})"))
+                        }
+                        _ => {
+                            self.unsupported(value.at, "this property of a native type");
+                            "None".to_string()
+                        }
+                    };
+                }
                 let Some(field) = field_of(self.program, &base.ty, *member) else {
-                    // A property of a native value, or of a delta.
+                    // A property of a delta.
                     self.unsupported(value.at, "this member");
                     return "None".to_string();
                 };
@@ -2837,6 +2916,25 @@ impl Emitter<'_> {
         } else {
             None
         };
+        // NATIVE-7: a native function of core is the provider's too,
+        // `_core.fn_log`. It binds its own name (NATIVE-3), which the
+        // provider's own helpers are kept apart from by the `fn_`.
+        if let DeclarationKind::NativeFunction(Role::Value) = declared.kind {
+            let native = format!("fn_{}", declared.name);
+            let core = Some(module) == program.core();
+            let lifted = function.mode == Mode::Graph
+                && arguments
+                    .iter()
+                    .any(|argument| self.connects(function, &argument.value));
+            if !core || lifted || !provided().any(|provided| provided == native) {
+                self.unsupported(at, &format!("the native function `{}`", declared.name));
+                return "None".to_string();
+            }
+            self.natives = true;
+            let arguments = self.arguments(function, (module, declaration), signature, arguments);
+            let called = format!("_core.{native}({arguments})");
+            return self.native_result(signature.result.as_ref(), called);
+        }
         // What a native candidate is configured with: its provider's
         // function takes each generic value by its name.
         let options = match native {

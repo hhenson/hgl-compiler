@@ -1349,7 +1349,7 @@ fn a_form_not_written_yet_is_reported() {
             "    bid: f64\n",
             "}\n",
             "fn gated(value: i64, gate: bool) -> i64 {\n",
-            "    inject clock\n",
+            "    inject scheduler\n",
             "    when { return value }\n",
             "}\n",
             "fn maybe(value: i64?) -> i64 {\n",
@@ -3497,6 +3497,168 @@ const STOPS: &str = concat!(
     "}\n",
 );
 
+/// TIME-6: a `cache`. TIME-8, core's CAP-1 to CAP-3 and CAP-6: a node
+/// injects `logger`, `clock` and `global_state`, reads a capability's
+/// properties, gives one to a function, and reads and writes the store.
+const CAPABILITIES: &str = concat!(
+    "module demo.caps\n",
+    "\n",
+    "fn counted(value: i64) -> i64 {\n",
+    "    cache seen: i64 = 0\n",
+    "    inject logger\n",
+    "    when {\n",
+    "        seen += 1\n",
+    // A `%` in a message is text.
+    "        log_info(logger, \"seen 100% of it\")\n",
+    "        return seen\n",
+    "    }\n",
+    "    stop { if seen > 1 { log(logger, .debug, \"more than one\") } }\n",
+    "}\n",
+    "\n",
+    "fn stamped(value: i64) -> datetime {\n",
+    "    inject clock\n",
+    "    when { return clock.evaluation_time }\n",
+    "}\n",
+    "\n",
+    "fn next_step(value: i64) -> duration {\n",
+    "    inject clock\n",
+    "    when { return clock.next_cycle_evaluation_time - clock.evaluation_time }\n",
+    "}\n",
+    "\n",
+    "fn remembered(value: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    when {\n",
+    "        let before: i64 =\n",
+    "            if has(global_state, \"last\") { get<i64>(global_state, \"last\") } else { 0 }\n",
+    "        put(global_state, \"last\", value)\n",
+    "        return before\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn levelled(value: i64) -> bool {\n",
+    "    inject logger\n",
+    "    when { return logger.level == .debug || logger.level != .debug }\n",
+    "}\n",
+    "\n",
+    "test capabilities {\n",
+    "    assert eval(counted(value: [7, _, 7])) == [1, _, 2]\n",
+    "    assert eval(stamped(value: [1, _, 3])) == [earliest_start, _, earliest_start + 2us]\n",
+    "    assert eval(next_step(value: [1])) == [1us]\n",
+    // CRUN-7: a run's store is empty when its graph is built.
+    "    assert eval(remembered(value: [5, 6, _, 7])) == [0, 5, _, 6]\n",
+    "    assert eval(remembered(value: [8])) == [0]\n",
+    "    assert eval(levelled(value: [1])) == [true]\n",
+    "}\n",
+);
+
+/// A node that reads a key the store has not.
+const CAPABILITIES_FAIL: &str = concat!(
+    "module demo.caps.fails\n",
+    "fn absent(value: i64) -> i64 {\n",
+    "    inject global_state\n",
+    "    when { return get<i64>(global_state, \"nothing\") }\n",
+    "}\n",
+    "test an_absent_key_fails_the_node {\n",
+    "    let seen = eval(absent(value: [1]))\n",
+    "}\n",
+);
+
+/// TIME-6: "Cache is reconstructible node-local value data, initialized
+/// on every start": a field of the node's state, as a `state` is.
+/// TIME-8: a capability is the parameter hgraph gives it as, to the
+/// node, its `start` and its `stop`. CAP-1: a property is read through
+/// the provider; CAP-2: `log` is the provider's; CAP-3: the clock's
+/// properties; CAP-6: `get`, `has` and `put` are core's candidates for
+/// the store.
+#[test]
+fn a_cache_and_a_capability_are_the_nodes_own() {
+    let emitted = emit(&[("caps.hgl", CAPABILITIES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_caps/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.compute_node\n",
+            "def counted(value: _hg.TS[_py.int], _state: _hg.STATE = None, ",
+            "_logger: _hg.LOGGER = None) -> _hg.TS[_py.int]:\n",
+            "    _state.seen = _core.add__i64_i64(lhs=_state.seen, rhs=1)\n",
+            "    _hgl_4core.log_info(logger=_logger, message=\"seen 100% of it\")\n",
+            "    return _state.seen\n",
+        ),
+        concat!(
+            "@counted.start\n",
+            "def _start_counted(_state: _hg.STATE = None, _logger: _hg.LOGGER = None):\n",
+            "    _state.seen = 0\n",
+        ),
+        concat!(
+            "@counted.stop\n",
+            "def _stop_counted(value: _hg.TS[_py.int], _state: _hg.STATE = None, ",
+            "_logger: _hg.LOGGER = None):\n",
+            "    if _core.gt__T_T(lhs=_state.seen, rhs=1):\n",
+            "        _core.fn_log(logger=_logger, level=_hgl_4core.LogLevel[\"debug\"], ",
+            "message=\"more than one\")\n",
+        ),
+        concat!(
+            "def stamped(value: _hg.TS[_py.int], _clock: _hg.EvaluationClock = None) ",
+            "-> _hg.TS[_dt.datetime]:\n",
+            "    return _core.Clock_evaluation_time(_clock)\n",
+        ),
+        "def remembered(value: _hg.TS[_py.int], _store: _hg.GlobalState = None)",
+        "_core.get_GlobalState_str(store=_store, key=\"last\")",
+        "_core.has_GlobalState_str(store=_store, key=\"last\")",
+        "    _core.put_GlobalState_str_V(store=_store, key=\"last\", value=value.value)\n",
+        "_core.member(_hgl_4core.LogLevel, _core.Logger_level(_logger))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    // Core's `log_info` is a function of core's module, which calls
+    // the provider's `log`.
+    let core = emitted.text("_hgl/_m_core/__init__.py");
+    assert!(
+        core.contains(concat!(
+            "def log_info(logger, message):\n",
+            "    _core.fn_log(logger=logger, level=LogLevel[\"info\"], message=message)\n",
+        )),
+        "{core}"
+    );
+}
+
+/// TIME-8: `scheduler` and `alarm` are not written yet, and are
+/// reported where they are injected.
+#[test]
+fn a_capability_that_is_not_written_is_reported() {
+    let emitted = emit(&[(
+        "wakes.hgl",
+        concat!(
+            "module demo.wakes\n",
+            "fn woken(value: i64) -> i64 {\n",
+            "    inject scheduler\n",
+            "    when {\n",
+            "        schedule(scheduler, 1s)\n",
+            "        return value\n",
+            "    }\n",
+            "}\n",
+            "test wakes {\n",
+            "    let seen = eval(woken(value: [1]))\n",
+            "}\n",
+        ),
+    )]);
+    assert!(
+        emitted
+            .reported
+            .contains(&"wakes.hgl:3:12 target.unsupported".to_string()),
+        "{:?}",
+        emitted.reported
+    );
+    let blocked = emitted.blocked("wakes").expect("the test is not run");
+    assert!(
+        blocked.ends_with("the hgraph target does not write an `inject` of `scheduler` yet"),
+        "{blocked}"
+    );
+}
+
 /// A `stop` that fails where its guard holds.
 const STOP_FAILS: &str = concat!(
     "module demo.stops.fails\n",
@@ -3967,6 +4129,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("elements.hgl", ELEMENTS));
     files.push(("compare.hgl", COMPARE));
     files.push(("stops.hgl", STOPS));
+    files.push(("caps.hgl", CAPABILITIES));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -3989,13 +4152,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        58,
+        59,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
-         require, one on a caller of one, one on an instance of a caller's type, and one of \
-         each demo's"
+         require, one on a caller of one, one on an instance of a caller's type, one on \
+         capabilities, and one of each demo's"
     );
 }
 
@@ -4043,6 +4206,7 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("loops.hgl", LOOP_FAILS));
     files.push(("elements.hgl", ELEMENT_FAILS));
     files.push(("stops.hgl", STOP_FAILS));
+    files.push(("caps.hgl", CAPABILITIES_FAIL));
     files.push(("sets.hgl", SET_FAILS));
     files.push(("given.hgl", GIVEN_FAILS));
     let emitted = emit(&files);
@@ -4175,6 +4339,21 @@ fn a_failure_names_the_statement_that_failed() {
     );
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),
+        "{message}"
+    );
+
+    // CAP-6: "an absent key fails the node."
+    let absent = [emitted.test("an_absent_key_fails_the_node").0];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &absent);
+    let [Ran::Failed { at, message }] = ran.as_slice() else {
+        panic!("the test failed: {ran:?}");
+    };
+    assert_eq!(
+        at.map(|at| emitted.place(at)),
+        Some("caps.hgl:7:9".to_string())
+    );
+    assert!(
+        message.contains("HglError: the global store holds nothing under 'nothing'"),
         "{message}"
     );
 }
