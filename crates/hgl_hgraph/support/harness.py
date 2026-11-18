@@ -117,6 +117,9 @@ def _bounds(config, unstated):
             code="run.end_and_length",
         )
     start = unstated if start is None else start
+    # CRUN-3 reserves the epoch itself for `never`, even for an empty run.
+    if start < _EARLIEST_START:
+        raise _core.HglError("the run's start is before the earliest evaluation time")
     if length is not None:
         end = _core.add__datetime_duration(start, length)
     return start, end

@@ -1607,8 +1607,7 @@ const BOUNDED: &str = concat!(
     "    assert first(eval(pass(value: [7]), RunConfig(start: later))) == later\n",
     "    assert first(eval(pass(value: [7]))) == earliest_start\n",
     "    assert eval(pass(value: [1, 2, 3]), RunConfig(start: later, length: 2us)) == [1, 2]\n",
-    // A run may start at any instant: a trace's cells are counted from
-    // its run's start, however far that is from the earliest one.
+    // The cells of a run with a later start are counted from that start.
     "    let day: datetime = @2026-09-03T09:30:00Z\n",
     "    assert eval(pass(value: [1, _, 3]), RunConfig(start: day)) == [1, _, 3]\n",
     "    assert first(eval(pass(value: [7]), RunConfig(start: day))) == day\n",
@@ -5785,8 +5784,13 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
         ),
         ("an_earlier_expectation_differs_from_the_recording", None),
         (
-            "a_replay_cannot_publish_before_the_earliest_start",
+            "a_replay_cannot_publish_before_its_configured_start",
             Some("before the run's start"),
+        ),
+        ("the_first_evaluation_instant_is_a_valid_start", None),
+        (
+            "the_never_sentinel_cannot_start_an_empty_run",
+            Some("before the earliest evaluation time"),
         ),
         ("computed_nullable_and_mixed_keys", None),
         ("equal_computed_keys", Some("must strictly increase")),

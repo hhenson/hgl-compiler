@@ -7,30 +7,39 @@ fn relay(value: i64?) -> i64? {
 const fn first_time(seen: list<tuple<datetime, delta<i64?>>>) -> datetime => seen[0][0]
 
 test written_publications_preserve_absolute_instants {
-    let earlier = @1969-12-31T00:00:00Z
-    var seen = eval(relay(value: [0s: 1]))
-    seen = [earlier: 7]
-    assert first_time(seen) == earlier
+    let quoted_at = @2026-01-05T09:29:59Z
+    let opening = @2026-01-05T09:30:00Z
+    var seen = eval(relay(value: [0s: 1]), RunConfig(start: opening))
+    seen = [quoted_at: 7]
+    assert first_time(seen) == quoted_at
     seen = [3us: 7]
     assert first_time(seen) == earliest_start + 3us
 }
 
 test written_publications_require_ordered_keys {
-    let earlier = @1969-12-31T00:00:00Z
-    let repeated = earlier
+    let quoted_at = @2026-01-05T09:29:59Z
+    let repeated = quoted_at
     var seen = eval(relay(value: [0s: 1]))
-    seen = [earlier: 7, repeated: 9]
-    assert first_time(seen) == earlier
+    seen = [quoted_at: 7, repeated: 9]
+    assert first_time(seen) == quoted_at
 }
 
 test an_earlier_expectation_differs_from_the_recording {
-    let earlier = @1969-12-31T00:00:00Z
-    assert eval(relay(value: [0s: 7])) != [earlier: 7]
+    let opening = @2026-01-05T09:30:00Z
+    assert eval(relay(value: [0s: 7]), RunConfig(start: opening)) != [opening - 1us: 7]
 }
 
-test a_replay_cannot_publish_before_the_earliest_start {
-    let earlier = @1969-12-31T00:00:00Z
-    eval(relay(value: [earlier: 7]))
+test a_replay_cannot_publish_before_its_configured_start {
+    let opening = @2026-01-05T09:30:00Z
+    eval(relay(value: [opening - 1us: 7]), RunConfig(start: opening))
+}
+
+test the_first_evaluation_instant_is_a_valid_start {
+    assert eval(relay(value: [earliest_start: 7]), RunConfig(start: earliest_start)) == [0s: 7]
+}
+
+test the_never_sentinel_cannot_start_an_empty_run {
+    eval(relay(value: []), RunConfig(start: never, length: 0s))
 }
 
 test computed_nullable_and_mixed_keys {
