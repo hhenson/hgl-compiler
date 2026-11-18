@@ -257,3 +257,61 @@ fn a_function_with_a_var_parameter_is_not_lifted() {
         ]
     );
 }
+
+/// FN-15: a place "holds an ordinary value of the parameter's type".
+/// The call gives the place what the parameter holds when the function
+/// returns, so a place of a narrower type takes none: an `i64` place
+/// is given to no `i64?` parameter, though an `i64` is a value of an
+/// `i64?`, nor a struct's place to a parameter of its abstract parent.
+#[test]
+fn a_place_is_of_the_var_parameters_type() {
+    let checked = module(&format!(
+        "{DECLARED}{}",
+        concat!(
+            "abstract struct Shape {\n",
+            "    name: str\n",
+            "}\n",
+            "struct Circle: Shape {\n",
+            "    radius: f64\n",
+            "}\n",
+            "const fn reshape(var shape: Shape, other: Shape) {{ shape = other }}\n",
+            "native const fn grow<V>(var values: list<V>, item: V)\n",
+            // Line 17.
+            "const fn narrower() -> i64 {{\n",
+            "    var n: i64 = 1\n",
+            "    clear(n)\n",
+            "    return n\n",
+            "}}\n",
+            "const fn inherited(other: Shape) -> f64 {{\n",
+            "    var circle: Circle = Circle(name: \"c\", radius: 1.0)\n",
+            "    reshape(circle, other)\n",
+            "    return circle.radius\n",
+            "}}\n",
+            "const fn element() -> i64 {{\n",
+            "    var items: list<i64> = [1]\n",
+            "    clear(items[0])\n",
+            "    return items[0]\n",
+            "}}\n",
+            // Each of these is of the parameter's type.
+            "const fn same(other: Shape) -> i64 {{\n",
+            "    var n: i64? = 1\n",
+            "    clear(n)\n",
+            "    var shape: Shape = other\n",
+            "    reshape(shape, other)\n",
+            "    var names: list<str> = []\n",
+            "    grow(names, \"a\")\n",
+            "    var maybe: list<i64?> = []\n",
+            "    grow(maybe, 1)\n",
+            "    return 1\n",
+            "}}\n",
+        )
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:19:11 type/type.mismatch FN-15",
+            "m.hgl:24:13 type/type.mismatch FN-15",
+            "m.hgl:29:11 type/type.mismatch FN-15",
+        ]
+    );
+}

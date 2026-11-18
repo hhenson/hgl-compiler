@@ -4668,17 +4668,19 @@ impl<'a> Typer<'a> {
         else {
             return;
         };
-        let (module, declaration) = match callee {
+        let (module, declaration, generics) = match callee {
             Callee::Function {
                 module,
                 declaration,
+                generics,
                 ..
             }
             | Callee::Candidate {
                 module,
                 declaration,
+                generics,
                 ..
-            } => (*module, *declaration),
+            } => (*module, *declaration, generics),
             Callee::Required { .. } | Callee::Unread => return,
         };
         let program = self.program;
@@ -4690,6 +4692,14 @@ impl<'a> Typer<'a> {
             return;
         }
         let callee = &program.modules[module].declarations[declaration].name;
+        // What a parameter's type is at this call, the callee's generic
+        // parameters in place.
+        let own: Vec<Location> = signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        let map: Vec<(Location, &Argument)> = own.iter().copied().zip(generics).collect();
         let mut reports = Vec::new();
         for argument in arguments {
             let Some(parameter) = argument
@@ -4720,6 +4730,32 @@ impl<'a> Typer<'a> {
                 root = base;
             }
             let takes = format!("the `var` parameter `{}` of `{callee}`", parameter.name);
+            // "that holds an ordinary value of the parameter's type":
+            // the call gives the place what the parameter holds, so
+            // the two are one type. A place of `i64` takes no `i64?`
+            // back, though an `i64` is a value of `i64?`.
+            let taken = placed(substitute_within(&parameter.ty, &map), &own);
+            let held = &argument.value.ty;
+            let assignable = matches!(
+                &root.kind,
+                ExprKind::Local(local) if matches!(
+                    self.locals[*local].kind,
+                    LocalKind::Var | LocalKind::State | LocalKind::Cache
+                )
+            );
+            if assignable && whole(&taken) && whole(held) && *held != taken {
+                reports.push(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "this place is `{held}`, and {takes} is `{taken}`: the call gives \
+                             the place what the parameter holds, so the two are one type"
+                    ),
+                    "FN-15",
+                ));
+                continue;
+            }
             match &root.kind {
                 ExprKind::Local(local) => {
                     let declared = &self.locals[*local];

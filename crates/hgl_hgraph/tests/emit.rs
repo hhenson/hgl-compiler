@@ -3984,6 +3984,18 @@ const PLACES: &str = concat!(
     "        return seen * 100 + held\n",
     "    }\n",
     "}\n",
+    // The place is the one named when the call's arguments are
+    // evaluated: `items[i]` is `items[0]`, though the call moves `i`.
+    "const fn change(var index: i64, var item: i64) {\n",
+    "    index = 1\n",
+    "    item = 9\n",
+    "}\n",
+    "const fn moved() -> i64 {\n",
+    "    var i: i64 = 0\n",
+    "    var items: list<i64> = [5, 6]\n",
+    "    change(i, items[i])\n",
+    "    return items[0] * 100 + items[1] * 10 + i\n",
+    "}\n",
     "\n",
     "test places {\n",
     "    assert total([1, 2, 3]) == 6\n",
@@ -3995,6 +4007,7 @@ const PLACES: &str = concat!(
     "    var count: i64 = 1\n",
     "    bump(count, 4)\n",
     "    assert count == 5\n",
+    "    assert moved() == 961\n",
     "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
     "}\n",
 );
@@ -4056,6 +4069,13 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _given = both(left=a, right=b)\n",
             "    a = _given[1]\n",
             "    b = _given[2]\n",
+        ),
+        // An index of a place is evaluated once, before the call.
+        concat!(
+            "    _at_1 = i\n",
+            "    _given = change(index=i, item=_core.item(items, _at_1))\n",
+            "    i = _given[1]\n",
+            "    items = _core.with_item(items, _at_1, _given[2])\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(
