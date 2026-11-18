@@ -280,6 +280,66 @@ def entry(dictionary, key):
         raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
 
 
+def Clock_evaluation_time(clock):
+    """CAP-3: a clock's four properties, each read from hgraph's
+    `EvaluationClock`, which has them by the same names. An instant is
+    a `datetime` in UTC that names no zone, as hgraph has them."""
+    return clock.evaluation_time
+
+
+def Clock_now(clock):
+    return clock.now
+
+
+def Clock_cycle_time(clock):
+    return clock.cycle_time
+
+
+def Clock_next_cycle_evaluation_time(clock):
+    return clock.next_cycle_evaluation_time
+
+
+# CAP-2: core's `LogLevel` members, each with the level Python's
+# `logging` has for it, lowest first.
+_LOG_LEVELS = (("debug", 10), ("info", 20), ("warning", 30), ("error", 40))
+
+
+def Logger_level(logger):
+    """CAP-2: "`logger.level` is the logger's current level". The name
+    of the `LogLevel` member that a record must be at to be written: a
+    level above `error` writes none below it, and is `error`."""
+    level = logger.getEffectiveLevel()
+    for member, number in _LOG_LEVELS:
+        if level <= number:
+            return member
+    return "error"
+
+
+def fn_log(logger, level, message):
+    """CAP-2: `log(logger, level, message)` "writes one record of
+    `message` at `level`". The message is given as an argument of a
+    fixed format, so that a `%` in it is text."""
+    logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
+
+
+def get_GlobalState_str(store, key):
+    """CAP-6: the value under `key`; "an absent key fails the node"."""
+    try:
+        return store[key]
+    except KeyError:
+        raise HglError(f"the global store holds nothing under {key!r}") from None
+
+
+def has_GlobalState_str(store, key):
+    """CAP-6: "whether the key holds a value"."""
+    return key in store
+
+
+def put_GlobalState_str_V(store, key, value):
+    """CAP-6: "puts one there"."""
+    store[key] = value
+
+
 def get_dict_K__T__K(store, key):
     """Core's `get<K, T>(store: dict<K, T>, key: K) -> T?`: the value a
     dictionary has for a key, or null where it has none (ERR-6)."""

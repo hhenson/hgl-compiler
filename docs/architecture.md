@@ -1433,7 +1433,11 @@ only where the program reaches it, at core's source.
 | In a value function and a node's hooks, `for item in items`, `for key, value in entries`, `while condition` (CTRL-12) | `for item in items:`, `for key, value in entries.items():`, `while condition:` |
 | `switch selector { case label: ... default: ... }` there (CTRL-6) | `_selected_N = selector`, N the depth it is written at, then `if _selected_N == label:` for the first case, `elif` for each after, and `else:` with the `default`, or with `_core.unmatched(_selected_N)`, which fails |
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
-| `state name: T = value` | A field of the node's `STATE`, given its value in the node's `start` |
+| `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
+| `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
+| `clock.evaluation_time`, `logger.level` (CAP-1) | `_core.Clock_evaluation_time(_clock)`, and `_core.member(LogLevel, _core.Logger_level(_logger))`: a property of a native type is the provider's to read, named for the type and the property |
+| `log(logger, .info, message)`, a native function of core (NATIVE-7) | `_core.fn_log(logger=_logger, level=LogLevel["info"], message=message)`: the provider's function, `fn_` and the name it binds |
+| `get<i64>(global_state, "key")`, `has(...)`, `put(...)` (CAP-6) | Core's candidates for the store, the provider's as any native candidate: `_core.get_GlobalState_str(store=_store, key="key")` |
 | `stop { if valid(input) { ... } }` (TIME-5) | `@name.stop` on a function that takes the node's `const` parameters, its inputs as the node has them, and its state. An input is read there as in a `when`, `input.value` under `input.valid`. `start` is given no input |
 | `valid(x)`, `modified(x)`, `delta_value(x)` | `x.valid`, `x.modified`, `x.delta_value` |
 | A symbol or a call that selects a native candidate of core | A function of `_hgl._core_native`, named for the candidate and its parameter types: `add__i64_i64` |
@@ -1506,7 +1510,7 @@ candidate answers;
 a default of a temporal input; a pack parameter; a node that no input
 wakes, `modified([])`;
 `out` read in `stop`, which hgraph gives no lifecycle hook;
-`cache`, the `inject` of a capability, and sources; in a graph, an `if`
+the `inject` of `scheduler` or `alarm`, and sources; in a graph, an `if`
 and any expression but a name, a literal and a call; a pack in a lifted
 call; a temporal function called in a test outside an `eval`;
 a loop and a `switch` in a graph or a test;
