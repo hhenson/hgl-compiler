@@ -1406,9 +1406,12 @@ const APPLICATIONS: [(&str, &str); 7] = [
             "application demo.ticks.seeded\n",
             "use demo.ticks::{limited}\n",
             "const base: i64 = 2\n",
-            // UNIT-14: what sets the run's store, before the run.
+            // A value function written for each call of it (GEN-2).
+            "const fn sum<T>(a: T, b: T) -> T requires add_(T, T) -> T => a + b\n",
+            // UNIT-14: what sets the run's store, before the run. The
+            // store is `put`'s first parameter, wherever it is written.
             "inject global_state\n",
-            "put(global_state, \"limit\", base + 1)\n",
+            "put(key: \"limit\", store: global_state, value: sum(base, 1))\n",
             "eval(limited())\n",
         ),
     ),
@@ -1492,12 +1495,15 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     );
     // UNIT-14: what sets the run's store is a function of the store,
     // given to the run, which calls it before it builds the graph.
+    // The instance of `sum` its value calls is written, as one a body
+    // calls is (GEN-2).
     let seeded = emitted.text("_hgl/_m_demo/_m_ticks/_m_seeded/__init__.py");
+    assert!(seeded.contains("def _inst_sum__i64(a, b):\n"), "{seeded}");
     assert!(
         seeded.ends_with(concat!(
             "def _application_store(_store):\n",
-            "    _core.put_GlobalState_str_V(store=_store, key=\"limit\", ",
-            "value=_core.add__i64_i64(lhs=base(), rhs=1))\n",
+            "    _core.put_GlobalState_str_V(key=\"limit\", store=_store, ",
+            "value=_inst_sum__i64(a=base(), b=1))\n",
             "\n\n",
             "def _application():\n",
             "    return _harness.run(_hgl_4demo_5ticks.limited, _hgl_4core._inst_record__i64, ",

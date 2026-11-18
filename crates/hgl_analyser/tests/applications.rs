@@ -60,6 +60,9 @@ fn an_application_sets_its_runs_store_before_its_run() {
                 "inject global_state\n",
                 "put(global_state, \"limit\", base + 1)\n",
                 "put(global_state, \"venue\", \"XLON\")\n",
+                // The store is `put`'s first parameter, wherever its
+                // argument is written.
+                "put(key: \"pace\", store: global_state, value: 2s)\n",
                 "\n",
                 "eval(counted())\n",
             ),
@@ -67,7 +70,7 @@ fn an_application_sets_its_runs_store_before_its_run() {
     ]);
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
     let application = checked.program.module("app.limited.three").unwrap();
-    assert_eq!(application.store.len(), 3);
+    assert_eq!(application.store.len(), 4);
     // The statements are typed together: the store is the one local,
     // and each `put` a call of core's.
     let body = application.store_body.as_ref().expect("the store is set");
@@ -87,7 +90,7 @@ fn an_application_sets_its_runs_store_before_its_run() {
             )
         })
         .count();
-    assert_eq!(puts, 2);
+    assert_eq!(puts, 3);
     // A module has none, and neither has an application that writes
     // none.
     let module = checked.program.module("app.limited").unwrap();
@@ -132,7 +135,7 @@ fn a_statement_that_sets_no_store_is_rejected() {
                 // Another capability, and one beside the store.
                 "inject clock\n",
                 "inject global_state, logger\n",
-                // A call that is no `put`, and a `put` on no store.
+                // A call that is no `put`, and one on no store.
                 "has(global_state, \"limit\")\n",
                 "log_info(logger, \"set\")\n",
                 "put(global_state, \"limit\", 3)\n",

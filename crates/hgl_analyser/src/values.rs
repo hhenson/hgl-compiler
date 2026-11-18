@@ -1027,14 +1027,19 @@ impl<'a> Typer<'a> {
         };
         let put = Some(module) == self.program.core()
             && self.program.modules[module].declarations[declaration].name == "put";
-        let on_store = arguments.first().is_some_and(|argument| {
-            matches!(
-                &argument.value.kind,
-                ExprKind::Local(local)
-                    if self.locals[*local].kind == LocalKind::Inject
-                        && self.locals[*local].name == "global_state"
-            )
-        });
+        // The store is `put`'s first parameter, wherever its argument
+        // is written: `put(key: "limit", store: global_state, value: 3)`.
+        let on_store = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0))
+            .is_some_and(|argument| {
+                matches!(
+                    &argument.value.kind,
+                    ExprKind::Local(local)
+                        if self.locals[*local].kind == LocalKind::Inject
+                            && self.locals[*local].name == "global_state"
+                )
+            });
         put && on_store
     }
 
