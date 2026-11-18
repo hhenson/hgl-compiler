@@ -2867,24 +2867,37 @@ impl Emitter<'_> {
                     }
                     self.bound = before.clone();
                     let mut all = statements.to_vec();
-                    let given = gives(value);
-                    if let Some(given) = given.clone() {
+                    if let Some(given) = gives(value) {
                         all.push(given);
-                    }
-                    if ends {
-                        all = continued(&all, rest);
-                    }
-                    self.statements(function, &all, depth + 1);
-                    if given.is_none() && !always_returns(&all) {
-                        self.line(
-                            depth + 1,
-                            &(match &target {
-                                Some(target) => format!("{target} = {absent}"),
-                                None => format!("return {absent}"),
-                            }),
-                        );
-                        if let Some(local) = declared {
-                            self.bind(function, local);
+                        if ends {
+                            all = continued(&all, rest);
+                        }
+                        self.statements(function, &all, depth + 1);
+                    } else {
+                        // A branch with no value: its statements, the
+                        // absent value, and then what follows.
+                        if ends && nested_return(statements) {
+                            self.unsupported(
+                                *at,
+                                "a returning `if` or `switch` in a branch with no value of a `let`'s `if`",
+                            );
+                        }
+                        self.statements(function, statements, depth + 1);
+                        if !always_returns(statements) {
+                            self.line(
+                                depth + 1,
+                                &(match &target {
+                                    Some(target) => format!("{target} = {absent}"),
+                                    None => format!("return {absent}"),
+                                }),
+                            );
+                            if let Some(local) = declared {
+                                self.bind(function, local);
+                            }
+                            if ends {
+                                self.statements(function, rest, depth + 1);
+                                all = continued(statements, rest);
+                            }
                         }
                     }
                     reaches.push(!always_returns(&all));

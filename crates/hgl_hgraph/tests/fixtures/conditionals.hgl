@@ -370,3 +370,17 @@ test a_return_in_a_wiring_time_statement {
     assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [10, 2]
     assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [1, 2]
 }
+
+# The same with no `else`: the absent value is given before what follows.
+fn returned_with_no_else(price: i64, const wide: bool, const narrow: bool) -> i64? {
+    let taken = if wide {
+        if narrow { return price }
+        price
+    }
+    return taken
+}
+
+test an_absent_value_comes_before_the_rest {
+    assert eval(returned_with_no_else(price: [1, 2], wide: false, narrow: false)) == []
+    assert eval(returned_with_no_else(price: [1, 2], wide: true, narrow: false)) == [1, 2]
+}
