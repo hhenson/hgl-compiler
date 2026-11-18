@@ -445,7 +445,7 @@ fn an_exported_native_function_is_another_modules_to_call() {
 /// "`log(logger, level, message)` writes one record ... `log_debug`,
 /// `log_info`, `log_warning`, and `log_error` each call `log` at their
 /// level. `logger.level` is the logger's current level." CAP-3: a
-/// clock's four properties. CAP-4: a scheduler's two properties,
+/// clock's four properties. CAP-4: a scheduler's three properties,
 /// `un_schedule` and `reset`. CAP-5: an alarm "has no property".
 #[test]
 fn the_supplied_core_declares_the_capabilities() {
@@ -467,6 +467,7 @@ fn the_supplied_core_declares_the_capabilities() {
             "        let spent = clock.cycle_time\n",
             "        let next = clock.next_cycle_evaluation_time\n",
             "        let pending = scheduler.is_scheduled\n",
+            "        let now_due: bool = scheduler.is_scheduled_now\n",
             "        let due = scheduler.next_scheduled_time\n",
             "        un_schedule(scheduler)\n",
             "        un_schedule(scheduler, tag: \"poll\")\n",
@@ -488,8 +489,8 @@ fn the_supplied_core_declares_the_capabilities() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:26:26 name/member.unknown NATIVE-6",
-            "m.hgl:27:13 type/type.mismatch EXPR-5",
+            "m.hgl:27:26 name/member.unknown NATIVE-6",
+            "m.hgl:28:13 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(checked.prelude_names("m"), [""; 0]);
@@ -507,6 +508,7 @@ fn the_supplied_core_declares_the_capabilities() {
             "spent: duration",
             "next: datetime",
             "pending: bool",
+            "now_due: bool",
             "due: datetime?",
         ]
     );

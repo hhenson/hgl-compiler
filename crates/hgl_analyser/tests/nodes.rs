@@ -536,6 +536,55 @@ fn a_capability_is_used_and_not_retained() {
     );
 }
 
+/// TIME-9: "`scheduled()` is the handler selector for a wake by the
+/// node's scheduler or alarm. In a node that injects `scheduler` it is
+/// the scheduler's `is_scheduled_now` ... In a node that injects
+/// `alarm` it holds where the node is evaluated and no temporal input
+/// has ticked. A node that injects neither rejects it
+/// (`inject.no_scheduler`)." Core's CAP-4: `is_scheduled_now` is a
+/// `bool` property of the scheduler, read in a body too.
+#[test]
+fn scheduled_asks_the_scheduler_or_the_alarm_the_node_injects() {
+    let checked = module(concat!(
+        "fn sampled(price: f64, const every: duration = 1s) -> f64 {\n",
+        "    state last: f64 = 0.0\n",
+        "    inject scheduler\n",
+        "    start { schedule(scheduler, every) }\n",
+        "    when modified(price) && valid(price) { last = price }\n",
+        "    when scheduled() {\n",
+        "        schedule(scheduler, every)\n",
+        "        return last\n",
+        "    }\n",
+        "}\n",
+        "fn polled(const every: duration = 1s) -> bool {\n",
+        "    inject alarm\n",
+        "    start { schedule(alarm, every) }\n",
+        "    when scheduled() { return true }\n",
+        "}\n",
+        // The property the selector is, read as a value.
+        "fn due(price: f64) -> bool {\n",
+        "    inject scheduler\n",
+        "    start { schedule(scheduler, 1s) }\n",
+        "    when { return scheduler.is_scheduled_now }\n",
+        "}\n",
+        // Neither is injected: in a header, and in a body.
+        "fn neither(price: f64) -> f64 {\n",
+        "    inject clock\n",
+        "    when scheduled() { return price }\n",
+        "    when {\n",
+        "        if !scheduled() { return price }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:24:10 injectable/inject.no_scheduler TIME-9",
+            "m.hgl:26:13 injectable/inject.no_scheduler TIME-9",
+        ]
+    );
+}
+
 /// EXPR-3: "The place's root is a `var`, a `state`, a `cache`, or, in a
 /// `when`, `out` (TIME-7)." TIME-7: "`out` is read in a `when` and in
 /// `stop`, and written only in a `when`". TIME-8: a capability is not
