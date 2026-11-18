@@ -225,3 +225,19 @@ test a_nested_fallback_is_a_capture {
     assert eval(fallback_inside(outer: [true, false, _, true], inner: [false, false, true, false], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
         [10, 2, 3, 40]
 }
+
+# A wiring-time `if` in a branch keeps no binding by reading it: the
+# `var`, with no value before, is no input of the branch's graph.
+fn wired_inside(outer: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen: i64
+    if outer {
+        if wide { chosen = right }
+        return left
+    } else {
+        return right
+    }
+}
+
+test a_wiring_time_fallback_is_no_capture {
+    assert eval(wired_inside(outer: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
+}

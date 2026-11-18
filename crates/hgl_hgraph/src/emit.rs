@@ -542,7 +542,13 @@ fn reads_of(value: &Expr, assigned: &[usize], read: &mut Vec<usize>) {
 /// graph takes from outside. `assigned` holds the locals assigned on
 /// every path so far, and is grown with those the statements assign.
 /// Each branch of an `if` or a `switch` is scanned with its own copy.
-fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &mut Vec<usize>) {
+/// `connects` says whether a condition or a selector is a connection.
+fn reads_before_assigned(
+    statements: &[Stmt],
+    assigned: &mut Vec<usize>,
+    read: &mut Vec<usize>,
+    connects: &dyn Fn(&Expr) -> bool,
+) {
     use hgl_analyser::hir::{Node, walk_statement_nodes};
     for statement in statements {
         match statement {
@@ -558,7 +564,7 @@ fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &
                 reads_of(condition, assigned, read);
                 for branch in [Some(&**then), otherwise.as_deref()].into_iter().flatten() {
                     let statements = alternative_statements(Some(branch));
-                    reads_before_assigned(&statements, &mut assigned.clone(), read);
+                    reads_before_assigned(&statements, &mut assigned.clone(), read, connects);
                 }
             }
             Stmt::Switch {
@@ -573,7 +579,7 @@ fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &
                     .map(|case| case.body.as_slice())
                     .chain(default.as_deref())
                 {
-                    reads_before_assigned(body, &mut assigned.clone(), read);
+                    reads_before_assigned(body, &mut assigned.clone(), read, connects);
                 }
             }
             _ => walk_statement_nodes(std::slice::from_ref(statement), &mut |node| {
@@ -594,24 +600,27 @@ fn reads_before_assigned(statements: &[Stmt], assigned: &mut Vec<usize>, read: &
                 candidates.push(*local);
             }
         });
-        let branches = matches!(
-            statement,
-            Stmt::Switch { .. }
-                | Stmt::Expr(Expr {
-                    kind: ExprKind::If { .. },
-                    ..
-                })
-        );
+        // An `if` or a `switch` over a connection: one the emitter
+        // writes as `switch_`. One over an ordinary value is Python's
+        // `if`, which keeps no binding by reading it.
+        let temporal = match statement {
+            Stmt::Switch { selector, .. } => connects(selector),
+            Stmt::Expr(Expr {
+                kind: ExprKind::If { condition, .. },
+                ..
+            }) => connects(condition),
+            _ => false,
+        };
         for local in candidates {
             if assigned.contains(&local) {
                 continue;
             }
             if assigns_on_every_path(std::slice::from_ref(statement), local) {
                 assigned.push(local);
-            } else if branches {
-                // An `if` or a `switch` that may leave the local
-                // unassigned gives, on that path, the binding it had
-                // before (CTRL-14): a read of it.
+            } else if temporal {
+                // An `if` or a `switch` over a connection that may leave
+                // the local unassigned gives, on that path, the binding
+                // it had before (CTRL-14): a read of it.
                 read.push(local);
             }
         }
@@ -2993,7 +3002,9 @@ impl Emitter<'_> {
             // A read after the branch has assigned the local on every
             // path reads the branch's own binding: no capture.
             let mut assigned = Vec::new();
-            reads_before_assigned(&branch.statements, &mut assigned, &mut read);
+            reads_before_assigned(&branch.statements, &mut assigned, &mut read, &|value| {
+                self.connects(function, value)
+            });
             match &branch.tail {
                 Tail::Value(value) => {
                     value.walk_nodes(&mut visit);
