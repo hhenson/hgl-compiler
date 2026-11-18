@@ -4934,6 +4934,23 @@ impl Emitter<'_> {
                         .any(|argument| self.connects(function, &argument.value))
             }
             ExprKind::Widen(inner) => self.connects(function, inner),
+            // CTRL-13: an `if` "is a connection when its condition is
+            // one or either branch's value is", and a block is what
+            // its value is.
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                self.connects(function, condition)
+                    || self.connects(function, then)
+                    || otherwise
+                        .as_ref()
+                        .is_some_and(|otherwise| self.connects(function, otherwise))
+            }
+            ExprKind::Block {
+                value: Some(value), ..
+            } => self.connects(function, value),
             _ => false,
         }
     }
