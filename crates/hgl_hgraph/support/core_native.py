@@ -442,6 +442,24 @@ def put_GlobalState_str_V(store, key, value):
     store[key] = Held(value)
 
 
+def fn_append(values, item):
+    """LIST-1: `append(values, item)` "gives the place `values` the list
+    it held with `item` after its last entry".
+
+    `values` is a `var` parameter (the language's FN-15), so this gives
+    back the list the place is to hold, after a result it has none of.
+    A new list is made: "a value taken from the place before the call
+    is as it was" (LIST-3).
+    """
+    return (None, [*values, item])
+
+
+def fn_extend(values, items):
+    """LIST-2: "each entry of `items` after its last entry, in the
+    order `items` has them". A new list, as `fn_append` makes."""
+    return (None, [*values, *items])
+
+
 def get_dict_K__T__K(store, key):
     """Core's `get<K, T>(store: dict<K, T>, key: K) -> T?`: the value a
     dictionary has for a key, or null where it has none (ERR-6)."""

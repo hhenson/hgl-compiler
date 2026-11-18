@@ -165,6 +165,7 @@ const DEMO_PYTHON: &str = concat!(
     "import hgraph as _hg\n",
     "import _hgl._core_native as _core\n",
     "import _hgl._harness as _harness\n",
+    "import _hgl._m_core as _hgl_4core\n",
     "\n",
     "\n",
     "def doubled(value):\n",
@@ -196,12 +197,12 @@ const DEMO_PYTHON: &str = concat!(
     "\n",
     "\n",
     "def test_scales():\n",
-    "    seen = _harness.evaluate(wired, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, None, 2])\n",
+    "    seen = _harness.evaluate(wired, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, None, 2])\n",
     "    if not (_harness.same(seen, [1, None, 12])):\n",
     "        raise _py.AssertionError()\n",
-    "    if not (not _harness.same(_harness.evaluate(scaled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[5], factor=2), [])):\n",
+    "    if not (not _harness.same(_harness.evaluate(scaled, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[5], factor=2), [])):\n",
     "        raise _py.AssertionError()\n",
-    "    _harness.evaluate(sink, {\"value\": _hg.TS[_py.bool]}, None, value=[True])\n",
+    "    _harness.evaluate(sink, {\"value\": _hgl_4core._inst_replay__bool}, None, value=[True])\n",
 );
 
 #[test]
@@ -219,6 +220,9 @@ fn a_module_is_written_as_python() {
         [
             "_hgl/__init__.py",
             "_hgl/_m_demo/_m_scaling/__init__.py",
+            // Core, whose `replay` and `record` an eval's run is wired
+            // with.
+            "_hgl/_m_core/__init__.py",
             "_hgl/_core_native.py",
             "_hgl/_harness.py"
         ]
@@ -244,9 +248,9 @@ fn cores_scalar_eval_cases_are_written_whole() {
         "    if (a.valid and a.modified):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
         "def _start_count_publications(_state: _hg.STATE = None):\n    _state.count = 0\n",
-        "    if not (_harness.same(_harness.evaluate(pass_i64, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[None, 7, None, None]), [None, 7])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[None, 7, None, None]), [None, 7])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.same(_harness.evaluate(pass_str, {\"value\": _hg.TS[_py.str]}, _hg.TS[_py.str], value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_str, {\"value\": _hgl_4core._inst_replay__str}, _hgl_4core._inst_record__str, value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(python.contains(expected), "the module has:\n{expected}");
@@ -568,9 +572,9 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         // A node's configuration, in a graph and in an eval.
         "def offset(value: _hg.TS[_py.int], by: _py.int) -> _hg.TS[_py.int]:\n",
         "    return offset(value=value, by=10)\n",
-        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1], by=10), [11])):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1], by=10), [11])):\n",
         "        raise _py.AssertionError()\n",
-        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1], by=1), [2])):\n",
+        "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1], by=1), [2])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -1060,10 +1064,10 @@ fn no_two_names_are_one_python_name() {
             "    return _core.add__i64_i64(lhs=_value_doubled(value=value.value), rhs=1)\n",
         ),
         "def eight():\n    return _value_doubled(value=4)\n",
-        "    if not (_harness.same(_harness.evaluate(doubled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[4]), [9])):\n",
+        "    if not (_harness.same(_harness.evaluate(doubled, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[4]), [9])):\n",
         "        raise _py.AssertionError()\n",
         // An input named as the harness's own parameter is.
-        "    if not (_harness.same(_harness.evaluate(pass_, {\"target\": _hg.TS[_py.int]}, _hg.TS[_py.int], target=[1]), [1])):\n",
+        "    if not (_harness.same(_harness.evaluate(pass_, {\"target\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, target=[1]), [1])):\n",
         "        raise _py.AssertionError()\n",
     ] {
         assert!(
@@ -1213,6 +1217,9 @@ fn modules_nest_and_empty_forms_have_a_body() {
             "_hgl/__init__.py",
             "_hgl/_m_demo/__init__.py",
             "_hgl/_m_demo/_m_util/__init__.py",
+            // Core, whose `replay` and `record` an eval's run is wired
+            // with.
+            "_hgl/_m_core/__init__.py",
             // The harness, and the provider it imports.
             "_hgl/_core_native.py",
             "_hgl/_harness.py"
@@ -1338,8 +1345,8 @@ fn an_evals_configuration_is_given_to_the_harness() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_bounded/__init__.py");
     for expected in [
-        "_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, 2, 3, 4, 5], _config=",
-        "_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[7])",
+        "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, 2, 3, 4, 5], _config=",
+        "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7])",
     ] {
         assert!(
             python.contains(expected),
@@ -1539,7 +1546,7 @@ fn a_value_function_given_a_connection_is_lifted() {
         ),
         // An eval of a value function runs it lifted.
         concat!(
-            "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[1, None, 3]), [2, None, 6])):\n",
+            "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, None, 3]), [2, None, 6])):\n",
             "        raise _py.AssertionError()\n",
         ),
     ] {
@@ -1800,7 +1807,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         // A call names the instance for its types.
         "    return _inst_identity_sum__i64(lhs=a, rhs=b)\n",
         "    return _inst_scaled__3(value=value)\n",
-        "_harness.evaluate(_inst_scaled__4, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[2])",
+        "_harness.evaluate(_inst_scaled__4, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[2])",
     ] {
         assert!(
             python.contains(expected),
@@ -2104,17 +2111,24 @@ fn an_instance_that_is_not_written_is_reported() {
     )]);
     // The type of the input, at the parameter, and of the result, at
     // the function's name: once each for the one instance that has it,
-    // of the node and of the graph that calls it. Then at the eval,
-    // whose run is wired with that type.
+    // of the node and of the graph that calls it. Then in core, where
+    // the `replay` the eval's run is wired with for that type is
+    // declared.
     assert_eq!(
-        emitted.reported,
+        emitted.reported[..4],
         [
             "held.hgl:2:12 target.unsupported",
             "held.hgl:2:4 target.unsupported",
             "held.hgl:5:13 target.unsupported",
             "held.hgl:5:4 target.unsupported",
-            "held.hgl:10:16 target.unsupported",
         ]
+    );
+    let [in_core] = &emitted.reported[4..] else {
+        panic!("one more is reported: {:?}", emitted.reported);
+    };
+    assert!(
+        in_core.starts_with("<core>/core/core.hgl:") && in_core.ends_with(" target.unsupported"),
+        "{in_core}"
     );
     assert_eq!(emitted.blocked("whole"), None);
     let blocked = emitted.blocked("listed").expect("the test is not run");
@@ -2187,8 +2201,17 @@ fn a_candidate_with_a_body_is_a_function() {
     }
 
     // A program that uses nothing core writes in HGL has no file of
-    // core's.
-    let emitted = emit(&[("demo.hgl", DEMO)]);
+    // core's: an eval would, for its `replay` and `record`.
+    let emitted = emit(&[(
+        "plain.hgl",
+        concat!(
+            "module demo.plain\n",
+            "const fn doubled(value: i64) -> i64 => value * 2\n",
+            "test plain {\n",
+            "    assert doubled(2) == 4\n",
+            "}\n",
+        ),
+    )]);
     assert!(
         emitted
             .output
@@ -2688,7 +2711,7 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
         "    return _lift_1_eq__T_T(lhs=side, rhs=Side[\"hold\"])\n",
         // A trace of members.
         concat!(
-            "_harness.same(_harness.evaluate(flipped, {\"side\": _hg.TS[Side]}, _hg.TS[Side], side=[Side[\"buy\"], None, Side[\"sell\"], ",
+            "_harness.same(_harness.evaluate(flipped, {\"side\": _hgl_4core._inst_replay__demo_enums__Side}, _hgl_4core._inst_record__demo_enums__Side, side=[Side[\"buy\"], None, Side[\"sell\"], ",
             "Side[\"hold\"]]), [Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]])",
         ),
     ] {
@@ -4280,7 +4303,7 @@ fn a_nullable_is_a_value_that_may_be_unset() {
         "-> _hg.TS[_py.int | None]:\n    return _core.published(none_of(value=value.value))\n",
         // TST-6: `null` in a trace is a published null, and `_` silence.
         concat!(
-            "_harness.evaluate(read_back, {\"value\": _hg.TS[_py.int | None]}, _hg.TS[_py.int], ",
+            "_harness.evaluate(read_back, {\"value\": _hgl_4core._inst_replay__i64_}, _hgl_4core._inst_record__i64, ",
             "value=[_hg.Null, None, 7, _hg.Null, None])",
         ),
         "[7, _hg.Null, None, _hg.Null, 9]",
@@ -4321,6 +4344,133 @@ fn a_nullable_set_is_not_written_as_a_temporal_type() {
             "sets.hgl:5:4 target.unsupported",
         ]
     );
+}
+
+/// Core's LIST-1 to LIST-3: `append` and `extend` give a list more
+/// entries. Each takes its list as a `var` parameter, so the call
+/// assigns the place, and a value taken from it before is as it was.
+const LISTS: &str = concat!(
+    "module demo.lists\n",
+    "\n",
+    "fn first_gathered(value: i64) -> i64 {\n",
+    "    cache seen: list<i64> = []\n",
+    "    when {\n",
+    "        append(seen, value)\n",
+    "        return seen[0]\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "const fn grown(first: list<i64>, more: list<i64>) -> list<i64> {\n",
+    "    var entries: list<i64> = first\n",
+    "    extend(entries, more)\n",
+    "    append(entries, 0)\n",
+    "    return entries\n",
+    "}\n",
+    "\n",
+    "test lists {\n",
+    "    var entries: list<i64> = [1, 2]\n",
+    "    let before = entries\n",
+    "    append(entries, 3)\n",
+    "    extend(entries, before)\n",
+    "    extend(entries, [])\n",
+    "    assert before == [1, 2]\n",
+    "    assert entries == [1, 2, 3, 1, 2]\n",
+    "    assert grown([7], [8, 9]) == [7, 8, 9, 0]\n",
+    "    assert eval(first_gathered(value: [7, _, 9])) == [7, _, 7]\n",
+    "}\n",
+);
+
+/// LIST-1, LIST-2: `append` and `extend` are the provider's functions.
+/// LIST-3: each gives back the list its place is to hold, a new one,
+/// and the call assigns the place (FN-15).
+#[test]
+fn a_list_grows_through_cores_append_and_extend() {
+    let emitted = emit(&[("lists.hgl", LISTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_lists/__init__.py");
+    for expected in [
+        // A node's `cache` is the place.
+        concat!(
+            "    _given = _core.fn_append(values=_state.seen, item=value.value)\n",
+            "    _state.seen = _given[1]\n",
+        ),
+        concat!(
+            "    _given = _core.fn_extend(values=entries, items=more)\n",
+            "    entries = _given[1]\n",
+            "    _given = _core.fn_append(values=entries, item=0)\n",
+            "    entries = _given[1]\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// A generic node whose configuration is of its generic parameter:
+/// what `T` is at a call decides how the configuration is given.
+const KEPT: &str = concat!(
+    "module demo.tagged\n",
+    "\n",
+    "fn tagged<T>(value: i64, const tag: T) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn optional<T>(value: i64, const tag: T? = null) -> i64 {\n",
+    "    when { return value }\n",
+    "}\n",
+    "fn wired(value: i64, const tags: list<i64>) -> i64 {\n",
+    "    return tagged<list<i64>>(value, tags)\n",
+    "}\n",
+    "fn defaulted(value: i64) -> i64 {\n",
+    "    return optional<list<i64>>(value)\n",
+    "}\n",
+    "\n",
+    "test kept {\n",
+    "    assert eval(wired(value: [7, _, 9], tags: [1, 2])) == [7, _, 9]\n",
+    "    assert eval(defaulted(value: [7])) == [7]\n",
+    "    assert eval(tagged<list<i64>>(value: [7], tag: [1, 2])) == [7]\n",
+    "    assert eval(tagged<dict<str, i64>>(value: [7], tag: [\"a\": 1])) == [7]\n",
+    "    assert eval(tagged<i64>(value: [7], tag: 1)) == [7]\n",
+    "    assert eval(optional<tuple<i64, str>>(value: [7])) == [7]\n",
+    "}\n",
+);
+
+/// GEN-2: a generic temporal function is written once for each set of
+/// generic arguments, and its configuration is of the type the
+/// arguments make it. A list, a tuple or a dictionary is given to a
+/// node inside the provider's `Held`, so a parameter declared a `T` is
+/// given inside one where `T` is a list, and as it is where `T` is an
+/// `i64`: by a graph's call, by an eval, and where a default stands in
+/// for an argument left out.
+#[test]
+fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
+    let emitted = emit(&[("tagged.hgl", KEPT)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
+    for expected in [
+        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(tags))\n",
+        "    return _inst_optional__list_i64_(value=value, tag=_core.Held(None))\n",
+        // The node written for a list takes it out; the one for an
+        // `i64` has nothing to take out.
+        concat!(
+            "def _inst_tagged__list_i64_(value: _hg.TS[_py.int], tag: _py.object) -> _hg.TS[_py.int]:\n",
+            "    tag = tag.value\n",
+        ),
+        concat!(
+            "def _inst_tagged__i64(value: _hg.TS[_py.int], tag: _py.int) -> _hg.TS[_py.int]:\n",
+            "    return value.value\n",
+        ),
+        "value=[7], tag=_core.Held([1, 2]))",
+        "value=[7], tag=_core.Held({\"a\": 1}))",
+        "_harness.evaluate(_inst_tagged__i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=1)",
+        "_harness.evaluate(_inst_optional__tuple_i64__str_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=_core.Held(None))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
 }
 
 /// A `stop` that fails where its guard holds.
@@ -4490,8 +4640,8 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
             "added=_py.frozenset((joined,)), tp=_py.int)\n",
         ),
-        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hg.TS[_py.int]}, _hg.TSS[_py.int], command=[0]), [])):\n",
-        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hg.TS[_py.int]}, _hg.TSS[_py.int], command=[1, 3]), [",
+        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0]), [])):\n",
+        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3]), [",
     ] {
         assert!(
             python.contains(expected),
@@ -4561,8 +4711,8 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
     let python = emitted.text("_hgl/_m_demo/_m_given/__init__.py");
     for expected in [
         // `pass` is a word of Python's, and is written `pass_`.
-        "ticks(seen=_harness.publications(_harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[7, None, 7, 9])))",
-        "    seen = _harness.evaluate(pass_, {\"value\": _hg.TS[_py.int]}, _hg.TS[_py.int], value=[None, 1, None, 2])\n",
+        "ticks(seen=_harness.publications(_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7, None, 7, 9])))",
+        "    seen = _harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[None, 1, None, 2])\n",
         "total(seen=_harness.publications(seen))",
     ] {
         assert!(
@@ -4797,6 +4947,8 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("sources.hgl", SOURCES));
     files.push(("places.hgl", PLACES));
     files.push(("nullable.hgl", NULLABLE));
+    files.push(("lists.hgl", LISTS));
+    files.push(("tagged.hgl", KEPT));
     files.push(("sets.hgl", SETS));
     files.push(("given.hgl", GIVEN));
     files.extend(MODULES);
@@ -4819,13 +4971,13 @@ fn the_generated_tests_pass_on_hgraph() {
     assert_eq!(not_passed, Vec::<String>::new());
     assert_eq!(
         ran.len(),
-        62,
+        64,
         "eight of core's, six on endpoints, seven on structs, two on loops, two on elements, two \
          on enums of one name, two on constants, one on durations, one on raises, one on \
          instants, one on a duration divided, one on a bounded run, one on temporal \
          candidates, one on generic temporal functions, one on value functions that \
          require, one on a caller of one, one on an instance of a caller's type, one on \
-         capabilities, one on sources, one on `var` parameters, one on nullables, and one of each demo's"
+         capabilities, one on sources, one on `var` parameters, one on nullables, one on lists, one on configuration of a generic type, and one of each demo's"
     );
 }
 

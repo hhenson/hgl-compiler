@@ -1247,6 +1247,12 @@ impl Emitter<'_> {
                 format!("_py.frozenset[{element}]")
             });
         }
+        // A list, a tuple or a dictionary that is a node's configuration
+        // is given to hgraph inside an object it keeps as it is
+        // (`held`): to hgraph it is an object.
+        if !temporal && held(ty) {
+            return Some("_py.object".to_string());
+        }
         // TYPE-14: "`T?` denotes an ordinary value that is either a T
         // or null". hgraph has a value that holds one `T` or is unset
         // where the type under `TS[...]` is `T | None`, and a tick of
@@ -1543,6 +1549,7 @@ impl Emitter<'_> {
             &format!("def {python}({}){returns}:", parameters.join(", ")),
         );
         let before = self.text.len();
+        self.unheld(signature);
         // An endpoint as the node's code names it: an input by its
         // name, and the node's own output as hgraph's `_output`.
         let endpoint = |local: usize| {
@@ -1613,6 +1620,7 @@ impl Emitter<'_> {
             self.line(0, &format!("@{python}.start"));
             self.line(0, &format!("def _start_{python}({lifecycle}):"));
             let before = self.text.len();
+            self.unheld(signature);
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
@@ -1634,6 +1642,7 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, &format!("@{python}.stop"));
             self.line(0, &format!("def _stop_{python}({stopping}):"));
+            self.unheld(signature);
             self.block(&stop_hook, stop, 1);
         }
     }
@@ -1777,6 +1786,7 @@ impl Emitter<'_> {
         self.line(0, "");
         self.line(0, &format!("@{node}.start"));
         self.line(0, &format!("def _start_{node}({hooks}):"));
+        self.unheld(signature);
         for (local, value) in &states {
             let field = name(&body.locals[*local].name);
             let value = match value {
@@ -1810,12 +1820,22 @@ impl Emitter<'_> {
             self.line(0, "");
             self.line(0, &format!("@{node}.stop"));
             self.line(0, &format!("def _stop_{node}({hooks}):"));
+            self.unheld(signature);
             self.block(&stop_hook, stop, 1);
         }
 
         // The graph a call names: the node, woken once as it starts.
+        // Configuration the node keeps is given to it inside an object
+        // hgraph keeps as it is.
         let mut wired = vec!["_hg.const(True)".to_string()];
-        wired.extend(names);
+        wired.extend(signature.parameters.iter().map(|parameter| {
+            let python = name(&parameter.name);
+            if held(&parameter.ty) {
+                format!("_core.Held({python})")
+            } else {
+                python
+            }
+        }));
         self.line(0, "");
         self.line(0, "");
         self.line(0, "@_hg.graph");
@@ -2511,7 +2531,9 @@ impl Emitter<'_> {
                 self.unsupported(value.at, "a run in real time");
                 "None".to_string()
             }
-            ExprKind::Eval { call, config, .. } => self.eval(function, call, config.as_deref()),
+            ExprKind::Eval { call, config, .. } => {
+                self.eval(function, call, &value.ty, config.as_deref())
+            }
             // TST-16: "A trace given to a `const fn` is an ordinary
             // value there: ... a `list<tuple<datetime, delta<T>>>`, one
             // tuple for each publication". The harness makes it of the
@@ -2973,15 +2995,54 @@ impl Emitter<'_> {
         &mut self,
         function: &Function,
         callee: (usize, usize),
+        generics: &[GenericArgument],
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
+        // A node keeps its configuration: a list, a tuple or a
+        // dictionary is given to it inside an object hgraph keeps as
+        // it is. What a parameter is of is read from the instance the
+        // call names, where the node is written by instance: a
+        // parameter declared a `T` is a list where `T` is one (GEN-2),
+        // and the node written for it takes the list out.
+        let node = self.is_node(callee);
+        let kept: Vec<bool> = {
+            let instances = self.instances;
+            let instance = instances
+                .instanced(self.program, callee.0, callee.1)
+                .then(|| instances.find(self.program, callee, generics))
+                .flatten();
+            let taken = instance.map_or(signature, |instance| &instance.signature);
+            signature
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    let ty = taken
+                        .parameters
+                        .get(index)
+                        .map_or(&parameter.ty, |parameter| &parameter.ty);
+                    node && parameter.constant && held(ty)
+                })
+                .collect()
+        };
+        if kept.contains(&true) {
+            self.natives = true;
+        }
+        let kept = |index: usize, value: String| {
+            if kept[index] {
+                format!("_core.Held({value})")
+            } else {
+                value
+            }
+        };
         let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
-                let parameter = signature.parameters.get(argument.parameter?)?;
+                let index = argument.parameter?;
+                let parameter = signature.parameters.get(index)?;
                 let value = self.expression(function, &argument.value);
-                Some(format!("{}={value}", name(&parameter.name)))
+                Some(format!("{}={}", name(&parameter.name), kept(index, value)))
             })
             .collect();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -2992,10 +3053,37 @@ impl Emitter<'_> {
                 continue;
             }
             if let Some(value) = self.left_out(callee, index, parameter) {
-                written.push(format!("{}={value}", name(&parameter.name)));
+                written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
             }
         }
         written.join(", ")
+    }
+
+    /// True when `callee`, a module and a declaration of it, is written
+    /// as an hgraph node that a call names: a temporal function with a
+    /// runtime body that is no source. A source's name is the graph
+    /// that wires its node.
+    fn is_node(&self, (module, declaration): (usize, usize)) -> bool {
+        let declared_in = &self.program.modules[module];
+        declared_in.declarations[declaration].kind.role() == Some(Role::Temporal)
+            && declared_in.phases.get(declaration).copied().flatten() == Some(Phase::Node)
+            && declared_in
+                .bodies
+                .get(declaration)
+                .and_then(Option::as_ref)
+                .is_some_and(|body| !yields(&body.statements))
+    }
+
+    /// The lines that take a node's kept configuration out of the
+    /// objects it was given in, at the head of the node, its `start`
+    /// or its `stop`: `items = items.value`.
+    fn unheld(&mut self, signature: &Signature) {
+        for parameter in &signature.parameters {
+            if parameter.constant && held(&parameter.ty) {
+                let python = name(&parameter.name);
+                self.line(1, &format!("{python} = {python}.value"));
+            }
+        }
     }
 
     /// What parameter `index` of the function `callee` is given when a
@@ -3217,7 +3305,13 @@ impl Emitter<'_> {
                         .annotation(ty, false, at)
                         .unwrap_or_else(|| "_py.object".to_string());
                     parameters.push(format!("{python}: {annotation}"));
-                    passed.push(format!("{python}={python}"));
+                    // Configuration the node keeps comes inside an
+                    // object hgraph keeps as it is.
+                    if held(ty) {
+                        passed.push(format!("{python}={python}.value"));
+                    } else {
+                        passed.push(format!("{python}={python}"));
+                    }
                 }
                 None => {
                     if let Some(value) = self.left_out(target, index, parameter) {
@@ -3294,11 +3388,20 @@ impl Emitter<'_> {
                 self.unsupported(argument.value.at, "an argument of a pack in a lifted call");
                 continue;
             };
-            bound[index] = Some(match input(self, &argument.value) {
+            let taken = match input(self, &argument.value) {
                 Some(ty) => Bound::Input(ty),
                 None => Bound::Configuration(argument.value.ty.clone()),
-            });
+            };
             let value = self.expression(function, &argument.value);
+            // A lifted node keeps its configuration, as any node does.
+            let value = match &taken {
+                Bound::Configuration(ty) if held(ty) => {
+                    self.natives = true;
+                    format!("_core.Held({value})")
+                }
+                _ => value,
+            };
+            bound[index] = Some(taken);
             written.push(format!("{}={value}", name(&parameter.name)));
         }
         (written, bound)
@@ -3488,7 +3591,13 @@ impl Emitter<'_> {
                 return "None".to_string();
             }
             self.natives = true;
-            let arguments = self.arguments(function, (module, declaration), signature, arguments);
+            let arguments = self.arguments(
+                function,
+                (module, declaration),
+                generics,
+                signature,
+                arguments,
+            );
             let called = format!("_core.{native}({arguments})");
             return self.native_result(signature.result.as_ref(), called);
         }
@@ -3528,7 +3637,13 @@ impl Emitter<'_> {
             // an error, which Python's own `+` would not make it: the
             // provider's function does.
             self.natives = true;
-            let arguments = self.arguments(function, (module, declaration), signature, arguments);
+            let arguments = self.arguments(
+                function,
+                (module, declaration),
+                generics,
+                signature,
+                arguments,
+            );
             let arguments: Vec<String> = [arguments]
                 .into_iter()
                 .filter(|written| !written.is_empty())
@@ -3542,13 +3657,19 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         let python = self.called_name((module, declaration), generics, at);
-        let arguments = self.arguments(function, (module, declaration), signature, arguments);
+        let arguments = self.arguments(
+            function,
+            (module, declaration),
+            generics,
+            signature,
+            arguments,
+        );
         format!("{python}({arguments})")
     }
 
     /// `eval(target, ...)`: the harness's `evaluate`, given the target,
-    /// the types its run is wired with ([`Emitter::run_types`]), and
-    /// each argument by its parameter's name.
+    /// what its run is wired with ([`Emitter::run_wired`]), and each
+    /// argument by its parameter's name.
     ///
     /// The harness does the rest, as core has an eval: each dense trace
     /// becomes a replay list (CEVAL-2), which a replay publishes
@@ -3561,7 +3682,13 @@ impl Emitter<'_> {
     /// `_config`, a name no parameter has, so that it is evaluated
     /// after the call's arguments, as EXPR-13 has them. The harness
     /// reads its `start`, `end` and `length`.
-    fn eval(&mut self, function: &Function, call: &Expr, config: Option<&Expr>) -> String {
+    fn eval(
+        &mut self,
+        function: &Function,
+        call: &Expr,
+        ty: &Type,
+        config: Option<&Expr>,
+    ) -> String {
         let ExprKind::Call {
             callee:
                 Callee::Function {
@@ -3610,17 +3737,7 @@ impl Emitter<'_> {
                 signature.result.as_ref(),
                 call.at,
             );
-            // The lifted node's inputs are the parameters given traces.
-            let inputs: Vec<(String, Type)> = signature
-                .parameters
-                .iter()
-                .zip(&bound)
-                .filter_map(|(parameter, bound)| match bound {
-                    Some(Bound::Input(ty)) => Some((name(&parameter.name), ty.clone())),
-                    _ => None,
-                })
-                .collect();
-            let run = self.run_types(&inputs, signature.result.as_ref(), call.at);
+            let run = self.run_wired(call, ty);
             let mut given = vec![node, run];
             given.extend(written);
             if let Some(config) = config {
@@ -3628,21 +3745,15 @@ impl Emitter<'_> {
             }
             return format!("_harness.evaluate({})", given.join(", "));
         }
-        // GEN-2: a target written by instance is run as its instance,
-        // whose types name no generic parameter.
-        let instances = self.instances;
-        let run_signature = instances
-            .find(self.program, (*module, *declaration), generics)
-            .map_or(signature, |instance| &instance.signature);
-        let inputs: Vec<(String, Type)> = run_signature
-            .parameters
-            .iter()
-            .filter(|parameter| !parameter.constant)
-            .map(|parameter| (name(&parameter.name), parameter.ty.clone()))
-            .collect();
-        let run = self.run_types(&inputs, run_signature.result.as_ref(), call.at);
+        let run = self.run_wired(call, ty);
         let target = self.called_name((*module, *declaration), generics, call.at);
-        let arguments = self.arguments(function, (*module, *declaration), signature, arguments);
+        let arguments = self.arguments(
+            function,
+            (*module, *declaration),
+            generics,
+            signature,
+            arguments,
+        );
         let mut given = vec![target, run];
         if !arguments.is_empty() {
             given.push(arguments);
@@ -3653,29 +3764,45 @@ impl Emitter<'_> {
         format!("_harness.evaluate({})", given.join(", "))
     }
 
-    /// What the harness is told of an eval's target, to wire its run
-    /// (core's CEVAL-1: "core's `replay` wired to each temporal input of
-    /// the target, and the target's result as the entry's"): the hgraph
-    /// type of each temporal input by its name, `{"value": _hg.TS[int]}`,
-    /// and then that of the result, or `None` where it has none.
-    fn run_types(
-        &mut self,
-        inputs: &[(String, Type)],
-        result: Option<&Type>,
-        at: Location,
-    ) -> String {
-        let inputs: Vec<String> = inputs
+    /// What the harness wires the run of the eval that takes `call`
+    /// with; `ty` is the eval's own type. Core's CEVAL-1: "core's
+    /// `replay` wired to each temporal input of the target, and the
+    /// target's result as the entry's", which the run records (CRUN-8).
+    ///
+    /// Core has `replay` and `record` as HGL, each for any type, so
+    /// each is written for the type it is of here (GEN-2): `replay`
+    /// for each input the eval gives a trace, by the input's name,
+    /// `{"value": _inst_replay__i64}`, and then `record` for the
+    /// target's result, or `None` where it has none.
+    fn run_wired(&mut self, call: &Expr, ty: &Type) -> String {
+        let at = call.at;
+        let program = self.program;
+        let Some(wiring) = crate::instances::run_wiring(program, call, ty) else {
+            self.unsupported(at, "this eval");
+            return "{}, None".to_string();
+        };
+        let instance =
+            |emitter: &mut Self, function: &str, of: &Type| match crate::instances::core_function(
+                program, function,
+            ) {
+                Some(found) => emitter.called_name(found, &[GenericArgument::Type(of.clone())], at),
+                None => {
+                    emitter.unsupported(at, &format!("an eval, with no `{function}` in core"));
+                    "None".to_string()
+                }
+            };
+        let inputs: Vec<String> = wiring
+            .inputs
             .iter()
-            .map(|(input, ty)| {
-                let annotation = self
-                    .annotation(ty, true, at)
-                    .unwrap_or_else(|| "_py.object".to_string());
-                format!("{}: {annotation}", string(input))
+            .map(|(input, of)| {
+                let replay = instance(self, "replay", of);
+                format!("{}: {replay}", string(&name(input)))
             })
             .collect();
-        let result = result
-            .and_then(|result| self.annotation(result, true, at))
-            .unwrap_or_else(|| "None".to_string());
+        let result = match &wiring.result {
+            Some(of) => instance(self, "record", of),
+            None => "None".to_string(),
+        };
         format!("{{{}}}, {result}", inputs.join(", "))
     }
 
@@ -3909,6 +4036,18 @@ fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Me
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True for a type of configuration a node is given inside an object
+/// hgraph keeps as it is: a list, a tuple or a dictionary, nullable or
+/// not. hgraph makes a value of its own of a node's configuration, and
+/// has none for some of what one of these may hold, a set's delta say.
+fn held(ty: &Type) -> bool {
+    match ty {
+        Type::Nullable(inner) => held(inner),
+        Type::List { .. } | Type::Tuple(_) | Type::Dict { .. } => true,
+        _ => false,
+    }
 }
 
 /// True for a type written `T?` (TYPE-14).

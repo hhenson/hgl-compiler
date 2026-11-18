@@ -32,13 +32,20 @@
 //! function written by instance with its own generic parameters, which
 //! are known only in an instance of it.
 //!
+//! An eval asks for instances too: its run is wired with core's
+//! `replay` for each input it gives a trace and core's `record` for
+//! its target's result (core's CEVAL-1), each written for the type it
+//! is of.
+//!
 //! An application's run statement is not written yet, and is not read
 //! here.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, walk_statements};
-use hgl_analyser::{Argument as GenericArgument, Detail, Program, Role, Signature};
+use hgl_analyser::{
+    Argument as GenericArgument, DeclarationKind, Detail, Program, Role, Signature, Type,
+};
 
 use crate::emit::canonical_argument;
 
@@ -83,6 +90,75 @@ struct Asked {
     generics: Vec<GenericArgument>,
     /// What answers each requirement it states there.
     requirements: Vec<Answer>,
+}
+
+/// What an eval's run is wired with (core's CEVAL-1: "core's `replay`
+/// wired to each temporal input of the target, and the target's result
+/// as the entry's").
+pub(crate) struct Wiring {
+    /// Each temporal input the eval gives a trace: its parameter's
+    /// name, and the type the input is of.
+    pub(crate) inputs: Vec<(String, Type)>,
+    /// The type of the target's result, where it has one.
+    pub(crate) result: Option<Type>,
+}
+
+/// What the run of the eval that takes `call` is wired with; `eval` is
+/// the eval's own type, a trace of what the target publishes. `None`
+/// where `call` is no call of a function.
+///
+/// A trace's cell is the delta of what is published (the language's
+/// TST-5), so the type published is read back from it: a scalar is its
+/// own delta, and a set's and a nullable's delta name the type they
+/// are of.
+pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
+    let ExprKind::Call {
+        callee:
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            },
+        arguments,
+        ..
+    } = &call.kind
+    else {
+        return None;
+    };
+    let Some(Detail::Callable(signature)) = program.modules[*module].details.get(*declaration)
+    else {
+        return None;
+    };
+    let published = |trace: &Type| match trace {
+        Type::Trace { cell, .. } => Some(match &**cell {
+            Type::Delta(of) => (**of).clone(),
+            other => other.clone(),
+        }),
+        _ => None,
+    };
+    let inputs = arguments
+        .iter()
+        .filter_map(|argument| {
+            let parameter = signature.parameters.get(argument.parameter?)?;
+            Some((parameter.name.clone(), published(&argument.value.ty)?))
+        })
+        .collect();
+    Some(Wiring {
+        inputs,
+        result: published(eval),
+    })
+}
+
+/// The temporal function `name` of core's module: `replay`, `record`.
+pub(crate) fn core_function(program: &Program, name: &str) -> Option<(usize, usize)> {
+    let core = program.core()?;
+    let declaration = program.modules[core]
+        .declarations
+        .iter()
+        .position(|declared| {
+            declared.name == name && declared.kind == DeclarationKind::Function(Role::Temporal)
+        })?;
+    Some((core, declaration))
 }
 
 /// True for a temporal function, or a temporal candidate of an
@@ -294,11 +370,35 @@ impl Instances {
         instances
     }
 
-    /// The instance the call `value` asks for, when it is the call of a
-    /// declaration that is written by instance.
-    fn asks(&self, program: &Program, value: &Expr) -> Option<Asked> {
+    /// The instances `value` asks for: the one the call of a
+    /// declaration that is written by instance names, and for an eval
+    /// the ones its run is wired with, core's `replay` for each input
+    /// it gives a trace and core's `record` for its target's result
+    /// (core's CEVAL-1).
+    fn asks(&self, program: &Program, value: &Expr) -> Vec<Asked> {
+        if let ExprKind::Eval { call, .. } = &value.kind {
+            let Some(wiring) = run_wiring(program, call, &value.ty) else {
+                return Vec::new();
+            };
+            let of = |function: Option<(usize, usize)>, ty: &Type| {
+                function.map(|(module, declaration)| Asked {
+                    module,
+                    declaration,
+                    generics: vec![GenericArgument::Type(ty.clone())],
+                    requirements: Vec::new(),
+                })
+            };
+            let replay = core_function(program, "replay");
+            let record = core_function(program, "record");
+            return wiring
+                .inputs
+                .iter()
+                .filter_map(|(_, ty)| of(replay, ty))
+                .chain(wiring.result.as_ref().and_then(|ty| of(record, ty)))
+                .collect();
+        }
         let ExprKind::Call { callee, .. } = &value.kind else {
-            return None;
+            return Vec::new();
         };
         let (Callee::Function {
             module,
@@ -314,15 +414,17 @@ impl Instances {
             ..
         }) = callee
         else {
-            return None;
+            return Vec::new();
         };
-        self.instanced(program, *module, *declaration)
-            .then(|| Asked {
-                module: *module,
-                declaration: *declaration,
-                generics: generics.clone(),
-                requirements: requirements.clone(),
-            })
+        if !self.instanced(program, *module, *declaration) {
+            return Vec::new();
+        }
+        vec![Asked {
+            module: *module,
+            declaration: *declaration,
+            generics: generics.clone(),
+            requirements: requirements.clone(),
+        }]
     }
 
     /// The instances the calls in `statements` ask for, in the order

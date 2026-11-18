@@ -1432,7 +1432,7 @@ only where the program reaches it, at core's source.
 | In a graph, such a call given no connection | The call itself, made where the graph is built |
 | `eval` of a value function | The function lifted the same way, each trace an input |
 | A temporal parameter | `name: _hg.TS[type]`; in a hook its payload is `name.value` |
-| A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph |
+| A `const` parameter of a temporal function | A scalar parameter, of the node and of its `start` and `stop`, which are functions of their own to hgraph. One that is a list, a tuple or a dictionary is an `object` to hgraph: a call of the node gives it inside `_core.Held(...)`, and each of the three functions takes it out first, `items = items.value`. Its type is the instance's: a parameter declared a `T` is given so where `T` is a list |
 | A value function's parameter written `T?` | The parameter as any other. A call that leaves it out gives it `None` (UNIT-8) |
 | A parameter with a default, of a value function or a `const` one of a temporal function | The parameter as any other. A call that leaves it out is written with the default in its place, which the analysed program holds as a typed value (`Module::defaults`). Python is given no default of its own, so it has none to put in order or to evaluate where the function is defined. A default that leaves itself out is reported |
 | A function of another module | `alias.name`, the module imported under a name of its own, `import _hgl._m_demo._m_util as _hgl_4demo_4util`: two modules may each have a `pick`. Each part of the path has its length before it in the alias, so no two paths give one |
@@ -1474,7 +1474,7 @@ only where the program reaches it, at core's source.
 | `r?` in a `when` (ERR-5) | `_core.succeeded(r)`, which fails the node with the error's message and code |
 | A named test | A function `test_name` |
 | `assert condition` | `if not (condition): raise _py.AssertionError()`. Python's own `assert` is removed when the interpreter is run with `-O` or `PYTHONOPTIMIZE`, and a test would then pass whatever it asserts |
-| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, {"input": _hg.TS[_py.int]}, _hg.TS[_py.int], input=[7, None, 9])` of `_hgl._harness`: the target, the hgraph type of each of its temporal inputs by name, that of its result or `None`, and then the arguments. The harness wires the run from those |
+| `eval(target(input: [7, _, 9]))` | `_harness.evaluate(target, {"input": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, input=[7, None, 9])` of `_hgl._harness`: the target; core's `replay` for each temporal input the eval gives a trace, by the input's name; core's `record` for the target's result, or `None`; and then the arguments. Core has the two as HGL for any type, so each is the instance written for the type it is of (GEN-2). The harness wires the run from those |
 | `eval(target(input: [7]), RunConfig(length: 2us))` (RUN-1, core's CRUN-2) | `_harness.evaluate(target, {...}, ..., input=[7], _config=...)`: the configuration last, by a name no input has, so that it is evaluated after the call's arguments (EXPR-13). The harness reads its `start`, `end` and `length`, refuses an `end` with a `length` (`run.end_and_length`), and runs the entry from the start to the end, which hgraph also takes as exclusive |
 | `eval(...) == [...]`, `seen != other` (TST-4) | `_harness.same(left, right)`, and `not _harness.same(...)` for `!=` |
 | `const scale: i64 = 2`, and `scale` read (UNIT-13) | `@_core.constant` over `def scale(): return 2`, and `scale()`. The provider runs the function once, when the constant is first read, so its expression may name what is written after it (UNIT-6) |
@@ -1530,18 +1530,23 @@ from the earliest start whatever start a run has, so it gives no trace
 for a run that starts at a calendar date; here a recording holds times,
 and the dense trace is counted from the run's start.
 
-`replay` and `record` are core's, and core has them as HGL. Until they
-are source in core the harness has the two itself, written in Python:
-`replay` is the provider's `resume` over the entries, as a source's own
-statements are resumed, and `record` a sink that appends each
-publication's time and delta and puts them in the store at stop. Core's
-own will take their place (issue 142).
+`replay` and `record` are core's, and core has them as HGL, for any
+type. The target writes each from core's own source, as it writes any
+generic temporal function: `replay` a source, and `record` a node that
+keeps its recording in a `cache` with core's `append` and puts it in the
+store at stop. Before any module is written the target finds the
+instances a program asks for, and an eval asks for these two, each for
+the type it is of. Core does not export them: a run wires them, and no
+module names them.
 
 hgraph makes a value of its own of what it is given to keep, a node's
 configuration and what its global state holds, and has none for a tuple
 that holds a set's delta. An object of a class it does not know is kept
-as it is, so the replay list and what the store is given are each
-inside one, the provider's `Held`.
+as it is. So a list, a tuple or a dictionary that is a node's
+configuration, `replay`'s list of entries among them, is given to the
+node inside one, the provider's `Held`, and taken out at the head of
+the node, of its `start` and of its `stop`; to hgraph such a parameter
+is an `object`. What the store is given is inside one too.
 
 It also holds `same`, the comparison of two
 traces (TST-4): cell by cell, with a `None` at the end of either adding
@@ -1613,7 +1618,7 @@ the environment variable `HGL_HGRAPH_PYTHON`, and are run with
 `cargo test -p hgl_hgraph -p hgl_cli -- --ignored`. The baseline is
 hgraph 0.9.1, the first with a value that may be unset (its RFC 0050),
 which a published null needs. With it,
-`hgl test spec/hgl_core/tests/conformance --target hgraph` passes all 24
+`hgl test spec/hgl_core/tests/conformance --target hgraph` passes all 28
 tests of the pinned core's conformance cases:
 
 | File | Tests | Pass |
@@ -1625,6 +1630,7 @@ tests of the pinned core's conformance cases:
 | `set_endpoints.hgl` | 1 | 1 |
 | `identity_arithmetic.hgl` | 5 | 5 |
 | `failure_eval.hgl` | 1 | 1 |
+| `lists.hgl` | 4 | 4 |
 
 That is a run by hand, and no conformance claim.
 
