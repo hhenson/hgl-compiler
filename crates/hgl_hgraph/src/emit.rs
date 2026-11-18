@@ -106,6 +106,7 @@ pub(crate) fn module(
         propagates: false,
         given_back: Vec::new(),
         place_call: false,
+        held_indices: Vec::new(),
         piece: Piece::default(),
         declared: Vec::new(),
         instanced: Vec::new(),
@@ -516,6 +517,11 @@ struct Emitter<'a> {
     /// True while the call that is the whole of a statement is
     /// written: one that assigns a place is written only there.
     place_call: bool,
+    /// The indices and keys of the places a call assigns, each by
+    /// where its expression is written, with the name it is held
+    /// under: it is evaluated once, before the call, so that the place
+    /// read and the place assigned are one (FN-15).
+    held_indices: Vec<(Location, String)>,
     /// What is known of the piece being written, but for its text.
     piece: Piece,
     /// The pieces written for the module's declarations.
@@ -1118,6 +1124,35 @@ impl Emitter<'_> {
         let ExprKind::Call { arguments, .. } = &value.kind else {
             return None;
         };
+        // FN-15: the place is the one the call's arguments name when
+        // they are evaluated. An index or a key of it is evaluated
+        // once, there, and held: an earlier place's assignment may
+        // change what it would come to, `change(i, items[i])`.
+        for parameter in &places {
+            let Some(argument) = arguments
+                .iter()
+                .find(|argument| argument.parameter == Some(*parameter))
+            else {
+                continue;
+            };
+            let mut place = &argument.value;
+            let mut indices = Vec::new();
+            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
+                if let ExprKind::Index { index, .. } = &place.kind
+                    && !matches!(index.kind, ExprKind::Literal(_))
+                {
+                    indices.push(&**index);
+                }
+                place = base;
+            }
+            // From the root outward, as they are written.
+            for index in indices.into_iter().rev() {
+                let held = format!("_at_{}", self.held_indices.len() + 1);
+                let written = self.expression(function, index);
+                self.line(depth, &format!("{held} = {written}"));
+                self.held_indices.push((index.at, held));
+            }
+        }
         self.place_call = true;
         let called = self.expression(function, value);
         self.place_call = false;
@@ -1134,6 +1169,7 @@ impl Emitter<'_> {
                 self.line(depth, &format!("{target} = {assigned}"));
             }
         }
+        self.held_indices.clear();
         Some("_given[0]".to_string())
     }
 
@@ -1541,7 +1577,7 @@ impl Emitter<'_> {
     ///   (SOURCE-2: "The first evaluation begins the body"), and its
     ///   own scheduler wakes it after;
     /// - its `start`, which gives each `cache` and `state` its value,
-    ///   runs the source's `start` and makes the generator, and its
+    ///   makes the generator and runs the source's `start`, and its
     ///   `stop`, the source's `stop`: "`stop`, where present, always
     ///   runs when the node ends, whatever state the generator is in".
     ///
@@ -1675,9 +1711,11 @@ impl Emitter<'_> {
             };
             self.line(1, &format!("_state.{field} = {value}"));
         }
-        if let Some(start) = start {
-            self.statements(&lifecycle_hook, start, 1);
-        }
+        // The generator is made before the source's `start` runs: a
+        // `return` there ends the hook, and must not leave the node
+        // with nothing to resume. Making it runs none of the source's
+        // statements: Python begins a generator where it is first
+        // resumed.
         self.line(
             1,
             &format!(
@@ -1685,6 +1723,9 @@ impl Emitter<'_> {
                 given.join(", ")
             ),
         );
+        if let Some(start) = start {
+            self.statements(&lifecycle_hook, start, 1);
+        }
         if let Some(stop) = stop {
             let stop_hook = Function {
                 locals: &body.locals,
@@ -1967,16 +2008,18 @@ impl Emitter<'_> {
                 ..
             }) => self.if_statement(function, condition, then, otherwise.as_deref(), depth),
             // SOURCE-1: the one block that holds every `yield` may be
-            // `{ ... }`: its statements, one after another.
+            // `{ ... }`: its statements, one after another, and then
+            // the expression it ends with, where it ends with one. A
+            // source's block gives no value, so that is a statement
+            // too.
             Stmt::Expr(Expr {
-                kind:
-                    ExprKind::Block {
-                        statements,
-                        value: None,
-                    },
+                kind: ExprKind::Block { statements, value },
                 ..
             }) if function.mode == Mode::Source => {
                 self.statements(function, statements, depth);
+                if let Some(value) = value {
+                    self.statement(function, &Stmt::Expr((**value).clone()), depth);
+                }
             }
             Stmt::Expr(value) => {
                 // FN-15: a call that assigns places is written with
@@ -2207,6 +2250,11 @@ impl Emitter<'_> {
         {
             self.unsupported(value.at, "this expression in a graph");
             return "None".to_string();
+        }
+        // An index of a place a call assigns is held under a name of
+        // its own, and is not evaluated again (FN-15).
+        if let Some((_, held)) = self.held_indices.iter().find(|(at, _)| *at == value.at) {
+            return held.clone();
         }
         match &value.kind {
             ExprKind::Literal(literal) => self.literal(literal, value.at),
@@ -3800,7 +3848,11 @@ fn is_nullable(ty: &Type) -> bool {
 fn yields(statements: &[Stmt]) -> bool {
     fn within(value: &Expr) -> bool {
         match &value.kind {
-            ExprKind::Block { statements, .. } => yields(statements),
+            // A block ends with an expression where its last statement
+            // is one: an `if` that yields, say.
+            ExprKind::Block { statements, value } => {
+                yields(statements) || value.as_deref().is_some_and(within)
+            }
             ExprKind::If {
                 then, otherwise, ..
             } => within(then) || otherwise.as_deref().is_some_and(within),

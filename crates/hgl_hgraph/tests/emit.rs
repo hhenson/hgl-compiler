@@ -3736,6 +3736,34 @@ const SOURCES: &str = concat!(
     "    }\n",
     "}\n",
     "\n",
+    // A block that ends with an expression: a call after its yields,
+    // and an `if` that holds them.
+    "fn trailed(const first: i64) -> i64 {\n",
+    "    inject logger\n",
+    "    {\n",
+    "        yield 1us: first\n",
+    "        log_info(logger, \"done\")\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    "fn guarded(const wanted: bool) -> i64 {\n",
+    "    {\n",
+    "        if wanted { yield 1us: 1 }\n",
+    "    }\n",
+    "}\n",
+    "\n",
+    // A `start` that returns early still leaves a source to resume.
+    "fn started(const quiet: bool) -> i64 {\n",
+    "    inject logger\n",
+    "    start {\n",
+    "        if quiet { return }\n",
+    "        log_info(logger, \"started\")\n",
+    "    }\n",
+    "    {\n",
+    "        yield 1us: 4\n",
+    "    }\n",
+    "}\n",
+    "\n",
     "fn doubled(value: i64) -> i64 {\n",
     "    when { return value * 2 }\n",
     "}\n",
@@ -3762,6 +3790,11 @@ const SOURCES: &str = concat!(
     "    assert eval(late(), RunConfig(start: earliest_start + 2us)) == [_, _, 2]\n",
     "    assert eval(ended(limit: 2)) == [_, 1, 2]\n",
     "    assert eval(wired()) == [_, 14, 18]\n",
+    "    assert eval(trailed(first: 6)) == [_, 6]\n",
+    "    assert eval(guarded(wanted: true)) == [_, 1]\n",
+    "    assert eval(guarded(wanted: false)) == []\n",
+    "    assert eval(started(quiet: true)) == [_, 4]\n",
+    "    assert eval(started(quiet: false)) == [_, 4]\n",
     // CRUN-2: a run ends before its `end`, with the source suspended.
     "    assert eval(counter(limit: 9), RunConfig(length: 3us)) == [_, 1, 2]\n",
     "    assert raises(\"yield.non_increasing_time\") { eval(backwards()) }\n",
@@ -3831,6 +3864,25 @@ fn a_source_is_a_generator_a_node_resumes() {
             "def _stop__source_greeting(every: _dt.timedelta, _state: _hg.STATE = None, ",
             "_logger: _hg.LOGGER = None):\n",
             "    _hgl_4core.log_info(logger=_logger, message=\"greeting ends\")\n",
+        ),
+        // A block's last expression is a statement of the generator.
+        concat!(
+            "def _yields_trailed(first, _state):\n",
+            "    yield (_dt.timedelta(microseconds=1), first)\n",
+            "    _hgl_4core.log_info(logger=_state._logger, message=\"done\")\n",
+        ),
+        concat!(
+            "def _yields_guarded(wanted, _state):\n",
+            "    if wanted:\n",
+            "        yield (_dt.timedelta(microseconds=1), 1)\n",
+        ),
+        // The generator is made before the source's `start` runs.
+        concat!(
+            "def _start__source_started(quiet: _py.bool, _state: _hg.STATE = None, ",
+            "_logger: _hg.LOGGER = None):\n",
+            "    _state._source = _core.Source(_yields_started(quiet, _state))\n",
+            "    if quiet:\n",
+            "        return\n",
         ),
         // SOURCE-4: an unbounded `while`, and a bare `return`.
         concat!(
@@ -3931,6 +3983,18 @@ const PLACES: &str = concat!(
     "        return seen * 100 + held\n",
     "    }\n",
     "}\n",
+    // The place is the one named when the call's arguments are
+    // evaluated: `items[i]` is `items[0]`, though the call moves `i`.
+    "const fn change(var index: i64, var item: i64) {\n",
+    "    index = 1\n",
+    "    item = 9\n",
+    "}\n",
+    "const fn moved() -> i64 {\n",
+    "    var i: i64 = 0\n",
+    "    var items: list<i64> = [5, 6]\n",
+    "    change(i, items[i])\n",
+    "    return items[0] * 100 + items[1] * 10 + i\n",
+    "}\n",
     "\n",
     "test places {\n",
     "    assert total([1, 2, 3]) == 6\n",
@@ -3942,6 +4006,7 @@ const PLACES: &str = concat!(
     "    var count: i64 = 1\n",
     "    bump(count, 4)\n",
     "    assert count == 5\n",
+    "    assert moved() == 961\n",
     "    assert eval(counted(value: [1, _, 2])) == [101, _, 203]\n",
     "}\n",
 );
@@ -4003,6 +4068,13 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _given = both(left=a, right=b)\n",
             "    a = _given[1]\n",
             "    b = _given[2]\n",
+        ),
+        // An index of a place is evaluated once, before the call.
+        concat!(
+            "    _at_1 = i\n",
+            "    _given = change(index=i, item=_core.item(items, _at_1))\n",
+            "    i = _given[1]\n",
+            "    items = _core.with_item(items, _at_1, _given[2])\n",
         ),
         // A node's `state` and `cache` are places.
         concat!(
