@@ -173,3 +173,128 @@ test a_nested_branch_that_may_not_assign_keeps_the_binding {
     assert eval(partly(outer: [true, _, false, true], inner: [true, false, _, _], price: [1, 2, 3, 4])) ==
         [10, 2, 4, 4]
 }
+
+# An `if` over a connection in a branch of a wiring-time `if` is
+# composition too: its child graph is selected at runtime.
+fn widened(price: i64, rising: bool, const wide: bool) -> i64 {
+    var chosen = price
+    if wide {
+        if rising { chosen = price * 10 }
+    }
+    return chosen
+}
+
+test an_if_over_a_connection_in_a_wiring_time_branch {
+    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: true)) == [10, 2, 30]
+    assert eval(widened(price: [1, 2, 3], rising: [true, false, true], wide: false)) == [1, 2, 3]
+}
+
+# A read after the branch has assigned the `var` is the branch's own
+# binding: the `var`, with no value before, is no input of the child.
+fn assigned_first(flag: bool, left: i64, right: i64) -> i64 {
+    var chosen: i64
+    if flag {
+        chosen = left
+        return chosen
+    } else {
+        chosen = right
+        return chosen
+    }
+}
+
+test a_read_after_an_assignment_is_no_capture {
+    assert eval(assigned_first(flag: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
+        [1, 20, 3]
+}
+
+# A nested `if` that may leave the `var` unassigned reads the binding
+# it had before: the outer branch's graph takes it, though the other
+# branch assigns it before it reads it.
+fn fallback_inside(outer: bool, inner: bool, left: i64, right: i64) -> i64 {
+    var chosen = left
+    if outer {
+        chosen = right
+        return chosen
+    } else {
+        if inner { chosen = right }
+        return left
+    }
+}
+
+test a_nested_fallback_is_a_capture {
+    assert eval(fallback_inside(outer: [true, false, _, true], inner: [false, false, true, false], left: [1, 2, 3, 4], right: [10, 20, 30, 40])) ==
+        [10, 2, 3, 40]
+}
+
+# A wiring-time `if` in a branch keeps no binding by reading it: the
+# `var`, with no value before, is no input of the branch's graph.
+fn wired_inside(outer: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen: i64
+    if outer {
+        if wide { chosen = right }
+        return left
+    } else {
+        return right
+    }
+}
+
+test a_wiring_time_fallback_is_no_capture {
+    assert eval(wired_inside(outer: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
+}
+
+# An assignment under a temporal `if` inside a `let`'s wiring-time `if`
+# value: the outer branch's graph is given the `var`'s binding.
+fn assigned_in_a_value(outer: bool, inner: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen = left
+    if outer {
+        chosen = right
+        return chosen
+    } else {
+        let taken = if wide {
+            if inner { chosen = right }
+            left
+        } else {
+            right
+        }
+        return taken
+    }
+}
+
+test an_assignment_in_a_lets_value_is_captured {
+    assert eval(assigned_in_a_value(outer: [true, false], inner: [false, true], left: [1, 2], right: [10, 20], wide: true)) ==
+        [10, 2]
+}
+
+# A wiring-time branch whose nested `if` returns on every path does not
+# reach what follows: the `var` the other branch assigns is bound there.
+fn returned_inside(flag: bool, left: i64, right: i64, const wide: bool, const other_wide: bool) -> i64 {
+    var chosen: i64
+    if wide {
+        if other_wide { return left } else { return right }
+    } else {
+        chosen = left
+    }
+    if flag { chosen = chosen + right }
+    return chosen
+}
+
+test a_nested_return_leaves_the_other_binding {
+    assert eval(returned_inside(flag: [true, false], left: [1, 2], right: [10, 20], wide: false, other_wide: false)) ==
+        [11, 2]
+}
+
+# The same for a `let`'s wiring-time `if` value whose branch returns.
+fn returned_in_a_value(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    var chosen: i64
+    let taken = if wide { return right } else {
+        chosen = left
+        right
+    }
+    if flag { chosen = chosen + taken }
+    return chosen
+}
+
+test a_returning_value_branch_leaves_the_other_binding {
+    assert eval(returned_in_a_value(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) ==
+        [11, 2]
+}
