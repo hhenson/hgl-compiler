@@ -114,6 +114,7 @@ pub(crate) fn module(
         lifted: 0,
         switched: 0,
         bound: Vec::new(),
+        in_case: 0,
         candidates: BTreeSet::new(),
         propagates: false,
         given_back: Vec::new(),
@@ -523,6 +524,43 @@ fn alternative_statements(otherwise: Option<&Expr>) -> Vec<Stmt> {
     }
 }
 
+/// True where some path through `statements` has a `return`, at any
+/// depth.
+fn may_return(statements: &[Stmt]) -> bool {
+    let mut found = false;
+    hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| {
+        found |= matches!(
+            node,
+            hgl_analyser::hir::Node::Statement(Stmt::Return { .. })
+        );
+    });
+    found
+}
+
+/// True where an `if` or a `switch` among `statements` has a `return`
+/// in it: it needs what follows it to lower its other paths.
+fn nested_return(statements: &[Stmt]) -> bool {
+    statements.iter().any(|statement| {
+        matches!(
+            statement,
+            Stmt::Switch { .. }
+                | Stmt::Expr(Expr {
+                    kind: ExprKind::If { .. },
+                    ..
+                })
+        ) && may_return(std::slice::from_ref(statement))
+    })
+}
+
+/// `statements`, and after them `rest` where they can reach their end.
+fn continued(statements: &[Stmt], rest: &[Stmt]) -> Vec<Stmt> {
+    let mut all = statements.to_vec();
+    if !always_returns(statements) {
+        all.extend_from_slice(rest);
+    }
+    all
+}
+
 /// True where every path through `statements` ends in a `return`: the
 /// last is one, or an `if` with an `else` or a `switch` with a
 /// `default` each branch of which always returns.
@@ -707,6 +745,9 @@ struct Emitter<'a> {
     /// its parameters, a `let` or `var` declared with one, a `var` once
     /// assigned. A branch's graph is given only these (CTRL-14).
     bound: Vec<usize>,
+    /// How many branch graphs of a `switch_` enclose what is being
+    /// written: a `return` of an ordinary value there is a constant.
+    in_case: usize,
     /// The Python names of the candidates the module has written.
     candidates: BTreeSet<String>,
     /// True once the value function being written has a `?`: a
@@ -2597,7 +2638,6 @@ impl Emitter<'_> {
                 _ => (&[], Some(branch)),
             }
         }
-        let returns = |statements: &[Stmt]| matches!(statements.last(), Some(Stmt::Return { .. }));
         match statement {
             // An `if` that stands as a statement, over a connection.
             Stmt::Expr(Expr {
@@ -2616,16 +2656,11 @@ impl Emitter<'_> {
                 let then_statements = then_owned.as_slice();
                 let other_owned = alternative_statements(otherwise.as_deref());
                 let other_statements = other_owned.as_slice();
-                if returns(then_statements) || returns(other_statements) {
-                    // A branch that does not return goes on into the
-                    // rest of the block.
-                    let on = |statements: &[Stmt]| {
-                        let mut all = statements.to_vec();
-                        if !returns(statements) {
-                            all.extend_from_slice(rest);
-                        }
-                        all
-                    };
+                if may_return(then_statements) || may_return(other_statements) {
+                    // A path that does not return goes on into the rest
+                    // of the block: each branch's graph has it after
+                    // its own statements.
+                    let on = |statements: &[Stmt]| continued(statements, rest);
                     let Some(result) = function
                         .signature
                         .and_then(|signature| signature.result.clone())
@@ -2652,6 +2687,33 @@ impl Emitter<'_> {
                 let branches = [("True", then_statements), ("False", other_statements)];
                 self.assigned_in_branches(function, condition, &branches, *at, depth);
                 Branched::Written
+            }
+            // An `if` over an ordinary value that stands as a statement,
+            // with a returning `if` or `switch` in a branch: what follows
+            // it is written in each branch, so that the nested one is
+            // lowered with its other path.
+            Stmt::Expr(Expr {
+                kind:
+                    ExprKind::If {
+                        condition,
+                        then,
+                        otherwise,
+                    },
+                ..
+            }) if !rest.is_empty()
+                && (nested_return(&alternative_statements(Some(then)))
+                    || nested_return(&alternative_statements(otherwise.as_deref()))) =>
+            {
+                let condition = self.expression(function, condition);
+                self.line(depth, &format!("if {condition}:"));
+                let before = self.bound.clone();
+                let then = continued(&alternative_statements(Some(then)), rest);
+                self.block(function, &then, depth + 1);
+                self.bound = before;
+                self.line(depth, "else:");
+                let other = continued(&alternative_statements(otherwise.as_deref()), rest);
+                self.block(function, &other, depth + 1);
+                Branched::Ended
             }
             // An `if` whose value the graph returns, or a `let` or a
             // `var` is given.
@@ -2700,7 +2762,26 @@ impl Emitter<'_> {
                 };
                 let (then_statements, then_value) = parts(then);
                 let other = otherwise.as_deref().map(parts);
+                let branch_statements = [
+                    Some(then_statements),
+                    other.map(|(statements, _)| statements),
+                ];
                 if self.connects(function, condition) {
+                    // A `return` in a branch whose value a `let` or a
+                    // `var` is given leaves the graph, not the branch's
+                    // graph: not written here.
+                    if declared.is_some()
+                        && branch_statements
+                            .iter()
+                            .flatten()
+                            .any(|statements| may_return(statements))
+                    {
+                        self.unsupported(
+                            *at,
+                            "a `return` in an `if` over a connection that gives a `let` or a `var` its value",
+                        );
+                        return Branched::Written;
+                    }
                     let tail = |value: Option<&Expr>| match value {
                         Some(value) => Tail::Value(Box::new(value.clone())),
                         None => Tail::Nothing,
@@ -2744,39 +2825,110 @@ impl Emitter<'_> {
                 } else {
                     "None".to_string()
                 };
+                // Each branch is its statements and then what it gives,
+                // as a statement of its own: a `return` of its value, or
+                // the name's declaration, so that an `if` over a
+                // connection among them, or as the value, is lowered with
+                // what follows it. Where one of them returns, what
+                // follows the `let` is written in each branch too.
+                // A branch's value that is itself an `if` with a `return`
+                // in it needs what follows too.
+                let returning_value = |value: Option<&Expr>| {
+                    value.is_some_and(|value| may_return(&[Stmt::Expr(value.clone())]))
+                };
+                let ends = declared.is_some()
+                    && (branch_statements
+                        .iter()
+                        .flatten()
+                        .any(|statements| nested_return(statements))
+                        || returning_value(then_value)
+                        || other.is_some_and(|(_, value)| returning_value(value)));
+                let gives = |value: Option<&Expr>| -> Option<Stmt> {
+                    let value = value?.clone();
+                    let at = value.at;
+                    Some(match declared {
+                        Some(local) => Stmt::Declare {
+                            local,
+                            value: Some(value),
+                        },
+                        None => Stmt::Return {
+                            value: Some(value),
+                            at,
+                        },
+                    })
+                };
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("if {condition}:"));
                 let before = self.bound.clone();
-                self.statements(function, then_statements, depth + 1);
-                let value = match then_value {
-                    Some(value) => self.expression(function, value),
-                    None => absent.clone(),
-                };
-                self.line(depth + 1, &given(value));
-                let after_then = std::mem::replace(&mut self.bound, before);
-                self.line(depth, "else:");
-                let value = match other {
-                    Some((statements, value)) => {
+                let mut binds = Vec::new();
+                let mut reaches = Vec::new();
+                let alternatives = [
+                    Some((then_statements, then_value)),
+                    other.or(Some((&[][..], None))),
+                ];
+                for (position, (statements, value)) in
+                    alternatives.into_iter().flatten().enumerate()
+                {
+                    if position == 1 {
+                        self.line(depth, "else:");
+                    }
+                    self.bound = before.clone();
+                    let mut all = statements.to_vec();
+                    if let Some(given) = gives(value) {
+                        all.push(given);
+                        if ends {
+                            all = continued(&all, rest);
+                        }
+                        self.statements(function, &all, depth + 1);
+                    } else {
+                        // A branch with no value: its statements, the
+                        // absent value, and then what follows.
+                        if ends && nested_return(statements) {
+                            self.unsupported(
+                                *at,
+                                "a returning `if` or `switch` in a branch with no value of a `let`'s `if`",
+                            );
+                        }
                         self.statements(function, statements, depth + 1);
-                        match value {
-                            Some(value) => self.expression(function, value),
-                            None => absent,
+                        if !always_returns(statements) {
+                            self.line(
+                                depth + 1,
+                                &(match &target {
+                                    Some(target) => format!("{target} = {absent}"),
+                                    None => format!("return {absent}"),
+                                }),
+                            );
+                            if let Some(local) = declared {
+                                self.bind(function, local);
+                            }
+                            if ends {
+                                self.statements(function, rest, depth + 1);
+                                all = continued(statements, rest);
+                            }
                         }
                     }
-                    None => absent,
-                };
-                self.line(depth + 1, &given(value));
+                    reaches.push(!always_returns(&all));
+                    binds.push(std::mem::take(&mut self.bound));
+                }
+                if ends {
+                    return Branched::Ended;
+                }
                 // Python's `if`: what both branches bind is bound after,
                 // less a branch that returns, which does not reach the
                 // next statement.
-                let other_returns = other.is_some_and(|(statements, _)| always_returns(statements));
-                if always_returns(then_statements) {
-                    // The `else`'s bindings stand.
-                } else if other_returns {
-                    self.bound = after_then;
-                } else {
-                    self.bound.retain(|local| after_then.contains(local));
+                let mut joined: Option<Vec<usize>> = None;
+                for (bound, reaches) in binds.into_iter().zip(reaches) {
+                    if reaches {
+                        joined = Some(match joined {
+                            None => bound,
+                            Some(mut joined) => {
+                                joined.retain(|local| bound.contains(local));
+                                joined
+                            }
+                        });
+                    }
                 }
+                self.bound = joined.unwrap_or(before);
                 if let Some(local) = declared {
                     self.bind(function, local);
                 }
@@ -2798,7 +2950,10 @@ impl Emitter<'_> {
                     // CTRL-6: "An unmatched selector uses default".
                     branches.push(("_hg.DEFAULT".to_string(), default));
                 }
-                if branches.iter().all(|(_, statements)| returns(statements)) {
+                if branches
+                    .iter()
+                    .any(|(_, statements)| may_return(statements))
+                {
                     let Some(result) = function
                         .signature
                         .and_then(|signature| signature.result.clone())
@@ -2806,11 +2961,14 @@ impl Emitter<'_> {
                         self.unsupported(*at, "a `return` in a `switch` of a graph with no result");
                         return Branched::Ended;
                     };
+                    // A case that can reach its end goes on into the rest
+                    // of the block, as an `if`'s branch does. With no
+                    // `default`, an unmatched selector fails (CTRL-6).
                     let branches: Vec<Branch> = branches
                         .into_iter()
                         .map(|(key, statements)| Branch {
                             key,
-                            statements: statements.to_vec(),
+                            statements: continued(statements, rest),
                             tail: Tail::Returns,
                         })
                         .collect();
@@ -2964,32 +3122,29 @@ impl Emitter<'_> {
                 depth,
                 &format!("def {graph}({}) -> {annotation}:", parameters.join(", ")),
             );
-            self.statements(function, &branch.statements, depth + 1);
+            // What the branch gives is the last of its statements, so
+            // that an `if` or a `switch` among them is lowered with it.
+            let mut all = branch.statements.clone();
             match &branch.tail {
-                // FN-3: "an ordinary value in a branch is then wired
-                // as a constant".
-                Tail::Value(value) => {
-                    let ended = Stmt::Return {
-                        value: Some((**value).clone()),
-                        at: value.at,
-                    };
-                    // An `else if` is the value of its `else`.
-                    if self.branched(function, &ended, &[], depth + 1) == Branched::No {
-                        let written = self.expression(function, value);
-                        let written = if self.connects(function, value) {
-                            written
-                        } else {
-                            format!("_hg.const({written})")
-                        };
-                        self.line(depth + 1, &format!("return {written}"));
-                    }
-                }
-                Tail::Local(var) => {
-                    let var = self.place(function, *var);
-                    self.line(depth + 1, &format!("return {var}"));
-                }
-                Tail::Nothing => self.line(depth + 1, &format!("return _hg.nothing({annotation})")),
-                Tail::Returns => {}
+                Tail::Value(value) => all.push(Stmt::Return {
+                    value: Some((**value).clone()),
+                    at: value.at,
+                }),
+                Tail::Local(var) => all.push(Stmt::Return {
+                    value: Some(Expr {
+                        kind: ExprKind::Local(*var),
+                        ty: function.locals[*var].ty.clone(),
+                        at,
+                    }),
+                    at,
+                }),
+                Tail::Nothing | Tail::Returns => {}
+            }
+            self.in_case += 1;
+            self.statements(function, &all, depth + 1);
+            self.in_case -= 1;
+            if matches!(branch.tail, Tail::Nothing) && !always_returns(&all) {
+                self.line(depth + 1, &format!("return _hg.nothing({annotation})"));
             }
             cases.push(format!("{}: {graph}", branch.key));
         }
@@ -3280,6 +3435,16 @@ impl Emitter<'_> {
                     None => self.expression(function, returned),
                 };
                 let value = self.given_out(function, returned, value);
+                // FN-3: in a branch's graph "an ordinary value in a
+                // branch is then wired as a constant".
+                let value = if function.mode == Mode::Graph
+                    && self.in_case > 0
+                    && !self.connects(function, returned)
+                {
+                    format!("_hg.const({value})")
+                } else {
+                    value
+                };
                 // A node that publishes a nullable publishes its null.
                 let value =
                     if function.mode == Mode::Node && Self::publishes_null(function, returned) {

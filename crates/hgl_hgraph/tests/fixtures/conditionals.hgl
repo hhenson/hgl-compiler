@@ -298,3 +298,110 @@ test a_returning_value_branch_leaves_the_other_binding {
     assert eval(returned_in_a_value(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) ==
         [11, 2]
 }
+
+# An `if` over a connection as the value of a wiring-time branch is a
+# child graph, not Python's `if` on the port.
+fn wide_pick(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    if wide { if flag { left } else { right } } else { left }
+}
+
+test a_connections_if_in_a_wiring_time_value {
+    assert eval(wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [1, 20]
+    assert eval(wide_pick(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [1, 2]
+}
+
+# A `switch` some of whose cases return and others assign: a case that
+# does not return goes on into the rest of the block.
+fn part_returned(route: i64, left: i64, right: i64) -> i64 {
+    var chosen = left
+    switch route {
+        case 1: return right
+        default: chosen = left
+    }
+    return chosen * 2
+}
+
+test a_switch_case_that_returns_skips_the_rest {
+    assert eval(part_returned(route: [1, 2], left: [1, 2], right: [10, 20])) == [10, 4]
+}
+
+# A returning `if` in a branch whose value is the graph's: the branch's
+# value is what follows it.
+fn returned_before_value(outer: bool, inner: bool, left: i64, right: i64) -> i64 {
+    if outer {
+        if inner { return left }
+        right
+    } else {
+        right
+    }
+}
+
+test a_return_before_a_branchs_value {
+    assert eval(returned_before_value(outer: [true, true, false], inner: [true, false, true], left: [1, 2, 3], right: [10, 20, 30])) ==
+        [1, 20, 30]
+}
+
+# A returning `if` over a connection in a branch of a `let`'s
+# wiring-time value: what follows the `let` is that `if`'s other path.
+fn returned_in_a_let(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    let taken = if wide {
+        if flag { return right }
+        left
+    } else {
+        left
+    }
+    return taken + 1
+}
+
+test a_return_in_a_lets_wiring_time_value {
+    assert eval(returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [10, 3]
+    assert eval(returned_in_a_let(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [2, 3]
+}
+
+# The same for a wiring-time `if` that stands as a statement.
+fn returned_in_a_statement(flag: bool, left: i64, right: i64, const wide: bool) -> i64 {
+    if wide {
+        if flag { return right }
+    }
+    return left
+}
+
+test a_return_in_a_wiring_time_statement {
+    assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: true)) == [10, 2]
+    assert eval(returned_in_a_statement(flag: [true, false], left: [1, 2], right: [10, 20], wide: false)) == [1, 2]
+}
+
+# The same with no `else`: the absent value is given before what follows.
+fn returned_with_no_else(price: i64, const wide: bool, const narrow: bool) -> i64? {
+    let taken = if wide {
+        if narrow { return price }
+        price
+    }
+    return taken
+}
+
+test an_absent_value_comes_before_the_rest {
+    assert eval(returned_with_no_else(price: [1, 2], wide: false, narrow: false)) == []
+    assert eval(returned_with_no_else(price: [1, 2], wide: true, narrow: false)) == [1, 2]
+}
+
+# A returning `if` in a branch's value, itself a wiring-time `if`: what
+# follows the `let` is carried into it.
+fn returned_in_a_value_if(flag: bool, price: i64, const wide: bool, const narrow: bool) -> i64 {
+    let taken = if wide {
+        if narrow {
+            if flag { return price }
+            price
+        } else {
+            price
+        }
+    } else {
+        price
+    }
+    return taken + 1
+}
+
+test a_return_in_a_nested_value {
+    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: true, narrow: true)) == [1, 3]
+    assert eval(returned_in_a_value_if(flag: [true, false], price: [1, 2], wide: false, narrow: true)) == [2, 3]
+}
