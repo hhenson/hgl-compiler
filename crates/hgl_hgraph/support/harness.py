@@ -1,10 +1,12 @@
-"""The eval harness of a generated test, for the hgraph target.
+"""The run of an entry, for the hgraph target: a generated test's eval,
+and an application's run statement.
 
 Written by the hgl compiler beside the modules it generates.
 """
 
 import datetime as _datetime
 import logging as _logging
+import threading as _threading
 
 import hgraph as _hg
 
@@ -40,9 +42,10 @@ class _Trace(list):
     start = _EARLIEST_START
 
 
-def _bounds(config):
-    """The start and the end a run's configuration gives it, each `None`
-    where it gives none (core's CRUN-2).
+def _bounds(config, unstated):
+    """The start a run has, and the end its configuration gives it,
+    `None` where it gives none (core's CRUN-2). `unstated` is the start
+    of a run whose configuration gives none.
 
     "`length` gives the end counted from the start the run has, given or
     not ... A `RunConfig` with both an `end` and a `length` is refused
@@ -50,16 +53,139 @@ def _bounds(config):
     `run.end_and_length`."
     """
     if config is None:
-        return None, None
+        return unstated, None
     start, end, length = config.start, config.end, config.length
     if end is not None and length is not None:
         raise _core.HglError(
             "a run's configuration gives both an `end` and a `length`",
             code="run.end_and_length",
         )
+    start = unstated if start is None else start
     if length is not None:
-        end = _core.add__datetime_duration(_EARLIEST_START if start is None else start, length)
+        end = _core.add__datetime_duration(start, length)
     return start, end
+
+
+def _present():
+    """The host clock's present time, as hgraph has an instant: in UTC,
+    naming no zone."""
+    return _datetime.datetime.now(_datetime.timezone.utc).replace(tzinfo=None)
+
+
+# What asks the run in real time that is under way to stop: the sender
+# of its stop source, once the source has started. `_stop_wanted` is set
+# by a request that came before then, which the source then sends
+# itself.
+_senders = []
+_stop_wanted = _threading.Event()
+
+
+@_hg.push_queue(_hg.TS[bool])
+def _stop_source(sender):
+    """A source the host's stop is sent through. hgraph wakes a run in
+    real time for what is sent to one, from any thread."""
+    _senders.append(sender)
+    if _stop_wanted.is_set():
+        sender(True)
+
+
+def stop():
+    """Asks the run in real time that is under way to stop, as its host
+    (the language's RUN-3: "until the configuration's end or until its
+    host stops it"). The run then ends as any does: every node that
+    started is stopped (core's CRUN-6), and its output is its recording
+    up to then.
+
+    It may be called from any thread, and from a signal's handler. False
+    where no run in real time is under way.
+    """
+    _stop_wanted.set()
+    for sender in list(_senders):
+        sender(True)
+    return bool(_senders)
+
+
+def _ran(target, replays, record, replayed, arguments, start, end, real_time):
+    """Runs the entry that wires `target`, from `start` and before
+    `end`, and gives its output: the run's recording, or `None` where
+    `record` is `None`.
+
+    Core's CRUN-1: "It builds the entry's graph, starts it, evaluates
+    zero or more cycles, and stops it, once each." Core's CEVAL-1: "Eval
+    is a run of an entry it generates: core's `replay` wired to each
+    temporal input of the target, and the target's result as the
+    entry's." The entry is wired here, and run by hgraph: as a
+    simulation of its, or in real time (core's CRUN-4, CRUN-5). Core's
+    CRUN-2: "`start` is inclusive and `end` exclusive", as hgraph's own
+    are.
+    """
+
+    @_hg.graph
+    def entry():
+        given = {
+            name: (replays[name](items=replayed[name]) if name in replayed else value)
+            for name, value in arguments.items()
+        }
+        published = target(**given)
+        if record is not None:
+            # CRUN-8: "The run wires `record` to the entry's result under
+            # the key `"run.output"`".
+            record(input=published, key=_RUN_OUTPUT)
+        if real_time:
+            # The host's stop: hgraph ends the run when the source
+            # publishes.
+            _hg.stop_engine(_stop_source())
+
+    # CRUN-7: "A run has one store, which is empty when its graph is
+    # built."
+    with _hg.GlobalState() as store:
+        try:
+            _hg.evaluate_graph(
+                entry,
+                _hg.GraphConfiguration(
+                    run_mode=_hg.EvaluationMode.REAL_TIME
+                    if real_time
+                    else _hg.EvaluationMode.SIMULATION,
+                    start_time=start,
+                    end_time=end,
+                    # hgraph writes its own account of a run at the level
+                    # below this one.
+                    default_log_level=_logging.INFO,
+                ),
+            )
+        finally:
+            _senders.clear()
+            _stop_wanted.clear()
+        if record is None:
+            return None
+        # CEVAL-6: "A failed run or a missing recording makes eval fail."
+        if not _core.has_GlobalState_str(store, _RUN_OUTPUT):
+            raise _core.HglError("the run stopped with no recording")
+        return _core.get_GlobalState_str(store, _RUN_OUTPUT)
+
+
+def run(target, _record, _real_time, /, _config=None, **arguments):
+    """Runs an application's entry `target`, and gives the run's output.
+
+    The language's RUN-1: "The entry's result, if any, is the run's
+    output: for a result type T a `list<tuple<datetime, delta<T>>>`, one
+    tuple for each publication, in time order". It is `None` for an
+    entry with no result. `_record` is core's `record` for the result's
+    type, as the compiler wrote it, `None` where the entry has none.
+    They are given by position alone, so that a parameter of the entry
+    may have any name, and the run's configuration as `_config`.
+
+    RUN-3: "The word of a run statement is its mode": `_real_time` is
+    true for `run` and false for `eval`. Core's CRUN-2: "A null `start`
+    is the earliest start in simulation and the host clock's present
+    time in real time."
+    """
+    start, end = _bounds(_config, _present() if _real_time else _EARLIEST_START)
+    if end is not None and end <= start:
+        # No cycle runs. hgraph has no run that ends where it starts, so
+        # none is made: the graph is not built, started or stopped.
+        return None if _record is None else []
+    return _ran(target, {}, _record, {}, arguments, start, end, _real_time)
 
 
 def evaluate(target, _replays, _record, /, _config=None, **arguments):
@@ -79,15 +205,11 @@ def evaluate(target, _replays, _record, /, _config=None, **arguments):
     the last publication, and is empty when there was none (the language's
     TST-6).
 
-    Core's CEVAL-1: "Eval is a run of an entry it generates: core's
-    `replay` wired to each temporal input of the target, and the
-    target's result as the entry's." The entry is wired here, and run as
-    a simulation of hgraph's under the configuration. Core's CRUN-2:
-    "`start` is inclusive and `end` exclusive", as hgraph's own are.
+    The run is a simulation under the configuration (`_ran`).
     """
-    start, end = _bounds(_config)
+    start, end = _bounds(_config, _EARLIEST_START)
     result = _Trace()
-    result.start = _EARLIEST_START if start is None else start
+    result.start = start
     if end is not None and end <= result.start:
         # No cycle runs. hgraph has no run that ends where it starts, so
         # none is made: the graph is not built, started or stopped.
@@ -105,38 +227,9 @@ def evaluate(target, _replays, _record, /, _config=None, **arguments):
         for name in _replays
         if name in arguments
     }
-
-    @_hg.graph
-    def entry():
-        given = {
-            name: (_replays[name](items=replayed[name]) if name in replayed else value)
-            for name, value in arguments.items()
-        }
-        published = target(**given)
-        if _record is not None:
-            # CRUN-8: "The run wires `record` to the entry's result under
-            # the key `"run.output"`".
-            _record(input=published, key=_RUN_OUTPUT)
-
-    # CRUN-7: "A run has one store, which is empty when its graph is
-    # built."
-    with _hg.GlobalState() as store:
-        _hg.evaluate_graph(
-            entry,
-            _hg.GraphConfiguration(
-                start_time=result.start,
-                end_time=end,
-                # hgraph writes its own account of a run at the level
-                # below this one.
-                default_log_level=_logging.INFO,
-            ),
-        )
-        if _record is None:
-            return result
-        # CEVAL-6: "A failed run or a missing recording makes eval fail."
-        if not _core.has_GlobalState_str(store, _RUN_OUTPUT):
-            raise _core.HglError("the run stopped with no recording")
-        output = _core.get_GlobalState_str(store, _RUN_OUTPUT)
+    output = _ran(target, _replays, _record, replayed, arguments, result.start, end, False)
+    if output is None:
+        return result
     # TST-6: dense, from the run's start through the last publication.
     for at, published in output:
         position = (at - result.start) // _SMALLEST_STEP

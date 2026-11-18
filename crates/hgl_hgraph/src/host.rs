@@ -1,10 +1,11 @@
-//! Running a written program's tests on hgraph.
+//! Running a written program on hgraph: its tests, and an application.
 //!
 //! hgraph is run from Python, so the host is a Python interpreter that
 //! has hgraph installed. [`run`] writes the program into a directory,
 //! starts the interpreter on a small driver the target carries
 //! (`support/run_tests.py`), and reads what the driver recorded of each
-//! test.
+//! test. [`run_application`] does the same for one application, with
+//! a driver of its own (`support/run_application.py`).
 //!
 //! The driver and this file agree on two files, both in the output
 //! directory:
@@ -19,12 +20,16 @@
 //! nothing a program or hgraph prints can be taken for an outcome.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use hgl_diagnostics::Location;
 
+use crate::emit::APPLICATION;
 use crate::{File, Output, ROOT, python_module, test_function};
 
 /// The driver that runs named tests, as Python.
@@ -39,6 +44,245 @@ const PLAN_FILE: &str = "_plan.txt";
 
 /// The file the driver records what happened in.
 const RESULTS_FILE: &str = "_results.txt";
+
+/// The driver that runs an application, as Python.
+const APPLICATION_DRIVER: &str = include_str!("../support/run_application.py");
+
+/// The file that driver is written to.
+const APPLICATION_DRIVER_FILE: &str = "_run_application.py";
+
+/// The file that driver records an application's run in.
+const APPLICATION_RESULTS_FILE: &str = "_run.txt";
+
+/// What became of an application given to [`run_application`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RanApplication {
+    /// The run ended, as core's CRUN-1 has one: built, started,
+    /// evaluated and stopped.
+    Stopped {
+        /// The run's output (RUN-1): each publication of the entry's
+        /// result in time order, as its instant and its value, both as
+        /// text. `None` for an entry with no result.
+        output: Option<Vec<(String, String)>>,
+        /// True where the run ended because its host asked it to
+        /// (RUN-3), and not at its end.
+        by_host: bool,
+    },
+    /// The run failed, with what the host said of it. Core's CRUN-6: "A
+    /// run that failed has no output."
+    Failed(String),
+    /// It was not run to an end, with the reason: the interpreter did
+    /// not start or stopped early, or the module did not load.
+    NotRun(String),
+}
+
+/// What asks an application's run to stop, as its host (RUN-3: "until
+/// the configuration's end or until its host stops it"). It is given
+/// to [`run_application`], and may be asked from any thread while the
+/// run goes: by what handles an interrupt of the caller, say.
+///
+/// The request goes to the driver down a pipe, so that it reaches the
+/// run however the caller came to ask: a signal sent to the caller
+/// alone reaches no other process.
+#[derive(Clone, Default)]
+pub struct Stop {
+    /// How many times it was asked, and the driver's process while it
+    /// runs. A lock, since it is asked from one thread and the run is
+    /// waited for on another.
+    state: Arc<Mutex<StopState>>,
+}
+
+/// What a [`Stop`] holds.
+#[derive(Default)]
+struct StopState {
+    /// How many times a stop was asked for.
+    asked: u32,
+    /// The driver's process, from when it starts until it has ended.
+    driver: Option<Child>,
+}
+
+impl Stop {
+    /// A stop not yet asked for.
+    pub fn new() -> Stop {
+        Stop::default()
+    }
+
+    /// Asks the run to stop. The first request is passed to the
+    /// driver, which ends a run in real time as its end does: what it
+    /// recorded is its output. A second ends the driver as it is, and
+    /// the run then has no output. One made before the driver starts
+    /// is kept for it.
+    pub fn ask(&self) {
+        // A lock that another thread died holding is still the state.
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.asked += 1;
+        state.pass_on();
+    }
+}
+
+impl StopState {
+    /// Passes what was asked to the driver, where it has started.
+    fn pass_on(&mut self) {
+        let Some(driver) = &mut self.driver else {
+            return;
+        };
+        if self.asked > 1 {
+            // It may have ended by itself already.
+            let _ = driver.kill();
+        } else if self.asked == 1
+            && let Some(pipe) = &mut driver.stdin
+        {
+            // A driver that has ended reads nothing, and needs no stop.
+            let _ = pipe.write_all(b"stop\n").and_then(|()| pipe.flush());
+        }
+    }
+}
+
+/// Runs application `application` of a written program on hgraph, and
+/// says what became of it.
+///
+/// `python` is the interpreter to start, one that has hgraph.
+/// `directory` is where the program is written; `output` is what
+/// [`crate::transpile`] gave, and `application` a position in its
+/// `applications`, of one that is not blocked.
+///
+/// What the program logs and hgraph prints goes to this process's
+/// standard error, as it is printed: a run in real time may be a long
+/// one. Standard output is left to the caller, for the run's output.
+/// The run's outcome is read from a file the driver writes, so that
+/// nothing printed can be taken for it.
+///
+/// The run is stopped by its host in one of two ways. An interrupt
+/// from a terminal reaches the driver as it reaches the caller, and
+/// the driver takes it. Any other request is the caller's to pass on,
+/// through `stop`. Either way the run's output is what it recorded up
+/// to there, and the caller is to outlive what asked.
+pub fn run_application(
+    python: &Path,
+    directory: &Path,
+    output: &Output,
+    application: usize,
+    stop: &Stop,
+) -> RanApplication {
+    let driver = directory.join(ROOT).join(APPLICATION_DRIVER_FILE);
+    let results = directory.join(APPLICATION_RESULTS_FILE);
+    let written = write(&output.files, directory)
+        .and_then(|()| fs::write(&driver, APPLICATION_DRIVER))
+        // What an earlier run recorded in a directory that was kept is
+        // not this run's.
+        .and_then(|()| match fs::remove_file(&results) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        });
+    if let Err(error) = written {
+        return RanApplication::NotRun(format!(
+            "the program could not be written to {}: {error}",
+            directory.display()
+        ));
+    }
+    let described = &output.applications[application];
+    // `-B`: the interpreter writes no bytecode files, into the output
+    // directory or beside hgraph. Its standard input is a pipe a stop
+    // is passed down.
+    let started = Command::new(python)
+        .arg("-B")
+        .arg(&driver)
+        .arg(directory)
+        .arg(python_module(&described.path))
+        .arg(APPLICATION)
+        .arg(&results)
+        .arg(if described.real_time {
+            "real-time"
+        } else {
+            "simulation"
+        })
+        .stdin(Stdio::piped())
+        .spawn();
+    let child = match started {
+        Ok(child) => child,
+        Err(error) => {
+            return RanApplication::NotRun(format!(
+                "`{}` could not be started: {error}",
+                python.display()
+            ));
+        }
+    };
+    // The driver is where a stop can reach it, and one asked for
+    // before now is passed on.
+    {
+        let mut state = stop
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.driver = Some(child);
+        state.pass_on();
+    }
+    // Waits for the driver with the lock held only to look: a stop is
+    // asked from another thread while this one waits.
+    let status = loop {
+        let mut state = stop
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ended = match state.driver.as_mut().map(Child::try_wait) {
+            Some(Ok(None)) => None,
+            Some(Ok(Some(status))) => Some(Ok(status)),
+            Some(Err(error)) => Some(Err(error)),
+            None => Some(Err(io::Error::other("the driver was lost"))),
+        };
+        if let Some(ended) = ended {
+            state.driver = None;
+            break ended;
+        }
+        drop(state);
+        thread::sleep(Duration::from_millis(20));
+    };
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            return RanApplication::NotRun(format!(
+                "`{}` could not be waited for: {error}",
+                python.display()
+            ));
+        }
+    };
+    let recorded = fs::read_to_string(&results).unwrap_or_default();
+    let mut started = false;
+    let mut by_host = false;
+    let mut published: Vec<(String, String)> = Vec::new();
+    for line in recorded.lines() {
+        let (what, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match what {
+            "start" => started = true,
+            "host" => by_host = true,
+            "published" => {
+                let (at, value) = rest.split_once(' ').unwrap_or((rest, ""));
+                published.push((at.to_string(), unescaped(value)));
+            }
+            "stopped" => {
+                return RanApplication::Stopped {
+                    output: (rest != "none").then_some(published),
+                    by_host,
+                };
+            }
+            "failed" => return RanApplication::Failed(unescaped(rest)),
+            "unloaded" => {
+                return RanApplication::NotRun(format!(
+                    "its module could not be loaded: {}",
+                    unescaped(rest)
+                ));
+            }
+            _ => {}
+        }
+    }
+    let when = if started { "while running" } else { "before" };
+    RanApplication::NotRun(format!(
+        "the interpreter stopped ({status}) {when} the application"
+    ))
+}
 
 /// What became of a test given to [`run`].
 #[derive(Debug, Clone, PartialEq, Eq)]

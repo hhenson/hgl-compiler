@@ -37,12 +37,13 @@
 //! its target's result (core's CEVAL-1), each written for the type it
 //! is of.
 //!
-//! An application's run statement is not written yet, and is not read
-//! here.
+//! An application's run statement asks as an eval does: for what its
+//! call and its configuration name, and for core's `record` of its
+//! entry's result (core's CRUN-8).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, walk_statements};
+use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Run, Stmt, walk_statements};
 use hgl_analyser::{
     Argument as GenericArgument, DeclarationKind, Detail, Program, Role, Signature, Type,
 };
@@ -147,6 +148,33 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
         inputs,
         result: published(eval),
     })
+}
+
+/// The type of what the entry of the run statement `run` publishes,
+/// which the run records (core's CRUN-8): "The run wires `record` to
+/// the entry's result". `None` for an entry with no result, and where
+/// the statement's call is no call of a function.
+pub(crate) fn run_result(program: &Program, run: &Run) -> Option<Type> {
+    let ExprKind::Call {
+        callee:
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            },
+        ..
+    } = &run.call.kind
+    else {
+        return None;
+    };
+    let Some(Detail::Callable(signature)) = program.modules[*module].details.get(*declaration)
+    else {
+        return None;
+    };
+    // The call's own type is the result as this call has it: with the
+    // generic arguments of the call in place of the entry's generic
+    // parameters.
+    signature.result.as_ref().map(|_| run.call.ty.clone())
 }
 
 /// The temporal function `name` of core's module: `replay`, `record`.
@@ -311,6 +339,25 @@ impl Instances {
             }
             for body in module.test_bodies.iter().flatten() {
                 waiting.extend(instances.asked(program, &body.statements));
+            }
+            // UNIT-14: an application's run statement, which names its
+            // entry and is recorded by core's `record`.
+            if let Some(run) = &module.run_body {
+                waiting.extend(instances.asked_in(program, &run.call));
+                if let Some(config) = &run.config {
+                    waiting.extend(instances.asked_in(program, config));
+                }
+                let record = core_function(program, "record");
+                if let (Some((module, declaration)), Some(result)) =
+                    (record, run_result(program, run))
+                {
+                    waiting.push_back(Asked {
+                        module,
+                        declaration,
+                        generics: vec![GenericArgument::Type(result)],
+                        requirements: Vec::new(),
+                    });
+                }
             }
             // What is worked out with no body around it: a constant's
             // value, and a default (UNIT-13, UNIT-8).

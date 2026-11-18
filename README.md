@@ -30,7 +30,7 @@ the front end. The first target is the
 | Analyser, error reporting | first passes: modules, parts, declarations, imports, test scopes and the names used in signatures and bodies (`hgl check`); types, phases and constants planned |
 | Test runner | rejection cases: `# expect-error` annotations matched one to one against diagnostics, for every catalogued code the compiler reports (`hgl test`); tests run on hgraph (`hgl test --target hgraph`), where the target writes what they need |
 | Optimiser | planned |
-| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, structs as ordinary values, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`) |
+| Transpiler | hgraph, first slice: scalar nodes, value functions, operator candidates with a body, enums, structs as ordinary values, results and errors, graphs that call nodes and lift value functions and symbols over connections, and tests with dense evals, as Python wiring (`hgl emit`); an application run on hgraph (`hgl run`) |
 
 Design, crate layout and planned order: [docs/architecture.md](docs/architecture.md).
 Each rule and the stage that implements it: [docs/rules.md](docs/rules.md).
@@ -45,6 +45,7 @@ cargo run -- tree path/to/file.hgl
 cargo run -- check path/to/sources --modules
 cargo run -- test path/to/sources --rejections-only
 cargo run -- test path/to/sources --integration
+cargo run -- run path/to/sources --application demo.app --python path/to/python
 cargo doc --workspace --no-deps --open
 ```
 
@@ -67,9 +68,14 @@ reported `not run`, with the form. An `integration_test` is left out
 unless `--integration` asks for them or `--test NAME` names it.
 `hgl emit --out DIR` writes an
 accepted program as Python wiring for hgraph, and reports what the
-target does not write yet. Exit status is 0 when the source is accepted
-and every selected case passed, 1 when the source is rejected or a case
-failed, 2 when the command could not run or a selected test was not
+target does not write yet. `hgl run` runs an application of the program
+on hgraph, the one `--application PATH` names or the only one, and prints
+its output when the run has stopped: a line for each publication of its
+entry's result. An `eval` application is a simulation; a `run` one is in
+real time, and an interrupt stops it. Exit status is 0 when the source is
+accepted and every selected case passed or the application's run ended,
+1 when the source is rejected, a case failed or the run failed, 2 when
+the command could not run or a selected test or the application was not
 run.
 
 The compiler reports nesting deeper than 100 levels and a syntax tree deeper

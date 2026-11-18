@@ -9,11 +9,12 @@
 //! hgl check <roots>     syntax trees --[analyse]--> program; its errors reported
 //! hgl test <roots>      the program's cases, each checked; the outcome of each
 //! hgl emit <roots>      program --[transpile]--> files for a target, written
+//! hgl run <roots>       an application of the program, run on a target
 //! ```
 //!
-//! `tokens` and `tree` read one file. `check`, `test` and `emit` read a
-//! program: every `.hgl` file under the source roots they are given.
-//! `test --target` also runs the program's tests on that target.
+//! `tokens` and `tree` read one file. `check`, `test`, `emit` and `run`
+//! read a program: every `.hgl` file under the source roots they are
+//! given. `test --target` also runs the program's tests on that target.
 //!
 //! This file contains no compiler logic. It reads arguments, finds and
 //! reads files, calls the stage crates, and prints. Argument parsing is delegated to the `clap`
@@ -25,9 +26,9 @@
 //!
 //! | Status | Meaning                                                    |
 //! | ------ | ---------------------------------------------------------- |
-//! | 0      | The source was accepted; every selected case passed.       |
-//! | 1      | The source was rejected, or a case failed; the reasons are on standard error. |
-//! | 2      | The command could not run: bad arguments, unreadable file, a selected test that was not run. |
+//! | 0      | The source was accepted; every selected case passed; the application's run ended. |
+//! | 1      | The source was rejected, a case failed, or the application's run failed; the reasons are on standard error. |
+//! | 2      | The command could not run: bad arguments, unreadable file, a selected test or an application that was not run. |
 //!
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
@@ -40,7 +41,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hgl_analyser::{Detail, ImportKind, ParsedFile, Program};
 use hgl_diagnostics::{Diagnostics, Severity, render};
-use hgl_hgraph::Ran;
+use hgl_hgraph::{Ran, RanApplication, Stop};
 use hgl_lexer::{Token, TokenKind, lex, literal};
 use hgl_parser::ast::{self, AstNode};
 use hgl_parser::{Entry, Limits};
@@ -81,6 +82,9 @@ enum Command {
     Test(TestArgs),
     /// Write a program for a target, into a directory.
     Emit(EmitArgs),
+    /// Run an application of a program on a target, and print its
+    /// output.
+    Run(RunArgs),
 }
 
 /// Arguments of `hgl tokens`.
@@ -192,8 +196,40 @@ struct EmitArgs {
     limits: LimitArgs,
 }
 
-/// What `hgl emit` writes for and `hgl test` runs on. Each is a
-/// transpiler crate of its own.
+/// Arguments of `hgl run`.
+#[derive(Args)]
+struct RunArgs {
+    /// Source roots, as for `hgl check`.
+    #[arg(required = true, value_name = "ROOT")]
+    roots: Vec<PathBuf>,
+
+    /// The application to run, by its path: `examples.entry.backtest`.
+    /// It may be left out where the program has one application.
+    #[arg(long, value_name = "PATH")]
+    application: Option<String>,
+
+    /// The target to run it on.
+    #[arg(long, value_enum, default_value_t = Target::Hgraph)]
+    target: Target,
+
+    /// For `--target hgraph`: the Python interpreter to run the
+    /// program with, one that has hgraph installed. `python3` when not
+    /// given, or `python` on Windows.
+    #[arg(long, value_name = "PATH")]
+    python: Option<PathBuf>,
+
+    /// Keep what the target wrote for the run in this directory. With
+    /// none, it is written to a temporary directory and removed after
+    /// the run.
+    #[arg(long, value_name = "DIR")]
+    keep: Option<PathBuf>,
+
+    #[command(flatten)]
+    limits: LimitArgs,
+}
+
+/// What `hgl emit` writes for, and `hgl test` and `hgl run` run on.
+/// Each is a transpiler crate of its own.
 #[derive(Clone, Copy, ValueEnum)]
 enum Target {
     /// Python wiring for hgraph.
@@ -261,6 +297,10 @@ fn main() -> ExitCode {
         Command::Emit(arguments) => {
             let stack = analysis_stack(arguments.limits.limits());
             on_stack_of(stack, move || emit(&arguments))
+        }
+        Command::Run(arguments) => {
+            let stack = analysis_stack(arguments.limits.limits());
+            on_stack_of(stack, move || run(&arguments))
         }
     }
 }
@@ -678,6 +718,167 @@ fn emit(arguments: &EmitArgs) -> ExitCode {
         arguments.out.display()
     );
     report(&sources, diagnostics)
+}
+
+/// `hgl run`: runs an application of a program on a target (UNIT-14,
+/// RUN-1), and prints the run's output: a line for each publication of
+/// the entry's result, its instant and then what was published.
+///
+/// ```text
+/// 1970-01-01T00:00:00.000001Z  1970-01-01T00:00:00.000001Z
+/// 1970-01-01T00:00:00.500001Z  1970-01-01T00:00:00.500001Z
+/// ran examples.entry.backtest on hgraph: 2 publications
+/// ```
+///
+/// What the program logs and what the target prints goes to standard
+/// error, as the run goes. The output is printed to standard output
+/// when the run has stopped: core's CRUN-8 has it as the recording
+/// "once the run has stopped", and CRUN-6 gives a run that failed
+/// none.
+///
+/// RUN-3: `eval` is a simulation, and `run` is in real time "until the
+/// configuration's end or until its host stops it". An interrupt is
+/// the host's stop: the run ends as it does at its end, and what it
+/// recorded up to then is printed.
+///
+/// RUN-2's replacement of an argument or of a field of the
+/// configuration by what starts the application is not written: the
+/// application runs as it is written.
+fn run(arguments: &RunArgs) -> ExitCode {
+    let Parsed {
+        sources,
+        files: parsed,
+        mut diagnostics,
+        ..
+    } = match parse_program(&arguments.roots, arguments.limits.limits()) {
+        Ok(program) => program,
+        Err(status) => return status,
+    };
+    let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    if diagnostics.has_errors() {
+        println!("not run: the program is rejected");
+        return report(&sources, diagnostics);
+    }
+    let Target::Hgraph = arguments.target;
+    // What the target does not write yet is no error of the program:
+    // it matters where the application needs it.
+    let mut unwritten = Diagnostics::new();
+    let output = hgl_hgraph::transpile(&program, &mut unwritten);
+    let paths = || {
+        let paths: Vec<&str> = output
+            .applications
+            .iter()
+            .map(|application| application.path.as_str())
+            .collect();
+        paths.join(", ")
+    };
+    let chosen = match (&arguments.application, output.applications.as_slice()) {
+        (_, []) => {
+            eprintln!("hgl: the program has no application to run");
+            return ExitCode::from(EXIT_FAILED);
+        }
+        (None, [_]) => 0,
+        (None, several) => {
+            eprintln!(
+                "hgl: the program has {}; name one with `--application`: {}",
+                count(several.len(), "application"),
+                paths()
+            );
+            return ExitCode::from(EXIT_FAILED);
+        }
+        (Some(path), applications) => {
+            match applications
+                .iter()
+                .position(|application| application.path == *path)
+            {
+                Some(found) => found,
+                None => {
+                    eprintln!(
+                        "hgl: the program has no application `{path}`; it has: {}",
+                        paths()
+                    );
+                    return ExitCode::from(EXIT_FAILED);
+                }
+            }
+        }
+    };
+    let application = &output.applications[chosen];
+    let name = hgl_hgraph::TARGET;
+    if let Some(diagnostic) = &application.blocked {
+        let source = sources.file(diagnostic.primary.file);
+        eprintln!(
+            "{}:{}: {}",
+            source.name(),
+            source.line_col(diagnostic.primary.span.start),
+            diagnostic.message
+        );
+        println!(
+            "not run: the {name} target does not write all that {} needs yet",
+            application.path
+        );
+        return ExitCode::from(EXIT_FAILED);
+    }
+
+    // The directory the program is written to: the one to keep, or a
+    // temporary one that is removed when `temporary` is dropped at the
+    // end of this function.
+    let temporary;
+    let directory = match &arguments.keep {
+        Some(directory) => directory.as_path(),
+        None => match tempfile::Builder::new().prefix("hgl-run-").tempdir() {
+            Ok(made) => {
+                temporary = made;
+                temporary.path()
+            }
+            Err(error) => {
+                eprintln!("hgl: a temporary directory could not be made: {error}");
+                return ExitCode::from(EXIT_FAILED);
+            }
+        },
+    };
+    let python = arguments
+        .python
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "python" } else { "python3" }));
+    // An interrupt or a request to end, of this process, is the host's
+    // stop of the run (RUN-3). It is passed to the interpreter, which
+    // one sent to this process alone does not reach, and this process
+    // outlives it, to print what the run recorded. Where the handler
+    // cannot be set the run goes on all the same, and an interrupt
+    // then ends this process as it always did.
+    let stop = Stop::new();
+    let asked = stop.clone();
+    let _ = ctrlc::set_handler(move || asked.ask());
+    match hgl_hgraph::run_application(&python, directory, &output, chosen, &stop) {
+        RanApplication::Stopped { output, by_host } => {
+            let how = if by_host { " until it was stopped" } else { "" };
+            match output {
+                Some(published) => {
+                    for (at, value) in &published {
+                        println!("{at}  {value}");
+                    }
+                    println!(
+                        "ran {} on {name}{how}: {}",
+                        application.path,
+                        count(published.len(), "publication")
+                    );
+                }
+                None => println!(
+                    "ran {} on {name}{how}: its entry has no result",
+                    application.path
+                ),
+            }
+            ExitCode::SUCCESS
+        }
+        RanApplication::Failed(message) => {
+            eprintln!("hgl: {} failed: {message}", application.path);
+            ExitCode::from(EXIT_REJECTED)
+        }
+        RanApplication::NotRun(reason) => {
+            eprintln!("hgl: {} was not run: {reason}", application.path);
+            ExitCode::from(EXIT_FAILED)
+        }
+    }
 }
 
 /// `hgl test`: checks the cases of a program and prints the outcome of
