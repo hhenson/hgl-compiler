@@ -6,7 +6,7 @@
 mod common;
 
 use common::check;
-use hgl_analyser::hir::{Callee, ExprKind};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -23,6 +23,145 @@ const MODULE: &str = concat!(
     "    }\n",
     "}\n",
 );
+
+/// A module whose entry reads a key of the store.
+const LIMITED: &str = concat!(
+    "module app.limited\n",
+    "\n",
+    "export fn counted(const every: duration = 1s) -> i64 {\n",
+    "    inject global_state\n",
+    "    cache count: i64 = 0\n",
+    "    while count < get<i64>(global_state, \"limit\") {\n",
+    "        count += 1\n",
+    "        yield every: count\n",
+    "    }\n",
+    "}\n",
+);
+
+/// UNIT-14: "Between its declarations and its run statement it may set
+/// the run's store: `inject global_state`, and then calls of `put` on
+/// it. Each is evaluated once, in the order written, before the run's
+/// graph is built, and its value is read as a constant's is (UNIT-13),
+/// with no parameter in scope." FN-9: "An application injects
+/// `global_state` and no other".
+#[test]
+fn an_application_sets_its_runs_store_before_its_run() {
+    let checked = check(&[
+        ("limited.hgl", LIMITED),
+        (
+            "three.hgl",
+            concat!(
+                "application app.limited.three\n",
+                "\n",
+                "use app.limited::{counted}\n",
+                "\n",
+                "const base: i64 = 2\n",
+                "\n",
+                "inject global_state\n",
+                "put(global_state, \"limit\", base + 1)\n",
+                "put(global_state, \"venue\", \"XLON\")\n",
+                // The store is `put`'s first parameter, wherever its
+                // argument is written.
+                "put(key: \"pace\", store: global_state, value: 2s)\n",
+                "\n",
+                "eval(counted())\n",
+            ),
+        ),
+    ]);
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let application = checked.program.module("app.limited.three").unwrap();
+    assert_eq!(application.store.len(), 4);
+    // The statements are typed together: the store is the one local,
+    // and each `put` a call of core's.
+    let body = application.store_body.as_ref().expect("the store is set");
+    let locals: Vec<String> = body
+        .locals
+        .iter()
+        .map(|local| format!("{}: {}", local.name, local.ty))
+        .collect();
+    assert_eq!(locals, ["global_state: GlobalState"]);
+    let puts = body
+        .statements
+        .iter()
+        .filter(|statement| {
+            matches!(
+                statement,
+                Stmt::Expr(value) if matches!(value.kind, ExprKind::Call { .. })
+            )
+        })
+        .count();
+    assert_eq!(puts, 3);
+    // A module has none, and neither has an application that writes
+    // none.
+    let module = checked.program.module("app.limited").unwrap();
+    assert!(module.store.is_empty() && module.store_body.is_none());
+}
+
+/// UNIT-14: "Any other statement there rejects
+/// (`application.statement`). A module holds none of these." TIME-8: a
+/// capability is used "for the `global_state` an application injects,
+/// in the statements before its run statement".
+#[test]
+fn a_statement_that_sets_no_store_is_rejected() {
+    let checked = check(&[
+        ("limited.hgl", LIMITED),
+        (
+            "module.hgl",
+            // In a module.
+            concat!(
+                "module app.other\n",
+                "inject global_state\n",
+                "put(global_state, \"limit\", 3)\n",
+            ),
+        ),
+        (
+            "wrong.hgl",
+            concat!(
+                "application app.limited.wrong\n",
+                "use app.limited::{counted}\n",
+                // Before a declaration.
+                "inject global_state\n",
+                "const base: i64 = 2\n",
+                "eval(counted())\n",
+                // After the run statement.
+                "put(global_state, \"limit\", 3)\n",
+            ),
+        ),
+        (
+            "calls.hgl",
+            concat!(
+                "application app.limited.calls\n",
+                "use app.limited::{counted}\n",
+                // Another capability, and one beside the store.
+                "inject clock\n",
+                "inject global_state, logger\n",
+                // A call that is no `put`, and one on no store.
+                "has(global_state, \"limit\")\n",
+                "log_info(logger, \"set\")\n",
+                "put(global_state, \"limit\", 3)\n",
+                // A value that reads the store: no constant's.
+                "put(global_state, \"next\", get<i64>(global_state, \"limit\") + 1)\n",
+                "eval(counted())\n",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        checked.summary(),
+        [
+            "calls.hgl:3:8 phase/application.statement UNIT-14",
+            "calls.hgl:4:22 phase/application.statement UNIT-14",
+            "calls.hgl:5:1 phase/application.statement UNIT-14",
+            "calls.hgl:6:1 phase/application.statement UNIT-14",
+            "calls.hgl:8:36 phase/application.statement UNIT-14",
+            "module.hgl:2:1 phase/application.statement UNIT-14",
+            "module.hgl:3:1 phase/application.statement UNIT-14",
+            "wrong.hgl:3:1 phase/application.statement UNIT-14",
+            "wrong.hgl:6:1 phase/application.statement UNIT-14",
+        ],
+        "{}",
+        checked.report
+    );
+}
 
 /// UNIT-14: "An application is one file, headed `application name`,
 /// where a module's files are headed `module name`. It holds what a

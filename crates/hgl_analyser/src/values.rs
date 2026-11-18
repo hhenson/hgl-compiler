@@ -43,6 +43,7 @@ use crate::hir::{
 };
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
+    StoreStatement,
 };
 use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
 use crate::types::{
@@ -243,6 +244,33 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             )
             .run_statement()
         });
+        // UNIT-14: the statements an application sets its run's store
+        // with are no declaration either. They are read together, as
+        // the statements of one block are.
+        let store_body = module.store.first().and_then(|first| {
+            let stand_in = Declaration {
+                name: "store".to_string(),
+                at: first.at,
+                kind: DeclarationKind::Function(Role::Temporal),
+                exported: false,
+                test_only: false,
+                file: first.file,
+                syntax: first.syntax.clone(),
+            };
+            Typer::new(
+                program,
+                module,
+                &stand_in,
+                &empty,
+                Tables {
+                    bindings: &bindings,
+                    written: &written,
+                    calls: &calls,
+                },
+                diagnostics,
+            )
+            .store(&module.store)
+        });
         // UNIT-8: "Defaults remain required-constant/cold expressions
         // checked against the expected type. Any parameter but a pack
         // may have one: a value function's, const configuration, or a
@@ -332,6 +360,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
         program.modules[index].run_body = run_body;
+        program.modules[index].store_body = store_body;
         program.modules[index].defaults = defaults;
     }
 }
@@ -905,6 +934,163 @@ impl<'a> Typer<'a> {
             locals: self.locals,
             statements,
         })
+    }
+
+    /// The statements an application sets its run's store with
+    /// (UNIT-14): "`inject global_state`, and then calls of `put` on
+    /// it. Each is evaluated once, in the order written, before the
+    /// run's graph is built, and its value is read as a constant's is
+    /// (UNIT-13), with no parameter in scope. Any other statement
+    /// there rejects (`application.statement`)."
+    ///
+    /// They are read as the statements of a node's `start` are, which
+    /// is where a node uses a capability before its graph runs: with
+    /// no parameter and no input, each is value code.
+    fn store(mut self, written: &[StoreStatement]) -> Option<Body> {
+        self.hook = Some(Hook::Start);
+        let mut statements = Vec::new();
+        for store in written {
+            let Some(node) = store.syntax.children().next() else {
+                continue;
+            };
+            if node.kind() == SyntaxKind::InjectDecl {
+                // "An application injects `global_state` and no other"
+                // (FN-9).
+                for name in tokens(&node).filter(|token| token.kind() == SyntaxKind::Ident) {
+                    if name.text() != "global_state" {
+                        self.diagnostics.emit(error(
+                            Category::Phase,
+                            codes::APPLICATION_STATEMENT,
+                            Location::new(self.file, name.span()),
+                            format!(
+                                "an application injects `global_state` alone, to set its \
+                                 run's store, and not `{}`",
+                                name.text()
+                            ),
+                            "UNIT-14",
+                        ));
+                    }
+                }
+                statements.extend(self.inject(&node));
+                continue;
+            }
+            let reported = self.diagnostics.len();
+            let statement = self.statement(&node);
+            // A call that is itself rejected is not judged again
+            // (ERR-9).
+            if self.diagnostics.len() == reported && !self.puts_to_the_store(&statement) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Phase,
+                        codes::APPLICATION_STATEMENT,
+                        store.at,
+                        "an application's statement before its run sets the run's store, and \
+                         this is no `put` on it"
+                            .to_string(),
+                        "UNIT-14",
+                    )
+                    .with_note("`inject global_state`, and then `put(global_state, key, value)`"),
+                );
+            } else if self.diagnostics.len() == reported {
+                // "its value is read as a constant's is (UNIT-13)": the
+                // store is `put`'s own argument, and is read by nothing
+                // the call is given. A value that reads the store,
+                // `get<i64>(global_state, "limit") + 1`, is no
+                // constant's.
+                for at in self.reads_of_the_store(&statement) {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Phase,
+                            codes::APPLICATION_STATEMENT,
+                            at,
+                            "what a store statement puts is read as a constant's value is, \
+                             and reads no capability: the store is `put`'s own argument"
+                                .to_string(),
+                            "UNIT-14",
+                        )
+                        .with_note(
+                            "a constant, or a call of a `const fn` on constants, is such a value",
+                        ),
+                    );
+                }
+            }
+            statements.push(statement);
+        }
+        Some(Body {
+            locals: self.locals,
+            statements,
+        })
+    }
+
+    /// Where a `put` on the store reads the store again, in what it is
+    /// given beside the store itself: each use of the injected
+    /// capability inside its key or its value.
+    fn reads_of_the_store(&self, statement: &Stmt) -> Vec<Location> {
+        let Stmt::Expr(Expr {
+            kind: ExprKind::Call { arguments, .. },
+            ..
+        }) = statement
+        else {
+            return Vec::new();
+        };
+        let mut reads = Vec::new();
+        for argument in arguments {
+            // The store itself: `put`'s first parameter.
+            if argument.parameter == Some(0) {
+                continue;
+            }
+            argument.value.walk(&mut |part| {
+                if let ExprKind::Local(local) = &part.kind
+                    && self.locals[*local].kind == LocalKind::Inject
+                {
+                    reads.push(part.at);
+                }
+            });
+        }
+        reads
+    }
+
+    /// True for a statement that is a call of core's `put` on the
+    /// store the unit injects: `put(global_state, "limit", 3)`.
+    fn puts_to_the_store(&self, statement: &Stmt) -> bool {
+        let Stmt::Expr(Expr {
+            kind: ExprKind::Call {
+                callee, arguments, ..
+            },
+            ..
+        }) = statement
+        else {
+            return false;
+        };
+        let (module, declaration) = match callee {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => (*module, *declaration),
+            _ => return false,
+        };
+        let put = Some(module) == self.program.core()
+            && self.program.modules[module].declarations[declaration].name == "put";
+        // The store is `put`'s first parameter, wherever its argument
+        // is written: `put(key: "limit", store: global_state, value: 3)`.
+        let on_store = arguments
+            .iter()
+            .find(|argument| argument.parameter == Some(0))
+            .is_some_and(|argument| {
+                matches!(
+                    &argument.value.kind,
+                    ExprKind::Local(local)
+                        if self.locals[*local].kind == LocalKind::Inject
+                            && self.locals[*local].name == "global_state"
+                )
+            });
+        put && on_store
     }
 
     /// `assert condition`, or `assert raises("code") { ... }` (TST-4,

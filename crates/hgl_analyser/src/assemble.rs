@@ -120,6 +120,8 @@ pub(crate) fn assemble<'a>(
             constants: Vec::new(),
             run: None,
             run_body: None,
+            store: Vec::new(),
+            store_body: None,
             defaults: Vec::new(),
             phases: Vec::new(),
             written: Vec::new(),

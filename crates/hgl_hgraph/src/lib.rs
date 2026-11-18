@@ -46,6 +46,7 @@
 //! | `assert raises("code") { ... }` | A `try` whose handler is `_harness.raised(error, "code")` |
 //! | `eval(...) == [...]` | `_harness.same(left, right)` |
 //! | An application's `eval(entry(n: 3), RunConfig(length: 2s))` | `def _application(): return _harness.run(entry, _inst_record__i64, False, n=3, _config=...)` |
+//! | An application's `inject global_state` and `put(global_state, "limit", 3)` | `def _application_store(_store): ...`, given to `_harness.run` as `_store=` |
 //! | A trace given to a `const fn` | `_harness.publications(trace)` |
 //!
 //! `docs/architecture.md` says what is covered and what is not.

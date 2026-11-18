@@ -176,6 +176,17 @@ pub struct Module {
     pub run: Option<RunStatement>,
     /// That statement, typed. `None` where it could not be read.
     pub run_body: Option<Run>,
+    /// What an application sets its run's store with, as it is
+    /// written, in the order written (UNIT-14): "`inject global_state`,
+    /// and then calls of `put` on it", between its declarations and
+    /// its run statement. Empty for a module, and for an application
+    /// that writes none. One that stands where none may is reported
+    /// and is not here.
+    pub store: Vec<StoreStatement>,
+    /// Those statements, typed: `inject global_state` as the one local
+    /// it binds, and each call as a statement. `None` where there are
+    /// none.
+    pub store_body: Option<Body>,
     /// The defaults each declaration writes: one entry for each of
     /// `declarations`, in the same order. A callable's has one for each
     /// of its parameters (UNIT-8), and a struct's one for each of its
@@ -486,6 +497,18 @@ pub struct Test {
     /// The position of its file in [`Module::files`].
     pub file: usize,
     /// The test's syntax tree.
+    pub syntax: SyntaxNode,
+}
+
+/// A statement an application sets its run's store with, as it is
+/// written (UNIT-14).
+#[derive(Debug, Clone)]
+pub struct StoreStatement {
+    /// Where the statement starts.
+    pub at: Location,
+    /// The position of its file in [`Module::files`].
+    pub file: usize,
+    /// The statement's syntax tree: a `StoreStmt`.
     pub syntax: SyntaxNode,
 }
 
