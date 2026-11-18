@@ -287,6 +287,9 @@ const APPLICATION: &str = r#"application tour.live
 
 use tour.all::{arrow}
 
+inject global_state
+put(global_state, "limit", 3)
+
 run(arrow(1), RunConfig())
 "#;
 

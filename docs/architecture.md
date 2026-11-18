@@ -1699,8 +1699,9 @@ hgraph: the program's one application, or the one named.
 | Step | What does it |
 | --- | --- |
 | The run statement is written as a function, `_application`, in the application's own Python module | The transpiler |
+| What sets the run's store, `inject global_state` and the `put` calls before the run statement, is written as a function of the store, `_application_store` | The transpiler |
 | The function calls the harness's `run` with the entry, core's `record` for the entry's result, the mode, the entry's `const` arguments and the configuration | The generated code |
-| `run` wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
+| `run` makes the run's store, calls `_application_store` with it, wires the entry and `record` into a graph, runs it with hgraph, and gives what `record` put under `"run.output"` | `support/harness.py`: the run an eval is too |
 | A driver loads the module, calls the function on a thread of its own, and writes each publication to a results file | `support/run_application.py` |
 | `hgl run` starts the driver, and prints the publications once the run has stopped | `hgl_hgraph::run_application`, `hgl_cli` |
 

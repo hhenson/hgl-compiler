@@ -1337,7 +1337,7 @@ fn a_run_in_real_time_and_an_application_are_written() {
 /// `run(call, config)` or `eval(call, config)`, where the call is of an
 /// entry ... giving the entry's const arguments, and the configuration
 /// is a value of core's `RunConfig`".
-const APPLICATIONS: [(&str, &str); 6] = [
+const APPLICATIONS: [(&str, &str); 7] = [
     (
         "ticks.hgl",
         concat!(
@@ -1361,6 +1361,15 @@ const APPLICATIONS: [(&str, &str); 6] = [
             "}\n",
             "export fn quiet(const upto: i64) {\n",
             "    kept(counted(upto))\n",
+            "}\n",
+            // An entry that reads a key of the run's store.
+            "export fn limited(const every: duration = 1s) -> i64 {\n",
+            "    inject global_state\n",
+            "    cache count: i64 = 0\n",
+            "    while count < get<i64>(global_state, \"limit\") {\n",
+            "        count += 1\n",
+            "        yield every: count\n",
+            "    }\n",
             "}\n",
             // An entry whose run fails.
             "fn inverse(value: i64) -> i64 {\n",
@@ -1389,6 +1398,18 @@ const APPLICATIONS: [(&str, &str); 6] = [
             // RUN-3: `run` is in real time, here for a fifth of a
             // second.
             "run(counted(upto: 100, every: 50ms), RunConfig(length: 220ms))\n",
+        ),
+    ),
+    (
+        "seeded.hgl",
+        concat!(
+            "application demo.ticks.seeded\n",
+            "use demo.ticks::{limited}\n",
+            "const base: i64 = 2\n",
+            // UNIT-14: what sets the run's store, before the run.
+            "inject global_state\n",
+            "put(global_state, \"limit\", base + 1)\n",
+            "eval(limited())\n",
         ),
     ),
     (
@@ -1445,6 +1466,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             ("demo.ticks.broken", false, false),
             ("demo.ticks.endless", true, false),
             ("demo.ticks.live", true, false),
+            ("demo.ticks.seeded", false, false),
             ("demo.ticks.silent", false, false),
         ]
     );
@@ -1467,6 +1489,21 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             "upto=100, every=_dt.timedelta(microseconds=50000), ",
         )),
         "{live}"
+    );
+    // UNIT-14: what sets the run's store is a function of the store,
+    // given to the run, which calls it before it builds the graph.
+    let seeded = emitted.text("_hgl/_m_demo/_m_ticks/_m_seeded/__init__.py");
+    assert!(
+        seeded.ends_with(concat!(
+            "def _application_store(_store):\n",
+            "    _core.put_GlobalState_str_V(store=_store, key=\"limit\", ",
+            "value=_core.add__i64_i64(lhs=base(), rhs=1))\n",
+            "\n\n",
+            "def _application():\n",
+            "    return _harness.run(_hgl_4demo_5ticks.limited, _hgl_4core._inst_record__i64, ",
+            "False, every=_dt.timedelta(microseconds=1000000), _store=_application_store)\n",
+        )),
+        "{seeded}"
     );
     // An entry with no result is given no `record`, and a statement
     // with no configuration writes none.
@@ -5974,6 +6011,18 @@ fn an_application_runs_on_hgraph() {
             ("1970-01-01T00:00:01.000001Z", "2"),
             ("1970-01-01T00:00:02.000001Z", "4"),
             ("1970-01-01T00:00:03.000001Z", "6"),
+        ])
+    );
+
+    // UNIT-14, core's CRUN-7: the store holds what the application put
+    // there when the graph is built, so the entry reads its limit, 3,
+    // from its first evaluation.
+    assert_eq!(
+        ran("demo.ticks.seeded"),
+        published(&[
+            ("1970-01-01T00:00:01.000001Z", "1"),
+            ("1970-01-01T00:00:02.000001Z", "2"),
+            ("1970-01-01T00:00:03.000001Z", "3"),
         ])
     );
 

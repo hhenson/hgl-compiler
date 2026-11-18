@@ -14,7 +14,8 @@ use hgl_parser::{HasSpan, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::program::{
-    Declaration, DeclarationKind, Import, ImportKind, Module, Role, RunStatement, Test,
+    Declaration, DeclarationKind, Import, ImportKind, Module, Role, RunStatement, StoreStatement,
+    Test,
 };
 use crate::{codes, error};
 
@@ -27,6 +28,7 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
         instantiations: Vec::new(),
         application: module.application,
         runs: Vec::new(),
+        stores: Vec::new(),
         diagnostics,
     };
     let mut run_omitted = false;
@@ -79,6 +81,30 @@ pub(crate) fn declare(module: &mut Module, omits: &[&[Span]], diagnostics: &mut 
     // it writes more.
     if module.application {
         module.run = walk.runs.into_iter().next().map(|run| run.statement);
+    }
+    // UNIT-14: "Between its declarations and its run statement it may
+    // set the run's store ... A module holds none of these." One that
+    // stands elsewhere is reported, and sets nothing.
+    for store in walk.stores {
+        let wrong = if !module.application {
+            Some("stands in a module: an application sets its run's store")
+        } else if store.late {
+            Some("follows the run statement: the store is set before the run")
+        } else if store.followed {
+            Some("stands before a declaration: the store is set after the declarations")
+        } else {
+            None
+        };
+        match wrong {
+            Some(why) => walk.diagnostics.emit(error(
+                Category::Phase,
+                codes::APPLICATION_STATEMENT,
+                store.statement.at,
+                format!("this statement {why}"),
+                "UNIT-14",
+            )),
+            None => module.store.push(store.statement),
+        }
     }
     module.declarations = walk.declarations;
     module.tests = walk.tests;
@@ -208,7 +234,19 @@ struct Walk<'a> {
     application: bool,
     /// Each run statement, in file order and then source order.
     runs: Vec<WalkedRun>,
+    /// Each statement that sets the run's store, in the same order.
+    stores: Vec<WalkedStore>,
     diagnostics: &'a mut Diagnostics,
+}
+
+/// A statement that sets the run's store, which the walk has met.
+struct WalkedStore {
+    /// The statement, as written.
+    statement: StoreStatement,
+    /// True when a declaration of its file follows it (UNIT-14).
+    followed: bool,
+    /// True when a run statement of its file stands before it.
+    late: bool,
 }
 
 /// A run statement the walk has met.
@@ -226,9 +264,12 @@ impl Walk<'_> {
         let syntax = item.syntax().clone();
         // UNIT-14: the run statement "follows its declarations". A
         // declaration of the file after one is marked against it.
-        if !in_test && !matches!(item, Item::Run(_)) {
+        if !in_test && !matches!(item, Item::Run(_) | Item::Store(_)) {
             for run in &mut self.runs {
                 run.followed = true;
+            }
+            for store in &mut self.stores {
+                store.followed = true;
             }
         }
         // Each arm gives the item's name, what it is, and its `export`
@@ -253,6 +294,23 @@ impl Walk<'_> {
                             syntax,
                         },
                         followed: false,
+                    });
+                }
+                return;
+            }
+            // UNIT-14: a statement that sets the run's store declares
+            // nothing. One in a test context has been rejected by the
+            // parser (TST-1).
+            Item::Store(_) => {
+                if !in_test {
+                    self.stores.push(WalkedStore {
+                        statement: StoreStatement {
+                            at: Location::new(file, first_token_span(&syntax)),
+                            file: index,
+                            syntax,
+                        },
+                        followed: false,
+                        late: !self.runs.is_empty(),
                     });
                 }
                 return;

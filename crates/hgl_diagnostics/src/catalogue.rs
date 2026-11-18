@@ -48,6 +48,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Module, "application.import"),
     (Category::Module, "application.export"),
     (Category::Module, "application.run_count"),
+    (Category::Phase, "application.statement"),
     (Category::Phase, "run.position"),
     (Category::Type, "run.entry"),
     (Category::Name, "name.duplicate"),

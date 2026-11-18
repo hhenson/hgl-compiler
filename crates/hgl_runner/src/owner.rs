@@ -203,6 +203,7 @@ fn label(item: &Item) -> String {
             Some(word) => format!("{} statement", word.text()),
             None => "run statement".to_string(),
         },
+        Item::Store(_) => "store statement".to_string(),
     }
 }
 

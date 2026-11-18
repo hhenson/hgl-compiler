@@ -251,6 +251,11 @@ pub mod codes {
     /// its application (UNIT-14); `run` is written in a test that is no
     /// integration test (RUN-3).
     pub const RUN_POSITION: &str = "run.position";
+    /// A statement of an application that is no `inject global_state`
+    /// and no call of `put` on it, or that follows the run statement
+    /// or precedes a declaration; and either of those in a module
+    /// (UNIT-14).
+    pub const APPLICATION_STATEMENT: &str = "application.statement";
     /// An application's path is a module's or another application's
     /// (UNIT-14).
     pub const APPLICATION_DUPLICATE_PATH: &str = "application.duplicate_path";

@@ -1145,6 +1145,56 @@ fn an_application_is_headed_by_its_line_and_holds_a_run_statement() {
     );
 }
 
+#[test]
+fn an_application_writes_what_sets_its_runs_store() {
+    // UNIT-14: "Between its declarations and its run statement it may
+    // set the run's store: `inject global_state`, and then calls of
+    // `put` on it." `store_statement = inject_decl | IDENTIFIER,
+    // call_suffix`.
+    assert_eq!(
+        accepted(
+            Entry::SourceFile,
+            "application a\n\ninject global_state\nput(global_state, \"limit\", 3)\n\nrun(beat())\n"
+        ),
+        "ApplicationDecl[\"application\" ModulePath[\"a\"]] \
+         StoreStmt[InjectDecl[\"inject\" \"global_state\"]] \
+         StoreStmt[ExprStmt[CallExpr[NameExpr[\"put\"] ArgList[\"(\" \
+         Arg[NameExpr[\"global_state\"]] \",\" Arg[Literal[\"\\\"limit\\\"\"]] \",\" \
+         Arg[Literal[\"3\"]] \")\"]]]] \
+         RunStmt[RunExpr[\"run\" ArgList[\"(\" Arg[CallExpr[NameExpr[\"beat\"] \
+         ArgList[\"(\" \")\"]]] \")\"]]]"
+    );
+    // Whether the file is an application's, which capability it
+    // injects and which function it calls are the analyser's to say:
+    // each of these is a store statement to the parser.
+    for text in [
+        "module a\n\ninject global_state\n",
+        "application a\n\ninject clock\n",
+        "application a\n\nhas(store, \"limit\")\n",
+    ] {
+        let outline = accepted(Entry::SourceFile, text);
+        assert!(outline.contains("StoreStmt["), "{outline}");
+    }
+    // A statement ends its line, and is a call and no other expression.
+    assert_eq!(
+        rejected(
+            Entry::SourceFile,
+            "application a\nput(store, \"a\", 1) + 2\n"
+        ),
+        ["LEX-5 2:20: expected a line break, found `+`"]
+    );
+    assert!(!rejected(Entry::SourceFile, "application a\nlet limit = 3\n").is_empty());
+    assert!(!rejected(Entry::SourceFile, "application a\n1 + 2\n").is_empty());
+    // TST-1: a test context holds none.
+    assert_eq!(
+        rejected(
+            Entry::SourceFile,
+            "module a\ntest {\n    inject global_state\n}\n"
+        ),
+        ["TST-1 3:5: a test context holds functions, structs, enums and named tests"]
+    );
+}
+
 // ---- TST-17 ----
 
 #[test]

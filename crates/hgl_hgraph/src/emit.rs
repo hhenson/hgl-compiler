@@ -2110,6 +2110,35 @@ impl Emitter<'_> {
         let Some(headed) = module.application_at() else {
             return;
         };
+        // UNIT-14: "Between its declarations and its run statement it
+        // may set the run's store: `inject global_state`, and then
+        // calls of `put` on it. Each is evaluated once, in the order
+        // written, before the run's graph is built". They are a
+        // function of the store, which the harness calls with the
+        // run's own before it builds the graph (core's CRUN-7).
+        let seeded = match &module.store_body {
+            Some(body) => {
+                let setting = Function {
+                    locals: &body.locals,
+                    signature: None,
+                    mode: Mode::Lifecycle,
+                };
+                // The `inject` is the function's parameter.
+                let puts: Vec<Stmt> = body
+                    .statements
+                    .iter()
+                    .filter(|statement| !matches!(statement, Stmt::Inject { .. }))
+                    .cloned()
+                    .collect();
+                self.hgraph = true;
+                self.line(0, "");
+                self.line(0, "");
+                self.line(0, &format!("def {APPLICATION}_store(_store):"));
+                self.block(&setting, &puts, 1);
+                true
+            }
+            None => false,
+        };
         self.line(0, "");
         self.line(0, "");
         self.line(0, &format!("def {APPLICATION}():"));
@@ -2122,8 +2151,14 @@ impl Emitter<'_> {
                     signature: None,
                     mode: Mode::Test,
                 };
-                self.piece.statements.push((1, run.at));
-                let written = self.run_statement(&function, run);
+                let line = self.text.matches('\n').count();
+                self.piece.statements.push((line, run.at));
+                let mut written = self.run_statement(&function, run);
+                if seeded {
+                    // Given last, by a name no parameter has.
+                    let call = written.strip_suffix(')').unwrap_or(&written).to_string();
+                    written = format!("{call}, _store={APPLICATION}_store)");
+                }
                 self.line(1, &format!("return {written}"));
             }
             // The analyser gave the statement no reading.
