@@ -438,8 +438,62 @@ def has_GlobalState_str(store, key):
 
 
 def put_GlobalState_str_V(store, key, value):
-    """CAP-6: "puts one there". It is kept as it is (`Held`)."""
-    store[key] = Held(value)
+    """CAP-6: "puts one there". It is kept as it is (`Held`). The store
+    keeps the value, so a list a place grows is marked as shared
+    (`shared`): the place's later growth does not reach the store."""
+    store[key] = Held(shared(value))
+
+
+class Grown(list):
+    """A list that a place grows where it is: what a `var`, a `state`
+    or a `cache` holds once `append` or `extend` has grown it.
+
+    LIST-3: "a value taken from the place before the call is as it
+    was". A `let`, a parameter and whatever else is given a place's
+    list is given the list itself, with no copy, and the list is then
+    marked as shared (`shared`). While `owned` holds nothing else has
+    the list, and it grows where it is; once it does not, the place
+    takes a copy before it grows, and what was given the list keeps it
+    as it was.
+    """
+
+    # One made in any other way than by `_own` is not a place's own.
+    owned = False
+
+
+def shared(values):
+    """`values`, marked as held by more than the place it was read
+    from. A value that is no list a place grows is given as it is."""
+    if type(values) is Grown:
+        values.owned = False
+    return values
+
+
+def _own(values):
+    """The list a place grows: `values` itself where the place alone
+    holds it, and a copy otherwise."""
+    if type(values) is Grown and values.owned:
+        return values
+    grown = Grown(values)
+    grown.owned = True
+    return grown
+
+
+def restored(values, length):
+    """What a place holds once a call that was given its list has
+    failed (the language's FN-15: a function that fails "assigns
+    nothing"): the list as long as it was before the call.
+
+    A list the place alone holds is cut back where it is. One that
+    something took while the call ran stays as that took it, and the
+    place holds a list of its first entries.
+    """
+    if len(values) <= length:
+        return values
+    if type(values) is Grown and values.owned:
+        del values[length:]
+        return values
+    return values[:length]
 
 
 def fn_append(values, item):
@@ -448,16 +502,20 @@ def fn_append(values, item):
 
     `values` is a `var` parameter (the language's FN-15), so this gives
     back the list the place is to hold, after a result it has none of.
-    A new list is made: "a value taken from the place before the call
-    is as it was" (LIST-3).
+    The list grows where it is while the place alone holds it (LIST-3,
+    `Grown`), and the list keeps `item`, which is marked as shared.
     """
-    return (None, [*values, item])
+    values = _own(values)
+    values.append(shared(item))
+    return (None, values)
 
 
 def fn_extend(values, items):
     """LIST-2: "each entry of `items` after its last entry, in the
-    order `items` has them". A new list, as `fn_append` makes."""
-    return (None, [*values, *items])
+    order `items` has them". The list grows as `fn_append` grows it."""
+    values = _own(values)
+    values.extend(items)
+    return (None, values)
 
 
 def get_dict_K__T__K(store, key):

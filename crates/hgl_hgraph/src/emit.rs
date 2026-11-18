@@ -1124,7 +1124,22 @@ impl Emitter<'_> {
         if places.is_empty() {
             return None;
         }
-        let ExprKind::Call { arguments, .. } = &value.kind else {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                },
+            arguments,
+            ..
+        } = &value.kind
+        else {
+            return None;
+        };
+        let Some(Detail::Callable(signature)) =
+            self.program.modules[*module].details.get(*declaration)
+        else {
             return None;
         };
         // FN-15: the place is the one the call's arguments name when
@@ -1201,7 +1216,12 @@ impl Emitter<'_> {
                     }
                 }
                 let held = format!("_arg_{}", position + 1);
-                let written = self.expression(function, &argument.value);
+                let written = if is_place(argument) {
+                    let in_place = given_in_place(function, signature, arguments, argument);
+                    self.given_place(function, &argument.value, in_place)
+                } else {
+                    self.expression(function, &argument.value)
+                };
                 self.line(depth, &format!("{held} = {written}"));
                 // An index is held until the place is assigned. What it
                 // is of is not: an earlier place's assignment may have
@@ -1211,10 +1231,47 @@ impl Emitter<'_> {
                 self.held.push((argument.value.at, held));
             }
         }
+        // FN-15: "A function that fails raises, and assigns nothing."
+        // A function of the program that is given a place's own list
+        // may have grown it where it is before it failed: the list is
+        // then put back to the length it had. The provider's own
+        // `append` and `extend` grow a list last, and do not fail
+        // once they have.
+        let bodied = self.program.modules[*module]
+            .bodies
+            .get(*declaration)
+            .is_some_and(Option::is_some);
+        let mut grown_in_place: Vec<String> = Vec::new();
+        if bodied {
+            for argument in arguments.iter().filter(|argument| is_place(argument)) {
+                if let ExprKind::Local(local) = &argument.value.kind
+                    && given_in_place(function, signature, arguments, argument)
+                {
+                    grown_in_place.push(self.place(function, *local));
+                }
+            }
+        }
+        for (index, place) in grown_in_place.iter().enumerate() {
+            self.line(depth, &format!("_was_{} = _py.len({place})", index + 1));
+        }
         self.place_call = true;
         let called = self.expression(function, value);
         self.place_call = false;
-        self.line(depth, &format!("_given = {called}"));
+        if grown_in_place.is_empty() {
+            self.line(depth, &format!("_given = {called}"));
+        } else {
+            self.natives = true;
+            self.line(depth, "try:");
+            self.line(depth + 1, &format!("_given = {called}"));
+            self.line(depth, "except _py.BaseException:");
+            for (index, place) in grown_in_place.iter().enumerate() {
+                self.line(
+                    depth + 1,
+                    &format!("{place} = _core.restored({place}, _was_{})", index + 1),
+                );
+            }
+            self.line(depth + 1, "raise");
+        }
         for (position, parameter) in places.iter().enumerate() {
             let Some(argument) = arguments
                 .iter()
@@ -1222,7 +1279,21 @@ impl Emitter<'_> {
             else {
                 continue;
             };
-            let given = format!("_given[{}]", position + 1);
+            let mut given = format!("_given[{}]", position + 1);
+            // A function whose parameter is not declared a list does
+            // not know it holds one, and may give back a list that
+            // something else holds: a local that holds a list of its
+            // own takes it marked as shared.
+            if let ExprKind::Local(local) = &argument.value.kind
+                && owns(function, *local)
+                && !signature
+                    .parameters
+                    .get(*parameter)
+                    .is_some_and(|parameter| matches!(parameter.ty, Type::List { .. }))
+            {
+                self.natives = true;
+                given = format!("_core.shared({given})");
+            }
             if let Some((target, assigned)) = self.assigned(function, &argument.value, given) {
                 self.line(depth, &format!("{target} = {assigned}"));
             }
@@ -1624,7 +1695,10 @@ impl Emitter<'_> {
             for (local, value) in &states {
                 let field = name(&body.locals[*local].name);
                 let value = match value {
-                    Some(value) => self.expression(&lifecycle_hook, value),
+                    Some(value) => {
+                        let written = self.expression(&lifecycle_hook, value);
+                        self.kept(&lifecycle_hook, *local, value, written)
+                    }
                     None => "None".to_string(),
                 };
                 self.line(1, &format!("_state.{field} = {value}"));
@@ -1790,7 +1864,10 @@ impl Emitter<'_> {
         for (local, value) in &states {
             let field = name(&body.locals[*local].name);
             let value = match value {
-                Some(value) => self.expression(&lifecycle_hook, value),
+                Some(value) => {
+                    let written = self.expression(&lifecycle_hook, value);
+                    self.kept(&lifecycle_hook, *local, value, written)
+                }
                 None => "None".to_string(),
             };
             self.line(1, &format!("_state.{field} = {value}"));
@@ -1912,6 +1989,108 @@ impl Emitter<'_> {
         self.text[before..].lines().count()
     }
 
+    /// `value` read by what keeps nothing of it, the read of an element
+    /// say: a local that holds a list of its own is read as it is, and
+    /// the list is not marked as shared ([`owns`]).
+    fn borrowed(&mut self, function: &Function, value: &Expr) -> String {
+        match &value.kind {
+            ExprKind::Local(local)
+                if owns(function, *local) && !self.held.iter().any(|(at, _)| *at == value.at) =>
+            {
+                self.place(function, *local)
+            }
+            _ => self.expression(function, value),
+        }
+    }
+
+    /// What is written into the local `local` for `value`, which is
+    /// written `written`. Where the local holds a list of its own
+    /// ([`owns`]) the list is marked as shared, since whatever `value`
+    /// read it from may hold it too: the local copies it before it
+    /// grows. A list written out is held by nothing else, and one read
+    /// from another such local is marked where it is read.
+    fn kept(&mut self, function: &Function, local: usize, value: &Expr, written: String) -> String {
+        fn fresh(function: &Function, value: &Expr) -> bool {
+            match &value.kind {
+                ExprKind::Sequence(_) => true,
+                ExprKind::Local(local) => owns(function, *local),
+                ExprKind::Widen(inner) => fresh(function, inner),
+                _ => false,
+            }
+        }
+        if owns(function, local) && !fresh(function, value) {
+            self.natives = true;
+            format!("_core.shared({written})")
+        } else {
+            written
+        }
+    }
+
+    /// What a `var` parameter is given for the place `value` (FN-15).
+    ///
+    /// `in_place` is true where the function may grow the list the
+    /// place holds where it is: its parameter is declared a list, the
+    /// place is a local that holds a list of its own, and no other
+    /// `var` parameter of the call is given that local. The list is
+    /// then given as it is. Any other place of a list type gives its
+    /// list marked as shared: an element or a field is held by
+    /// whatever else holds the value it is inside.
+    fn given_place(&mut self, function: &Function, value: &Expr, in_place: bool) -> String {
+        if let Some((_, held)) = self.held.iter().find(|(at, _)| *at == value.at) {
+            return held.clone();
+        }
+        match &value.kind {
+            ExprKind::Local(local) if in_place && owns(function, *local) => {
+                self.place(function, *local)
+            }
+            // A local that holds a list of its own marks it where it
+            // is read.
+            ExprKind::Local(_) => self.expression(function, value),
+            _ if grows(&value.ty) => {
+                self.natives = true;
+                let written = self.expression(function, value);
+                format!("_core.shared({written})")
+            }
+            _ => self.expression(function, value),
+        }
+    }
+
+    /// True where a call of `callee` keeps nothing of what it is
+    /// given past its return, so that a list is lent to it as it is:
+    /// a `const fn`, or a native one, with no result or a scalar one
+    /// and no `var` parameter, which is given data alone. Such a
+    /// function has nowhere to keep an argument: its result holds no
+    /// list, it assigns no place of the caller, and it is handed
+    /// nothing that outlives the call, a run's store say, to put one
+    /// in.
+    fn lends(
+        &self,
+        function: &Function,
+        callee: (usize, usize),
+        signature: &Signature,
+        arguments: &[Argument],
+    ) -> bool {
+        let declared = &self.program.modules[callee.0].declarations[callee.1];
+        // In a graph a call may be lifted to a node, which keeps its
+        // configuration.
+        function.mode != Mode::Graph
+            && declared.kind.role() == Some(Role::Value)
+            && signature.parameters.iter().all(|parameter| !parameter.var)
+            && arguments
+                .iter()
+                .all(|argument| data_alone(self.program, &argument.value.ty, 0))
+            && signature.result.as_ref().is_none_or(|result| {
+                scalar(result).is_some()
+                    || matches!(
+                        result,
+                        Type::Named {
+                            kind: NamedKind::Enum,
+                            ..
+                        }
+                    )
+            })
+    }
+
     /// What a local is written as where it is assigned or read as it
     /// is: a field of the node's state for a `state`, its name
     /// otherwise.
@@ -1976,10 +2155,11 @@ impl Emitter<'_> {
         match statement {
             Stmt::Declare { local, value } => {
                 if let Some(value) = value {
-                    let value = match self.place_call(function, value, depth) {
+                    let written = match self.place_call(function, value, depth) {
                         Some(result) => result,
                         None => self.expression(function, value),
                     };
+                    let value = self.kept(function, *local, value, written);
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
                 } else if matches!(function.locals[*local].ty, Type::Nullable(_)) {
@@ -2013,7 +2193,7 @@ impl Emitter<'_> {
                 {
                     self.published(value)
                 } else {
-                    value
+                    self.kept(function, *local, assigned, value)
                 };
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
@@ -2370,6 +2550,12 @@ impl Emitter<'_> {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
+                } else if owns(function, *local) {
+                    // LIST-3: what takes the list a place holds may
+                    // keep it, so the list is marked as shared: the
+                    // place copies it before it next grows.
+                    self.natives = true;
+                    format!("_core.shared({read})")
                 } else {
                     read
                 }
@@ -2653,7 +2839,7 @@ impl Emitter<'_> {
                     return "None".to_string();
                 };
                 self.natives = true;
-                let base = self.expression(function, base);
+                let base = self.borrowed(function, base);
                 let index = self.expression(function, index);
                 format!("_core.{read}({base}, {index})")
             }
@@ -2914,7 +3100,7 @@ impl Emitter<'_> {
                     }
                 };
                 self.natives = true;
-                let held = self.expression(function, base);
+                let held = self.borrowed(function, base);
                 let index = self.expression(function, index);
                 let value = format!("_core.{with}({held}, {index}, {value})");
                 self.assigned(function, base, value)
@@ -3036,12 +3222,22 @@ impl Emitter<'_> {
                 value
             }
         };
+        let lends = self.lends(function, callee, signature, arguments);
         let mut written: Vec<String> = arguments
             .iter()
             .filter_map(|argument| {
                 let index = argument.parameter?;
                 let parameter = signature.parameters.get(index)?;
-                let value = self.expression(function, &argument.value);
+                let value = if parameter.var {
+                    // FN-15: the place itself, where the function may
+                    // grow its list where it is.
+                    let in_place = given_in_place(function, signature, arguments, argument);
+                    self.given_place(function, &argument.value, in_place)
+                } else if lends {
+                    self.borrowed(function, &argument.value)
+                } else {
+                    self.expression(function, &argument.value)
+                };
                 Some(format!("{}={}", name(&parameter.name), kept(index, value)))
             })
             .collect();
@@ -4048,6 +4244,123 @@ fn held(ty: &Type) -> bool {
         Type::List { .. } | Type::Tuple(_) | Type::Dict { .. } => true,
         _ => false,
     }
+}
+
+/// True for a type whose value core's `append` and `extend` grow
+/// (LIST-1, LIST-2): a list, nullable or not.
+fn grows(ty: &Type) -> bool {
+    match ty {
+        Type::Nullable(inner) => grows(inner),
+        Type::List { .. } => true,
+        _ => false,
+    }
+}
+
+/// True for a type whose values are data alone: a scalar, an enum, and
+/// a list, a set, a tuple, a dictionary, a nullable or a struct of
+/// those. A value of any other type may be something that outlives a
+/// call, a capability say, or may hold one: a native type, a generic
+/// parameter, `any`, and a struct that another struct inherits from,
+/// whose value may be of that other struct.
+fn data_alone(program: &Program, ty: &Type, depth: usize) -> bool {
+    // A struct may hold itself inside a list: a type this deep is not
+    // followed further.
+    if depth > 8 {
+        return false;
+    }
+    let all = |types: &[&Type]| types.iter().all(|ty| data_alone(program, ty, depth + 1));
+    match ty {
+        Type::Scalar(scalar) => *scalar != Scalar::Any,
+        Type::Named {
+            kind: NamedKind::Enum,
+            ..
+        } => true,
+        Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } => {
+            let inherited = program.modules.iter().any(|module_of| {
+                module_of.details.iter().any(|detail| {
+                    matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
+                        matches!(parent, Type::Named { module: parent_module, declaration: parent_declaration, .. }
+                            if parent_module == module && parent_declaration == declaration)
+                    }))
+                })
+            });
+            !inherited
+                && match program.modules[*module].details.get(*declaration) {
+                    Some(Detail::Struct(read)) => read
+                        .members
+                        .iter()
+                        .all(|member| data_alone(program, &member.ty, depth + 1)),
+                    _ => false,
+                }
+        }
+        Type::Nullable(inner) | Type::Set(inner) => all(&[inner]),
+        Type::List { element, .. } => all(&[element]),
+        Type::Tuple(elements) => elements
+            .iter()
+            .all(|element| data_alone(program, element, depth + 1)),
+        Type::Dict { key, value } => all(&[key, value]),
+        _ => false,
+    }
+}
+
+/// True where the `var` parameter `argument` is given may have its
+/// list grown where it is: the parameter is declared a list, so its
+/// function knows it for one; the place is a local that holds a list of
+/// its own ([`owns`]); and no other `var` parameter of the call is
+/// given the same local.
+fn given_in_place(
+    function: &Function,
+    signature: &Signature,
+    arguments: &[Argument],
+    argument: &Argument,
+) -> bool {
+    let place = |argument: &Argument| match (&argument.value.kind, argument.parameter) {
+        (ExprKind::Local(local), Some(index)) => signature
+            .parameters
+            .get(index)
+            .filter(|parameter| parameter.var)
+            .map(|parameter| (*local, parameter)),
+        _ => None,
+    };
+    let Some((local, parameter)) = place(argument) else {
+        return false;
+    };
+    // The local is declared a list too: one declared `list<T>?` may
+    // hold a null.
+    matches!(parameter.ty, Type::List { .. })
+        && owns(function, local)
+        && matches!(function.locals[local].ty, Type::List { .. })
+        && arguments
+            .iter()
+            .filter(|other| place(other).is_some_and(|(given, _)| given == local))
+            .count()
+            == 1
+}
+
+/// True for a local that holds a list of its own: a `var`, a `var`
+/// parameter, a `state` or a `cache` of a list type, which is no
+/// connection.
+///
+/// LIST-3: "a value taken from the place before the call is as it
+/// was". Python's list is one object that every name of it sees
+/// change. So a `let`, a parameter and whatever else is given the list
+/// such a local holds is given the list itself, with no copy, and the
+/// list is marked as shared; `append` and `extend` grow a list where
+/// it is while it is not shared, and copy it once where it is. What
+/// only reads the list, an element read or a function that can keep
+/// nothing, leaves it unmarked.
+fn owns(function: &Function, local: usize) -> bool {
+    let declared = &function.locals[local];
+    matches!(
+        declared.kind,
+        LocalKind::Var | LocalKind::State | LocalKind::Cache
+    ) && grows(&declared.ty)
+        && declared.category != ValueCategory::Connection
 }
 
 /// True for a type written `T?` (TYPE-14).
