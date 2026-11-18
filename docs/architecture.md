@@ -1546,11 +1546,15 @@ shares a collection and copies it only where it would otherwise be seen
 to change. A struct and a tuple are small: a change to one makes a new
 one.
 
-| Where a `var`, a `state` or a `cache` of a list or a dictionary type is | What is written |
+| Where a `var`, a `state` or a `cache` that is or holds a list or a dictionary is | What is written |
 | --- | --- |
 | Read by what may keep the list: a `let`, a `return`, an entry of a list or a field of a struct, a function whose result may hold it, a node | `_core.shared(entries)`: the list itself, marked as held by more than the place |
 | Read by what can keep nothing: the read of an element, and a `const fn` or a native one with no `var` parameter, which is given data alone (no capability, native value or value of a generic type to keep the collection in) and whose result cannot be or hold the collection: an `i64`, or the entry `get` gives of the dictionary it is given | `entries`, unmarked. The collection is lent for the call |
 | Assigned an element or an entry, `items[i] = value`, `book[key] = value`, in the function that declares it | `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)`: changed where it is while the place alone holds it, and copied once otherwise |
+| Assigned further in, `book.bids[price] = size`, `rows[key][0] = 2` | `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)`: the provider goes in, and changes each collection on the way where it is while it is its holder's alone. The value is asked for once the way in has been read |
+| Grown further in by a native function of core, `append(book.orders, order)` | `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))`, and then `book = _given[1]` |
+| Read out of the value by what may keep it, `let orders = book.orders`, `for row in rows` | `_core.shared(book.orders)`, `for row in _core.each(rows)`: the collection taken is marked, and the value copies it before it changes it |
+| Read through, `book.orders[0]`, or lent, `total(book.orders)` | `_core.item(book.orders, 0)`, `total(values=book.orders)`: unmarked |
 | Given to a `var` parameter that is declared a list | `entries`, unmarked: the function grows the place's own list |
 | Given to a `var` parameter of another type, or given to two of them | `_core.shared(entries)`, and what is given back is marked too |
 | Written from anything but a list written out | `entries = _core.shared(value)`: what the value was read from may hold it |
@@ -1559,10 +1563,17 @@ one.
 `append`, `extend`, `set_item` and `set_entry` are the provider's. Each
 changes a collection where it is while it is the place's alone, a
 `Grown` list or a `GrownDict` whose `owned` holds, and takes a copy first
-where it is not. A collection inside another value, `rows[0][1] = 2`, is
-given a new value, and the one it is inside is changed where it is; a
-`var` parameter's element is assigned by making a new list, so that a
-call that fails leaves the caller's as it was. So a recording grows with no copy,
+where it is not. The mark is the collection's own: a struct and a tuple
+carry none, so marking one marks the collections directly inside it, and
+a copy of a collection marks what the copy now holds too. A collection's
+mark is trusted only below holders that are themselves the place's
+alone, which is how the provider goes in (`_changed`): from the place,
+each list and dictionary on the way is copied first where it is not its
+holder's own. A `var` parameter's element is assigned by making a new
+list, so that a call that fails leaves the caller's as it was; a way in
+whose index is an expression after an element read is given new values
+too, so that the index is evaluated only once what it is an index of
+has been read. So a recording grows with no copy,
 a list passed to a function is not copied, and a `let` costs a copy
 only where the place grows after it. What the provider puts in a run's
 store it marks as shared itself.
