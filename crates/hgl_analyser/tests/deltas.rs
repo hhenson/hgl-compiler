@@ -74,11 +74,11 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
             "c: result<f64, error>",
             "d: Quote",
             "e: f64",
-            "f: dict<i64, f64>",
-            "g: dict<i64, delta<Quote>>",
+            "f: delta<list<f64>>",
+            "g: delta<list<Quote, 3>>",
             "h: tuple<f64?, str?>",
             "i: delta<f64?>",
-            "j: dict<i64, delta<f64?>>",
+            "j: delta<list<f64?>>",
             "l: delta<set<str>>",
             "m: delta<dict<str, f64>>",
             "n: delta<Quote>",
@@ -253,13 +253,13 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         "    let wrong = delta<i64?>(value: \"a\")\n",
         "    let other = delta<i64?>(added: 1)\n",
         // A form that takes its type from its place is the `delta<V>`:
-        // a list's delta is a dictionary, and its entries are held to
-        // it; an enum's member; a set's delta is no literal.
-        "    let moved: delta<list<i64>?> = [0: 7]\n",
+        // an enum's member; a list's and a set's delta is no literal,
+        // and a list's `updated` holds its entries to its positions.
+        "    let moved: delta<list<i64>?> = delta<list<i64>>(updated: [0: 7])\n",
         "    let side: delta<Side?> = .buy\n",
         "    let good: delta<result<i64, str>?> = ok(1)\n",
         "    let bad: delta<result<i64, str>?> = err(\"no\")\n",
-        "    let keyed: delta<list<i64>?> = [\"wrong\": \"wrong\"]\n",
+        "    let keyed: delta<list<i64>?> = delta<list<i64>>(updated: [\"wrong\": \"wrong\"])\n",
         "    return 1\n",
         "}\n",
         // A branch gives the whole optional, or what it holds.
@@ -271,11 +271,11 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
         "const fn noted() -> delta<Quote> => delta<Quote>(note: \"n\")\n",
         "const fn no_field() -> delta<Quote> => delta<Quote>(ask: 1.0)\n",
         // A field that is nullable: its property is a `delta<F>?`.
-        // Null leaves it as it was, and a literal is the list's delta.
+        // Null leaves it as it was.
         "struct Held {\n    items: list<i64>? = null\n}\n",
-        "const fn held() -> delta<Held> => delta<Held>(items: [0: 7])\n",
+        "const fn held() -> delta<Held> => delta<Held>(items: delta<list<i64>>(updated: [0: 7]))\n",
         "const fn kept() -> delta<Held> => delta<Held>(items: null)\n",
-        "const fn held_wrong() -> delta<Held> => delta<Held>(items: [\"wrong\": \"wrong\"])\n",
+        "const fn held_wrong() -> delta<Held> => delta<Held>(items: delta<list<i64>>(updated: [\"wrong\": \"wrong\"]))\n",
         // TIME-7: `return null` publishes a null, as the delta does.
         "fn cleared(command: i64) -> i64? {\n",
         "    when {\n",
@@ -303,13 +303,13 @@ fn a_nullables_delta_is_an_optional_and_a_structs_has_its_fields() {
             "m.hgl:19:36 type/type.mismatch EXPR-5",
             "m.hgl:20:29 name/delta.argument_name TYPE-16",
             // The key and the value of the entry, each against the
-            // dictionary a list's delta is.
-            "m.hgl:25:37 type/type.mismatch EXPR-5",
-            "m.hgl:25:46 type/type.mismatch EXPR-5",
+            // dictionary a list's `updated` is.
+            "m.hgl:25:63 type/type.mismatch EXPR-5",
+            "m.hgl:25:72 type/type.mismatch EXPR-5",
             "m.hgl:33:53 name/delta.argument_name TYPE-16",
             // Through the `?` of a struct delta's property.
-            "m.hgl:39:61 type/type.mismatch EXPR-5",
-            "m.hgl:39:70 type/type.mismatch EXPR-5",
+            "m.hgl:39:87 type/type.mismatch EXPR-5",
+            "m.hgl:39:96 type/type.mismatch EXPR-5",
         ]
     );
     assert_eq!(
@@ -367,12 +367,12 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         "fn made(bid: f64) -> atomic<Quote> {\n",
         "    when { return Quote(bid: bid, ask: bid) }\n",
         "}\n",
-        // A scalar's delta is the scalar; a list's a dictionary.
+        // A scalar's delta is the scalar; a list's has `updated`.
         // Under a `?` that marks an input that may be left out, the
         // delta is the shape's.
         "fn scalars(price: f64, rows: list<f64>, window: rolling_window<f64, 5>? = null) -> f64 {\n",
         "    when {\n",
-        "        let moved: dict<i64, f64> = delta_value(rows)\n",
+        "        let moved: dict<i64, f64> = delta_value(rows).updated\n",
         "        let latest: f64 = delta_value(window)\n",
         "        return delta_value(price)\n",
         "    }\n",
@@ -503,5 +503,47 @@ fn a_generic_delta_is_published_and_recorded() {
             "whole: EvalEntry<set<str>>",
             "absent: EvalEntry<i64>",
         ]
+    );
+}
+
+/// TYPE-16: "A list's delta, for `list<V>` and `list<V, N>` alike, has
+/// `updated`, each changed position with its delta; `removed`, the
+/// positions that lost their value ... and `size_modified`" ("an
+/// `i64?`"). "A property left out is empty, or null for ... a list's
+/// `size_modified`." "A delta that names one member, key or position
+/// both as added or updated and as removed is malformed. A constant one
+/// is rejected (`delta.overlap`). A run makes no check."
+#[test]
+fn a_lists_delta_has_its_properties_and_a_constant_overlap_is_rejected() {
+    let checked = module(concat!(
+        "const fn uses(change: delta<list<i64, 2>>) -> i64 {\n",
+        "    let moved = change.updated\n",
+        "    let gone = change.removed\n",
+        "    let size = change.size_modified\n",
+        "    return 1\n",
+        "}\n",
+        "const fn shrunk(size: i64) -> delta<list<i64>> => delta<list<i64>>(size_modified: size)\n",
+        "const fn placed(slot: i64, value: i64) -> delta<list<i64>> =>\n",
+        "    delta<list<i64>>(updated: [slot: value], removed: [slot])\n",
+        // A list's delta is no dictionary.
+        "const fn plain() -> delta<list<i64>> => [0: 1]\n",
+        // Constant overlaps, of a list, a dictionary and a set.
+        "const fn listed() -> delta<list<i64>> => delta<list<i64>>(updated: [0: 1], removed: [0])\n",
+        "const fn keyed() -> delta<dict<str, i64>> =>\n",
+        "    delta<dict<str, i64>>(removed: [\"a\"], updated: [\"a\": 1])\n",
+        "const fn members() -> delta<set<str>> => delta<set<str>>(added: [\"a\"], removed: [\"a\"])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:41 type/type.mismatch EXPR-5",
+            "m.hgl:12:86 type/delta.overlap TYPE-16",
+            "m.hgl:14:53 type/delta.overlap TYPE-16",
+            "m.hgl:15:82 type/delta.overlap TYPE-16",
+        ]
+    );
+    assert_eq!(
+        locals(&checked, "uses")[1..],
+        ["moved: dict<i64, i64>", "gone: set<i64>", "size: i64?",]
     );
 }

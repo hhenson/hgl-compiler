@@ -6050,6 +6050,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("graph_for.hgl", GRAPH_FOR));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("errors.hgl", ERRORS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6414,7 +6415,8 @@ const CAPTURES: &str = include_str!("fixtures/captures.hgl");
 /// ERR-7: "`capture(callable, args...)` creates a temporal error
 /// boundary", hgraph's `try_except`, whose `out` is `.value` and whose
 /// failures, each made an `error` by the provider, are `.error`. A
-/// capture of an outputless call is read the same way.
+/// capture of an outputless call is read the same way. ERR-8: the
+/// provider's `captured` lets the failures of a `start` or a `stop` out.
 #[test]
 fn a_capture_is_a_try_except() {
     let emitted = emit(&[
@@ -6434,37 +6436,93 @@ fn a_capture_is_a_try_except() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_captures/__init__.py");
     for expected in [
-        "    boundary = _hg.try_except(doubled, value=value)\n    return boundary.out\n",
+        "    boundary = _core.captured(_hg.try_except(doubled, value=value))\n    return boundary.out\n",
         "    return is_negative(failure=_core.captured_error(boundary.exception))\n",
-        "    outer = _hg.try_except(handled, value=value, repeat=repeat)\n",
+        "    outer = _core.captured(_hg.try_except(handled, value=value, repeat=repeat))\n",
         "def handled(value: _hg.TS[_py.int], repeat: _hg.TS[_py.bool]) -> _hg.TS[_core.Error]:\n",
     ] {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }
     let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
     let expected = concat!(
-        "    boundary = _hg.combine(exception=_hg.try_except(drop, value=value))\n",
+        "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(drop, value=value)))\n",
         "    return _core.captured_error(boundary.exception)\n",
     );
     assert!(sink.contains(expected), "{expected}\nnot in\n{sink}");
 }
 
-/// hgraph's `try_except` does not take a graph given a wiring-time
-/// value: that capture is reported, and not written.
+/// ERR-4, ERR-7, ERR-8, ERR-11 and TYPE-13: an error's context,
+/// captures of a graph given a wiring-time value and of a lifted value
+/// function, lifecycle failures that escape, a temporal `result`, and
+/// non-finite numbers as data.
+const ERRORS: &str = include_str!("fixtures/errors.hgl");
+
+/// hgraph's `try_except` does not take a graph with a scalar input.
+/// ERR-7: a capture of a graph given a wiring-time value, bound with
+/// `let`, is of a graph of the target's own that binds the value: the
+/// arguments are evaluated in the order written, before the statement
+/// (EXPR-13), a wiring-time value and a connection that is a call each
+/// held, and the defaults left out in the call of the child. FN-6: a
+/// lifted value function is captured as its node.
 #[test]
-fn a_capture_of_a_graph_given_a_constant_is_reported() {
+fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
+    let emitted = emit(&[("errors.hgl", ERRORS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_errors/__init__.py");
+    for expected in [
+        concat!(
+            "    _capture_0_by = 3\n",
+            "    @_hg.graph\n",
+            "    def _capture_0(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return scaled(value=value, by=_capture_0_by)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_0, value=value))\n",
+        ),
+        concat!(
+            "    _capture_1_by = by\n",
+            "    _capture_1_value = forward(value=value)\n",
+            "    @_hg.graph\n",
+            "    def _capture_1(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return offset(by=_capture_1_by, value=value, plus=10)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_1, value=_capture_1_value))\n",
+        ),
+        concat!(
+            "    def _capture_5(value: _hg.TS[_py.int]) -> None:\n",
+            "        return sink_of(value=value, by=_capture_5_by)\n",
+            "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(_capture_5, value=value)))\n",
+        ),
+        "    boundary = _core.captured(_hg.try_except(_lift_5_hundredth, value=value))\n",
+        "    return _core.lifted_is_err(value)\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+}
+
+/// ERR-7: a capture of a graph given a wiring-time value anywhere but as
+/// the value of a `let` is reported, and not written; so is a capture of
+/// a lifted operator.
+#[test]
+fn a_capture_of_a_graph_given_a_constant_outside_a_let_is_reported() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "fn scaled(value: i64, const by: i64) -> i64 { return value * by }\n",
             "fn watched(value: i64) -> i64 {\n",
-            "    let boundary = capture(scaled, value, 2)\n",
+            "    return capture(scaled, value, 2).value\n",
+            "}\n",
+            "fn added(value: i64) -> i64 {\n",
+            "    let boundary = capture(add_, value, 1)\n",
             "    return boundary.value\n",
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:4:20 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:4:12 target.unsupported",
+            "m.hgl:7:20 target.unsupported"
+        ]
+    );
 }
 
 /// CTRL-15: over a connection "each case is a child graph selected at
@@ -7623,11 +7681,12 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "    return _core.item(_py.list(values.value), 1)".to_string(),
         "    return _py.tuple(doubled(values=_py.list(values.value)))".to_string(),
         format!("-> {pair}:"),
-        "    change = {slot.value: reading.value}\n    return change".to_string(),
+        "    return _core.list_delta(updated={slot.value: reading.value})".to_string(),
         "    return _py.tuple([low.value, _core.add__i64_i64(lhs=low.value, rhs=1)])".to_string(),
-        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef pair_span(pair: {pair})"),
-        "store=pair.delta_value, key=1".to_string(),
-        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef _lift_3_pair_total(pair: {pair})"),
+        // TIME-9: a fixed list is valid once any position is.
+        format!("@_hg.compute_node\ndef pair_span(pair: {pair})"),
+        "store=_core.updated(pair.delta_value), key=1".to_string(),
+        format!("@_hg.compute_node\ndef _lift_3_pair_total(pair: {pair})"),
         "    return one_position(slot=slot, reading=reading)[0]".to_string(),
         format!("-> {prices}:"),
         "        return _core.dict_delta(removed=_py.frozenset((key.value,)))".to_string(),
@@ -7646,7 +7705,8 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 }
 
 /// What this target does not write of a temporal list or dictionary
-/// is reported: an unsized list's delta, published or read (it ticks
+/// is reported: a removed position written to a fixed list (hgraph's
+/// bounded `TSL` takes none), an unsized list's delta read (it ticks
 /// whole here), an unsized list of composite elements, a whole
 /// dictionary published, a nullable element of a fixed list published
 /// whole, a list's element at a position that ticks, and an unsized
@@ -7658,14 +7718,13 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
         concat!(
             "module m\n",
             "struct Quote { bid: i64 }\n",
-            "fn grown(slot: i64) -> list<i64> {\n",
+            "fn grown(slot: i64) -> list<i64, 2> {\n",
             "    when {\n",
-            "        let change: delta<list<i64>> = [slot: 1]\n",
-            "        return change\n",
+            "        return delta<list<i64, 2>>(removed: [slot])\n",
             "    }\n",
             "}\n",
             "fn grown_delta(values: list<i64>) -> i64? {\n",
-            "    when { return get(delta_value(values), 0) }\n",
+            "    when { return get(delta_value(values).updated, 0) }\n",
             "}\n",
             "fn quotes(values: list<Quote>) -> i64 {\n",
             "    when { return 1 }\n",
@@ -7688,14 +7747,107 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:6:16 target.unsupported",
-            "m.hgl:10:23 target.unsupported",
-            "m.hgl:12:11 target.unsupported",
-            "m.hgl:16:19 target.unsupported",
-            "m.hgl:19:19 target.unsupported",
-            "m.hgl:24:44 target.unsupported",
-            "m.hgl:25:4 target.unsupported",
+            "m.hgl:5:45 target.unsupported",
+            "m.hgl:9:23 target.unsupported",
+            "m.hgl:11:11 target.unsupported",
+            "m.hgl:15:19 target.unsupported",
+            "m.hgl:18:19 target.unsupported",
+            "m.hgl:23:44 target.unsupported",
+            "m.hgl:24:4 target.unsupported",
         ]
+    );
+}
+
+/// TIME-9: "`valid` of a collection is true where any element, field or
+/// entry is valid ... `all_valid` is true where every one is", hgraph's
+/// `valid` and `all_valid`. TYPE-16: "A delta written with a smaller
+/// `size_modified` and no `removed` shrinks the list": an unsized list
+/// applies it to what it last published; a source, which has no
+/// `_output` here, does not yet. A fixed list's `removed` is not read: hgraph's bounded `TSL` does not report it.
+#[test]
+fn collection_validity_and_a_lists_delta_are_written() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn both(probe: bool, pair: list<i64, 2>) -> bool {\n",
+            "    when modified(probe) && valid([]) { return valid(pair) && all_valid(pair) }\n",
+            "}\n",
+            "fn resized(size: i64) -> list<i64> {\n",
+            "    when { return delta<list<i64>>(size_modified: size) }\n",
+            "}\n",
+            "fn shrinking() -> list<i64> {\n",
+            "    yield 1s: delta<list<i64>>(size_modified: 0)\n",
+            "}\n",
+            "fn lost(pair: list<i64, 2>) -> set<i64> {\n",
+            "    when { return delta_value(pair).removed }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:9:15 target.unsupported",
+            "m.hgl:12:19 target.unsupported"
+        ]
+    );
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "pair.valid and pair.all_valid",
+        "_output: _hg.TS_OUT[_py.tuple[_py.int, ...]] = None",
+        "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// TYPE-16: "A delta written with a smaller `size_modified` and no
+/// `removed` shrinks the list"; TYPE-10: a size is "a count that is not
+/// negative". A negative size given as the graph runs fails, before the
+/// list is cut; the catalogue has no execution code for it.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_negative_list_size_fails_as_the_graph_runs() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_negative_size");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[(
+        "sizes.hgl",
+        concat!(
+            "module sizes\n",
+            "fn resize(size: i64) -> list<i64> {\n",
+            "    when {\n",
+            "        if size == 3 { return [10, 20, 30] }\n",
+            "        return delta<list<i64>>(size_modified: size)\n",
+            "    }\n",
+            "}\n",
+            "const fn total(values: list<i64>) -> i64 {\n",
+            "    var sum: i64 = 0\n",
+            "    for value in values { sum += value }\n",
+            "    return sum\n",
+            "}\n",
+            "fn total_after(size: i64) -> i64 => total(resize(size))\n",
+            "test shrinks {\n",
+            "    assert eval(total_after(size: [3, 1])) == [60, 10]\n",
+            "}\n",
+            "test negative {\n",
+            "    assert eval(total_after(size: [3, -1])) == [60, 30]\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let tests = [emitted.test("shrinks").0, emitted.test("negative").0];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
+    let Ran::Failed { message, .. } = &ran[1] else {
+        panic!("a negative size does not fail: {:?}", ran[1]);
+    };
+    assert!(
+        message.contains("HglError: the size -1 of a list is negative"),
+        "{message}"
     );
 }
 
