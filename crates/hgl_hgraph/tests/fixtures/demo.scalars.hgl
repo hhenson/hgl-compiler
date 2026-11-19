@@ -76,8 +76,7 @@ test scalars_configure_a_node {
 
 # TYPE-2: "Zone aliases are distinct names". Europe/Jersey is a link to
 # Europe/London. Two zoned datetimes are compared by core's candidates,
-# which take the option `utc` and are not written yet
-# (`a_zoned_equality_is_not_written_yet`).
+# which take the option `utc` (`demo.scalars_wave3`).
 test a_zone_is_its_name {
     assert @[Europe/London] == @[Europe/London]
     assert @[Europe/London] != @[Europe/Jersey]

@@ -1,0 +1,11 @@
+module m
+const fn repeated(text: str, count: i64) -> str => text * count
+fn wired(text: str, count: i64) -> str => text * count
+
+test below_zero_in_a_value_function {
+    assert repeated("ab", -1) == ""
+}
+
+test below_zero_in_a_graph {
+    assert eval(wired(text: ["ab"], count: [-1])) == [""]
+}
