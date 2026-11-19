@@ -6786,7 +6786,7 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
     let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_escapes");
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_no_hgl_error");
     fs::remove_dir_all(&directory).ok();
     fs::create_dir_all(&directory).unwrap();
     fs::write(
