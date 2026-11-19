@@ -9,29 +9,12 @@
 
 mod common;
 
-use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Form, Stmt};
+use common::{Checked, body, locals, module};
+use hgl_analyser::hir::{Callee, Expr, ExprKind, Form, Stmt};
 use hgl_analyser::{DeclarationKind, Role};
 
 /// No findings.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
-}
 
 /// The value the function `name` of module `m` returns: its arrow
 /// body's.
@@ -44,15 +27,6 @@ fn returned<'a>(checked: &'a Checked, name: &str) -> &'a Expr {
         ] => value,
         other => panic!("`{name}` returns one value: {other:?}"),
     }
-}
-
-/// The locals of `name` as `local: type`, parameters first.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    body(checked, name)
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
 }
 
 // ---- EXPR-1 ----
