@@ -196,3 +196,52 @@ fn the_envelopes_are_ordinary_atomic_values() {
         ]
     );
 }
+
+/// ERR-12: "Refine that same binding to T on paths proving a non-null T?
+/// value ... Using it where T is required without that proof rejects
+/// with `nullable.required_presence`." EXPR-7: a member and an element
+/// are read of the payload, so a nullable's is read where a test
+/// against null proves the binding present, in a value function and in
+/// a `when`. What is read with no proof is not known, and nothing more
+/// is reported of it (ERR-9): `mistyped` reports the presence alone.
+#[test]
+fn a_nullables_payload_is_read_where_it_is_proved_present() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    bid: f64\n",
+        "}\n",
+        "const fn message_of(failure: error?) -> str => failure.message\n",
+        "const fn bid_of(quote: Quote?) -> f64 => quote.bid\n",
+        "const fn value_of(outcome: result<i64, error>?) -> i64 => outcome.value\n",
+        "const fn head(items: list<i64>?) -> i64 => items[0]\n",
+        "const fn priced(book: dict<str, i64>?) -> i64 => book[\"a\"]\n",
+        "const fn mistyped(failure: error?) -> i64 => failure.message\n",
+        "const fn guarded(failure: error?, quote: Quote?, items: list<i64>?) -> f64 {\n",
+        "    if failure == null || quote == null || items == null { return 0.0 }\n",
+        "    let message: str = failure.message\n",
+        "    let leading: i64 = items[0]\n",
+        "    return quote.bid\n",
+        "}\n",
+        "fn watched(quote: Quote?) -> f64 {\n",
+        "    when {\n",
+        "        if quote == null { return 0.0 }\n",
+        "        return quote.bid\n",
+        "    }\n",
+        "}\n",
+        "fn unwatched(quote: Quote?) -> f64 {\n",
+        "    when { return quote.bid }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:48 type/nullable.required_presence ERR-12",
+            "m.hgl:6:42 type/nullable.required_presence ERR-12",
+            "m.hgl:7:59 type/nullable.required_presence ERR-12",
+            "m.hgl:8:44 type/nullable.required_presence ERR-12",
+            "m.hgl:9:50 type/nullable.required_presence ERR-12",
+            "m.hgl:10:46 type/nullable.required_presence ERR-12",
+            "m.hgl:24:19 type/nullable.required_presence ERR-12",
+        ]
+    );
+}

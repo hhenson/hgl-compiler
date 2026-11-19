@@ -45,6 +45,12 @@ pub(crate) struct Copies {
     /// The `let`s that hold a value of their own: one bound to what
     /// nothing else holds ([`fresh`]).
     own: HashSet<usize>,
+    /// The references that may also be, or hold, what is held
+    /// elsewhere and is no place of this body: a parameter, a constant
+    /// of a module, what a native function gives of one
+    /// ([`Copies::elsewhere`]). `let x = if flag { mine } else { p }`
+    /// refers into `mine`, and may be `p`.
+    elsewhere: HashSet<usize>,
 }
 
 impl Copies {
@@ -65,9 +71,10 @@ impl Copies {
     /// function returns: what it returns of it is then held by nothing
     /// else, and is returned as it is. It is read from a `var` the
     /// body declares, or through a `let` that holds a value of its
-    /// own or refers into such a `var`. What is read from a parameter,
-    /// a `var` one among them, is the caller's, and what is read from
-    /// a `state` or a `cache` stays the node's.
+    /// own or refers into such `var`s alone: every value it may be is
+    /// the function's own. What is read from a parameter, a `var` one
+    /// among them, is the caller's, what is read from a `state` or a
+    /// `cache` stays the node's, and a constant is the module's.
     ///
     /// `parameters` is how many of the locals are parameters: they
     /// come first.
@@ -80,9 +87,11 @@ impl Copies {
                 } else if self.copied.contains(local) || self.own.contains(local) {
                     true
                 } else {
-                    self.references
-                        .get(local)
-                        .is_some_and(|places| places.iter().all(|&place| own_place(place)))
+                    !self.elsewhere.contains(local)
+                        && self
+                            .references
+                            .get(local)
+                            .is_some_and(|places| places.iter().all(|&place| own_place(place)))
                 }
             }
             ExprKind::Field { base: inner, .. }
@@ -106,8 +115,13 @@ impl Copies {
 
     /// The places `value` is read from: the `var`, `state` or `cache`
     /// it names, or is a part of, or that a name it reads refers into.
-    /// Empty for a value that is read from no place: one written out,
-    /// what a call gives, a parameter.
+    /// Empty for a value that is read from no place: a literal, what a
+    /// function of the program gives, a parameter, a constant. What it
+    /// may also be that is no place of the body, a parameter say, is
+    /// not among them: [`Copies::elsewhere`] says whether there is any.
+    /// An expression of any other form may hold a part of what it is
+    /// made of, `rows + more` the lists `rows` holds: its places are
+    /// those of each part.
     pub(crate) fn places(&self, program: &Program, locals: &[Local], value: &Expr) -> Vec<usize> {
         match &value.kind {
             ExprKind::Local(local) => {
@@ -168,7 +182,93 @@ impl Copies {
                 }
                 places
             }
-            _ => Vec::new(),
+            // What a function of the program gives is its own.
+            ExprKind::Call { .. }
+            | ExprKind::Literal(_)
+            | ExprKind::Constant { .. }
+            | ExprKind::Endpoint { .. }
+            | ExprKind::EndpointOf(_)
+            | ExprKind::GenericValue { .. }
+            | ExprKind::EnumMember { .. }
+            | ExprKind::Unread
+            | ExprKind::Block { value: None, .. } => Vec::new(),
+            _ => {
+                let mut parts = Vec::new();
+                children(value, &mut parts);
+                self.all_places(program, locals, parts.into_iter())
+            }
+        }
+    }
+
+    /// True where `value` may be, or may hold, a value that is no place
+    /// of this body and is not its own: a parameter, a constant of a
+    /// module, an input's value, what a native function gives of one,
+    /// a `let` of one. Only what is known to be the body's own is not:
+    /// a place of it, a literal, what a function of the program gives,
+    /// a copy, and a value of a type nothing changes where it is. Any
+    /// form not known is taken to be held elsewhere.
+    pub(crate) fn elsewhere(&self, program: &Program, locals: &[Local], value: &Expr) -> bool {
+        if !changed_in_place(program, &value.ty, 0) {
+            return false;
+        }
+        // Whether any of some parts is held elsewhere. `&mut dyn` is a
+        // borrowed iterator of any kind, so one closure takes them all.
+        let any = |values: &mut dyn Iterator<Item = &Expr>| {
+            let mut found = false;
+            for part in values {
+                found |= self.elsewhere(program, locals, part);
+            }
+            found
+        };
+        match &value.kind {
+            ExprKind::Local(local) => {
+                if is_place(locals, *local)
+                    || self.copied.contains(local)
+                    || self.own.contains(local)
+                {
+                    false
+                } else if self.references.contains_key(local) {
+                    self.elsewhere.contains(local)
+                } else {
+                    true
+                }
+            }
+            ExprKind::Literal(_) | ExprKind::EnumMember { .. } => false,
+            ExprKind::Field { base: inner, .. }
+            | ExprKind::Index { base: inner, .. }
+            | ExprKind::Widen(inner)
+            | ExprKind::Payload { result: inner, .. }
+            | ExprKind::Tagged { payload: inner, .. }
+            | ExprKind::Propagate(inner) => self.elsewhere(program, locals, inner),
+            ExprKind::Block { value, .. } => value
+                .as_ref()
+                .is_some_and(|last| self.elsewhere(program, locals, last)),
+            ExprKind::If {
+                then, otherwise, ..
+            } => {
+                self.elsewhere(program, locals, then)
+                    || otherwise
+                        .as_ref()
+                        .is_some_and(|other| self.elsewhere(program, locals, other))
+            }
+            // A field left out takes its default, which may be a
+            // constant of a module (see `fresh`).
+            ExprKind::Construct { .. } if !fresh_defaults(program, value) => true,
+            ExprKind::Construct { arguments, .. } | ExprKind::Delta { arguments } => {
+                any(&mut arguments.iter().map(|given| &given.value))
+            }
+            ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => any(&mut entries.iter()),
+            ExprKind::Pairs(entries) => {
+                any(&mut entries.iter().flat_map(|(key, entry)| [key, entry]))
+            }
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                !gives_its_own(program, callee)
+                    && (arguments.is_empty()
+                        || any(&mut arguments.iter().map(|given| &given.value)))
+            }
+            _ => true,
         }
     }
 
@@ -232,6 +332,9 @@ impl Copies {
                     if changed {
                         self.copied.insert(*local);
                     } else {
+                        if self.elsewhere(program, locals, value) {
+                            self.elsewhere.insert(*local);
+                        }
                         self.references.insert(*local, places);
                     }
                 }
@@ -254,7 +357,11 @@ impl Copies {
                             self.copied.insert(*first);
                         }
                     } else if !places.is_empty() {
+                        let elsewhere = self.elsewhere(program, locals, sequence);
                         for name in names {
+                            if elsewhere {
+                                self.elsewhere.insert(*name);
+                            }
                             self.references.insert(*name, places.clone());
                         }
                     }
@@ -372,21 +479,8 @@ pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
         // of a module: the one value every read of it has. A struct
         // written with fewer fields than it has is fresh only where
         // none of those left out can hold a collection.
-        ExprKind::Construct {
-            module,
-            declaration,
-            arguments,
-        } => {
-            let complete = match program.modules[*module].details.get(*declaration) {
-                Some(Detail::Struct(of)) => of.members.iter().enumerate().all(|(index, member)| {
-                    arguments
-                        .iter()
-                        .any(|argument| argument.parameter == Some(index))
-                        || !changed_in_place(program, &member.ty, 0)
-                }),
-                _ => false,
-            };
-            complete
+        ExprKind::Construct { arguments, .. } => {
+            fresh_defaults(program, value)
                 && arguments
                     .iter()
                     .all(|argument| fresh(program, &argument.value))
@@ -407,6 +501,30 @@ pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
                     .is_none_or(|otherwise| fresh(program, otherwise))
         }
         ExprKind::Call { callee, .. } => gives_its_own(program, callee),
+        _ => false,
+    }
+}
+
+/// True where the construction `value` leaves out no field that may
+/// hold what is changed where it is: a field left out takes its
+/// default, which may be a constant of a module, the one value every
+/// read of it has.
+fn fresh_defaults(program: &Program, value: &Expr) -> bool {
+    let ExprKind::Construct {
+        module,
+        declaration,
+        arguments,
+    } = &value.kind
+    else {
+        return false;
+    };
+    match program.modules[*module].details.get(*declaration) {
+        Some(Detail::Struct(of)) => of.members.iter().enumerate().all(|(index, member)| {
+            arguments
+                .iter()
+                .any(|argument| argument.parameter == Some(index))
+                || !changed_in_place(program, &member.ty, 0)
+        }),
         _ => false,
     }
 }
@@ -474,29 +592,32 @@ pub(crate) fn changes(
             },
             ..
         }) => {
-            let (Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            }) = callee
-            else {
-                return;
-            };
-            let Some(Detail::Callable(signature)) =
-                program.modules[*module].details.get(*declaration)
-            else {
-                return;
+            // The signature of what is called, where it is known. A call
+            // of what is not known may take any argument as a place.
+            let signature = match callee {
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                }
+                | Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                } => match program.modules[*module].details.get(*declaration) {
+                    Some(Detail::Callable(signature)) => Some(signature),
+                    _ => None,
+                },
+                Callee::Required { .. } | Callee::Unread => None,
             };
             for argument in arguments {
-                let var = argument
-                    .parameter
-                    .and_then(|parameter| signature.parameters.get(parameter))
-                    .is_some_and(|parameter| parameter.var);
+                let var = match (signature, argument.parameter) {
+                    (Some(signature), Some(parameter)) => signature
+                        .parameters
+                        .get(parameter)
+                        .is_none_or(|parameter| parameter.var),
+                    _ => true,
+                };
                 if var && place_of(locals, &argument.value) == Some(place) {
                     changed = true;
                 }
