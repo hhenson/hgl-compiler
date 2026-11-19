@@ -4894,7 +4894,6 @@ impl<'a> Typer<'a> {
             value,
             retried,
             node,
-            constant: None,
         }
     }
 
@@ -5012,10 +5011,10 @@ impl<'a> Typer<'a> {
             if !selecting.contains(name.as_str()) {
                 continue;
             }
-            // Its type is the candidate's to say (GEN-6): it is held to
-            // that once the candidate is (`instance`).
-            let read = self.typed_in(self.file, &given.node, None);
-            let value = read.clone().map(|read| read.value);
+            // Its type is the candidate's to say (GEN-6): it is read as a
+            // value of that once the candidate is (`instance`). Whether
+            // it is a constant at all is asked here, once.
+            let value = self.read_constant(&given.node, None);
             if let Some(why) = Self::not_constant(&value) {
                 self.diagnostics.emit(error(
                     Category::Type,
@@ -5028,7 +5027,6 @@ impl<'a> Typer<'a> {
                     "GEN-8",
                 ));
             }
-            given.constant = Some(read);
         }
     }
 
@@ -9025,7 +9023,6 @@ impl<'a> Typer<'a> {
             value,
             retried,
             node,
-            constant: None,
         }
     }
 
@@ -9068,12 +9065,13 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
+                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.read_constant(node, ty);
                 let Some((taken, generics, defaulted)) = instance(
                     signature,
                     public,
                     given,
                     wanted,
-                    (&widens, &defaults, program),
+                    (&widens, &defaults, &constant),
                 ) else {
                     continue;
                 };
@@ -12212,11 +12210,6 @@ struct Given {
     /// read again as the selected candidate's parameter: `value` is
     /// then not what stands.
     retried: bool,
-    /// The compile-time constant it is, read where the call stands, when
-    /// it is given by a name a candidate declares as a generic value
-    /// parameter: what it reads as, held to the candidate's type once
-    /// the candidate is known (`instance`).
-    constant: Option<Result<Typed, Fault>>,
 }
 
 impl Given {
@@ -12229,7 +12222,6 @@ impl Given {
             by_place: false,
             value,
             retried: false,
-            constant: None,
         }
     }
 }
@@ -12487,18 +12479,18 @@ struct Chosen<'s> {
 /// all the way down, `null`, `.member` or `[]`, says nothing.
 ///
 /// `defaults` gives the constant a generic value parameter's default
-/// comes to (GEN-2), and `program` the enums a constant given to an
-/// option is held to.
+/// comes to (GEN-2), and `constant` what a constant the call gives an
+/// option comes to as a value of the type given (`crate::constant`).
 #[allow(clippy::type_complexity)]
 fn instance<'s>(
     signature: &'s Signature,
     public: &Signature,
     given: &[Given],
     wanted: &Wanted,
-    (widens, defaults, program): (
+    (widens, defaults, constant): (
         &dyn Fn(&Type, &Type) -> bool,
         &dyn Fn(&GenericParameter) -> Option<Constant>,
-        &Program,
+        &dyn Fn(&SyntaxNode, Option<&Type>) -> Result<ConstantValue, Fault>,
     ),
 ) -> Option<(std::borrow::Cow<'s, Signature>, Vec<Argument>, Vec<usize>)> {
     let generics = &signature.generics;
@@ -12524,12 +12516,7 @@ fn instance<'s>(
                 GenericKind::Value(ty) if !names_parameter(ty) => Some(ty),
                 _ => None,
             };
-            let value = given
-                .constant
-                .clone()
-                .unwrap_or(Err(Fault::Reported))
-                .and_then(|read| crate::constant::fit(read, expected, program))
-                .unwrap_or(ConstantValue::Unknown);
+            let value = constant(&given.node, expected).unwrap_or(ConstantValue::Unknown);
             found[index] = Some(Argument::Constant(Constant {
                 text: constant_text(&given.node),
                 value,

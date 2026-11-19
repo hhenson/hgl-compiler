@@ -835,6 +835,17 @@ fn a_candidates_default_is_read_as_its_options_type() {
         ),
         &[],
     );
+    // An option the call gives is read as a value of the type the
+    // candidate declares, in the same way: `X: 2` of an `f64` is `2.0`.
+    let given = |option: &str| {
+        format!(
+            "operator picked(value: i64) -> i64\n\
+             impl const fn picked<const X: f64>(value: i64) -> i64 requires X == 2.0 => value\n\
+             const fn uses() -> i64 => picked(1, X: {option})\n"
+        )
+    };
+    expect(&given("2"), &[]);
+    expect(&given("3"), &["4 operator.no_candidate"]);
 }
 
 /// The types of the parameters of the function `name` of `m`.
