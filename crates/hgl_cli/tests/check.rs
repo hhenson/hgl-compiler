@@ -434,3 +434,70 @@ fn a_limit_is_for_the_programs_source_and_not_for_the_core_supplied() {
     assert_eq!(flat.status.code(), Some(1), "{stderr}");
     assert!(!stderr.contains("<core>"), "{stderr}");
 }
+
+/// ERR-1, UNIT-5: keep primary and related ranges across files and count
+/// an astral character as two UTF-16 units, independent of BOM and CRLF.
+#[test]
+fn json_preserves_diagnostic_identity_and_editor_ranges() {
+    use serde_json::{Value, json};
+    let root = scratch("json-related");
+    let first = write(&root, "first.hgl", "module m\r\nfn scale() {}\r\n");
+    let second = write(
+        &root,
+        "second.hgl",
+        "\u{feff}module m part second\r\n/*😀*/ fn scale() {}\r\n",
+    );
+    let output = hgl(&["check", "--json", &argument(&root)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["version"], 1);
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    let d = &items[0];
+    assert_eq!(d["severity"], "error");
+    assert_eq!(d["category"], "name");
+    assert_eq!(d["code"], "name.duplicate");
+    assert_eq!(d["catalogued"], true);
+    assert_eq!(d["rule"], "UNIT-5");
+    assert_eq!(
+        d["primary"],
+        json!({"file": second, "start":{"line":1,"character":10}, "end":{"line":1,"character":15}})
+    );
+    assert_eq!(
+        d["related"][0],
+        json!({"message":"first declared here, as a temporal function", "location":{"file":first,"start":{"line":1,"character":3},"end":{"line":1,"character":8}}})
+    );
+}
+
+/// ERR-1: clean and warning-only sources both succeed. I/O failures are distinct.
+#[test]
+fn json_clean_warning_and_invocation_failure() {
+    use serde_json::{Value, json};
+    let root = scratch("json-success");
+    let file = write(&root, "a.hgl", "module m\n");
+    let check = || hgl(&["check", "--json", &file]);
+    let clean = check();
+    assert!(clean.status.success() && clean.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&clean.stdout).unwrap(),
+        json!({"version":1,"diagnostics":[]})
+    );
+    write(
+        &root,
+        "a.hgl",
+        "module m\nfn dormant(a: f64) -> f64 {\n    when modified([]) { return a }\n}\n",
+    );
+    let warned = check();
+    assert!(warned.status.success() && warned.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&warned.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["severity"], "warning");
+    assert_eq!(report["diagnostics"][0]["code"], "node.no_activation");
+    for failed in [
+        hgl(&["check", "--modules", "--json", &file]),
+        hgl(&["check", "--json", &argument(&root.join("missing"))]),
+    ] {
+        assert_eq!(failed.status.code(), Some(2));
+        assert!(failed.stdout.is_empty() && !failed.stderr.is_empty());
+    }
+}

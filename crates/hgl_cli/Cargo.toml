@@ -13,6 +13,7 @@ name = "hgl"
 path = "src/main.rs"
 
 [dependencies]
+serde_json.workspace = true
 hgl_source.workspace = true
 hgl_diagnostics.workspace = true
 hgl_lexer.workspace = true
