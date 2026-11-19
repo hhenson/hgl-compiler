@@ -161,6 +161,13 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
                 "struct Changed : Passed<i64>, One {}\n",
                 "abstract struct Mid : ByName {}\n",
                 "struct Diamond : Mid, ByName {}\n",
+                // A generic value parameter given to a callee: `limit<N>()`
+                // is `limit<3>()` where the path gives `N` 3.
+                "const fn limit<const N: i64>() -> i64 => N\n",
+                "abstract struct Limited<const N: i64> : Base { size = limit<N>() }\n",
+                "abstract struct Capped : Base { size = limit<3>() }\n",
+                "struct Called : Limited<3>, Capped {}\n",
+                "struct Miscalled : Limited<4>, Capped {}\n",
             ),
         ),
     ]);
@@ -172,6 +179,7 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
             "m.hgl:19:16 local:type/default.conflict UNIT-9",
             "m.hgl:28:23 local:type/default.conflict UNIT-9",
             "m.hgl:34:31 local:type/default.conflict UNIT-9",
+            "m.hgl:41:32 local:type/default.conflict UNIT-9",
         ]
     );
     assert_eq!(
@@ -472,6 +480,12 @@ fn a_list_of_structs_converts_to_a_list_of_their_parent() {
         "const fn sibling(values: list<Round>) -> list<Polygon> => convert<list<Polygon>>(values)\n",
         "const fn checked(values: list<Round>) -> result<list<Shape>, error> => convert<list<Shape>>(values)\n",
         "const fn forced(values: list<Round>) -> list<Shape> => convert<list<Shape>>(values, invalid: .fail)\n",
+        // By the operator's name for its parameter (EXPR-2), and with
+        // its other generic arguments written: the value's type, and
+        // the result, which is the list asked for.
+        "const fn named(values: list<Round>) -> list<Shape> => convert<list<Shape>>(value: values)\n",
+        "const fn written(values: list<Round>) -> list<Shape> => convert<list<Shape>, list<Round>, list<Shape>>(values)\n",
+        "const fn output(values: list<Round>) -> str => convert<list<Shape>, list<Round>, str>(values)\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -484,9 +498,10 @@ fn a_list_of_structs_converts_to_a_list_of_their_parent() {
             "m.hgl:18:59 operator/operator.no_candidate GEN-5",
             "m.hgl:19:72 operator/operator.no_candidate GEN-5",
             "m.hgl:20:56 operator/operator.no_candidate GEN-5",
+            "m.hgl:23:48 operator/operator.no_candidate GEN-5",
         ]
     );
-    for name in ["widened", "deep", "parents", "generic"] {
+    for name in ["widened", "deep", "parents", "generic", "named", "written"] {
         let value = returned(&checked, name);
         assert!(
             matches!(value.kind, ExprKind::ParentList(_)),

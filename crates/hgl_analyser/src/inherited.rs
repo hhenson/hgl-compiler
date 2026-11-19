@@ -177,8 +177,25 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
                     _ => None,
                 };
                 for generic in generics.into_iter().flatten() {
-                    if let Argument::Type(ty) = generic {
-                        *ty = substitute_within(ty, &map);
+                    match generic {
+                        Argument::Type(ty) => *ty = substitute_within(ty, &map),
+                        // A generic value parameter given as a callee's
+                        // argument: `limit<N>()` is `limit<3>()` where
+                        // the path gives `N` 3.
+                        Argument::Constant(constant) => {
+                            let ConstantValue::Parameter { at, .. } = &constant.value else {
+                                continue;
+                            };
+                            let given = map
+                                .iter()
+                                .find(|(declared, _)| declared == at)
+                                .map(|(_, argument)| *argument);
+                            match given {
+                                None => {}
+                                Some(Argument::Constant(given)) => *constant = given.clone(),
+                                Some(Argument::Type(_)) => known = false,
+                            }
+                        }
                     }
                 }
             }

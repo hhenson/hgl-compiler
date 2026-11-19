@@ -8144,6 +8144,8 @@ impl<'a> Typer<'a> {
         // output requested, in GEN-2's order: what the call writes, then
         // what its place expects, then its arguments, and the default
         // where none of them says."
+        // What the call writes, before its place says anything.
+        let explicit = written.clone();
         let mut found = written;
         from_place(public, expected, &mut found);
         let candidates = self.value_candidates(operator);
@@ -8181,7 +8183,7 @@ impl<'a> Typer<'a> {
         // where `values` is a `list<A>` and the struct `A` inherits from
         // the abstract struct `B`; it yields the same elements." Core
         // declares no candidate for it.
-        if let Some(ty) = self.parent_list(operator, found.first(), &given, expected) {
+        if let Some(ty) = self.parent_list(operator, public, &explicit, &given, expected) {
             let value = given.swap_remove(0).value;
             return (ExprKind::ParentList(Box::new(value)), ty);
         }
@@ -8366,21 +8368,25 @@ impl<'a> Typer<'a> {
     /// The list a call of `operator` converts its one argument to, where
     /// the call is core's `convert<list<B>>(values)` of a `list<A>` and
     /// the struct `A` inherits from the abstract struct `B` (core's
-    /// OPS-6). `written` is the T the call writes, and `expected` what
-    /// its place expects.
+    /// OPS-6). `public` is the operator's signature, `explicit` the
+    /// generic arguments the call writes, in its order, and `expected`
+    /// what its place expects.
     ///
     /// Core declares no candidate for it: "A list of structs to a list
     /// of their parent is not declared here." It takes no option, and
     /// "yields the same elements", so it cannot fail and is the list
     /// asked for (OPS-8: "A conversion that cannot fail returns T"); a
     /// place that expects another type, a `result` among them, is
-    /// matched by no candidate (GEN-5). A list of a struct converted to
-    /// a list of that struct, a list of a size, and a list of nullable
-    /// elements are none of it.
+    /// matched by no candidate (GEN-5). So is another generic argument
+    /// the call writes: the value's type, `V`, is what it is given, and
+    /// the output, `O`, is T. A list of a struct converted to a list of
+    /// that struct, a list of a size, and a list of nullable elements
+    /// are none of it.
     fn parent_list(
         &self,
         operator: OperatorRef,
-        written: Option<&Option<Argument>>,
+        public: &Signature,
+        explicit: &[Option<Argument>],
         given: &[Given],
         expected: Option<&Type>,
     ) -> Option<Type> {
@@ -8389,22 +8395,28 @@ impl<'a> Typer<'a> {
         if Some(operator.module) != program.core() || declared.name != "convert" {
             return None;
         }
-        let Some(Some(Argument::Type(
+        let Some(Argument::Type(
             asked @ Type::List {
                 element: parent,
                 size: None,
             },
-        ))) = written
+        )) = explicit.first()?
         else {
             return None;
         };
         if expected.is_some_and(|expected| !self.admits(expected, asked)) {
             return None;
         }
-        let [value] = given else {
+        // The one argument, by position or by the operator's name for
+        // its parameter (EXPR-2).
+        let ([value], [parameter]) = (given, public.parameters.as_slice()) else {
             return None;
         };
-        if !matches!(value.key, Key::Position(0)) {
+        let named = match &value.key {
+            Key::Position(position) => *position == 0,
+            Key::Name(name) => *name == parameter.name,
+        };
+        if !named {
             return None;
         }
         let Type::List {
@@ -8414,6 +8426,24 @@ impl<'a> Typer<'a> {
         else {
             return None;
         };
+        // Each other generic argument the call writes: the parameter's
+        // type, which is the value's, or the result, which is T.
+        for (generic, written) in public.generics.iter().zip(explicit).skip(1) {
+            let Some(written) = written else {
+                continue;
+            };
+            let names = |ty: &Type| matches!(ty, Type::Parameter { at, .. } if *at == generic.at);
+            let stands_for = if names(&parameter.ty) {
+                &value.value.ty
+            } else if public.result.as_ref().is_some_and(names) {
+                asked
+            } else {
+                return None;
+            };
+            if !matches!(written, Argument::Type(ty) if agree(ty, stands_for)) {
+                return None;
+            }
+        }
         let (
             Type::Named {
                 kind: NamedKind::Struct,
