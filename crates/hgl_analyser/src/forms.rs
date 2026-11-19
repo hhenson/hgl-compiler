@@ -11,10 +11,11 @@
 //! which is an integer only under a minus (LEX-7).
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_lexer::literal::{MAX_INTEGER_MAGNITUDE, decode_integer};
+use hgl_lexer::literal::decode_integer;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
+use crate::constant::is_least_magnitude;
 use crate::program::{DeclarationKind, Program, Role};
 use crate::{codes, error};
 
@@ -99,18 +100,10 @@ fn cardinalities(declaration: &SyntaxNode, file: FileId, diagnostics: &mut Diagn
 /// operand of that minus; anywhere else it is rejected here.
 fn integer_range(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) {
     // `descendants` walks the tree under `root` without calling itself.
-    for literal in root
-        .descendants()
-        .filter(|node| node.kind() == SyntaxKind::Literal)
-    {
+    for literal in root.descendants().filter(is_least_magnitude) {
         let Some(token) = tokens(&literal).next() else {
             continue;
         };
-        if token.kind() != SyntaxKind::Int
-            || decode_integer(token.text()) != Ok(MAX_INTEGER_MAGNITUDE)
-        {
-            continue;
-        }
         let under_minus = literal.parent().is_some_and(|parent| {
             parent.kind() == SyntaxKind::UnaryExpr
                 && tokens(&parent)

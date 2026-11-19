@@ -460,6 +460,34 @@ fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
+/// What a name in a constant expression stands for, `bound` being what
+/// the resolver bound it to (UNIT-10): a generic value parameter of the
+/// declaration it is written in; a constant of a module, followed to
+/// its value (UNIT-13); anything else [`ConstantValue::Unevaluated`].
+/// It is the `name` that [`fold`] is given wherever a constant is
+/// folded with its names.
+pub(crate) fn named_constant(
+    program: &Program,
+    values: &ConstantValues,
+    name: &SyntaxToken,
+    bound: Option<&Binding>,
+) -> ConstantValue {
+    match bound {
+        Some(Binding::Local {
+            at,
+            kind: LocalKind::GenericParameter,
+        }) => ConstantValue::Parameter {
+            name: name.text().to_string(),
+            at: *at,
+        },
+        Some(Binding::Declarations {
+            module,
+            declarations,
+        }) if declarations.len() == 1 => constant_value(program, *module, declarations[0], values),
+        _ => ConstantValue::Unevaluated,
+    }
+}
+
 /// How many constants a constant's value is followed through. One that
 /// names more, each through the last, is left unevaluated.
 const CONSTANT_DEPTH: usize = 32;
@@ -538,15 +566,7 @@ pub(crate) fn constant_value(
             .iter()
             .find(|found| found.at.file == file && found.at.span.start == name.span().start)
             .map(|found| &found.binding);
-        match binding {
-            Some(Binding::Declarations {
-                module,
-                declarations,
-            }) if declarations.len() == 1 => {
-                constant_value(program, *module, declarations[0], values)
-            }
-            _ => ConstantValue::Unevaluated,
-        }
+        named_constant(program, values, &name, binding)
     };
     // Whether anything under this constant was cut is asked of this
     // constant alone, and then added to what its caller is asking.
@@ -2380,27 +2400,8 @@ impl Reader<'_> {
             let Some(name) = used_name(used) else {
                 return ConstantValue::Unevaluated;
             };
-            match self.bindings.get(&(self.file, name.span().start)) {
-                Some(Binding::Local {
-                    at,
-                    kind: LocalKind::GenericParameter,
-                }) => ConstantValue::Parameter {
-                    name: name.text().to_string(),
-                    at: *at,
-                },
-                // UNIT-13: a constant of a module, followed to its
-                // value.
-                Some(Binding::Declarations {
-                    module,
-                    declarations,
-                }) if declarations.len() == 1 => constant_value(
-                    self.program,
-                    *module,
-                    declarations[0],
-                    &self.constant_values,
-                ),
-                _ => ConstantValue::Unevaluated,
-            }
+            let bound = self.bindings.get(&(self.file, name.span().start)).copied();
+            named_constant(self.program, &self.constant_values, &name, bound)
         };
         let constant = Constant {
             text: text_of(node),
