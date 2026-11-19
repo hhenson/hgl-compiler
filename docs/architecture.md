@@ -1219,8 +1219,9 @@ passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
 depth (`requirements::instances_hold`), and reported at that call. Only
 the calls that reach a `requires` are followed, each instance once
-however many calls make it, and at most 4096 instances from one; a call
-whose instances go past that is local
+however many calls make it, and at most 4096 instances from one, whose
+arguments are no longer than 65536 characters written out; a call whose
+instances go past that is local
 `generic.instance_limit`, for what is past it is not told. What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.

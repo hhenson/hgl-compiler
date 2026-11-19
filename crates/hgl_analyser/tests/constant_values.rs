@@ -1152,7 +1152,11 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
              operator unwrap<T>(boxed: T) -> i64\n\
              impl const fn unwrap<const X: f64>(boxed: FBox<X>) -> i64 => only_two(boxed)\n\
              const fn h() -> i64 => unwrap(FBox<1.0>(v: 1))\n\
-             const fn k() -> i64 => unwrap(FBox<2.0>(v: 1))\n"
+             const fn k() -> i64 => unwrap(FBox<2.0>(v: 1))\n\
+             struct Only<T> requires T == FBox<2.0> {{ v: i64 }}\n\
+             struct Outer<const X: f64> {{ held: Only<FBox<X>>? }}\n\
+             const fn m() -> Outer<1.0> => Outer<1.0>(held: null)\n\
+             const fn n() -> Outer<2.0> => Outer<2.0>(held: null)\n"
         ),
         &[
             "13 requires.unmet",
@@ -1163,6 +1167,9 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
             "18 requires.unmet",
             "20 requires.unmet",
             "23 requires.unmet",
+            // The result's type and the construction each apply it.
+            "27 requires.unmet",
+            "27 requires.unmet",
         ],
     );
 }
@@ -1182,6 +1189,16 @@ fn the_instances_a_call_makes_are_followed_within_a_bound() {
         "const fn spin<const N: i64>(v: i64) -> i64 => every<N>(v) + spin<N * 2>(v) + spin<N * 2 + 1>(v)\n",
     );
     expect(&format!("{shared}const fn a() -> i64 => free<1>(1)\n"), &[]);
+    // An instance whose arguments grow is followed no further than they
+    // may be held: `S + S` doubles a string at each level.
+    expect(
+        &format!(
+            "{shared}const fn same_text<const S: str>(v: i64) -> i64 requires S == S => v\n\
+             const fn doubled<const S: str>(v: i64) -> i64 => same_text<S>(v) + doubled<S + S>(v)\n\
+             const fn a() -> i64 => doubled<\"x\">(1)\n"
+        ),
+        &["9 generic.instance_limit"],
+    );
     // One instance made from many calls is followed once: four thousand
     // and more calls of `wrap<1>` are one instance of it, whose
     // `requires` holds.

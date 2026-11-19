@@ -1085,6 +1085,11 @@ struct Made {
 /// (`generic.instance_limit`).
 const INSTANCES: usize = 4096;
 
+/// How long, written out, an instance's generic arguments may grow: `S +
+/// S` in `doubled<const S: str>` doubles a string at each instance. One
+/// past it is not made, and is reported as [`INSTANCES`] is.
+const ARGUMENTS: usize = 1 << 16;
+
 /// Tells the `requires` of each instance a call makes.
 ///
 /// GEN-3: "A call of a function whose `requires` does not hold with the
@@ -1126,6 +1131,19 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .flatten()
             {
                 made_by(default, &mut made);
+            }
+            // A struct a type written in it applies, a field's or a
+            // parameter's (GEN-3: "an application of a struct whose
+            // `requires` does not hold with its arguments").
+            let span = module.declarations[position].syntax.span();
+            let file = module.files[module.declarations[position].file].file;
+            for written in &module.written {
+                if written.at.file == file
+                    && written.at.span.start >= span.start
+                    && written.at.span.end <= span.end
+                {
+                    applied_in(&written.ty, written.at, &mut made);
+                }
             }
             let declared = own((index, position));
             for call in made {
@@ -1209,32 +1227,11 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         let mut waiting: std::collections::VecDeque<Made> =
             std::collections::VecDeque::from([root]);
         let mut followed = 0;
+        let mut exhausted = false;
         while let Some(made) = waiting.pop_front() {
             followed += 1;
             if followed > INSTANCES {
-                // What is not followed is not told, and is not taken to
-                // hold (GEN-3): each call it is made from is reported, but
-                // one already rejected for a `requires` (ERR-9: "Do not
-                // demand cascaded diagnostics").
-                for &at in &from {
-                    let rejected = diagnostics.as_slice().iter().any(|earlier| {
-                        earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
-                            && earlier.primary.file == at.file
-                            && earlier.primary.span.start == at.span.start
-                    });
-                    if !rejected {
-                        diagnostics.emit(crate::local_error(
-                            Category::Constraint,
-                            codes::local::INSTANCE_LIMIT,
-                            at,
-                            format!(
-                                "this call makes more than {INSTANCES} instances, and the \
-                                 `requires` of those past them are not told"
-                            ),
-                            "GEN-3",
-                        ));
-                    }
-                }
+                past_the_limit(&from, diagnostics);
                 break;
             }
             let Some(inner) = passed.get(&made.callee) else {
@@ -1249,6 +1246,11 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .iter()
                     .map(|argument| given_in(argument, &map, &declared))
                     .collect();
+                let key = format!("{:?}{generics:?}", call.callee);
+                if key.len() > ARGUMENTS {
+                    exhausted = true;
+                    break;
+                }
                 if required(program, call.callee).is_some() {
                     let (module, declaration) = call.callee;
                     let unit = &program.modules[module];
@@ -1269,7 +1271,6 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         typer.instance_met((at, call.at), call.callee, &generics);
                     }
                 }
-                let key = format!("{:?}{generics:?}", call.callee);
                 if reaching.contains(&call.callee) && seen.insert(key) {
                     waiting.push_back(Made {
                         callee: call.callee,
@@ -1278,6 +1279,53 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     });
                 }
             }
+            if exhausted {
+                past_the_limit(&from, diagnostics);
+                break;
+            }
+        }
+    }
+}
+
+/// Reports each call in `from` whose instances go past what is followed
+/// ([`INSTANCES`], [`ARGUMENTS`]): what is past it is not told, and is
+/// not taken to hold (GEN-3). One already rejected for a `requires` is
+/// not reported again (ERR-9: "Do not demand cascaded diagnostics").
+fn past_the_limit(from: &[Location], diagnostics: &mut Diagnostics) {
+    for &at in from {
+        let rejected = diagnostics.as_slice().iter().any(|earlier| {
+            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+                && earlier.primary.file == at.file
+                && earlier.primary.span.start == at.span.start
+        });
+        if !rejected {
+            diagnostics.emit(crate::local_error(
+                Category::Constraint,
+                codes::local::INSTANCE_LIMIT,
+                at,
+                format!(
+                    "this call makes more instances than this compiler follows ({INSTANCES}, \
+                     with arguments no longer than {ARGUMENTS} characters written out), and \
+                     the `requires` of those past them are not told"
+                ),
+                "GEN-3",
+            ));
+        }
+    }
+}
+
+/// The struct applications `ty`, written at `at`, makes, at any depth,
+/// each that gives generic arguments.
+fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
+    let mut found = Vec::new();
+    struct_applications(ty, &mut found);
+    for (callee, generics) in found {
+        if !generics.is_empty() {
+            made.push(Made {
+                callee,
+                generics,
+                at,
+            });
         }
     }
 }
