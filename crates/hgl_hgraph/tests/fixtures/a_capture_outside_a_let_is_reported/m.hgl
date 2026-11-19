@@ -1,0 +1,17 @@
+module m
+fn scaled(value: i64, const by: i64) -> i64 { return value * by }
+fn watched(value: i64) -> i64 {
+    return capture(scaled, value, 2).value
+}
+fn added(value: i64) -> i64 {
+    let boundary = capture(add_, value, 1)
+    return boundary.value
+}
+fn forward(value: i64) -> i64 { when { return value } }
+fn inline(value: i64) -> i64 {
+    return capture(forward, value).value
+}
+test outside_an_eval {
+    let seen = capture(forward, 1)
+    assert true
+}

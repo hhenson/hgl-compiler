@@ -1,0 +1,10 @@
+module m
+struct Tagged {
+    tags: dict<str, i64>
+}
+fn whole(tag: str) -> Tagged {
+    when { return Tagged(tags: [tag: 1]) }
+}
+fn changed(tag: str) -> Tagged {
+    when { return delta<Tagged>(tags: delta<dict<str, i64>>(removed: [tag])) }
+}

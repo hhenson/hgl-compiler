@@ -59,7 +59,8 @@ mod emit;
 mod host;
 mod instances;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use hgl_analyser::Program;
@@ -428,13 +429,19 @@ fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diag
     None
 }
 
-/// The functions the provider of core's natives defines, read from its text: the
-/// name after each `def` at the start of a line, but for the private
-/// ones.
-pub(crate) fn provided() -> impl Iterator<Item = &'static str> {
-    CORE_NATIVE
-        .lines()
-        .filter_map(|line| line.strip_prefix("def "))
-        .filter_map(|rest| rest.split('(').next())
-        .filter(|name| !name.starts_with('_'))
+/// True where the provider of core's natives defines the function
+/// `name`. What it defines is read from its text once: the name after
+/// each `def` at the start of a line, but for the private ones.
+pub(crate) fn provides(name: &str) -> bool {
+    // `LazyLock` works its value out the first time it is read, and
+    // keeps it for every read after.
+    static PROVIDED: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+        CORE_NATIVE
+            .lines()
+            .filter_map(|line| line.strip_prefix("def "))
+            .filter_map(|rest| rest.split('(').next())
+            .filter(|name| !name.starts_with('_'))
+            .collect()
+    });
+    PROVIDED.contains(name)
 }

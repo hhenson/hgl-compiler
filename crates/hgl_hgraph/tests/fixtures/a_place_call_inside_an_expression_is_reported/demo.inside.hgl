@@ -1,0 +1,9 @@
+module demo.inside
+const fn take(var count: i64) -> i64 {
+    count = 0
+    return 1
+}
+const fn twice() -> i64 {
+    var held: i64 = 7
+    return take(held) + take(held)
+}
