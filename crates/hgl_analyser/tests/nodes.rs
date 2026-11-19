@@ -448,6 +448,50 @@ fn a_dormant_node_is_warned_of() {
     assert!(!checked.rejected);
 }
 
+/// TIME-3: "A selector sets subscription or admission when it stands
+/// alone in the header or appears as a top-level conjunct. Selectors
+/// under negation or disjunction leave the default in place." Where
+/// `modified([])` "is a bool, in a body or under a negation or a
+/// disjunction, it is true in a cycle where no temporal input was
+/// modified": no selector, so the handler subscribes to every input
+/// ("A handler with no `modified` selector subscribes to every temporal
+/// input"), which wakes it, and the node is not dormant. A selector
+/// alone and as a top-level conjunct is warned of (`node.no_activation`).
+#[test]
+fn an_empty_selection_that_is_no_selector_leaves_the_node_awake() {
+    let checked = module(concat!(
+        "fn negated(a: f64) -> bool {\n",
+        "    when !modified([]) { return true }\n",
+        "}\n",
+        "fn in_body(a: f64) -> bool {\n",
+        "    when { return modified([]) }\n",
+        "}\n",
+        "fn either(a: f64) -> bool {\n",
+        "    when modified([]) || modified(a) { return true }\n",
+        "}\n",
+        "fn guarded(a: f64) -> bool {\n",
+        "    when {\n",
+        "        if modified([]) { return false }\n",
+        "        return true\n",
+        "    }\n",
+        "}\n",
+        // The control: a selector, alone and as a top-level conjunct.
+        "fn alone(a: f64) -> bool {\n",
+        "    when modified([]) { return true }\n",
+        "}\n",
+        "fn conjunct(a: f64) -> bool {\n",
+        "    when valid(a) && modified([]) { return true }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:18:10 warning/node.no_activation TIME-3",
+            "m.hgl:21:22 warning/node.no_activation TIME-3",
+        ]
+    );
+}
+
 /// TIME-8: "A capability is used within the node that injects it and is
 /// not retained: it is not the value of a `state` or a `cache`, an entry
 /// of a tuple, list, set, dictionary, or struct, what a function
