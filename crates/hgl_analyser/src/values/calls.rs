@@ -724,6 +724,43 @@ impl<'a> Typer<'a> {
             );
         }
 
+        // FN-1: a value function's "parameter and result types are
+        // ordinary value types", and GEN-1: "ordinary positions require
+        // value types", which a window is not (TYPE-12). A window given
+        // to a value function binds its generic parameters to the list
+        // it holds (`inferred_from`); one that the call's place, or what
+        // the call writes, binds to a type that holds a window rejects.
+        if listed && judged {
+            for (generic, found) in generics.iter().zip(&found) {
+                let Some(Argument::Type(ty)) = found else {
+                    continue;
+                };
+                if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
+                    false
+                }) {
+                    continue;
+                }
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::TYPE_NOT_ORDINARY,
+                        Location::new(self.file, name.span()),
+                        format!(
+                            "`{ty}` is not an ordinary value type, and the `{}` of the value \
+                             function `{}` stands for it here",
+                            generic.name,
+                            name.text()
+                        ),
+                        "FN-1",
+                    )
+                    .with_note(
+                        "a value function's parameters and result are ordinary values; a window \
+                         given to one is the `list<V>` it holds (TYPE-11)",
+                    ),
+                );
+            }
+        }
+
         // The result, with what was found in place. One that still
         // names a parameter nothing resolved is not known.
         let own: Vec<Location> = generics.iter().map(|generic| generic.at).collect();

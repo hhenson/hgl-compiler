@@ -9,6 +9,7 @@ analyser: partial
 - A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`
 - A parameter of a capability's type, and `endpoint<T>` in a native value function, are admitted (TIME-8, TYPE-12)
 - A `const fn` parameter marked `ref` is `ref.position` (FN-16)
+- A generic parameter of a value function that a call's place, or what the call writes, binds to a type that holds a window is `type.not_ordinary`; one given a window binds to the `list<V>` it holds (GEN-1, TYPE-11)
 - In a hook, a source and a value function a `const` parameter is given a constant expression (`argument.constant`); in a graph, no connection (`connection.as_constant`)
 - Left: a `const` parameter that only an operator marks; roles of `const fn` and a temporal `fn` in bodies
 
@@ -118,7 +119,7 @@ transpiler: partial
 
 analyser: partial
 
-- A window's connection is given to a value function's `list<V>` in composition, the list it holds (TYPE-11)
+- A window's connection is given to a value function's parameter in composition as the `list<V>` it holds, which binds its generic parameters: the `T` of `list<T>` is V, and a bare `T` is `list<V>` (TYPE-11, FN-1)
 - Left: which aggregates need `all_valid` (FN-11)
 
 transpiler: partial
@@ -128,7 +129,7 @@ transpiler: partial
 - A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
 - A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds
 - Left, reported: a window given to a parameter with a default, which FN-11 does not say what binds where the window is valid and not all valid
-- Left, reported: a window given to a lifted helper
+- Left, reported: a window that a value function's generic parameter stands for in an instance of a generic declaration, checked once (GEN-7)
 
 ## FN-13
 

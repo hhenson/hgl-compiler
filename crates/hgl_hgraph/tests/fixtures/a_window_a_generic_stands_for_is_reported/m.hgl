@@ -1,0 +1,15 @@
+module m
+fn readings(reading: i64) -> rolling_window<i64, 3, 2> {
+    when { return reading }
+}
+fn relay<T>(x: T) -> T {
+    when { return x }
+}
+fn relayed(reading: i64) -> rolling_window<i64, 3, 2> => relay(readings(reading))
+const fn ident<T>(value: T) -> T => value
+fn passed<T>(x: T) -> T => ident(x)
+fn passed_window(reading: i64) -> rolling_window<i64, 3, 2> => passed(readings(reading))
+fn ready<T>(x: T) -> bool {
+    when valid([]) { return valid(x) }
+}
+fn ready_window(reading: i64) -> bool => ready(readings(reading))
