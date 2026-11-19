@@ -395,30 +395,45 @@ pub(crate) fn fit(
         }
         _ => read,
     };
-    // TYPE-10: "Size participates in identity": a list of another
-    // length than the size expected is no value of it.
-    if let (
-        ConstantValue::List(values),
-        Type::List {
-            element,
-            size: Some(size),
-        },
-    ) = (&read.value, expected)
-        && let ConstantValue::Int(count) = size.value
-        && i64::try_from(values.len()).ok() != Some(count)
-    {
-        let length = values.len().to_string();
-        return Err(Fault::Mismatch(Some(Box::new(Type::List {
-            element: element.clone(),
-            size: Some(crate::types::Constant {
-                text: length.clone(),
-                value: ConstantValue::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
-            }),
-        }))));
-    }
+    sizes_hold(&read.value, expected)?;
     match &read.ty {
         Some(ty) if !fits(ty, expected) => Err(Fault::Mismatch(Some(Box::new(ty.clone())))),
         _ => Ok(read.value),
+    }
+}
+
+/// TYPE-10: "Size participates in identity": a list of another length
+/// than the size expected is no value of it, at any depth. A constant
+/// of `list<list<i64>>` holding `[[1, 2]]` is no `list<list<i64, 3>>`,
+/// though its type says no size.
+fn sizes_hold(value: &ConstantValue, expected: &Type) -> Result<(), Fault> {
+    match (value, expected) {
+        (_, Type::Nullable(inner)) => sizes_hold(value, inner),
+        (ConstantValue::List(values), Type::List { element, size }) => {
+            if let Some(size) = size
+                && let ConstantValue::Int(count) = size.value
+                && i64::try_from(values.len()).ok() != Some(count)
+            {
+                let length = values.len().to_string();
+                return Err(Fault::Mismatch(Some(Box::new(Type::List {
+                    element: element.clone(),
+                    size: Some(crate::types::Constant {
+                        text: length,
+                        value: ConstantValue::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+                    }),
+                }))));
+            }
+            values
+                .iter()
+                .try_for_each(|value| sizes_hold(value, element))
+        }
+        (ConstantValue::Tuple(values), Type::Tuple(elements)) if values.len() == elements.len() => {
+            values
+                .iter()
+                .zip(elements)
+                .try_for_each(|(value, element)| sizes_hold(value, element))
+        }
+        _ => Ok(()),
     }
 }
 
