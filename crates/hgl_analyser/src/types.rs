@@ -233,7 +233,8 @@ pub enum Type {
     /// (TST-3). It is a type of this compiler's, for a value of a test.
     Trace {
         /// What each cell is: one cycle's publication, the `delta<T>`
-        /// of the type the trace is of (TST-5).
+        /// of the type the trace is of (TST-5), as [`Type::trace_cell`]
+        /// writes it.
         cell: Box<Type>,
         /// Dense or timed, where a trace that has cells says which.
         style: Option<TraceStyle>,
@@ -318,6 +319,31 @@ impl Type {
             payload
         } else {
             Type::Atomic(Box::new(payload))
+        }
+    }
+
+    /// What a cell of a trace of `of` is (TST-5): "one cycle's
+    /// publication, written as a `return` is (TIME-7) ... a T, published
+    /// whole, or a `delta<T>`". It is `delta<of>` ([`Type::delta`]), but
+    /// for a tuple, whose delta is a tuple of its positions' and so does
+    /// not say what T is: the cell is then `Type::Delta` of the tuple,
+    /// which names T, so that a cell written as a T is read whole, as a
+    /// `return` of it is. [`Type::cell_delta`] is the delta it stands
+    /// for.
+    pub fn trace_cell(of: Type) -> Type {
+        match of {
+            Type::Tuple(_) => Type::Delta(Box::new(of)),
+            other => Type::delta(other),
+        }
+    }
+
+    /// The `delta<T>` a trace's `cell` is (TYPE-16): what
+    /// [`Type::trace_cell`] gives, with a tuple's delta formed, a tuple
+    /// of each position's.
+    pub fn cell_delta(cell: &Type) -> Type {
+        match cell {
+            Type::Delta(of) if matches!(**of, Type::Tuple(_)) => Type::delta((**of).clone()),
+            other => other.clone(),
         }
     }
 

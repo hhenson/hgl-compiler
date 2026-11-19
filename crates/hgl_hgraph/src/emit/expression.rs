@@ -1724,12 +1724,22 @@ impl Emitter<'_> {
                         return "None".to_string();
                     }
                     let fixed = matches!(value.ty, Type::List { size: Some(_), .. });
+                    // A tuple's is published as hgraph's bundle takes a
+                    // whole one, position by position (`bundled`), a null
+                    // position as a published null: its shape says how.
+                    let shape = match &value.ty {
+                        Type::Tuple(_) => match self.whole_shape(&value.ty, value.at) {
+                            Some(shape) => Some(shape.text),
+                            None => return "None".to_string(),
+                        },
+                        _ => None,
+                    };
                     let value = self.expression(function, value);
                     self.harness = true;
-                    if fixed {
-                        format!("_harness.whole({value}, fixed=True)")
-                    } else {
-                        format!("_harness.whole({value})")
+                    match (fixed, shape) {
+                        (true, _) => format!("_harness.whole({value}, fixed=True)"),
+                        (false, Some(shape)) => format!("_harness.whole({value}, shape={shape})"),
+                        (false, None) => format!("_harness.whole({value})"),
                     }
                 }
                 Some(value) => self.expression(function, value),

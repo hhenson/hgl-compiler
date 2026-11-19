@@ -517,7 +517,7 @@ impl<'a> Typer<'a> {
             let cell = if names_parameter(&ty) || matches!(ty, Type::Unknown) {
                 ty
             } else {
-                Type::delta(ty)
+                Type::trace_cell(ty)
             };
             Type::Trace {
                 cell: Box::new(cell),

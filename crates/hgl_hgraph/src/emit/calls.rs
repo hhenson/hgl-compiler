@@ -944,14 +944,20 @@ impl<'a> Emitter<'a> {
     }
 
     /// True where each part of a whole value of `ty`, an element, a
-    /// field or an entry, publishes whole: a scalar, an enum or a
-    /// nullable one. A list's element is not nullable: hgraph's whole
-    /// tuple of a list holds no null (see `bundle_of`).
+    /// field, an entry or a position, publishes whole: a scalar, an enum
+    /// or a nullable one, and for a tuple's position an atomic one too,
+    /// which hgraph holds as one value (TYPE-9: "`atomic<V>` stops
+    /// expansion at a complete ordinary V"). A list's element is not
+    /// nullable: hgraph's whole tuple of a list holds no null (see
+    /// `bundle_of`).
     pub(super) fn parts_publish_whole(&self, ty: &Type) -> bool {
         match ty {
             Type::List { element, .. } => whole_scalar(element),
             Type::Set(_) => true,
             Type::Dict { value, .. } => publishes_whole(value),
+            Type::Tuple(positions) => positions
+                .iter()
+                .all(|position| publishes_whole(position) || matches!(position, Type::Atomic(_))),
             Type::Named {
                 module,
                 declaration,
@@ -973,9 +979,9 @@ impl<'a> Emitter<'a> {
     /// expectation's cell written as a `delta<T>` ... compared with the
     /// delta its cycle published, and one written as a T with the value
     /// the result holds once its cycle has published". `_hold=` a
-    /// function of the result's port, for a type whose delta is a type of
-    /// its own: a list, a set, a dictionary and a struct. `None` for one
-    /// whose delta is the value itself.
+    /// function of the result's port, for a type whose delta is another
+    /// type: a list, a set, a dictionary, a struct and a tuple. `None`
+    /// for one whose delta is the value itself.
     fn held_reader(&mut self, ty: &Type, at: Location) -> Option<String> {
         // A value this target does not read whole, an abstract struct's
         // or one that holds a window, has no reader: an eval of it that
@@ -989,6 +995,7 @@ impl<'a> Emitter<'a> {
             Type::List { .. }
                 | Type::Set(_)
                 | Type::Dict { .. }
+                | Type::Tuple(_)
                 | Type::Named {
                     kind: NamedKind::Struct,
                     ..

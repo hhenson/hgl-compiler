@@ -1182,19 +1182,22 @@ def dict_replaced(output, value):
     return made
 
 
-def whole_delta(value, keys, fixed=False, size=0):
+def whole_delta(value, keys, fixed=False, size=0, shape=None):
     """The delta that publishing `value` whole records, to a value that
     holds the keys or members `keys` (the language's TST-9: "a T whole,
     which replaces what the input held"; TST-16: "A T published whole is
     held as its delta too"), as hgraph records it and takes it back: a
     dictionary's is each entry, and the removal of each key it has not; a
     set's the members added and removed; a struct's each field, as
-    hgraph's bundle takes it (see `bundled`); a fixed list's, `fixed`,
-    each position, as its `TSL` records it; and an unsized list's, to a
-    list of `size` positions, each position, the tail past them removed,
-    and the new size where it moves, as hgraph's unbounded `TSL` reads
-    it (TYPE-16: "on a shrink names the tail positions it drops in
-    `removed`")."""
+    hgraph's bundle takes it (see `bundled`); a tuple's, given its
+    `shape`, each position, as hgraph's bundle takes it too, a null
+    position a published null; a fixed list's, `fixed`, each position,
+    as its `TSL` records it; and an unsized list's, to a list of `size`
+    positions, each position, the tail past them removed, and the new
+    size where it moves, as hgraph's unbounded `TSL` reads it (TYPE-16:
+    "on a shrink names the tail positions it drops in `removed`")."""
+    if shape is not None:
+        return _bundled(value, shape, None)
     if isinstance(value, (set, frozenset)):
         added, removed = frozenset(value - keys), frozenset(keys - value)
         members = added | removed

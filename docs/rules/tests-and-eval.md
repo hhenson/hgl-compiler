@@ -60,7 +60,7 @@ analyser: partial
 
 - An eval's first argument is a call of a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
-- A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary and a struct; a tuple's whole cell reads as its delta, a tuple of its positions
+- A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions
 - A generic target's parameters are found from the cells
 - A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`)
 - A second argument is a `RunConfig` of core's, and an eval takes no third
@@ -68,12 +68,12 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a cell written whole is `_harness.whole(value)`
+- hgraph: a cell written whole is `_harness.whole(value)`, and a tuple's `_harness.whole(value, shape=...)`, how hgraph's bundle takes each position (`bundled`): an input publishes a null position as a published null
 - An expectation's is compared with the value the result holds after its cycle, read from the result's port (`_hold`), and one written as a delta with the delta recorded
 - An unsized list's whole cell replays as the `TSLDelta` that replaces what the input held, the tail it has not removed (`_core.whole_delta`); core's `record` records hgraph's `TSLDelta`
 - The value held follows the owner's decision on hhenson/hgl_spec#126, ahead of the pinned text: a struct, a tuple or a list is whole only where each part is valid, an optional part that is not being null; where a required part is not valid there is no whole value, and no cell written whole equals it: it is read as a part is (`part_value`)
-- A tuple's cell is read as its delta, a tuple of its positions
-- Left: a tuple's cell with no null position, which reads as a whole tuple too: which comparison it takes is not stated
+- A tuple's cell written as its delta is that tuple of its positions, published and compared as recorded
+- Left: a whole cell of a tuple with a position that is composite, a list or a struct, which is reported, as a struct's with a composite field is
 
 ## TST-6
 
@@ -120,7 +120,7 @@ runner: planned
 
 transpiler: partial
 
-- hgraph: a structural input cell written whole replaces what the input held: a dictionary's removes each key it held that the cell has not, and a set's each member; one written as a delta is that change
+- hgraph: a structural input cell written whole replaces what the input held: a dictionary's removes each key it held that the cell has not, a set's each member, and a tuple's sets each position, a null one to a published null; one written as a delta is that change
 - Left: what a whole value nested in another replaces
 
 runner: planned
