@@ -9241,7 +9241,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
         "        return _core.child_delta(_core.position_of(parts, 1))\n".to_string(),
         "    return _core.entry_port(prices, \"B\").valid\n".to_string(),
         "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)\n".to_string(),
-        "_hold=lambda _port: (_py.list(_port.value) if _port.all_valid else _core.unset_read())), [_harness.whole([1, 2]), _harness.whole([5, 6])]".to_string(),
+        "_hold=lambda _port: (_py.list(_port.value) if _port.all_valid else _core.unset_read())), [_harness.whole([1, 2], fixed=True), _harness.whole([5, 6], fixed=True)]".to_string(),
         "    return _core.dict_replaced(_output, _py.dict(book.value))\n".to_string(),
         format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
         "    _output.value = {key.value: value.value}\n".to_string(),
