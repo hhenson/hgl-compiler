@@ -6045,6 +6045,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("captures.hgl", CAPTURES));
     files.push(("errors.hgl", ERRORS));
     files.push(("tuples.hgl", TUPLES));
+    files.push(("tuples_names.hgl", TUPLES_NAMES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -7852,6 +7853,37 @@ fn a_negative_list_size_fails_as_the_graph_runs() {
 /// struct's application, and an abstract struct with the structs below
 /// it. TIME-7: `out` assigned by part.
 const TUPLES: &str = include_str!("fixtures/tuples.hgl");
+
+/// TYPE-3: "Structs are nominal". A module whose structs have the names
+/// of `demo.tuples`'s, with other fields.
+const TUPLES_NAMES: &str = include_str!("fixtures/tuples_names.hgl");
+
+/// Two modules' structs of one name, a generic one among them, each a
+/// bundle and an atomic value, are two types to hgraph: the modules load
+/// together and each one's tests pass. hgraph knows a class and a
+/// bundle's schema by its module and its name, and each struct's are of
+/// its own module. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_struct_names");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let not_passed: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .filter(|(_, ran)| **ran != Ran::Passed)
+        .map(|(test, ran)| format!("{}: {ran:?}", test.identity()))
+        .collect();
+    assert_eq!(not_passed, Vec::<String>::new());
+    assert_eq!(ran.len(), 6);
+}
 
 /// A tuple is hgraph's bundle with no name, a field for each position;
 /// a generic struct's bundle has the field types its arguments give; an
