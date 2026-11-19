@@ -56,7 +56,12 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && let Some(port) = self.input_port(function, value)
                 {
-                    return self.port_value(function.port_type(value), &port, value.at);
+                    let ty = function.port_type(value);
+                    let read = self.port_value(ty, &port, value.at);
+                    if function.is_out(*local) {
+                        return self.published_read(ty, &port, read);
+                    }
+                    return read;
                 }
                 let read = self.place(function, *local);
                 if function.mode == Mode::Lifecycle && function.is_input(*local) {
@@ -1379,6 +1384,25 @@ impl Emitter<'_> {
     /// and a struct's, a tuple's or a list's parts each in turn.
     pub(super) fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
         self.part_value_at(ty, port, 0, at)
+    }
+
+    /// `read`, the whole of the node's `out` read at its port `port`, of
+    /// the result's type `ty`, where it is valid.
+    ///
+    /// TIME-7: "`inject out` exposes that same result for reads", read
+    /// in a `when` and in `stop`. Until the node has published, and after
+    /// `invalidate(out)`, `out` holds no payload, and nothing is made up
+    /// for it: the read fails with the catalogue's `value.unset_read`,
+    /// "Executed operation requires an unset ordinary payload", an
+    /// execution failure (ERR-1) a capture takes (ERR-7). It fails where
+    /// `valid(out)` is false, by the same test (`valid_test`). A part of
+    /// `out` read alone is held to its own `valid` (`part_value`).
+    fn published_read(&mut self, ty: &Type, port: &str, read: String) -> String {
+        let ready = self.valid_test(ty, port);
+        self.natives = true;
+        format!(
+            "({read} if {ready} else _core.unset_read(\"`out` is read before it holds a value\"))"
+        )
     }
 
     /// `part_value` of a port read inside `depth` comprehensions.

@@ -1251,13 +1251,15 @@ def only_value(published, struct):
     return published if isinstance(published, struct) else struct()
 
 
-def unset_read():
+def unset_read(message="a part that has not published is read"):
     """The read of a part of a temporal struct or tuple that has not
-    published, where a value of it is needed: it fails, with the code
-    the language catalogues, `value.unset_read` ("Executed operation
-    requires an unset ordinary payload"), and no value is made up. The
-    compiler reads an optional part that has not published as null."""
-    raise HglError("a part that has not published is read", code="value.unset_read")
+    published, where a value of it is needed, or of a node's `out` before
+    it holds a value (the language's TIME-7), which `message` says: it
+    fails, with the code the language catalogues, `value.unset_read`
+    ("Executed operation requires an unset ordinary payload"), and no
+    value is made up. The compiler reads an optional part that has not
+    published as null."""
+    raise HglError(message, code="value.unset_read")
 
 
 def bundled(value, shape=None, port=None):

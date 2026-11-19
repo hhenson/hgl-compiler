@@ -101,6 +101,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: `inject out` is the node's `_output`, read and assigned through its value; no write, no tick
+- `out` read whole, in a `when` or in `stop`, before it holds a value, or after `invalidate(out)`, fails with `value.unset_read`, which a capture takes, where `valid(out)` is false
 - A node whose result is written `T?` publishes its null: a `return`, a `yield` and an assignment to `out` give hgraph `Null` where the value is null, which ticks a value that is unset
 - A `stop` is given the output too, and reads it under `valid(out)`
 - A part of `out` is assigned through its own port, a struct's field, a tuple's position and a fixed list's position, each by a whole value of its type (EXPR-3 has a part take no `delta<T>`), and a dictionary's entry as that key's change; a place inside a part that publishes whole gives the part a new value, published whole; `out` read after holds it, and a required part of it that is not valid fails the read with `value.unset_read`

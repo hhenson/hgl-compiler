@@ -2032,8 +2032,13 @@ fn a_stop_is_given_the_nodes_output() {
         python.contains(expected),
         "the module has:\n{expected}\nin:\n{python}"
     );
+    // TIME-7: `out` read holds what was published, and fails with
+    // `value.unset_read` before it holds a value.
+    let read = out_read("_output.value", "_output.valid");
     assert!(
-        python.contains("if _core.eq__i64_i64_f64_f64(lhs=_output.value, rhs=expected"),
+        python.contains(&format!(
+            "if _core.eq__i64_i64_f64_f64(lhs={read}, rhs=expected"
+        )),
         "{python}"
     );
 }
@@ -5315,11 +5320,20 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]] = None".to_string(),
         "    _output[1].value = ".to_string(),
         "    _output.value = {key.value: value.value}".to_string(),
-        "    _output.value = _core.with_field(_output.value, ask=".to_string(),
         format!(
-            "    whole = Quote(bid={}, ask={})",
-            part("_output[\"bid\"]"),
-            part("_output[\"ask\"]")
+            "    _output.value = _core.with_field({}, ask=",
+            out_read("_output.value", "_output.valid")
+        ),
+        format!(
+            "    whole = {}",
+            out_read(
+                &format!(
+                    "Quote(bid={}, ask={})",
+                    part("_output[\"bid\"]"),
+                    part("_output[\"ask\"]")
+                ),
+                "_output.valid"
+            )
         ),
     ]);
 }
@@ -5395,7 +5409,10 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
         "    return width(quote=quote.value)".to_string(),
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
-        "    whole = _output.value\n".to_string(),
+        format!(
+            "    whole = {}\n",
+            out_read("_output.value", "_output.valid")
+        ),
         "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:"
             .to_string(),
         // An atomic input's value is hgraph's: a `var` takes a copy.
@@ -5467,6 +5484,12 @@ fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
 /// where it is not.
 fn part(port: &str) -> String {
     format!("({port}.value if {port}.valid else _core.unset_read())")
+}
+
+/// How a hook reads the whole of its `out`, `read` where `out` is valid
+/// by `valid`, and `value.unset_read` where it is not (TIME-7).
+fn out_read(read: &str, valid: &str) -> String {
+    format!("({read} if {valid} else _core.unset_read(\"`out` is read before it holds a value\"))")
 }
 
 /// TYPE-9 and TIME-9: a part of a struct or a tuple that has not
