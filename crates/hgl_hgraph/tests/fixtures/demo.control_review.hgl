@@ -130,7 +130,9 @@ test a_var_assigned_and_read_in_a_returned_branch {
 
 # CTRL-6: labels are "compared by resolved value". A negation that
 # selects a candidate of the program's own is no minus: its value is
-# the candidate's, and this `switch` has two labels.
+# the candidate's, and this `switch` has two labels. The same `switch`
+# over a connection is reported, since the compiler does not work out
+# the candidate's value (`a_switch_label_not_worked_out_is_reported`).
 impl const fn neg_(value: i64, const shifted: bool) -> i64
     requires shifted == true => 7
 
@@ -142,16 +144,7 @@ const fn negated(route: i64) -> i64 {
     }
 }
 
-fn negated_in_a_graph(route: i64, a: i64) -> i64 {
-    switch route {
-        case -{shifted: true} 1: return a
-        case -1: return a * 2
-        default: return a * 3
-    }
-}
-
 test a_negation_of_another_candidate_is_its_own_label {
     assert negated(7) == 1
     assert negated(-1) == 2
-    assert eval(negated_in_a_graph(route: [7, -1, 0], a: [1, 2, 3])) == [1, 4, 9]
 }

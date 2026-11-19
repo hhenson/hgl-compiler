@@ -49,7 +49,7 @@ transpiler: partial
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
-- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])`, and `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
+- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` read as a bool, in a body or under a negation or a disjunction, which TIME-3 has true in a cycle where no temporal input was modified, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4
 
@@ -101,6 +101,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: `inject out` is the node's `_output`, read and assigned through its value; no write, no tick
+- `out` read whole, in a `when` or in `stop`, before it holds a value, or after `invalidate(out)`, fails with `value.unset_read`, which a capture takes, where `valid(out)` is false
 - A node whose result is written `T?` publishes its null: a `return`, a `yield` and an assignment to `out` give hgraph `Null` where the value is null, which ticks a value that is unset
 - A `stop` is given the output too, and reads it under `valid(out)`
 - A part of `out` is assigned through its own port, a struct's field, a tuple's position and a fixed list's position, each by a whole value of its type (EXPR-3 has a part take no `delta<T>`), and a dictionary's entry as that key's change; a place inside a part that publishes whole gives the part a new value, published whole; `out` read after holds it, and a required part of it that is not valid fails the read with `value.unset_read`

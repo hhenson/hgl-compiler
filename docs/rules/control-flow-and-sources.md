@@ -53,6 +53,7 @@ transpiler: done
 - hgraph: in a value function, a node's hooks and a graph's `switch` over an ordinary value the selector is evaluated once and each case is an `if` on it, so there is no fallthrough; what no case matches runs the `default`, or fails (`_core.unmatched`)
 - Over a connection, `switch_`, whose `default` where none is written is a graph that fails the same way when it is selected
 - Two labels of one value in an instance are reported
+- Over a connection, a label whose value the analyser has not worked out, a constant a `const fn` computes or a negation by a candidate of the program's own, is reported beside another label: `switch_` keeps the last of two labels of one value, where an ordinary `switch` takes the first
 
 ## CTRL-7
 
@@ -181,6 +182,7 @@ transpiler: done
 transpiler: done
 
 - hgraph: a target not after the one before it, a skipped one among them, is `yield.non_increasing_time`; a past target is skipped, a current one published at once, and a future one keeps its payload until the node's scheduler wakes it there
+- A due payload is published through the node's output before the generator is resumed: where the statements after the `yield` fail, the publication stands (ERR-8)
 
 ## SOURCE-4
 

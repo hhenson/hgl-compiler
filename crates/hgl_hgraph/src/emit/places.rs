@@ -418,6 +418,218 @@ impl Emitter<'_> {
         Some((format!("{port}.value"), published))
     }
 
+    /// What the assignment of `value`, written `written`, to `place`,
+    /// inside a `var` of a graph that holds a connection, writes: the
+    /// `var`, and the new connection it is given.
+    ///
+    /// EXPR-15: "In a graph, an assignment into a place of a `var` is
+    /// copy on write ... `point.x = price` rebinds `point` to a new
+    /// connection, which is `point` with its `x` from `price`. Nothing is
+    /// changed in place: what read `point` before the assignment keeps
+    /// the connection it had." A struct's and a tuple's connection is
+    /// hgraph's bundle, and a fixed list's its `TSL`, each made of its
+    /// parts' connections where the graph is built, with no node of its
+    /// own (`from_ts`, TYPE-9): each step from the place out to the `var`
+    /// is a new one, with the old one's parts but the one on the way. An
+    /// ordinary value assigned is a constant connection of the place's
+    /// type (FN-3). Reported: a place whose parts hgraph has as one value
+    /// or knows only as the graph runs, a field of an atomic struct, an
+    /// entry of a dictionary and a position of an unsized list.
+    pub(super) fn connected_place(
+        &mut self,
+        function: &Function,
+        place: &Expr,
+        value: &Expr,
+        written: String,
+    ) -> Option<(String, String)> {
+        let narrowing = matches!(
+            (&place.ty, &value.ty),
+            (
+                Type::Named {
+                    kind: NamedKind::Struct,
+                    ..
+                },
+                Type::Named {
+                    kind: NamedKind::Struct,
+                    ..
+                }
+            )
+        );
+        let connected = self.connects(function, value);
+        let mut part = match &place.ty {
+            // TYPE-14: "a T is a value where a T? is expected". A place of
+            // a nullable scalar is hgraph's `TS[T | None]`: a connection
+            // of `T` is made one (`_core.nullable`), and an ordinary value,
+            // a null among them, is a constant of it, as a branch's
+            // result is (`normalized`).
+            Type::Nullable(inner) if whole_scalar(inner) => {
+                let scalar = self.annotation(inner, false, value.at)?;
+                self.natives = true;
+                self.hgraph = true;
+                if !connected {
+                    format!("_hg.const(_core.published({written}), _hg.TS[{scalar} | None])")
+                } else if value.ty == place.ty || value.ty == **inner {
+                    format!("_core.nullable({written}, {scalar})")
+                } else {
+                    self.unsupported(
+                        value.at,
+                        "a connection of another type assigned to a place of a connection",
+                    );
+                    return None;
+                }
+            }
+            ty if is_nullable(ty) => {
+                self.unsupported(
+                    value.at,
+                    "an assignment to a nullable place of a connection of this type",
+                );
+                return None;
+            }
+            _ if !connected => self.constant_connection(&place.ty, value.at, written),
+            // A struct's connection where an abstract struct it inherits
+            // from is expected is a bundle of that struct (TYPE-3).
+            _ if value.ty == place.ty || narrowing => {
+                self.narrowed(function, &place.ty, value, written)
+            }
+            _ => {
+                self.unsupported(
+                    value.at,
+                    "a connection of another type assigned to a place of a connection",
+                );
+                return None;
+            }
+        };
+        let mut at = place;
+        loop {
+            // The step out from `at`: what it is a part of, how many parts
+            // that has and which `at` is, and their names, a struct's
+            // fields or a tuple's positions' (`tuple_annotation`), or
+            // `None` for a fixed list's, which are given in order.
+            let (base, count, assigned, names) = match &at.kind {
+                ExprKind::Local(local) => return Some((self.place(function, *local), part)),
+                ExprKind::Field { base, member } => {
+                    let (
+                        Type::Named {
+                            module,
+                            declaration,
+                            ..
+                        },
+                        Some(field),
+                        Some(fields),
+                    ) = (
+                        &base.ty,
+                        field_of(self.program, &base.ty, *member),
+                        fields_of(self.program, &base.ty),
+                    )
+                    else {
+                        let what = if matches!(base.ty, Type::Atomic(_)) {
+                            "a field of an atomic struct's connection assigned in a graph"
+                        } else {
+                            "an assignment to this member of a connection"
+                        };
+                        self.unsupported(at.at, what);
+                        return None;
+                    };
+                    if inherited(self.program, *module, *declaration) {
+                        self.unsupported(
+                            at.at,
+                            "a field of an abstract struct's connection assigned in a graph",
+                        );
+                        return None;
+                    }
+                    let names: Vec<String> = fields
+                        .iter()
+                        .map(|(member, _)| name(&member.name))
+                        .collect();
+                    let assigned = name(&field.name);
+                    let Some(assigned) = names.iter().position(|field| *field == assigned) else {
+                        self.unsupported(at.at, "an assignment to this member of a connection");
+                        return None;
+                    };
+                    (base, names.len(), assigned, Some(names))
+                }
+                // EXPR-3: "of a tuple's position, under a constant index",
+                // and of a list's element, which for a fixed list is
+                // taken by a literal inside it: one outside it is
+                // reported.
+                ExprKind::Index { base, index } => {
+                    let count = match &base.ty {
+                        Type::Tuple(elements) => Some(elements.len()),
+                        Type::List {
+                            size: Some(size), ..
+                        } => match size.value {
+                            ConstantValue::Int(count) => usize::try_from(count).ok(),
+                            _ => None,
+                        },
+                        Type::Dict { .. } => {
+                            self.unsupported(
+                                at.at,
+                                "an entry of a dictionary's connection assigned in a graph",
+                            );
+                            return None;
+                        }
+                        _ => {
+                            self.unsupported(
+                                at.at,
+                                "a position of an unsized list's connection assigned in a graph",
+                            );
+                            return None;
+                        }
+                    };
+                    let Some(count) = count else {
+                        self.unsupported(
+                            at.at,
+                            "a position of a list's connection of a size not known as the graph is built assigned in a graph",
+                        );
+                        return None;
+                    };
+                    let Some(assigned) = constant_position(index) else {
+                        self.unsupported(
+                            at.at,
+                            "a position of a connection assigned in a graph by an index that is no literal",
+                        );
+                        return None;
+                    };
+                    if assigned >= count {
+                        self.unsupported(
+                            at.at,
+                            "a position outside a fixed list's connection assigned in a graph",
+                        );
+                        return None;
+                    }
+                    let names = matches!(base.ty, Type::Tuple(_))
+                        .then(|| (0..count).map(position).collect());
+                    (base, count, assigned, names)
+                }
+                _ => {
+                    self.unsupported(at.at, "an assignment to this place of a connection");
+                    return None;
+                }
+            };
+            // Each part as the old connection has it, but the one `at` is:
+            // by its name, `ask=quote["ask"]`, or in order, `rows[1]`.
+            let held = self.expression(function, base);
+            let given: Vec<String> = (0..count)
+                .map(|index| {
+                    let key = names.as_ref().map(|names| &names[index]);
+                    let given = match key {
+                        _ if index == assigned => part.clone(),
+                        Some(key) => format!("{held}[{}]", string(key)),
+                        None => format!("{held}[{index}]"),
+                    };
+                    match key {
+                        Some(key) => format!("{key}={given}"),
+                        None => given,
+                    }
+                })
+                .collect();
+            let made = self.annotation(&base.ty, true, at.at)?;
+            self.hgraph = true;
+            part = format!("{made}.from_ts({})", given.join(", "));
+            at = base;
+        }
+    }
+
     /// The value `stop`, a part of `out` that publishes whole, holds once
     /// `place`, inside it, is given `value`: each value on the way given
     /// a new one, as `assigned_by_copy` gives a `var`'s, read from the
