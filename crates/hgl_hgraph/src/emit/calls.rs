@@ -555,8 +555,10 @@ impl<'a> Emitter<'a> {
         let mut required = Vec::new();
         let mut inputs = 0;
         let mut passed = Vec::new();
-        // What the node tests of a required input that holds a list,
-        // whose `valid` is not hgraph's (`valid_test`).
+        // What the node tests of an input beside hgraph's `valid`: of
+        // one that holds a list, whose `valid` is not hgraph's
+        // (`valid_test`), and of one read whole only where it is all
+        // valid (`all_valid_test`).
         let mut admitted = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let python = name(&parameter.name);
@@ -599,14 +601,25 @@ impl<'a> Emitter<'a> {
                     // as any list is (TIME-9)": `valid` as the language
                     // has it (`valid_test`).
                     let precise = self.precise_valid(ty, &python);
+                    // FN-12: "A struct, a tuple and a fixed-size list need
+                    // `all_valid`, and an optional child that is not valid
+                    // is passed as null" (`part_value`). FN-11: "one that is
+                    // valid and not all valid binds no fallback, and the
+                    // helper is not invoked".
+                    let whole = read_whole_all_valid(self.program, ty)
+                        .then(|| self.all_valid_test(ty, &python));
                     match self.left_out(target, index, parameter) {
                         Some(fallback) => {
                             let valid = precise.unwrap_or_else(|| format!("{python}.valid"));
+                            if let Some(whole) = whole {
+                                admitted.push(format!("(not {valid} or {whole})"));
+                            }
                             passed.push(format!("{python}=({read} if {valid} else {fallback})"));
                         }
                         None => {
                             passed.push(format!("{python}={read}"));
                             admitted.extend(precise);
+                            admitted.extend(whole);
                             required.push(python);
                         }
                     }
@@ -670,8 +683,8 @@ impl<'a> Emitter<'a> {
             Some(result) => self.published_to(result, at, call, output),
             None => call,
         };
-        // A required input that holds a list and is not valid as the
-        // language has it publishes nothing.
+        // An input that is not valid as the language has it, or not all
+        // valid where it must be, publishes nothing.
         let admission = if admitted.is_empty() {
             String::new()
         } else {
