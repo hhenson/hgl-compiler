@@ -2122,7 +2122,7 @@ fn may_be_one(left: &Constant, right: &Constant) -> bool {
 /// The literal inside a constant that is one literal in parentheses or
 /// under a minus, with whether an odd number of minuses stand before
 /// it: `-(1.0)` gives `1.0`, negative.
-fn bare_literal(text: &str) -> (bool, &str) {
+pub(crate) fn bare_literal(text: &str) -> (bool, &str) {
     let mut negative = false;
     let mut rest = text.trim();
     loop {

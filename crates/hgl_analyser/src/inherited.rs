@@ -18,10 +18,13 @@ use hgl_lexer::literal::{decode_float, decode_string};
 use hgl_source::Span;
 
 use crate::codes;
-use crate::declared::substitute_within;
+use crate::declared::{bare_literal, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, Stmt, UnaryOperator, Value};
 use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, FieldRef, Type};
+use crate::types::{
+    Argument, Constant, ConstantValue, Detail, FieldRef, GenericKind, GenericParameter, Scalar,
+    Type,
+};
 
 /// The defaults two parents give one field of a struct, which gives
 /// that field none of its own.
@@ -112,6 +115,15 @@ pub(crate) fn check(
 /// arguments of its path in place of the generic parameters of the
 /// struct that writes it, and every expression put at `place`. `None`
 /// where it is not read, or names what this pass cannot put in place.
+///
+/// What is compared is what the default is bound to, and each constant
+/// in it by its value: a constant given to a generic value parameter,
+/// to a callee or inside a type is that value however it is written
+/// (GEN-8: "a compile-time constant"). So `(true)` is `true`, `-(0.5)`
+/// is `-0.5`, `1_000` is `1000`, the name of an `i64` constant is its
+/// value, and an integer where an `f64` is wanted is that `f64`
+/// (EXPR-5). Only folding is not done (UNIT-9: "before folding"): `1 +
+/// 1` is no `2`.
 fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Option<Expr> {
     let written = default.written;
     let mut value = program.modules[written.module]
@@ -130,16 +142,11 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
     value.walk_mut(&mut |expression| {
         expression.at = place;
         expression.ty = substitute_within(&expression.ty, &map);
-        canonical_type(&mut expression.ty);
-        // A minus before a number is the negative number it writes, as
-        // a generic argument `-3` is: LEX-7 reads the least `i64` so.
-        if let Some(value) = negated(&expression.kind) {
-            expression.kind = ExprKind::Literal(value);
-        }
+        known &= canonical_type(program, &mut expression.ty);
         match &mut expression.kind {
             ExprKind::Unread => known = false,
             // A generic value parameter of the struct that writes the
-            // default: the constant its path gives it.
+            // default: the value its path gives it.
             ExprKind::GenericValue { at, .. } => {
                 let given = map
                     .iter()
@@ -148,68 +155,63 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
                 match given {
                     // One of the struct that has the field: itself.
                     None => {}
-                    Some(Argument::Constant(constant)) => match &constant.value {
-                        ConstantValue::Int(value) => {
-                            expression.kind = ExprKind::Literal(Value::Int(*value));
-                        }
-                        ConstantValue::Duration(value) => {
-                            expression.kind = ExprKind::Literal(Value::Duration(*value));
-                        }
-                        ConstantValue::Parameter { name, at } => {
-                            expression.kind = ExprKind::GenericValue {
-                                name: name.clone(),
-                                at: *at,
-                            };
-                        }
-                        ConstantValue::Member(name) => {
-                            match member(program, &expression.ty, name) {
-                                Some(kind) => expression.kind = kind,
-                                None => known = false,
-                            }
-                        }
-                        // A `bool`, an `f64` or a `str`, which this pass
-                        // holds as it is written: the literal it is.
-                        ConstantValue::Other(_) => match literal_of(constant) {
-                            Some(value) => expression.kind = ExprKind::Literal(value),
+                    Some(Argument::Constant(constant)) => {
+                        match given_value(program, constant, &expression.ty) {
+                            Some(kind) => expression.kind = kind,
                             None => known = false,
-                        },
-                        _ => known = false,
-                    },
+                        }
+                    }
                     Some(Argument::Type(_)) => known = false,
                 }
             }
-            ExprKind::Call { callee, form, .. } => {
-                // A symbol binds the operator a call by its name does
-                // (EXPR-10): how the call is written is no part of what
-                // it is bound to.
-                *form = Form::Named;
-                let generics = match callee {
-                    Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => {
-                        Some(generics)
+            ExprKind::Call { callee, .. } => {
+                let (generics, declared) = match callee {
+                    Callee::Function {
+                        generics,
+                        module,
+                        declaration,
+                        ..
                     }
-                    _ => None,
+                    | Callee::Candidate {
+                        generics,
+                        module,
+                        declaration,
+                        ..
+                    } => (generics, (*module, *declaration)),
+                    _ => return,
                 };
-                for generic in generics.into_iter().flatten() {
-                    match generic {
-                        Argument::Type(ty) => *ty = substitute_within(ty, &map),
-                        // A generic value parameter given as a callee's
-                        // argument: `limit<N>()` is `limit<3>()` where
-                        // the path gives `N` 3.
-                        Argument::Constant(constant) => {
-                            if let ConstantValue::Parameter { at, .. } = &constant.value {
-                                let given = map
-                                    .iter()
-                                    .find(|(declared, _)| declared == at)
-                                    .map(|(_, argument)| *argument);
-                                match given {
-                                    None => {}
-                                    Some(Argument::Constant(given)) => *constant = given.clone(),
-                                    Some(Argument::Type(_)) => known = false,
-                                }
-                            }
+                // What each of the callee's generic parameters is
+                // declared as: an `f64` value takes an integer as that
+                // `f64`.
+                let kinds: Vec<Option<Type>> =
+                    match program.modules[declared.0].details.get(declared.1) {
+                        Some(Detail::Callable(signature)) => {
+                            signature.generics.iter().map(value_type).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                for (index, generic) in generics.iter_mut().enumerate() {
+                    if let Argument::Type(ty) = generic {
+                        *ty = substitute_within(ty, &map);
+                    }
+                    // A generic value parameter given as a callee's
+                    // argument: `limit<N>()` is `limit<3>()` where the
+                    // path gives `N` 3.
+                    if let Argument::Constant(constant) = generic
+                        && let ConstantValue::Parameter { at, .. } = &constant.value
+                    {
+                        let given = map
+                            .iter()
+                            .find(|(declared, _)| declared == at)
+                            .map(|(_, argument)| *argument);
+                        match given {
+                            None => {}
+                            Some(Argument::Constant(given)) => *constant = given.clone(),
+                            Some(Argument::Type(_)) => known = false,
                         }
                     }
-                    canonical_argument(generic);
+                    let kind = kinds.get(index).cloned().flatten();
+                    known &= canonical_argument(program, generic, kind.as_ref());
                 }
             }
             ExprKind::Block { statements, .. } => {
@@ -220,7 +222,125 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
             _ => {}
         }
     });
+    // A minus before a number is the negative number it writes, as a
+    // generic argument `-3` is (LEX-7 reads the least `i64` so), and an
+    // integer widened to an `f64` is that `f64` (EXPR-5). Each change
+    // takes a node away, so the passes end; one exposes the next, as in
+    // `-1` where an `f64` is wanted.
+    loop {
+        let mut changed = false;
+        value.walk_mut(&mut |expression| {
+            let literal = match &expression.kind {
+                ExprKind::Widen(inner) => match inner.kind {
+                    // `as` gives the nearest `f64`, as EXPR-5's widening
+                    // does.
+                    ExprKind::Literal(Value::Int(whole)) => Some(Value::Float(whole as f64)),
+                    _ => None,
+                },
+                kind => negated(kind),
+            };
+            if let Some(literal) = literal {
+                expression.kind = ExprKind::Literal(literal);
+                changed = true;
+            }
+        });
+        if !changed {
+            break;
+        }
+    }
+    // A symbol binds the operator a call by its name does (EXPR-10):
+    // how the call is written is no part of what it is bound to.
+    value.walk_mut(&mut |expression| {
+        if let ExprKind::Call { form, .. } = &mut expression.kind {
+            *form = Form::Named;
+        }
+    });
     known.then_some(value)
+}
+
+/// The type of the generic value parameter `generic`; `None` for a
+/// type parameter, and for one declared with no type.
+fn value_type(generic: &GenericParameter) -> Option<Type> {
+    match &generic.kind {
+        GenericKind::Value(ty) => Some(ty.clone()),
+        _ => None,
+    }
+}
+
+/// A constant as the value it is: what this pass holds of it, or for a
+/// literal it holds as written (a float, a string, a bool, `null`), the
+/// literal read through the parentheses and the minus around it
+/// (EXPR-1). `None` for one it does not hold: an expression not
+/// evaluated, a date or time, a tenor.
+#[derive(Debug, Clone, PartialEq)]
+enum Held {
+    /// An integer.
+    Int(i64),
+    /// A float.
+    Float(f64),
+    /// A duration, in microseconds.
+    Duration(i64),
+    /// `true` or `false`.
+    Bool(bool),
+    /// A string's contents.
+    Str(String),
+    /// `null`.
+    Null,
+    /// A member of an enum, by its name.
+    Member(String),
+    /// A generic value parameter, by where it is declared.
+    Parameter(String, Location),
+    /// `unbounded`.
+    Unbounded,
+}
+
+/// What `constant` is as a value; see [`Held`].
+fn held(constant: &Constant) -> Option<Held> {
+    Some(match &constant.value {
+        ConstantValue::Int(value) => Held::Int(*value),
+        ConstantValue::Duration(value) => Held::Duration(*value),
+        ConstantValue::Member(name) => Held::Member(name.clone()),
+        ConstantValue::Parameter { name, at } => Held::Parameter(name.clone(), *at),
+        ConstantValue::Unbounded => Held::Unbounded,
+        ConstantValue::Other(kind) => {
+            let (negative, text) = bare_literal(&constant.text);
+            match *kind {
+                "a float" => {
+                    let value = decode_float(text).ok()?;
+                    Held::Float(if negative { -value } else { value })
+                }
+                "a string" if !negative => Held::Str(decode_string(text).ok()?),
+                "a bool" if !negative => match text {
+                    "true" => Held::Bool(true),
+                    "false" => Held::Bool(false),
+                    _ => return None,
+                },
+                "null" if !negative => Held::Null,
+                _ => return None,
+            }
+        }
+        ConstantValue::Unevaluated => return None,
+    })
+}
+
+/// What a generic value parameter of type `ty` is, given `constant`:
+/// the literal, enum member or generic value parameter of its value.
+/// `None` where the value is not held.
+fn given_value(program: &Program, constant: &Constant, ty: &Type) -> Option<ExprKind> {
+    let literal = |value| Some(ExprKind::Literal(value));
+    match held(constant)? {
+        // EXPR-5: "An integer literal is an `f64` where one is expected".
+        Held::Int(value) if *ty == Type::Scalar(Scalar::F64) => literal(Value::Float(value as f64)),
+        Held::Int(value) => literal(Value::Int(value)),
+        Held::Float(value) => literal(Value::Float(value)),
+        Held::Duration(value) => literal(Value::Duration(value)),
+        Held::Bool(value) => literal(Value::Bool(value)),
+        Held::Str(value) => literal(Value::Str(value)),
+        Held::Null => literal(Value::Null),
+        Held::Member(name) => member(program, ty, &name),
+        Held::Parameter(name, at) => Some(ExprKind::GenericValue { name, at }),
+        Held::Unbounded => None,
+    }
 }
 
 /// The member `name` of the enum `ty`, as an expression.
@@ -242,23 +362,6 @@ fn member(program: &Program, ty: &Type, name: &str) -> Option<ExprKind> {
         declaration: *declaration,
         member,
     })
-}
-
-/// The literal a constant is, where this pass holds it as it is
-/// written: a `bool`, an `f64` or a `str` of one token. `None` for any
-/// other.
-fn literal_of(constant: &Constant) -> Option<Value> {
-    let text = constant.unspaced();
-    match text.as_str() {
-        "true" => Some(Value::Bool(true)),
-        "false" => Some(Value::Bool(false)),
-        text if text.starts_with('"') => decode_string(text).ok().map(Value::Str),
-        // A float after one minus is the negative float.
-        text => match text.strip_prefix('-') {
-            Some(number) => decode_float(number).ok().map(|value| Value::Float(-value)),
-            None => decode_float(text).ok().map(Value::Float),
-        },
-    }
 }
 
 /// The negative number `kind` writes, where it is a minus before a
@@ -286,61 +389,87 @@ fn negated(kind: &ExprKind) -> Option<Value> {
     }
 }
 
-/// Writes a constant this pass holds as it is written in one form for
-/// each value, so that two that are one value compare equal: `1.0` and
-/// `1.00`, or a string written with an escape and without one. Its
-/// other constants it holds by their value.
-fn canonical(constant: &mut Constant) {
-    if !matches!(constant.value, ConstantValue::Other(_)) {
-        return;
-    }
-    let text = constant.unspaced();
-    // A float after a minus: the minus, then the float's own form.
-    let (sign, number) = match text.strip_prefix('-') {
-        Some(number) => ("-", number.to_string()),
-        None => ("", text),
+/// Writes `constant` in one form for its value, so that two constants
+/// that are one value are equal however each is written. `ty` is the
+/// type of the generic value parameter it is given to, where that is
+/// known: an integer given to an `f64` is that `f64` (EXPR-5). False
+/// where its value is not held: it is then compared as written, and the
+/// pair is not judged.
+fn canonical(constant: &mut Constant, ty: Option<&Type>) -> bool {
+    let Some(value) = held(constant) else {
+        return false;
     };
-    let one = Constant {
-        text: number,
-        value: constant.value.clone(),
+    let (text, value) = match value {
+        Held::Int(whole) if ty == Some(&Type::Scalar(Scalar::F64)) => (
+            format!("{:?}", whole as f64),
+            ConstantValue::Other("a float"),
+        ),
+        // `{:?}` writes a float so that it reads back, and a string
+        // with its escapes in one form.
+        Held::Float(real) => (format!("{real:?}"), ConstantValue::Other("a float")),
+        Held::Str(text) => (format!("{text:?}"), ConstantValue::Other("a string")),
+        Held::Bool(flag) => (flag.to_string(), ConstantValue::Other("a bool")),
+        Held::Null => ("null".to_string(), ConstantValue::Other("null")),
+        // The others are compared by the value this pass holds.
+        _ => return true,
     };
-    let written = match literal_of(&one) {
-        Some(Value::Float(value)) => format!("{sign}{value:?}"),
-        // `{:?}` writes a string with its escapes in one form.
-        Some(Value::Str(value)) if sign.is_empty() => format!("{value:?}"),
-        Some(Value::Bool(value)) if sign.is_empty() => value.to_string(),
-        _ => return,
-    };
-    constant.text = written;
+    *constant = Constant { text, value };
+    true
 }
 
 /// [`canonical`], for a generic argument: a constant, or each constant
-/// inside a type.
-fn canonical_argument(argument: &mut Argument) {
+/// inside a type. `ty` is as for `canonical`.
+fn canonical_argument(program: &Program, argument: &mut Argument, ty: Option<&Type>) -> bool {
     match argument {
-        Argument::Type(ty) => canonical_type(ty),
-        Argument::Constant(constant) => canonical(constant),
+        Argument::Type(inner) => canonical_type(program, inner),
+        Argument::Constant(constant) => canonical(constant, ty),
     }
 }
 
 /// [`canonical`], for each constant inside `ty`: a size, a window's
-/// bounds, a generic argument.
-fn canonical_type(ty: &mut Type) {
+/// bounds, a generic argument of a struct, given as that struct's
+/// parameter declares it. False where one's value is not held.
+fn canonical_type(program: &Program, ty: &mut Type) -> bool {
     match ty {
-        Type::Named { arguments, .. } => arguments.iter_mut().for_each(canonical_argument),
-        Type::Tuple(elements) => elements.iter_mut().for_each(canonical_type),
+        Type::Named {
+            module,
+            declaration,
+            arguments,
+            ..
+        } => {
+            let kinds: Vec<Option<Type>> = match program.modules[*module].details.get(*declaration)
+            {
+                Some(Detail::Struct(read)) => read.generics.iter().map(value_type).collect(),
+                _ => Vec::new(),
+            };
+            let mut known = true;
+            for (index, argument) in arguments.iter_mut().enumerate() {
+                let kind = kinds.get(index).cloned().flatten();
+                known &= canonical_argument(program, argument, kind.as_ref());
+            }
+            known
+        }
+        Type::Tuple(elements) => {
+            let mut known = true;
+            for element in elements {
+                known &= canonical_type(program, element);
+            }
+            known
+        }
         Type::List { element, size } => {
-            canonical_type(element);
-            size.iter_mut().for_each(canonical);
+            let sized = size.as_mut().is_none_or(|size| canonical(size, None));
+            canonical_type(program, element) && sized
         }
         Type::RollingWindow {
             value,
             maximum,
             minimum,
         } => {
-            canonical_type(value);
-            canonical(maximum);
-            minimum.iter_mut().for_each(canonical);
+            let least = minimum
+                .as_mut()
+                .is_none_or(|minimum| canonical(minimum, None));
+            let most = canonical(maximum, None);
+            canonical_type(program, value) && most && least
         }
         Type::Set(inner)
         | Type::Ref(inner)
@@ -348,21 +477,21 @@ fn canonical_type(ty: &mut Type) {
         | Type::Atomic(inner)
         | Type::Delta(inner)
         | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner) => canonical_type(inner),
+        | Type::Nullable(inner) => canonical_type(program, inner),
         Type::Dict { key, value } => {
-            canonical_type(key);
-            canonical_type(value);
+            let keyed = canonical_type(program, key);
+            canonical_type(program, value) && keyed
         }
         Type::Result { value, error } => {
-            canonical_type(value);
-            canonical_type(error);
+            let failed = canonical_type(program, error);
+            canonical_type(program, value) && failed
         }
         Type::Scalar(_)
         | Type::Parameter { .. }
         | Type::Signal
         | Type::Error
         | Type::ErrorContext
-        | Type::Unknown => {}
+        | Type::Unknown => true,
     }
 }
 

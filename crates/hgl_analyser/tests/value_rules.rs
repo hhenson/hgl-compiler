@@ -109,8 +109,9 @@ fn a_chained_comparison_is_typed_as_written() {
 /// same constant read through a selective import and through an alias
 /// is one default; so is a generic value parameter given the number
 /// the other parent writes, and an enum member written in full or as
-/// `.member`. `1 + 1` is not `2` before folding, `1` is not `1.0`, and
-/// `[]` is not `[1]`. A struct that writes the field itself chooses.
+/// `.member`, and `1` where an `f64` is wanted is `1.0` (EXPR-5).
+/// `1 + 1` is not `2` before folding, and `[]` is not `[1]`. A struct
+/// that writes the field itself chooses.
 #[test]
 fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
     let checked = check(&[
@@ -177,7 +178,6 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
             "m.hgl:10:22 local:type/default.conflict UNIT-9",
             "m.hgl:14:27 local:type/default.conflict UNIT-9",
             "m.hgl:19:16 local:type/default.conflict UNIT-9",
-            "m.hgl:28:23 local:type/default.conflict UNIT-9",
             "m.hgl:34:31 local:type/default.conflict UNIT-9",
             "m.hgl:41:32 local:type/default.conflict UNIT-9",
         ]
@@ -237,6 +237,56 @@ fn literal_constants_in_defaults_are_compared_by_value() {
             "m.hgl:18:24 local:type/default.conflict UNIT-9",
             "m.hgl:22:34 local:type/default.conflict UNIT-9",
             "m.hgl:29:39 local:type/default.conflict UNIT-9",
+        ]
+    );
+}
+
+/// UNIT-9, GEN-8: a constant given to a generic value parameter is a
+/// compile-time constant, and is compared by its value, not its text:
+/// in parentheses or not, after a minus or as a negative argument, with
+/// an underscore in its digits, by the name of an `i64` constant, or as
+/// an integer where an `f64` is wanted (EXPR-5). Each is checked both
+/// ways: one value agrees, and another is reported.
+#[test]
+fn constants_in_defaults_are_compared_by_value_however_written() {
+    let checked = module(concat!(
+        "abstract struct Flagged { enabled: bool }\n",
+        "abstract struct ByParam<const B: bool> : Flagged { enabled = B }\n",
+        "abstract struct Off : Flagged { enabled = false }\n",
+        "struct GroupedClash : ByParam<(true)>, Off {}\n",
+        "struct GroupedSame : ByParam<(false)>, Off {}\n",
+        "const fn mark<const X: f64>() -> f64 => X\n",
+        "abstract struct Scaled { scale: f64 }\n",
+        "abstract struct One : Scaled { scale = mark<1.0>() }\n",
+        "abstract struct Grouped : Scaled { scale = mark<(1.0)>() }\n",
+        "abstract struct Whole : Scaled { scale = mark<1>() }\n",
+        "abstract struct GroupedTwo : Scaled { scale = mark<(2.0)>() }\n",
+        "struct MarkSame : One, Grouped {}\n",
+        "struct MarkWhole : One, Whole {}\n",
+        "struct MarkClash : One, GroupedTwo {}\n",
+        "abstract struct ByReal<const R: f64> : Scaled { scale = R }\n",
+        "abstract struct Unit : Scaled { scale = 1.0 }\n",
+        "struct RealWhole : ByReal<1>, Unit {}\n",
+        "struct RealWholeClash : ByReal<2>, Unit {}\n",
+        "abstract struct Negative : Scaled { scale = -0.5 }\n",
+        "struct SignSame : ByReal<-(0.5)>, Negative {}\n",
+        "struct SignClash : ByReal<(0.5)>, Negative {}\n",
+        "const limit: i64 = 1000\n",
+        "abstract struct Counted { size: i64 }\n",
+        "abstract struct Counts<const N: i64> : Counted { size = N }\n",
+        "abstract struct Thousand : Counted { size = 1000 }\n",
+        "struct DigitsSame : Counts<1_000>, Thousand {}\n",
+        "struct NamedSame : Counts<limit>, Thousand {}\n",
+        "struct NamedClash : Counts<limit + 1>, Thousand {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:40 local:type/default.conflict UNIT-9",
+            "m.hgl:15:25 local:type/default.conflict UNIT-9",
+            "m.hgl:19:36 local:type/default.conflict UNIT-9",
+            "m.hgl:22:35 local:type/default.conflict UNIT-9",
+            "m.hgl:29:40 local:type/default.conflict UNIT-9",
         ]
     );
 }
