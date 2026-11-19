@@ -5596,6 +5596,36 @@ fn a_control_form_that_would_be_wrong_is_reported() {
     );
 }
 
+/// EXPR-15: "In a graph, an assignment into a place of a `var` is copy
+/// on write ... `point.x = price` rebinds `point` to a new connection".
+/// A struct's, a tuple's and a fixed list's connection is made anew of
+/// its parts (`demo.graph_places`). One whose parts hgraph has as one
+/// value or knows only as the graph runs is reported, each with its own
+/// reason: a field of an atomic struct, an entry of a dictionary and a
+/// position of an unsized list.
+#[test]
+fn a_place_of_a_connection_not_written_yet_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_place_of_a_connection_not_written_yet_is_reported",
+        "m.hgl"
+    )]);
+    let unsupported = "target.unsupported: the hgraph target does not write";
+    assert_eq!(
+        emitted.reported,
+        [
+            format!(
+                "m.hgl:11:5 {unsupported} a field of an atomic struct's connection assigned in a graph yet"
+            ),
+            format!(
+                "m.hgl:19:5 {unsupported} an entry of a dictionary's connection assigned in a graph yet"
+            ),
+            format!(
+                "m.hgl:27:5 {unsupported} a position of an unsized list's connection assigned in a graph yet"
+            ),
+        ]
+    );
+}
+
 /// CTRL-6: "An unmatched selector uses default or fails": a `switch` of
 /// a graph over a connection fails as one in a node's hook does, with
 /// the provider's error. Needs hgraph, as above.
