@@ -152,6 +152,19 @@ def _equal(lhs, rhs):
     return lhs == rhs
 
 
+def _causes(error):
+    """`error`, and then each error it was raised from or while handling,
+    in turn: what Python keeps as its `__cause__`, or else as its
+    `__context__`. hgraph raises an error of its own for a node's
+    failure, with what the node raised under it. Each is given once,
+    where an error is among its own causes."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        yield error
+        error = error.__cause__ or error.__context__
+
+
 class Result:
     """A `result`: an `Ok` or an `Err` (ERR-2). The class a temporal
     `result` is a time series of."""
