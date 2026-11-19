@@ -7,3 +7,9 @@
 "the type `tuple<i64, i64>`" = [
     "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
 ]
+# TYPE-16's proposed gap, positions between not valid: this target writes
+# `list<V>` as a whole tuple, which holds none. hgraph's unbounded `TSL`
+# would give it.
+"an endpoint of an unsized list's element, a whole tuple here" = [
+    "conformance::an_entry_past_a_gap_leaves_the_positions_between_not_valid",
+]

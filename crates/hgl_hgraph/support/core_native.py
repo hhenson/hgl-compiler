@@ -61,6 +61,7 @@ from hgraph import (
     TS as _TS,
     TSD as _TSD,
     TimeSeriesSchema as _TimeSeriesSchema,
+    set_delta as _set_delta,
     compute_node as _compute_node,
     sink_node as _sink_node,
 )
@@ -614,23 +615,32 @@ def size_modified(delta):
 
 def list_applied(output, delta):
     """The whole list an unsized list publishes for `delta`, applied to
-    what it last published, `output`'s value (TYPE-16). "A delta written
-    with a smaller `size_modified` and no `removed` shrinks the list", and
-    one whose `removed` is the whole tail does too. This target writes an
-    unsized list as a whole tuple, which holds no position without a
-    value: a position removed short of the end, or one that growth leaves
-    with no value, is not written yet."""
+    what it last published, `output`'s value (TYPE-16).
+
+    "A delta written with a smaller `size_modified` and no `removed`
+    shrinks the list", and one whose `removed` is the whole tail does
+    too. "A negative `size_modified` written reduces the list by that
+    count ... and a count more than the list holds leaves it empty,
+    which is no failure." "An `updated` entry written at the position
+    after a `list<V>`'s last, with no `size_modified`, extends the list
+    to hold it."
+
+    This target writes an unsized list as a whole tuple, which holds no
+    position without a value: a position removed short of the end, and
+    one that growth leaves with no value (the proposed gap of TYPE-16),
+    are not written yet."""
     held = list(output.value) if output.valid else []
     gone = {position for position, change in delta.items() if _removes(change)}
     size = size_modified(delta)
-    # TYPE-10: a size is "a count that is not negative". The catalogue
-    # has no execution code for one that is, so the failure has none,
-    # as an index outside a sequence has none (see `item`).
     if size is not None and size < 0:
-        raise HglError(f"the size {size} of a list is negative: a size is a count that is not negative")
+        size = max(len(held) + size, 0)
     if size is None:
-        # Only a `removed` that is the whole tail shrinks the list.
+        # Only a `removed` that is the whole tail shrinks the list, and
+        # an entry past the end extends it to hold the entry.
         size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
+        written = [position for position, change in delta.items() if not _removes(change)]
+        if written and not gone:
+            size = max(size, max(written) + 1)
     if any(position < size for position in gone):
         raise NotImplementedError(
             "the hgraph target does not write a position removed inside an unsized list yet"
@@ -651,25 +661,184 @@ def list_applied(output, delta):
     return tuple(made)
 
 
+def list_within(delta, size):
+    """`delta`, a fixed list's of `size` positions, as it is published
+    (TYPE-16): "A `list<V, N>` keeps its bounds: ... one in a delta made as
+    the program runs fails the write that publishes it, as an index
+    outside a list does (EXPR-3)". The catalogue has no execution code for
+    it, so the failure has none, as `item`'s has none. A whole list given
+    for the delta, as a replay is given a trace's cell written whole, is
+    published as it is."""
+    if not isinstance(delta, dict):
+        return delta
+    for position in delta:
+        if not 0 <= position < size:
+            raise HglError(f"the position {position} is outside a list of {size}")
+    return delta
+
+
 def _removes(change):
     return change is _REMOVE or change is _REMOVE_IF_EXISTS
 
 
 @_compute_node
-def entry_of(dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K]) -> _TS[_SCALAR]:
+def entry_of(
+    dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K], _output: _TS[_SCALAR] = None
+) -> _TS[_SCALAR]:
     """`dictionary[key]` in a graph: the child of a temporal dictionary
     that `key` selects (the language's TYPE-9, "dictionaries to keyed
-    children"). The read is strict (ERR-6: "absence fails"), with the
-    code `value.missing_key`, where hgraph's own selection would be
-    silent. It publishes where the key ticks or the selected child
-    does, so another child's tick is silent."""
+    children"; EXPR-7, "Dictionary temporal key selection may produce a
+    reference designation"). TIME-1: "A child of a collection ... is an
+    endpoint whether or not it is valid": a key that is absent selects a
+    child that is not valid, and nothing is published for it. ERR-6's
+    strict read is of an ordinary or atomic dictionary, and not this.
+    It publishes where the key ticks or the selected child does, so
+    another child's tick is silent; where the selected child is gone or
+    is not valid, what it published before is invalidated (END-4)."""
     selected = key.value
     child = dictionary[selected] if selected in dictionary.keys() else None
     if child is None or not child.valid:
-        raise HglError(f"the dictionary has no key {selected!r}", code="value.missing_key")
-    if key.modified or child.modified:
+        if _output.valid:
+            _output.invalidate()
+        return None
+    if key.modified or child.modified or not _output.valid:
         # A child that holds a null publishes it (see `published`).
         return published(child.value)
+
+
+class _AbsentEntry:
+    """The endpoint of a dictionary's entry whose key the dictionary has
+    not: it exists and is not valid (the language's TIME-1: "A child of a
+    collection ... is an endpoint whether or not it is valid")."""
+
+    valid = False
+    all_valid = False
+    modified = False
+
+
+_ABSENT_ENTRY = _AbsentEntry()
+
+
+def position_of(port, index):
+    """The endpoint of a fixed list's element at `index`, hgraph's child
+    of the list's input (TIME-1). "An index outside a list fails where it
+    is evaluated" (EXPR-3)."""
+    if not 0 <= index < len(port):
+        raise HglError(f"the index {index} is outside a sequence of {len(port)}")
+    return port[index]
+
+
+def entry_port(port, key):
+    """The endpoint of a dictionary's entry for `key`, hgraph's child of
+    the dictionary's input, or one that is not valid where the key is
+    absent (TIME-1)."""
+    return port[key] if key in port.keys() else _ABSENT_ENTRY
+
+
+def entry_child(port, key):
+    """The child of a dictionary's input for `key`, read where its key
+    is known only when it runs. An absent key fails as a dictionary's
+    brackets do (ERR-6: "absence fails"), with `value.missing_key`."""
+    if key not in port.keys():
+        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
+    return port[key]
+
+
+def child_modified(port):
+    """`modified` of a child's endpoint (END-8): whether it published in
+    this cycle, held to its being valid, as an input's is (END-4)."""
+    return port.valid and port.modified
+
+
+def child_last_modified(port):
+    """`last_modified` of a child's endpoint (END-8, END-6): null where it
+    is not valid."""
+    return port.last_modified_time if port.valid else None
+
+
+def _unset(port):
+    """The failure of a read of a child that is not valid (TIME-1, ERR-14),
+    with the code `value.unset_read`."""
+    return HglError("the child read is not valid", code="value.unset_read")
+
+
+def child_delta(port):
+    """`delta_value` of a child's endpoint (END-8): what it published in
+    this cycle. TIME-1: "a read of a child's value, or of its
+    `delta_value`, requires that child's admission"; where that is
+    checked when it runs, a child that is not valid fails it."""
+    if not port.valid:
+        raise _unset(port)
+    return port.delta_value
+
+
+def checked_child(port, read):
+    """The read of a child known only when it runs, `parts[i]` (TIME-1):
+    `read` of its endpoint `port`. "A child that is not valid fails it
+    (`value.unset_read`)"."""
+    if not port.valid:
+        raise _unset(port)
+    return read(port)
+
+
+def checked_child_result(port, read):
+    """The read of a child known only when it runs where its place expects
+    `result<T, error>` (ERR-14): "`ok` of the child's value, or, for a
+    child that is not valid, `err` of an `error` whose code is
+    `value.unset_read`"."""
+    if not port.valid:
+        return Err(Error("the child read is not valid", code="value.unset_read"))
+    return Ok(read(port))
+
+
+def whole_item(port, index):
+    """The read of an unsized list's element known only when it runs
+    (TIME-1). This target writes an unsized list as a whole tuple, whose
+    every position holds a value while the list is valid."""
+    if not port.valid:
+        raise _unset(port)
+    return item(list(port.value), index)
+
+
+def whole_item_result(port, index):
+    """`whole_item` where the place expects `result<T, error>` (ERR-14)."""
+    if not port.valid:
+        return Err(Error("the child read is not valid", code="value.unset_read"))
+    return Ok(item(list(port.value), index))
+
+
+def dict_replaced(output, value):
+    """What a temporal dictionary publishes for a whole value of it,
+    given its own output (TIME-7, TST-9: a T whole "replaces what the
+    input held"): each entry of `value`, and the removal of each key the
+    output holds that `value` has not. hgraph's `TSD` would otherwise
+    keep those."""
+    made = {key: _REMOVE for key in (output.keys() if output.valid else ()) if key not in value}
+    made.update({key: published(entry) for key, entry in value.items()})
+    return made
+
+
+def whole_delta(value, keys):
+    """The delta that publishes `value` whole to an input that holds the
+    keys `keys` (the language's TST-9: "a T whole, which replaces what the
+    input held"): a dictionary's removes each key it has not, and a set's
+    each member; a struct's is each field, as hgraph's bundle takes it
+    (see `bundled`); a list's is its tuple."""
+    if isinstance(value, (set, frozenset)):
+        added, removed = frozenset(value - keys), frozenset(keys - value)
+        members = added | removed
+        if not members:
+            return frozenset()
+        return _set_delta(added=added, removed=removed, tp=type(next(iter(members))))
+    if isinstance(value, dict):
+        made = {key: _REMOVE for key in keys if key not in value}
+        made.update({key: published(entry) for key, entry in value.items()})
+        return made
+    if hasattr(value, "_hgl_fields"):
+        return bundled(value)
+    if isinstance(value, list):
+        return tuple(value)
+    return value
 
 
 def updated(delta):
@@ -1197,6 +1366,24 @@ def with_item(sequence, index, value, /):
     if not 0 <= index < len(sequence):
         raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
     return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+
+
+def out_entry(output, key, value, /):
+    """`out[key] = value` for a node's temporal dictionary (the language's
+    TIME-7): the one entry is written to hgraph's child of the output, so
+    only it ticks (END-3). "A key the dictionary has not is added"
+    (EXPR-3)."""
+    output.get_or_create(key).value = value
+
+
+def out_position(output, index, value, /):
+    """`out[index] = value` for a node's temporal fixed list (TIME-7): the
+    one position is written to hgraph's child of the output, so only it
+    ticks (END-3). "An index outside a list fails where it is evaluated"
+    (EXPR-3)."""
+    if not 0 <= index < len(output):
+        raise HglError(f"the index {index} is outside a sequence of {len(output)}")
+    output[index].value = value
 
 
 def with_entry(dictionary, key, value, /):

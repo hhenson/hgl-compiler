@@ -1891,12 +1891,21 @@ impl Emitter<'_> {
         at: Location,
     ) -> Option<String> {
         match size.map(|size| &size.value) {
+            // TYPE-10 allows a list of no position, and TIME-9 has a
+            // published empty list valid, but hgraph 0.9.3's `TSL` of
+            // none publishes nothing ("unresolved element type").
+            Some(ConstantValue::Int(0)) => {
+                self.unsupported(at, &format!("the type `{ty}`"));
+                None
+            }
             Some(ConstantValue::Int(count)) => {
                 let child = self.child_annotation(ty, element, at)?;
                 self.hgraph = true;
                 Some(format!("_hg.TSL[{child}, _hg.Size[{count}]]"))
             }
-            None if publishes_whole(element) => {
+            // A whole tuple of hgraph's holds no `None`: a nullable
+            // element (TYPE-14) has no place in it.
+            None if publishes_whole(element) && !is_nullable(element) => {
                 let element = self.annotation(element, false, at)?;
                 self.hgraph = true;
                 Some(format!("_hg.TS[_py.tuple[{element}, ...]]"))
@@ -2109,15 +2118,24 @@ impl Emitter<'_> {
         // An unsized list's delta is applied to what the node last
         // published (see `bundled`), which it reads from `_output`.
         let has_out = has_out || signature.result.as_ref().is_some_and(growing_list);
+        // A whole dictionary published replaces what the node published
+        // before, which it reads from `_output` (see `bundled`).
+        let has_out = has_out
+            || signature.result.as_ref().is_some_and(|result| {
+                whole_dictionary(result) && returns_whole(&body.statements, result)
+            });
         let output = has_out.then(|| {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
-            // `TSB_OUT[...]` for a struct's bundle, `TSL_OUT` for a
-            // list's and `TSD_OUT` for a dictionary's. Only the
-            // outermost is renamed: a child stays as it is.
+            // `TSB_OUT[...]` for a struct's bundle and `TSD_OUT` for a
+            // dictionary's. Only the outermost is renamed: a child stays
+            // as it is. hgraph 0.9.3 has no `TSL_OUT`: its `TS_OUT` of a
+            // time-series type is that type, `TS_OUT[TSL[...]]` for a
+            // fixed list's (hgraph injects `_output` by its name).
             let annotation = match &result {
+                Some(result) if result.starts_with("_hg.TSL[") => format!("_hg.TS_OUT[{result}]"),
                 Some(result) => {
-                    let kind = ["TSS", "TSB", "TSL", "TSD"]
+                    let kind = ["TSS", "TSB", "TSD"]
                         .into_iter()
                         .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
                         .unwrap_or("TS");
@@ -4120,6 +4138,19 @@ impl Emitter<'_> {
                         held_here.push(index.at);
                     }
                 }
+                // TIME-7: `out[key] = value` changes one entry of the
+                // dictionary the node publishes, and `out[i] = value` one
+                // position of its fixed list: that child of hgraph's
+                // `_output` is written, and only it ticks (END-3: the
+                // delta names what changed). A place deeper in it, or an
+                // entry that is no whole scalar, is not written yet.
+                if let Some(written) = self.out_child(function, place, value) {
+                    if let Some(line) = written {
+                        self.line(depth, &line);
+                    }
+                    self.held.retain(|(at, _)| !held_here.contains(at));
+                    return;
+                }
                 // The place keeps what it is given: a copy, where
                 // something else holds it.
                 let written = self.expression(function, value);
@@ -4910,6 +4941,20 @@ impl Emitter<'_> {
                         "None".to_string()
                     }
                 }
+            }
+            // END-8: "A child of a collection is an endpoint whether or
+            // not it is valid: `valid`, `modified`, `delta_value` and
+            // `last_modified` take it, and `all_valid` where it is a
+            // collection". It is hgraph's own child of the input.
+            ExprKind::ChildEndpoint { operation, child } => {
+                self.child_operation(function, *operation, child, value.at)
+            }
+            // TIME-1: "Elsewhere, `parts[i]`, it is checked when it
+            // runs: a child that is not valid fails it
+            // (`value.unset_read`), or gives an `err` where its place
+            // takes a `result` (ERR-14)."
+            ExprKind::CheckedChild { read, result } => {
+                self.checked_child(function, read, *result, value.at)
             }
             // TIME-9: `scheduled()` as a bool, where it sets no
             // subscription (TIME-3: "Selectors under negation or
@@ -5844,6 +5889,58 @@ impl Emitter<'_> {
     /// what took one of them took a copy (`kept`). Any other value on
     /// the way is given a new one: `point.x = 1` makes `point` the
     /// `Point` whose `x` is 1, and `pair[0] = 1` a new tuple.
+    /// The line that assigns `value` to `place` where the place is a
+    /// child of a node's `out` that is a dictionary or a fixed list:
+    /// `_core.out_entry(_output, key, value)`, which writes hgraph's own
+    /// child of `_output`, so that only it ticks (TIME-7, END-3).
+    /// `Some(None)` where such a place is not written yet and has been
+    /// reported, and `None` for any other place.
+    fn out_child(
+        &mut self,
+        function: &Function,
+        place: &Expr,
+        value: &Expr,
+    ) -> Option<Option<String>> {
+        let mut root = place;
+        let mut steps = 0;
+        while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
+            root = base;
+            steps += 1;
+        }
+        let ExprKind::Local(local) = root.kind else {
+            return None;
+        };
+        let element = match &function.locals[local].ty {
+            Type::Dict { value, .. } => value,
+            Type::List {
+                element,
+                size: Some(_),
+            } => element,
+            _ => return None,
+        };
+        if function.mode != Mode::Node || !Self::is_out(function, local) {
+            return None;
+        }
+        let ExprKind::Index { index, .. } = &place.kind else {
+            self.unsupported(place.at, "an assignment inside a child of `out`");
+            return Some(None);
+        };
+        if steps > 1 || !publishes_whole(element) || is_nullable(element) {
+            self.unsupported(place.at, "an assignment inside a child of `out`");
+            return Some(None);
+        }
+        let key = self.expression(function, index);
+        let written = self.expression(function, value);
+        let value = self.copied(function, value, written);
+        self.natives = true;
+        let set = if matches!(function.locals[local].ty, Type::Dict { .. }) {
+            "out_entry"
+        } else {
+            "out_position"
+        };
+        Some(Some(format!("_core.{set}(_output, {key}, {value})")))
+    }
+
     fn assigned(
         &mut self,
         function: &Function,
@@ -6487,6 +6584,25 @@ impl Emitter<'_> {
             self.unsupported(value.at, "a delta published to an unsized list");
             return written;
         }
+        // TYPE-16: "A `list<V, N>` keeps its bounds: ... one in a delta
+        // made as the program runs fails the write that publishes it".
+        if let Some(Type::List {
+            size: Some(size), ..
+        }) = result
+            && let ConstantValue::Int(count) = size.value
+            && matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::List { .. }))
+        {
+            self.natives = true;
+            return format!("_core.list_within({written}, {count})");
+        }
+        // TIME-7: a node's whole dictionary is "a complete value of the
+        // result": it replaces what the dictionary held, and each key it
+        // has not is removed from what the node last published, its
+        // `_output` (see `dict_replaced`).
+        if function.mode == Mode::Node && result == Some(&value.ty) && whole_dictionary(&value.ty) {
+            self.natives = true;
+            return format!("_core.dict_replaced(_output, {written})");
+        }
         if result != Some(&value.ty) {
             return written;
         }
@@ -6562,6 +6678,127 @@ impl Emitter<'_> {
         format!("_core.bundled({written})")
     }
 
+    /// The endpoint of `child`, a child of a temporal input of the node
+    /// (TIME-1), as hgraph has it: its own child of the input's,
+    /// `parts[1]` as `_core.position_of(parts, 1)`, `quote.bid` as
+    /// `quote["bid"]`, and a dictionary's entry as `_core.entry_port`,
+    /// one that is not valid where the key is absent; with `read`, the
+    /// entry of a key read when it runs, which fails where the key is
+    /// absent (ERR-6). `None` where hgraph has no child for it: an
+    /// element of an unsized list, which is a whole tuple here.
+    fn child_port(&mut self, function: &Function, child: &Expr, read: bool) -> Option<String> {
+        match &child.kind {
+            ExprKind::Local(local) if Self::is_input(function, *local) => {
+                Some(name(&function.locals[*local].name))
+            }
+            ExprKind::Field { base, member } => {
+                let field = field_of(self.program, &base.ty, *member)?;
+                let base = self.child_port(function, base, read)?;
+                Some(format!("{base}[{}]", string(&name(&field.name))))
+            }
+            ExprKind::Index { base, index } => {
+                let of = match &base.ty {
+                    Type::List { size: Some(_), .. } => "position_of",
+                    Type::Dict { .. } if read => "entry_child",
+                    Type::Dict { .. } => "entry_port",
+                    _ => return None,
+                };
+                let base = self.child_port(function, base, read)?;
+                let index = self.expression(function, index);
+                self.natives = true;
+                Some(format!("_core.{of}({base}, {index})"))
+            }
+            _ => None,
+        }
+    }
+
+    /// `operation` of the child `child` names, an endpoint whether or not
+    /// it is valid (END-8), written at `at`.
+    fn child_operation(
+        &mut self,
+        function: &Function,
+        operation: EndpointOperation,
+        child: &Expr,
+        at: Location,
+    ) -> String {
+        // At stop, validity and the last publication time are read, as
+        // an input's are (TIME-5).
+        let given = match function.mode {
+            Mode::Node => true,
+            Mode::Stop => matches!(
+                operation,
+                EndpointOperation::Valid
+                    | EndpointOperation::AllValid
+                    | EndpointOperation::LastModified
+            ),
+            _ => false,
+        };
+        if !given {
+            self.unsupported(at, "this endpoint read in `start` or `stop`");
+            return "None".to_string();
+        }
+        let Some(port) = self.child_port(function, child, false) else {
+            self.unsupported(
+                at,
+                "an endpoint of an unsized list's element, a whole tuple here",
+            );
+            return "None".to_string();
+        };
+        self.natives = true;
+        match operation {
+            EndpointOperation::Valid => format!("{port}.valid"),
+            EndpointOperation::AllValid => format!("{port}.all_valid"),
+            EndpointOperation::Modified => format!("_core.child_modified({port})"),
+            EndpointOperation::DeltaValue => format!("_core.child_delta({port})"),
+            EndpointOperation::LastModified => format!("_core.child_last_modified({port})"),
+            other => {
+                self.unsupported(at, &format!("`{}` of a child", other.name()));
+                "None".to_string()
+            }
+        }
+    }
+
+    /// The read `read` of a child known only when it runs (TIME-1),
+    /// written at `at`: its value, read from its endpoint, or a failure
+    /// with `value.unset_read` where it is not valid; where `result`,
+    /// `ok` of the value or `err` of that failure's error (ERR-14).
+    fn checked_child(
+        &mut self,
+        function: &Function,
+        read: &Expr,
+        result: bool,
+        at: Location,
+    ) -> String {
+        self.natives = true;
+        // An unsized list is a whole tuple here: its elements are valid
+        // with it.
+        if let ExprKind::Index { base, index } = &read.kind
+            && growing_list(&base.ty)
+            && let ExprKind::Local(local) = base.kind
+            && Self::is_input(function, local)
+        {
+            let port = name(&function.locals[local].name);
+            let index = self.expression(function, index);
+            let of = if result {
+                "whole_item_result"
+            } else {
+                "whole_item"
+            };
+            return format!("_core.{of}({port}, {index})");
+        }
+        let Some(port) = self.child_port(function, read, true) else {
+            self.unsupported(at, "this read of a child");
+            return "None".to_string();
+        };
+        let value = self.port_value(&read.ty, "_port");
+        let of = if result {
+            "checked_child_result"
+        } else {
+            "checked_child"
+        };
+        format!("_core.{of}({port}, lambda _port: {value})")
+    }
+
     /// The port of a node's temporal input that `value` reads, where it
     /// is the input or a field of a temporal struct port, as hgraph
     /// names it: `quote`, `quote["bid"]`. `None` for anything else, an
@@ -6618,6 +6855,11 @@ impl Emitter<'_> {
                 let read = self.port_value_at(value, &child, depth + 1);
                 return format!("{{{key}: {read} for {key}, {child} in {port}.items()}}");
             }
+            // A set's value is a `frozenset`, as a `const` one is: hgraph
+            // gives a `set`, which its `TSS` takes back as members added,
+            // and a whole set published replaces what the set held
+            // (TIME-7).
+            Type::Set(_) => return format!("_py.frozenset({port}.value)"),
             _ => {}
         }
         let fields = match ty {
@@ -7292,6 +7534,7 @@ impl Emitter<'_> {
             if real_time {
                 given.push("_real_time=True".to_string());
             }
+            given.extend(self.held_reader(&call.ty));
             return format!("_harness.evaluate({})", given.join(", "));
         }
         let run = self.run_wired(call, ty);
@@ -7313,7 +7556,33 @@ impl Emitter<'_> {
         if real_time {
             given.push("_real_time=True".to_string());
         }
+        given.extend(self.held_reader(&call.ty));
         format!("_harness.evaluate({})", given.join(", "))
+    }
+
+    /// What the harness reads, for a result of `ty`, as the value the
+    /// result holds once a cycle has published: TST-5 has "An
+    /// expectation's cell written as a `delta<T>` ... compared with the
+    /// delta its cycle published, and one written as a T with the value
+    /// the result holds once its cycle has published". `_hold=` a
+    /// function of the result's port, for a type whose delta is a type of
+    /// its own: a list, a set, a dictionary and a struct. `None` for one
+    /// whose delta is the value itself.
+    fn held_reader(&mut self, ty: &Type) -> Option<String> {
+        if !matches!(
+            ty,
+            Type::List { .. }
+                | Type::Set(_)
+                | Type::Dict { .. }
+                | Type::Named {
+                    kind: NamedKind::Struct,
+                    ..
+                }
+        ) {
+            return None;
+        }
+        let read = self.port_value(ty, "_port");
+        Some(format!("_hold=lambda _port: {read}"))
     }
 
     /// What the harness wires the run of the eval that takes `call`
@@ -7530,6 +7799,17 @@ impl Emitter<'_> {
                 Some(value) if nullable && is_nullable(&value.ty) => {
                     let value = self.expression(function, value);
                     self.published(value)
+                }
+                // TST-5: a cell "written as a `return` is ... a T,
+                // published whole, or a `delta<T>`". A whole value where
+                // the delta is a type of its own is marked so: an input
+                // publishes it whole, replacing what it held (TST-9), and
+                // an expectation's is compared with the value the result
+                // holds once its cycle has published.
+                Some(value) if whole_cell(ty, &value.ty) => {
+                    let value = self.expression(function, value);
+                    self.harness = true;
+                    format!("_harness.whole({value})")
                 }
                 Some(value) => self.expression(function, value),
             })
@@ -8001,6 +8281,48 @@ fn publishes_whole(ty: &Type) -> bool {
         } => true,
         other => scalar(other).is_some(),
     }
+}
+
+/// True where a cell of a trace of `trace` holds a value of `ty` whole:
+/// the trace's cell is the `delta<T>` of a list, a set, a dictionary or
+/// a struct, a type of its own, and the value is of T (TST-5).
+fn whole_cell(trace: &Type, ty: &Type) -> bool {
+    matches!(
+        trace,
+        Type::Trace { cell, .. } if matches!(
+            &**cell,
+            Type::Delta(of) if **of == *ty && matches!(
+                **of,
+                Type::List { .. }
+                    | Type::Set(_)
+                    | Type::Dict { .. }
+                    | Type::Named {
+                        kind: NamedKind::Struct,
+                        ..
+                    }
+            )
+        )
+    )
+}
+
+/// True for a dictionary whose entries each publish whole and are not
+/// null, which a whole value of it is published as (see `dict_replaced`).
+fn whole_dictionary(ty: &Type) -> bool {
+    matches!(ty, Type::Dict { value, .. } if publishes_whole(value))
+}
+
+/// True where `statements` return a value of `ty` itself, at any depth.
+fn returns_whole(statements: &[Stmt], ty: &Type) -> bool {
+    let mut found = false;
+    hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| {
+        if let hgl_analyser::hir::Node::Statement(Stmt::Return {
+            value: Some(value), ..
+        }) = node
+        {
+            found |= value.ty == *ty;
+        }
+    });
+    found
 }
 
 /// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),

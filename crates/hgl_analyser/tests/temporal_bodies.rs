@@ -197,7 +197,8 @@ fn configuration_binds_where_the_graph_is_built() {
         "    value: f64\n",
         "}\n",
         "impl fn eq_(lhs: Price, rhs: Price, abs: f64 = 0.0) -> bool {\n",
-        "    when { return lhs.value - rhs.value < abs }\n",
+        // TIME-1: a field is read where it is admitted.
+        "    when all_valid(lhs) && all_valid(rhs) { return lhs.value - rhs.value < abs }\n",
         "}\n",
         "fn near(a: Price, b: Price, tolerance: f64) -> bool => a =={abs: tolerance} b\n",
     ));

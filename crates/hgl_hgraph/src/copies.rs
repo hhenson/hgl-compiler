@@ -531,6 +531,9 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         | ExprKind::Propagate(inner)
         | ExprKind::Capture(inner)
         | ExprKind::Captured { capture: inner, .. }
+        | ExprKind::ChildEndpoint { child: inner, .. }
+        | ExprKind::ChildEndpointOf(inner)
+        | ExprKind::CheckedChild { read: inner, .. }
         | ExprKind::Publications(inner) => into.push(inner),
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {

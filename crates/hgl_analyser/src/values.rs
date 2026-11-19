@@ -52,6 +52,9 @@ use crate::types::{
 };
 use crate::{RESULT_FORMS, codes, error, local_error, warning};
 
+// The read of a collection's child, and the endpoint a child is (TIME-1).
+mod children;
+
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
@@ -489,6 +492,10 @@ struct Typer<'a> {
     initializing: bool,
     /// True while a node's `cache`'s initializer is read (TIME-1).
     caching: bool,
+    /// Where the temporal input stands whose child is being named as
+    /// an endpoint, `parts` in `valid(parts[1])`: the child is given to
+    /// the operation and not read (TIME-1, TIME-9).
+    naming: Option<Location>,
     /// How many requirements deep a candidate's condition is being
     /// tested: see [`REQUIRING`].
     requiring: u32,
@@ -562,6 +569,7 @@ impl<'a> Typer<'a> {
             undriven: Vec::new(),
             initializing: false,
             caching: false,
+            naming: None,
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
@@ -1315,7 +1323,9 @@ impl<'a> Typer<'a> {
         // admits: the reads in its body are then not judged (ERR-9).
         if self.diagnostics.len() != reported {
             let inputs = self.temporal_inputs();
-            self.present.extend(inputs.into_iter().map(Fact::Valid));
+            self.present.extend(inputs.iter().copied().map(Fact::Valid));
+            self.present
+                .extend(inputs.into_iter().map(children::all_valid_fact));
         }
         // ERR-12, TIME-4: the body is reached only where the condition
         // holds.
@@ -1415,6 +1425,16 @@ impl<'a> Typer<'a> {
                 if arguments.is_empty() {
                     // `valid()`: every temporal input.
                     return Some(self.temporal_inputs());
+                }
+                // TIME-4: `valid(parts[1])`, of a child, is a guard: "a
+                // `when` header that has the test alone or as a top-level
+                // conjunct guards its body". It names no input, and the
+                // default admission stands with it.
+                let of_child = arguments.iter().any(|(_, entry)| {
+                    matches!(entry.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr)
+                });
+                if of_child {
+                    return None;
                 }
                 // TIME-3: "`valid(a, b)` requires both named inputs,
                 // and similarly for more inputs ... `valid([])` requires
@@ -1648,6 +1668,26 @@ impl<'a> Typer<'a> {
                 );
             }
         }
+        // TIME-9, END-8: "A child of a collection is an endpoint whether
+        // or not it is valid: `valid`, `modified`, `delta_value` and
+        // `last_modified` take it, and `all_valid` where it is a
+        // collection". It is given alone; `is_active`, `activate` and
+        // `passivate` "operate on direct temporal inputs".
+        if let [only] = arguments.as_slice()
+            && matches!(
+                operation,
+                EndpointOperation::Valid
+                    | EndpointOperation::AllValid
+                    | EndpointOperation::Modified
+                    | EndpointOperation::DeltaValue
+                    | EndpointOperation::LastModified
+            )
+        {
+            let reported = self.diagnostics.len();
+            if let Some(found) = self.child_endpoint(only) {
+                return self.child_operation(operation, at, only, found, reported);
+            }
+        }
         let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
             None
         } else if none {
@@ -1815,6 +1855,24 @@ impl<'a> Typer<'a> {
                 return;
             }
         };
+        // A child that holds another type is no endpoint of the one
+        // written either (EXPR-5).
+        if let ExprKind::ChildEndpoint { child, .. } = kind {
+            if whole(held) && whole(&child.ty) && child.ty != *held {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    *at,
+                    format!(
+                        "`{}<{held}>` takes an endpoint of `{held}`, and this child holds `{}`",
+                        name.text(),
+                        child.ty
+                    ),
+                    "EXPR-5",
+                ));
+            }
+            return;
+        }
         let ExprKind::Endpoint {
             inputs: Some(inputs),
             ..
@@ -1860,6 +1918,29 @@ impl<'a> Typer<'a> {
             && let Some(inner) = named.children().next()
         {
             named = inner;
+        }
+        // TIME-9: "a child of one, `parts[1]`, `quote.bid` or
+        // `parts[i]`", in a hook.
+        let reported = self.diagnostics.len();
+        if self.hook.is_some()
+            && let Some(found) = self.child_endpoint(&named)
+        {
+            if let Some(child) = found {
+                self.child_in_start(at, &child);
+                let ty = Type::Endpoint(Box::new(child.ty.clone()));
+                return Expr {
+                    kind: ExprKind::ChildEndpointOf(Box::new(child)),
+                    ty,
+                    at,
+                };
+            }
+            if self.diagnostics.len() != reported {
+                return Expr {
+                    kind: ExprKind::Unread,
+                    ty: Type::Unknown,
+                    at,
+                };
+            }
         }
         let local = (named.kind() == SyntaxKind::NameExpr)
             .then(|| self.local_of(&named))
@@ -1939,7 +2020,9 @@ impl<'a> Typer<'a> {
                 // judged as well (ERR-9).
                 let frame = self.present.len();
                 let inputs = self.temporal_inputs();
-                self.present.extend(inputs.into_iter().map(Fact::Valid));
+                self.present.extend(inputs.iter().copied().map(Fact::Valid));
+                self.present
+                    .extend(inputs.into_iter().map(children::all_valid_fact));
                 self.expression(node, Some(&Type::Unknown));
                 self.present.truncate(frame);
                 None
@@ -2828,7 +2911,64 @@ impl<'a> Typer<'a> {
             });
         }
         self.delta_overlap(&ty, &arguments);
+        self.delta_bounds(&ty, &arguments);
         (ExprKind::Delta { arguments }, ty)
+    }
+
+    /// TYPE-16: "A `list<V, N>` keeps its bounds: a constant entry past
+    /// them rejects (`delta.index_bounds`)". The catalogue's row is
+    /// "Negative/out-of-fixed-range index": a constant position of any
+    /// list's delta, `updated` or `removed`, that is negative rejects
+    /// too. A position known only as the program runs is checked then.
+    fn delta_bounds(&mut self, ty: &Type, arguments: &[hir::Argument]) {
+        let Type::Delta(of) = ty else {
+            return;
+        };
+        let Type::List { size, .. } = &**of else {
+            return;
+        };
+        let size = match size.as_ref().map(|size| &size.value) {
+            Some(ConstantValue::Int(size)) => Some(*size),
+            _ => None,
+        };
+        let constant = |module: usize, declaration: usize| match crate::read::constant_value(
+            self.program,
+            module,
+            declaration,
+            &self.constant_values,
+        ) {
+            ConstantValue::Int(value) => Index::Known(value),
+            _ => Index::Unevaluated,
+        };
+        let mut outside = Vec::new();
+        for argument in arguments {
+            let positions: Vec<&Expr> = match (argument.parameter, &argument.value.kind) {
+                (Some(0), ExprKind::Pairs(pairs)) => pairs.iter().map(|(key, _)| key).collect(),
+                (Some(1), ExprKind::Sequence(items)) => items.iter().collect(),
+                _ => continue,
+            };
+            for position in positions {
+                if let Index::Known(value) = constant_index(position, &constant)
+                    && (value < 0 || size.is_some_and(|size| value >= size))
+                {
+                    outside.push((position.at, value));
+                }
+            }
+        }
+        for (at, value) in outside {
+            let bounds = match size {
+                Some(0) => "it has none".to_string(),
+                Some(size) => format!("its positions are 0 to {}", size - 1),
+                None => "a position is 0 or more".to_string(),
+            };
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::DELTA_INDEX_BOUNDS,
+                at,
+                format!("`{of}` has no position {value}: {bounds}"),
+                "TYPE-16",
+            ));
+        }
     }
 
     /// TYPE-16: "A delta that names one member, key or position both as
@@ -2845,12 +2985,40 @@ impl<'a> Typer<'a> {
         if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
             return;
         }
-        // The literal a member, a key or a position is written as.
-        fn literal(entry: &Expr) -> Option<&Value> {
+        // The constant a member, a key or a position is, by its value:
+        // `-1` is the integer it negates, `.buy` the enum's member, and
+        // an `i64` widened where an `f64` is expected the same number
+        // as the `f64` written (EXPR-5), so `1` and `1.0` of an `f64`
+        // key are one key.
+        #[derive(PartialEq)]
+        enum Key<'v> {
+            Int(i64),
+            Float(f64),
+            Member(usize, usize, usize),
+            Other(&'v Value),
+        }
+        fn literal(entry: &Expr) -> Option<Key<'_>> {
+            if let Index::Known(value) = constant_index(entry, &|_, _| Index::Unevaluated) {
+                return Some(Key::Int(value));
+            }
             match &entry.kind {
-                ExprKind::Literal(value) => Some(value),
-                ExprKind::Widen(inner) => literal(inner),
-                _ => None,
+                ExprKind::Literal(Value::Float(value)) => Some(Key::Float(*value)),
+                ExprKind::Literal(value) => Some(Key::Other(value)),
+                ExprKind::EnumMember {
+                    module,
+                    declaration,
+                    member,
+                } => Some(Key::Member(*module, *declaration, *member)),
+                ExprKind::Widen(inner) => match literal(inner)? {
+                    // An `i64` is widened to the `f64` of the same
+                    // number (NUM-1).
+                    Key::Int(value) => Some(Key::Float(value as f64)),
+                    other => Some(other),
+                },
+                _ => match negated(entry).map(literal)? {
+                    Some(Key::Float(value)) => Some(Key::Float(-value)),
+                    _ => None,
+                },
             }
         }
         // Each entry of the property at `index`: a set's members, or a
@@ -3176,7 +3344,12 @@ impl<'a> Typer<'a> {
         if self.graph {
             self.constants_of(&kind);
         }
-        Expr { kind, ty, at }
+        let value = Expr { kind, ty, at };
+        // TIME-1: a read in a hook of a temporal input's child.
+        if matches!(node.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr) {
+            return self.child_read(node, value);
+        }
+        value
     }
 
     /// What a value read in a graph is (FN-3). A connection: a
@@ -3747,7 +3920,13 @@ impl<'a> Typer<'a> {
         if self.is_temporal_input(local)
             && (self.hook.is_some() || self.initializing || self.caching)
         {
-            self.payload_read(local, at);
+            // TIME-1: where a child is read, `parts[1]`, the read is the
+            // child's, judged where the child is (`child_read`); and a
+            // child named as an endpoint, `valid(parts[1])`, is not read.
+            let child = self.reads_children() && self.continues_chain(node, &self.locals[local].ty);
+            if !child && self.naming != Some(at) {
+                self.payload_read(local, at);
+            }
         }
         // TIME-7: "`start` neither reads nor writes it".
         if Some(local) == self.out && self.hook == Some(Hook::Start) {
@@ -3847,9 +4026,12 @@ impl<'a> Typer<'a> {
         };
         null_tests(
             condition,
-            &refinable,
-            &tagged,
-            &|| self.temporal_inputs(),
+            &Proofs {
+                refinable: &refinable,
+                tagged: &tagged,
+                inputs: &|| self.temporal_inputs(),
+                children: &|child| self.tested_child(child),
+            },
             &[],
         )
     }
@@ -6772,12 +6954,25 @@ impl<'a> Typer<'a> {
                         at: self.at(&value),
                     })
                 } else if let Type::Delta(of) = cell
-                    && matches!(**of, Type::List { .. })
+                    && matches!(
+                        **of,
+                        Type::List { .. }
+                            | Type::Set(_)
+                            | Type::Dict { .. }
+                            | Type::Named {
+                                kind: NamedKind::Struct,
+                                ..
+                            }
+                    )
                 {
-                    // A list's cell is "one cycle's publication", and
-                    // TIME-7 has "a value that is a T ... published
-                    // whole": core's cases write a whole list as a
-                    // cell, `[[false, false], ...]`, as the delta is.
+                    // TST-5: "Each cell is one cycle's publication,
+                    // written as a `return` is (TIME-7) ... a T,
+                    // published whole, or a `delta<T>` (TYPE-16),
+                    // published as that change. A list, a tuple, a
+                    // struct and a dictionary are each written either
+                    // way". A cell's type says which it is. A tuple's
+                    // delta is a tuple of its positions, and a whole
+                    // tuple reads as that.
                     Some(self.published(&value, of, "a cell of the trace"))
                 } else {
                     let read = self.expression(&value, Some(cell));
@@ -7311,6 +7506,25 @@ impl<'a> Typer<'a> {
                 },
                 ty,
             );
+        }
+        // TIME-9: "`is_active(input)`, `activate(input)` and
+        // `passivate(input)` operate on direct temporal inputs": a child
+        // has no subscription of its own.
+        if reads_activity
+            && let ExprKind::Call { arguments, .. } = &kind
+            && let [argument] = arguments.as_slice()
+            && let ExprKind::ChildEndpointOf(_) = argument.value.kind
+        {
+            self.diagnostics.emit(error(
+                Category::Phase,
+                codes::ENDPOINT_ARGUMENT,
+                argument.value.at,
+                "`is_active` takes a direct temporal input of the node, and this is a child of \
+                 one"
+                .to_string(),
+                "TIME-9",
+            ));
+            return (ExprKind::Unread, ty);
         }
         (kind, ty)
     }
@@ -11304,6 +11518,29 @@ impl<'a> Typer<'a> {
     /// follows the admitted destination relationship"), and reported
     /// otherwise. `what` names the place: `the function's result`.
     fn fit(&mut self, value: Expr, expected: &Type, what: &str) -> Expr {
+        // ERR-14: "A read of a collection's child that is checked when
+        // it runs (TIME-1), `parts[i]`, takes its form from its place
+        // (EXPR-5). Where the place expects `result<T, error>`, T the
+        // child's type, it gives `ok` of the child's value, or, for a
+        // child that is not valid, `err`".
+        if let ExprKind::CheckedChild { result: false, .. } = &value.kind
+            && let Type::Result {
+                value: success,
+                error,
+            } = expected
+            && **error == Type::Error
+            && self.admits(success, &value.ty)
+        {
+            let at = value.at;
+            let ExprKind::CheckedChild { read, .. } = value.kind else {
+                return value;
+            };
+            return Expr {
+                kind: ExprKind::CheckedChild { read, result: true },
+                ty: expected.clone(),
+                at,
+            };
+        }
         if is_integer_literal(&value) && accepts_float(expected) {
             let at = value.at;
             return Expr {
@@ -11539,7 +11776,7 @@ enum CapturedOutput {
 }
 
 /// What a test has proved of a binding where the pass is reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Fact {
     /// It is not null (ERR-12).
     Present(LocalId),
@@ -11550,6 +11787,26 @@ enum Fact {
     Success(LocalId),
     /// It is a failure: a result whose `.error` may be read (ERR-3).
     Failure(LocalId),
+    /// Every child of this collection is valid, one level deep:
+    /// `all_valid(parts)`, which "admits every child" (TIME-1).
+    AllValid(children::ChildPath),
+    /// This child of a collection is valid: `valid(parts[1])`, which
+    /// admits "that one" (TIME-1).
+    ChildValid(children::ChildPath),
+}
+
+/// What [`null_tests`] asks of the function a condition is read in.
+struct Proofs<'p> {
+    /// Which bindings a null test proves anything of.
+    refinable: &'p dyn Fn(LocalId) -> bool,
+    /// Which bindings a tag test proves anything of, given what is
+    /// known.
+    tagged: &'p dyn Fn(LocalId, &[Fact]) -> bool,
+    /// Every temporal input, for a `valid()` written with no argument.
+    inputs: &'p dyn Fn() -> Vec<LocalId>,
+    /// The child an endpoint operation's argument names when the
+    /// program is compiled (TIME-1).
+    children: &'p dyn Fn(&Expr) -> Option<children::ChildPath>,
 }
 
 /// What a condition proves: where it holds, and where it does not.
@@ -11562,13 +11819,13 @@ enum Fact {
 /// a test of `valid(input)`, on the input by its name". ERR-3: "Track
 /// negation, short-circuit paths". A test of anything else, a field or
 /// a call, proves nothing.
-fn null_tests(
-    condition: &Expr,
-    refinable: &dyn Fn(LocalId) -> bool,
-    tagged: &dyn Fn(LocalId, &[Fact]) -> bool,
-    inputs: &dyn Fn() -> Vec<LocalId>,
-    assumed: &[Fact],
-) -> (Vec<Fact>, Vec<Fact>) {
+fn null_tests(condition: &Expr, proofs: &Proofs, assumed: &[Fact]) -> (Vec<Fact>, Vec<Fact>) {
+    let Proofs {
+        refinable,
+        tagged,
+        inputs,
+        children,
+    } = proofs;
     let both = |first: Vec<Fact>, second: Vec<Fact>| -> Vec<Fact> {
         first
             .into_iter()
@@ -11584,17 +11841,33 @@ fn null_tests(
         // named is valid where it holds. Where it does not, one of them
         // is not, and nothing is proved of any.
         // TIME-9: `all_valid` is true "where every one is" valid, and
-        // so the collection with them, as `valid` proves it.
+        // so the collection with them, as `valid` proves it; and
+        // TIME-1: "`all_valid(parts)` admits every child".
         ExprKind::Endpoint {
-            operation: EndpointOperation::Valid | EndpointOperation::AllValid,
+            operation: operation @ (EndpointOperation::Valid | EndpointOperation::AllValid),
             inputs: named,
         } => {
             let valid = match named {
                 Some(named) => named.clone(),
                 None => inputs(),
             };
-            (valid.into_iter().map(Fact::Valid).collect(), Vec::new())
+            let mut facts: Vec<Fact> = valid.iter().copied().map(Fact::Valid).collect();
+            if *operation == EndpointOperation::AllValid {
+                facts.extend(valid.into_iter().map(children::all_valid_fact));
+            }
+            (facts, Vec::new())
         }
+        // TIME-4: "A child's guard is a test of `all_valid` of its
+        // input, or of `valid` of the child as the read names it,
+        // `valid(parts[1])` for `parts[1]`". One known only when the
+        // program runs proves nothing here.
+        ExprKind::ChildEndpoint {
+            operation: operation @ (EndpointOperation::Valid | EndpointOperation::AllValid),
+            child,
+        } => match children(child) {
+            Some(path) => (children::child_facts(*operation, path), Vec::new()),
+            None => (Vec::new(), Vec::new()),
+        },
         // ERR-3: a binding "gains its tag fact from a direct
         // `is_ok`/`is_err` guard on it by its name: where `is_ok` holds
         // it is a success and where it does not a failure, and `is_err`
@@ -11616,7 +11889,7 @@ fn null_tests(
             operator: UnaryOperator::Not,
             operand,
         } => {
-            let (when_true, when_false) = null_tests(operand, refinable, tagged, inputs, assumed);
+            let (when_true, when_false) = null_tests(operand, proofs, assumed);
             (when_false, when_true)
         }
         ExprKind::Binary {
@@ -11643,19 +11916,17 @@ fn null_tests(
             BinaryOperator::And => {
                 // The right operand is evaluated where the left
                 // holds: what the left proves is known there.
-                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let (left_true, left_false) = null_tests(left, proofs, assumed);
                 let known = [assumed, left_true.as_slice()].concat();
-                let (right_true, right_false) =
-                    null_tests(right, refinable, tagged, inputs, &known);
+                let (right_true, right_false) = null_tests(right, proofs, &known);
                 (either(left_true, right_true), both(left_false, right_false))
             }
             BinaryOperator::Or => {
                 // The right operand is evaluated where the left does
                 // not hold.
-                let (left_true, left_false) = null_tests(left, refinable, tagged, inputs, assumed);
+                let (left_true, left_false) = null_tests(left, proofs, assumed);
                 let known = [assumed, left_false.as_slice()].concat();
-                let (right_true, right_false) =
-                    null_tests(right, refinable, tagged, inputs, &known);
+                let (right_true, right_false) = null_tests(right, proofs, &known);
                 (both(left_true, right_true), either(left_false, right_false))
             }
             _ => (Vec::new(), Vec::new()),

@@ -315,6 +315,9 @@ pub mod codes {
     /// A constant delta that names one member, key or position both as
     /// added or updated and as removed (TYPE-16).
     pub const DELTA_OVERLAP: &str = "delta.overlap";
+    /// A constant position of a list's delta that is negative, or past
+    /// a fixed list's bounds (TYPE-16).
+    pub const DELTA_INDEX_BOUNDS: &str = "delta.index_bounds";
     /// `signal` somewhere other than the whole type of an input
     /// (TYPE-12).
     pub const SIGNAL_POSITION: &str = "signal.position";

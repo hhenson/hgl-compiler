@@ -134,10 +134,14 @@ fn every_example_module_is_accepted_but_for_its_stated_rejections() {
 }
 
 /// UNIT-1, CONF-3: core's conformance cases are the parts of one module,
-/// and assemble into it with no name declared twice.
+/// and assemble into it with no name declared twice. Its source
+/// rejections are a module of their own, `conformance.rejections`.
 #[test]
 fn the_conformance_cases_assemble_into_one_module() {
-    let samples = hgl_files("hgl_core/tests/conformance");
+    let samples: Vec<common::Sample> = hgl_files("hgl_core/tests/conformance")
+        .into_iter()
+        .filter(|sample| !sample.origin.contains("/rejections/"))
+        .collect();
     let files: Vec<(&str, &str)> = samples
         .iter()
         .map(|sample| (sample.origin.as_str(), sample.text.as_str()))
@@ -155,4 +159,42 @@ fn the_conformance_cases_assemble_into_one_module() {
     );
     assert!(!module.declarations.is_empty());
     assert!(!module.tests.is_empty());
+}
+
+/// TST-12, CONF-3: core's source rejections, `conformance.rejections`,
+/// are each rejected with the code their `# expect-error` annotation
+/// names, on the line it applies to, and with nothing else.
+#[test]
+fn the_conformance_rejections_are_rejected_as_annotated() {
+    let samples: Vec<common::Sample> = hgl_files("hgl_core/tests/conformance")
+        .into_iter()
+        .filter(|sample| sample.origin.contains("/rejections/"))
+        .collect();
+    assert!(!samples.is_empty(), "core states source rejections");
+    let files: Vec<(&str, &str)> = samples
+        .iter()
+        .map(|sample| (sample.origin.as_str(), sample.text.as_str()))
+        .collect();
+    let checked = check(&files);
+    let mut expected: Vec<String> = files
+        .iter()
+        .flat_map(|(name, text)| {
+            expected_rejections(text)
+                .into_iter()
+                .map(move |(line, code)| format!("{name}:{line} {code}"))
+        })
+        .collect();
+    let mut found: Vec<String> = checked
+        .findings
+        .iter()
+        .map(|finding| {
+            let (line, _column) = finding.at.rsplit_once(':').unwrap();
+            format!("{line} {}", finding.code)
+        })
+        .collect();
+    expected.sort();
+    found.sort();
+    assert!(!expected.is_empty());
+    assert_eq!(found, expected, "{}", checked.report);
+    assert_eq!(checked.modules()[0].path, "conformance.rejections");
 }

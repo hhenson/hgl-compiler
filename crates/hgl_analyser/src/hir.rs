@@ -367,6 +367,38 @@ pub enum ExprKind {
     /// argument of an `endpoint<T>` parameter (TIME-9). The payload is
     /// not read.
     EndpointOf(LocalId),
+    /// An operation on a child of a temporal input, an element, a field
+    /// or an entry (TIME-1, TIME-9, END-8): `valid(parts[1])`,
+    /// `modified(quote.bid)`, `delta_value(parts[i])`. The child is an
+    /// endpoint whether or not it is valid, and is named, not read:
+    /// `child` is the [`ExprKind::Index`] or [`ExprKind::Field`] a read
+    /// of it is written as, rooted at the input's [`ExprKind::Local`].
+    ChildEndpoint {
+        /// The operation: `valid`, `all_valid`, `modified`,
+        /// `delta_value` or `last_modified`.
+        operation: EndpointOperation,
+        /// The child.
+        child: Box<Expr>,
+    },
+    /// The endpoint of a child of a temporal input, given to an
+    /// `endpoint<T>` parameter (TIME-9: "a child of one, `parts[1]`,
+    /// `quote.bid` or `parts[i]`"), named as in
+    /// [`ExprKind::ChildEndpoint`].
+    ChildEndpointOf(Box<Expr>),
+    /// A read of a collection's child that is checked when it runs
+    /// (TIME-1, ERR-14): `parts[i]` in a hook, whose child is known only
+    /// then. A child that is not valid fails the read with
+    /// `value.unset_read`. Where `result` is true the place expects a
+    /// `result<T, error>`: the read gives `ok` of the child's value, or
+    /// `err` of an `error` with that code, and the expression is of that
+    /// result; otherwise it is of the child's T.
+    CheckedChild {
+        /// The read: an [`ExprKind::Index`] or [`ExprKind::Field`]
+        /// rooted at a temporal input.
+        read: Box<Expr>,
+        /// True where the place expects `result<T, error>`.
+        result: bool,
+    },
     /// `{ statements }`: a block. Its value is that of its last
     /// statement, when that is an expression (CTRL-10).
     Block {
@@ -932,6 +964,9 @@ impl Expr {
             | ExprKind::Propagate(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
+            | ExprKind::ChildEndpoint { child: inner, .. }
+            | ExprKind::ChildEndpointOf(inner)
+            | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::Publications(inner) => inner.walk_nodes(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {
@@ -1025,6 +1060,9 @@ impl Expr {
             | ExprKind::Propagate(inner)
             | ExprKind::Capture(inner)
             | ExprKind::Captured { capture: inner, .. }
+            | ExprKind::ChildEndpoint { child: inner, .. }
+            | ExprKind::ChildEndpointOf(inner)
+            | ExprKind::CheckedChild { read: inner, .. }
             | ExprKind::Publications(inner) => inner.walk_mut(visit),
             ExprKind::Binary { left, right, .. }
             | ExprKind::Index {

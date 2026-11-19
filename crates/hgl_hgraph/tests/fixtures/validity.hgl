@@ -1,0 +1,255 @@
+module demo.validity
+
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+# ---- A collection's child (TIME-1, TIME-4, TIME-9, END-8, ERR-14) ----
+
+fn one_position(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+fn one_field(is_bid: bool, price: i64) -> Quote {
+    when {
+        if is_bid { return delta<Quote>(bid: price) }
+        return delta<Quote>(ask: price)
+    }
+}
+
+# TIME-4: `valid(parts[1])` guards the read of `parts[1]`.
+fn second_or_zero(parts: list<i64, 2>) -> i64 {
+    when {
+        if valid(parts[1]) { return parts[1] }
+        return 0
+    }
+}
+
+# TIME-1: `all_valid(parts)` admits every child.
+fn both(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) { return parts[0] * 10 + parts[1] }
+}
+
+# TIME-1: `valid(quote.ask)` admits that field alone.
+fn ask_or_zero(quote: Quote) -> i64 {
+    when {
+        if valid(quote.ask) { return quote.ask }
+        return 0
+    }
+}
+
+# TIME-1: "Elsewhere, `parts[i]`, it is checked when it runs".
+fn at(parts: list<i64, 2>, slot: i64) -> i64 {
+    when { return parts[slot] }
+}
+
+# ERR-14: where `result<T, error>` is expected, an `err` coded
+# `value.unset_read`.
+fn checked_at(parts: list<i64, 2>, slot: i64) -> result<i64, error> {
+    when { return parts[slot] }
+}
+
+const fn code_of(outcome: result<i64, error>) -> str {
+    if is_ok(outcome) { return "ok" }
+    let code = outcome.error.code
+    if code == null { return "none" }
+    return code
+}
+
+# END-8: `valid`, `modified` and `last_modified` of a child, whether or
+# not it is valid, at a constant and at a run-time index.
+fn child_state(parts: list<i64, 2>, slot: i64) -> i64 {
+    when valid(slot) {
+        var seen: i64 = 0
+        if valid(parts[1]) { seen += 1 }
+        if modified(parts[0]) { seen += 10 }
+        if valid(parts[slot]) { seen += 100 }
+        if last_modified(parts[1]) == null { seen += 1000 }
+        return seen
+    }
+}
+
+# END-8: a child's `delta_value`, admitted by its own guard.
+fn second_delta(parts: list<i64, 2>) -> i64 {
+    when {
+        if valid(parts[1]) && modified(parts[1]) { return delta_value(parts[1]) }
+        return -1
+    }
+}
+
+# END-8: a dictionary's entry is an endpoint, not valid while its key is
+# absent.
+fn priced(key: str, price: i64) -> dict<str, i64> {
+    when { return delta<dict<str, i64>>(updated: [key: price]) }
+}
+
+fn has_b(prices: dict<str, i64>) -> bool {
+    when { return valid(prices["B"]) }
+}
+
+fn second_of(slot: i64, reading: i64) -> i64 => second_or_zero(one_position(slot, reading))
+fn both_of(slot: i64, reading: i64) -> i64 => both(one_position(slot, reading))
+fn ask_of(is_bid: bool, price: i64) -> i64 => ask_or_zero(one_field(is_bid, price))
+fn at_of(position: i64, reading: i64, slot: i64) -> i64 => at(one_position(position, reading), slot)
+fn code_at(position: i64, reading: i64, slot: i64) -> str =>
+    code_of(checked_at(one_position(position, reading), slot))
+fn state_of(position: i64, reading: i64, slot: i64) -> i64 =>
+    child_state(one_position(position, reading), slot)
+fn delta_of(slot: i64, reading: i64) -> i64 => second_delta(one_position(slot, reading))
+fn b_present(key: str, price: i64) -> bool => has_b(priced(key, price))
+
+test a_child_is_read_where_it_is_admitted {
+    assert eval(second_of(slot: [0, 1], reading: [3, 8])) == [0, 8]
+    assert eval(both_of(slot: [0, 1], reading: [3, 8])) == [_, 38]
+    assert eval(ask_of(is_bid: [true, false], price: [1, 2])) == [0, 2]
+}
+
+test a_child_read_at_a_runtime_index_is_checked_when_it_runs {
+    assert eval(at_of(position: [0], reading: [3], slot: [0])) == [3]
+    assert raises("value.unset_read") {
+        eval(at_of(position: [0, _], reading: [3, _], slot: [0, 1]))
+    }
+    assert eval(code_at(position: [0, _], reading: [3, _], slot: [0, 1])) ==
+        ["ok", "value.unset_read"]
+}
+
+test a_child_is_an_endpoint_whether_or_not_it_is_valid {
+    assert eval(state_of(position: [0, 1], reading: [3, 8], slot: [1, 1])) == [1010, 101]
+    assert eval(delta_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [-1, 8, -1]
+    assert eval(b_present(key: ["A", "B"], price: [1, 2])) == [false, true]
+}
+
+# ---- Trace cells, whole or a delta (TST-5, TST-9) ----
+
+fn both_positions(low: i64) -> list<i64, 2> {
+    when { return [low, low + 1] }
+}
+
+fn relay_quote(quote: Quote) -> Quote {
+    when all_valid(quote) { return quote }
+}
+
+fn relay_book(book: dict<str, i64>) -> dict<str, i64> {
+    when all_valid(book) { return book }
+}
+
+fn relay_members(members: set<i64>) -> set<i64> {
+    when { return members }
+}
+
+test a_cell_is_written_whole_or_as_a_delta {
+    # An expectation written whole is compared with the value held.
+    assert eval(both_positions(low: [1, 5])) == [[1, 2], [5, 6]]
+    assert eval(one_position(slot: [0, 1], reading: [3, 8])) != [[3, 0], [3, 8]]
+    assert eval(one_position(slot: [0, 1], reading: [3, 8])) ==
+        [delta<list<i64, 2>>(updated: [0: 3]), [3, 8]]
+    assert eval(relay_quote(quote: [Quote(bid: 1, ask: 2), _, delta<Quote>(ask: 3)])) ==
+        [Quote(bid: 1, ask: 2), _, Quote(bid: 1, ask: 3)]
+    # A whole dictionary replaces what the input held.
+    assert eval(relay_book(book: [["bid": 10, "ask": 12], ["bid": 11]])) ==
+        [["bid": 10, "ask": 12], ["bid": 11]]
+    assert eval(relay_book(book: [["bid": 10, "ask": 12], ["bid": 11]])) ==
+        [["bid": 10, "ask": 12], delta<dict<str, i64>>(updated: ["bid": 11], removed: ["ask"])]
+    assert eval(relay_members(members: [[1, 2], [2, 3]])) == [[1, 2], [2, 3]]
+}
+
+# ---- The list's delta (TYPE-16) ----
+
+const fn digits(values: list<i64>) -> i64 {
+    var code: i64 = 0
+    for value in values { code = code * 10 + value }
+    return code
+}
+
+fn edited(command: i64) -> list<i64> {
+    when {
+        if command == 0 { return [1, 2, 3] }
+        if command == 1 { return delta<list<i64>>(updated: [3: 4]) }
+        if command == 2 { return delta<list<i64>>(size_modified: -1) }
+        return delta<list<i64>>(size_modified: -5)
+    }
+}
+
+fn digits_of(command: i64) -> i64 => digits(edited(command))
+
+fn failure_seen(failure: error) -> bool {
+    when { return true }
+}
+
+fn past_the_bounds(slot: i64, reading: i64) -> bool {
+    let boundary = capture(one_position, slot, reading)
+    return failure_seen(boundary.error)
+}
+
+test a_list_delta_extends_and_reduces_the_list {
+    assert eval(digits_of(command: [0, 1])) == [123, 1234]
+    assert eval(digits_of(command: [0, 2, 2])) == [123, 12, 1]
+    assert eval(digits_of(command: [0, 3])) == [123, 0]
+    assert eval(past_the_bounds(slot: [0, 2], reading: [3, 8])) == [_, true]
+}
+
+# ---- What a node publishes to its own `out` ----
+
+# TIME-7: a fixed list's `out`, read and published.
+fn pair_once(value: i64) -> list<i64, 2> {
+    inject out
+    when {
+        if valid(out) { return }
+        return [value, value]
+    }
+}
+
+const fn pair_total(pair: list<i64, 2>) -> i64 => pair[0] + pair[1]
+
+fn once_total(value: i64) -> i64 => pair_total(pair_once(value))
+
+# TIME-7: `out[key] = value` publishes the one entry (END-3).
+fn keyed(key: str, value: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if !valid(out) { return delta<dict<str, i64>>(updated: [key: value]) }
+        out[key] = value
+    }
+}
+
+fn updated_count(prices: dict<str, i64>) -> i64 {
+    when {
+        var count: i64 = 0
+        for key, price in delta_value(prices).updated { count += 1 }
+        return count
+    }
+}
+
+fn a_of_keyed(key: str, value: i64) -> i64 => keyed(key, value)["a"]
+fn changes_of(key: str, value: i64) -> i64 => updated_count(keyed(key, value))
+
+fn pair_set(value: i64) -> list<i64, 2> {
+    inject out
+    when {
+        if !valid(out) { return [value, value] }
+        out[0] = value
+    }
+}
+
+fn first_delta(pair: list<i64, 2>) -> i64 {
+    when {
+        let first = get(delta_value(pair).updated, 0)
+        if first == null { return -1 }
+        return first
+    }
+}
+
+fn pair_changes(value: i64) -> i64 => first_delta(pair_set(value))
+
+# EXPR-7: a key selected in a graph before it is present is a child that
+# is not valid, and nothing is published for it.
+fn b_of(key: str, price: i64) -> i64 => priced(key, price)["B"]
+
+test a_node_publishes_what_it_changes {
+    assert eval(once_total(value: [1, 5])) == [2, _]
+    assert eval(a_of_keyed(key: ["a", "b", "b"], value: [1, 5, 6])) == [1, _, _]
+    assert eval(changes_of(key: ["a", "b", "b"], value: [1, 5, 6])) == [1, 1, 1]
+    assert eval(pair_changes(value: [1, 5])) == [1, 5]
+    assert eval(b_of(key: ["A", "B"], price: [1, 2])) == [_, 2]
+}

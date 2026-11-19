@@ -36,11 +36,46 @@ class _Recording:
     would be a million cells on. Where two traces are compared each is
     read as its publications and how long after its run's start each
     is (`_relative`).
+
+    `held` has, by its instant, the value the result held once each
+    publication was made, where the result's delta is a type of its own
+    (see `_hold`): a cell written whole is compared with it.
     """
 
-    def __init__(self, start, output):
+    def __init__(self, start, output, held=None):
         self.start = start
         self.output = output
+        self.held = {} if held is None else held
+
+
+class _Whole:
+    """A trace's cell written as a whole value, where the cell's type has
+    a delta of its own (the language's TST-5: "a T, published whole, or a
+    `delta<T>`"). An input publishes it whole, which "replaces what the
+    input held" (TST-9), and an expectation's is "compared ... with the
+    value the result holds once its cycle has published"."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def whole(value):
+    """A trace's cell written as the whole value `value` (TST-5)."""
+    return _Whole(value)
+
+
+class _Published:
+    """One publication of an eval's recording, as a trace is compared:
+    the delta published, and the value the result held then, `None`
+    where it was not read."""
+
+    __slots__ = ("delta", "held")
+
+    def __init__(self, delta, held):
+        self.delta = delta
+        self.held = held
 
 
 class _Timed:
@@ -72,7 +107,10 @@ def _relative(trace, start=None):
     compared with.
     """
     if isinstance(trace, _Recording):
-        return [(at - trace.start, published) for at, published in trace.output]
+        return [
+            (at - trace.start, _Published(published, trace.held.get(at)))
+            for at, published in trace.output
+        ]
     if isinstance(trace, _Timed):
         entries = []
         for at, published in trace.entries:
@@ -89,11 +127,31 @@ def _relative(trace, start=None):
 
 
 def _replay_entries(trace, start):
-    """CEVAL-2: an input replay cannot publish before its run starts."""
+    """CEVAL-2: an input replay cannot publish before its run starts.
+
+    A cell written whole is published as the delta that replaces what
+    the input held (the language's TST-9: "a T whole, which replaces what
+    the input held, and a `delta<T>` as that change"): for a dictionary,
+    each key it held that the cell has not is removed, and for a set each
+    member. The keys or members it holds are followed through each cell,
+    a delta's among them."""
     entries = []
+    keys = set()
     for after, published in _relative(trace, start):
         if after < _datetime.timedelta(0):
             raise _core.HglError("a timed trace has a key before the run's start")
+        if isinstance(published, _Whole):
+            published = _core.whole_delta(published.value, keys)
+        if isinstance(published, dict):
+            for key, change in published.items():
+                if _core._removes(change):
+                    keys.discard(key)
+                else:
+                    keys.add(key)
+        elif _is_set_delta(published):
+            keys = (keys - set(published.removed)) | set(published.added)
+        elif isinstance(published, (set, frozenset)):
+            keys = set(published)
         entries.append((_core.add__datetime_duration(start, after), published))
     return entries
 
@@ -170,7 +228,21 @@ def stop_withdrawn():
     _stop_wanted.clear()
 
 
-def _ran(target, replays, record, replayed, arguments, start, end, real_time, seed=None):
+# What `_held_by` reads, while a run that reads it is under way: the
+# function of the result's port that gives the value it holds, and what
+# it has read, by instant. A run is one at a time.
+_holding = {"read": None, "held": {}}
+
+
+@_hg.sink_node
+def _held_by(published: _hg.TIME_SERIES_TYPE, _clock: _hg.EvaluationClock = None):
+    """Reads the value the result holds at each of its publications, as
+    core's `record` records its delta: where it is valid and modified."""
+    if published.valid and published.modified:
+        _holding["held"][_clock.evaluation_time] = _holding["read"](published)
+
+
+def _ran(target, replays, record, replayed, arguments, start, end, real_time, seed=None, hold=None):
     """Runs the entry that wires `target`, from `start` and before
     `end`, and gives its output: the run's recording, or `None` where
     `record` is `None`.
@@ -196,6 +268,8 @@ def _ran(target, replays, record, replayed, arguments, start, end, real_time, se
             # CRUN-8: "The run wires `record` to the entry's result under
             # the key `"run.output"`".
             record(input=published, key=_RUN_OUTPUT)
+        if hold is not None:
+            _held_by(published)
         if real_time:
             # The host's stop: hgraph ends the run when the source
             # publishes.
@@ -263,7 +337,7 @@ def run(target, _record, _real_time, /, _config=None, _store=None, **arguments):
     return _ran(target, {}, _record, {}, arguments, start, end, _real_time, _store)
 
 
-def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arguments):
+def evaluate(target, _replays, _record, /, _config=None, _real_time=False, _hold=None, **arguments):
     """Runs `target` with a dense trace for each temporal input.
 
     `_replays` has core's `replay` for each temporal input the eval
@@ -299,8 +373,17 @@ def evaluate(target, _replays, _record, /, _config=None, _real_time=False, **arg
         # Validate replay before graph start, including an empty run
         # (TST-9). hgraph has no run that ends where it starts.
         return _Recording(start, [])
-    output = _ran(target, _replays, _record, replayed, arguments, start, end, _real_time)
-    return _Recording(start, [] if output is None else output)
+    # `_hold`, a name no input has, reads the value the result holds
+    # (see `_Recording`), for a result whose delta is a type of its own.
+    _holding["read"], _holding["held"] = _hold, {}
+    try:
+        output = _ran(
+            target, _replays, _record, replayed, arguments, start, end, _real_time, hold=_hold
+        )
+        held = _holding["held"]
+    finally:
+        _holding["read"], _holding["held"] = None, {}
+    return _Recording(start, [] if output is None else output, held)
 
 
 def publications(trace):
@@ -318,6 +401,9 @@ def publications(trace):
     # its absolute instants and anchor only offsets to the earliest start.
     entries = []
     for key, published in _relative(trace):
+        # A cell written whole is held as what it publishes (TST-16).
+        if isinstance(published, _Whole):
+            published = published.value
         if isinstance(key, _datetime.timedelta):
             key = _core.add__datetime_duration(_EARLIEST_START, key)
         entries.append((key, published))
@@ -345,6 +431,20 @@ def same(left, right):
 def _same_cell(left, right):
     if left is None or right is None:
         return left is None and right is None
+    # TST-5: "An expectation's cell written as a `delta<T>` is compared
+    # with the delta its cycle published, and one written as a T with the
+    # value the result holds once its cycle has published."
+    if isinstance(left, _Whole) or isinstance(right, _Whole):
+        whole, other = (left, right) if isinstance(left, _Whole) else (right, left)
+        if isinstance(other, _Whole):
+            return _core._equal(whole.value, other.value)
+        if isinstance(other, _Published):
+            return other.held is not None and _core._equal(whole.value, other.held)
+        return _core._equal(whole.value, other)
+    if isinstance(left, _Published):
+        left = left.delta
+    if isinstance(right, _Published):
+        right = right.delta
     if _is_set_delta(left) or _is_set_delta(right):
         # hgraph's own equality takes `Removed(1)` for `1`, so a delta
         # that removed an element would equal one that added it. What
