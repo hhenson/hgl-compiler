@@ -3,9 +3,3 @@
 "the candidate `mul_(str, i64)`" = [
     "core_implementation::reverse_scaling",
 ]
-# TYPE-16's gap, positions between not valid (agreed on hgl_spec#124):
-# this target writes `list<V>` as a whole tuple, which holds none.
-# hgraph's unbounded `TSL` gives it.
-"an endpoint of an unsized list's element, a whole tuple here" = [
-    "conformance::an_entry_past_a_gap_leaves_the_positions_between_not_valid",
-]

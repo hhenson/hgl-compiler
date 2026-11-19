@@ -131,8 +131,9 @@ transpiler: partial
 - An ordinary struct, tuple, list, set or dictionary in a graph's branch is a constant of its time-series type
 - `atomic<V>` is a `TS[V]`, read in a hook as its whole V, and a field of an atomic struct in a graph hgraph's `getattr_`
 - A fixed list is a `TSL`, valid once a position is and all valid once each is, and a dictionary a `TSD`; an element is the child in a graph, by a constant position or by a key that may tick and that fails where absent (ERR-6), and a whole value is read in a hook and by a lifted helper
-- An unsized list is a `TS` of a whole tuple of scalars or enums
-- Left: an atomic tuple; an unsized list of composite elements, its delta and its children, and one as a child of a composite; a dictionary of composites read by key in a graph; a list's element at a position that ticks; a whole dictionary published, a whole fixed list with nullable or composite elements published, alone or as a part; a temporal abstract struct read whole; an ordinary fixed list or dictionary of composite elements as a graph branch's connection; a struct with no field as a part of a composite; an eval of a generic target given a trace with an atomic part, whose type is read back from its cells' delta
+- An unsized list is hgraph 0.9.5's unbounded `TSL`, `Size[-1]`, of any element, as an input, an output, `out`, a struct's field, a tuple's position, a dictionary's value and a connection, a position its own child, valid or not; a whole value of a struct that holds one gives it as a tuple, and an empty one ticks through its port of the node's output
+- A list read whole, fixed or unsized, needs each position valid, and fails with `value.unset_read` where one is not; a graph's loop over an unsized one is hgraph's `map_` over the `TSL`
+- Left: an atomic tuple; an element of an unsized list's connection in a graph, where hgraph's `getitem_` fails once the list no longer holds the position, reported; an empty unsized list inside a value a source yields or an entry of `out`, which fails as the graph runs; a dictionary of composites read by key in a graph; a list's element at a position that ticks; a whole dictionary published, a whole fixed list with nullable or composite elements published, alone or as a part; a temporal abstract struct read whole; an ordinary fixed list or dictionary of composite elements as a graph branch's connection; a struct with no field as a part of a composite; an eval of a generic target given a trace with an atomic part, whose type is read back from its cells' delta
 
 ## TYPE-10
 
@@ -144,9 +145,10 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a temporal list of a size is a `TSL` of that size; `list<T>` grows, and hgraph has no `TSL` that grows, so it is a `TS` of a whole tuple, whose tick is the complete list
+- hgraph: a temporal list of a size is a `TSL` of that size; `list<T>` grows: hgraph 0.9.5's unbounded `TSL`, `Size[-1]`, which ticks by position, a child for each position it holds
+- hgraph 0.9.5 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
 - A temporal tuple is no list: a `TSB` with no name and a field for each position, each of its own type (TYPE-9)
-- Left: `unbounded` and a size that is a generic parameter as a temporal shape; position-wise ticks of an unsized list
+- Left: `unbounded` and a size that is a generic parameter as a temporal shape
 
 ## TYPE-11
 
@@ -237,10 +239,11 @@ transpiler: partial
 - A nullable's is hgraph's own too: `Null` for a published null, and the value otherwise; `delta<i64?>()` and `delta<i64?>(value: v)` make one, and its `value` is read through the provider
 - A struct's is hgraph's delta of a bundle, a `dict` of the fields that changed, made from its properties and read by them through the provider
 - A tuple's is a tuple, null where a position did not change, which hgraph's bundle takes as it is; hgraph's `dict` of each position that changed is read as that tuple through the provider, in a node and in a trace
-- A list's is the provider's `ListDelta`, hgraph's `dict` of each position updated, with `size_modified`: a fixed list's is hgraph's own; an unsized list's is applied to what the node last published: a shrink by `size_modified`, a negative one reducing it by that count and to empty at most, or by a `removed` tail, and growth by an entry at the position after the last
-- A fixed list's delta made as the graph runs fails, with no code, where a position is past its bounds (`_core.list_within`)
+- A list's is hgraph 0.9.5's `TSLDelta`, a `dict` of each position updated and of each removed with `REMOVE`, with `size_modified`, made from its properties and read by them, for a fixed list and an unsized one alike
+- An unsized list's published is counted from the size the list holds, on the node's `_output` (`_core.list_applied`): a smaller `size_modified` alone shrinks it, a negative one reduces it by that count, to empty at most, an entry after the last extends it, and one further past leaves the positions between not valid (agreed on hhenson/hgl_spec#124); `removed` alone leaves the size; the delta read is hgraph's, the dropped tail in `removed`
+- A fixed list's delta made as the graph runs fails, with no code, where a position is past its bounds or a `size_modified` moves its size (`_core.list_within`); its `removed` makes the position not valid
 - A dictionary's is hgraph's delta of a `TSD`, a `dict` of each key updated with its delta and of each removed with `REMOVE`, made from `updated` and `removed` and read by them through the provider
-- Left, reported: an unsized list's delta read; a fixed list's `removed`, written or read, and its `size_modified` written (hgraph's bounded `TSL` reports neither); an unsized list's position removed short of its end fails as the graph runs; so does growth past the position after the last, whose positions between are not valid (TYPE-16, agreed on hhenson/hgl_spec#124): a whole tuple has no position that is not valid, and hgraph 0.9.3's unbounded `TSL` gives exactly the gap, so building it is moving `list<V>` onto that `TSL`
+- Left, reported: an unsized list's delta inside a struct's, a list's or a dictionary's delta the program makes, which hgraph applies with no negative size; an entry at or past a `size_modified` written with it and a removed position the list never held, which the rules do not settle, fail as the graph runs
 - The delta of a list or a dictionary that holds a tuple, read, is reported
 
 ## TYPE-17

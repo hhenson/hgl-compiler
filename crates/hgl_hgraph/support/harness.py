@@ -155,15 +155,19 @@ def _deltas(cells):
 
     The keys or members the value holds are followed through each cell,
     a delta's among them, so that a whole dictionary or set removes what
-    it has not (TST-9). The same deltas are replayed to an input (CEVAL-2)
-    and given to a `const fn` (TST-16: "A T published whole is held as
-    its delta too")."""
+    it has not (TST-9), and so is the size of an unsized list, so that a
+    whole list removes the tail it has not. The same deltas are replayed
+    to an input (CEVAL-2) and given to a `const fn` (TST-16: "A T
+    published whole is held as its delta too")."""
     keys = set()
+    size = 0
     for key, published in cells:
         if isinstance(published, _Published):
             published = published.delta
         if isinstance(published, _Whole):
-            published = _core.whole_delta(published.value, keys, published.fixed)
+            published = _core.whole_delta(published.value, keys, published.fixed, size)
+        if isinstance(published, _hg.TSLDelta):
+            size = _core.list_size(size, published)
         if isinstance(published, dict):
             for held, change in published.items():
                 if _core._removes(change):

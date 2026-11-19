@@ -1141,10 +1141,15 @@ impl Emitter<'_> {
     /// while the key stays and stops it where the key is removed; a key
     /// added again has a child that starts afresh. A dictionary's `TSD`
     /// is given as it is, and each child has its value's port. A set's
-    /// `TSS` is the keys, `__keys__`. A list, which ticks whole here
-    /// (`list_annotation`), is made hgraph's `TSD` of its positions by
-    /// hgraph's `convert`: a position that changes ticks, one past the
-    /// list's end is removed. hgraph gives a child its key as a port,
+    /// `TSS` is the keys, `__keys__`. A list's unbounded `TSL` is given as
+    /// it is: hgraph 0.9.5's `map_` over it has a child for each position
+    /// the list holds, one that has lost its value among them, stops the
+    /// children of the positions a shrink drops and starts fresh ones
+    /// where it grows. Its `map_` of a graph with no output fails the run
+    /// once the list changes ("Node has no output"), and hgraph leaves
+    /// out of a graph what nothing reads: so each child gives a constant,
+    /// and the provider's `discarded` reads the `map_`. hgraph gives a
+    /// child its key as a port,
     /// `__key_arg__`, and so a key or a member is read only as the whole
     /// argument of a temporal parameter (`key_read_as_value`), where a
     /// port is what is taken. The connections the body reads from
@@ -1205,10 +1210,8 @@ impl Emitter<'_> {
         let mut multiplexed = None;
         if let Some(member) = member {
             let child = match &sequence.ty {
-                Type::Dict { value, .. } => self.child_annotation(&sequence.ty, value, at),
-                // An element of a list that ticks whole publishes whole.
-                Type::List { element, .. } if !is_nullable(element) => {
-                    self.annotation(element, true, at)
+                Type::Dict { value, .. } | Type::List { element: value, .. } => {
+                    self.child_annotation(&sequence.ty, value, at)
                 }
                 _ => {
                     self.unsupported(at, &format!("a loop over `{}`", sequence.ty));
@@ -1223,8 +1226,19 @@ impl Emitter<'_> {
         }
         parameters.extend(self.parameters_of(function, &taken, at));
         let graph = format!("_each_{number}");
+        let listed = matches!(sequence.ty, Type::List { .. });
         self.line(depth, "@_hg.graph");
-        self.line(depth, &format!("def {graph}({}):", parameters.join(", ")));
+        if listed {
+            self.line(
+                depth,
+                &format!(
+                    "def {graph}({}) -> _hg.TS[_py.bool]:",
+                    parameters.join(", ")
+                ),
+            );
+        } else {
+            self.line(depth, &format!("def {graph}({}):", parameters.join(", ")));
+        }
         self.renamed(function, &own[key.iter().len()..], depth + 1);
         self.renamed(function, &taken, depth + 1);
         own.extend(&taken);
@@ -1234,6 +1248,9 @@ impl Emitter<'_> {
         let ported = self.ported.len();
         self.ported.extend(key);
         self.block(function, body, depth + 1);
+        if listed {
+            self.line(depth + 1, "return _hg.const(True)");
+        }
         self.ported.truncate(ported);
         self.unrolling = unrolling;
         self.bound = outside;
@@ -1241,9 +1258,6 @@ impl Emitter<'_> {
         let mut given = vec![graph];
         match (&sequence.ty, multiplexed) {
             (Type::Set(_), _) => given.push(format!("__keys__={over}")),
-            (Type::List { .. }, Some((member, child))) => given.push(format!(
-                "{member}=_hg.convert[_hg.TSD[_py.int, {child}]]({over})"
-            )),
             (_, Some((member, _))) => given.push(format!("{member}={over}")),
             (_, None) => {}
         }
@@ -1253,7 +1267,15 @@ impl Emitter<'_> {
             let python = name(&function.locals[local].name);
             format!("{}=_hg.pass_through({python})", taken_name(&python))
         }));
-        self.line(depth, &format!("_hg.map_({})", given.join(", ")));
+        if listed {
+            self.natives = true;
+            self.line(
+                depth,
+                &format!("_core.discarded(_hg.map_({}))", given.join(", ")),
+            );
+        } else {
+            self.line(depth, &format!("_hg.map_({})", given.join(", ")));
+        }
     }
 
     /// Where `body`, the body of a loop that makes one child for each

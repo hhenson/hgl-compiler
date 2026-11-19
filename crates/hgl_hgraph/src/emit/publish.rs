@@ -40,28 +40,29 @@ impl Emitter<'_> {
             return written;
         }
         // TYPE-16: a list's delta has `updated`, `removed` and
-        // `size_modified`. An unsized list is a whole tuple here
-        // (`list_annotation`): the provider applies the delta to the
-        // list the node last published, its `_output` (see
-        // `list_applied`), and publishes the whole list made.
+        // `size_modified`, and an unsized list is hgraph's unbounded
+        // `TSL` (`list_annotation`). The provider counts the size the
+        // list has after it from the size it holds, on the node's
+        // `_output`: hgraph takes no negative size (`list_applied`). A
+        // whole list ticks where it is empty too (`list_replaced`). A
+        // source's generator makes what it yields before it is due, and
+        // its node applies it to the list as it is then
+        // (`list_published`).
         if let Some(result) = result
             && growing_list(result)
-            && result != &value.ty
         {
-            // A source's generator has no `_output` to apply it to.
-            if function.mode == Mode::Node
-                && matches!(&value.ty, Type::Delta(of) if growing_list(of))
-            {
+            let whole = whole_value(result, value);
+            if function.mode == Mode::Source {
+                // A whole list of what is not written whole is reported.
+                if whole {
+                    self.whole_shape(result, value.at);
+                }
+                return written;
+            }
+            if !whole {
                 self.natives = true;
                 return format!("_core.list_applied(_output, {written})");
             }
-            let unwritten = if function.mode == Mode::Source {
-                "a delta of an unsized list yielded by a source"
-            } else {
-                "a delta published to an unsized list"
-            };
-            self.unsupported(value.at, unwritten);
-            return written;
         }
         // TYPE-16: "A `list<V, N>` keeps its bounds: ... one in a delta
         // made as the program runs fails the write that publishes it".
@@ -82,13 +83,19 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.dict_replaced(_output, {written})");
         }
+        // An unsized list in a whole value ticks through its own port of
+        // the node's output (`_whole_list`); a source's generator has
+        // none.
+        let port = (function.mode == Mode::Node).then_some("_output");
         match result {
             // A struct with no field publishes its one value, for a
             // whole value and for its delta alike (`empty_struct`).
             Some(result) if empty_struct(self.program, result) => {
-                self.bundle_of(result, value.at, written)
+                self.bundle_of(result, value.at, written, port)
             }
-            Some(result) if whole_value(result, value) => self.bundle_of(result, value.at, written),
+            Some(result) if whole_value(result, value) => {
+                self.bundle_of(result, value.at, written, port)
+            }
             _ => written,
         }
     }
@@ -129,6 +136,23 @@ impl Emitter<'_> {
         let Some(tp) = self.annotation(ty, true, at) else {
             return "None".to_string();
         };
+        // A value that holds an unsized list: hgraph's `const` has no
+        // port of its output to make an empty list tick (`_ticked`), so
+        // the provider's node for the type publishes it, as a node does
+        // (`constant_of`).
+        if holds_growing_list(self.program, ty) {
+            let Some(shape) = self.whole_shape(ty, at) else {
+                return "None".to_string();
+            };
+            self.natives = true;
+            self.hgraph = true;
+            // The node publishes the value as the graph starts, which the
+            // graph may go on changing as it is built: a copy.
+            return format!(
+                "_core.constant_of({tp})(_hg.const(True), given=_core.Held((_core.copied({written}), {})))",
+                shape.text
+            );
+        }
         let whole = match ty {
             // A dictionary's composite value would be given its child's
             // update, a struct's fields, which is not written here.
@@ -146,7 +170,7 @@ impl Emitter<'_> {
                 format!("{{_key: _core.published(_entry) for _key, _entry in ({written}).items()}}")
             }
             Type::Set(_) | Type::Dict { .. } => written,
-            _ => self.bundle_of(ty, at, written),
+            _ => self.bundle_of(ty, at, written, None),
         };
         format!("_hg.const({whole}, tp={tp})")
     }
@@ -226,18 +250,34 @@ impl Emitter<'_> {
     /// the field's type", so a part takes a whole value and no
     /// `delta<T>`, which the analyser rejects; a lifted function's
     /// result is a value. `at` is where what is not written yet is
-    /// reported.
-    pub(super) fn published_to(&mut self, ty: &Type, at: Location, written: String) -> String {
+    /// reported, and `port` the port of the output it is published to,
+    /// where an unsized list in it ticks (`bundle_of`).
+    pub(super) fn published_to(
+        &mut self,
+        ty: &Type,
+        at: Location,
+        written: String,
+        port: Option<&str>,
+    ) -> String {
         if publishes_whole_null(ty) {
             return self.published(written);
         }
-        self.bundle_of(ty, at, written)
+        self.bundle_of(ty, at, written, port)
     }
 
     /// `written`, a whole value of `ty`, as a temporal value of `ty`
     /// publishes it: a struct's fields as hgraph's bundle takes them
-    /// (TYPE-9), and any other value as it is.
-    pub(super) fn bundle_of(&mut self, ty: &Type, at: Location, written: String) -> String {
+    /// (TYPE-9), and any other value as it is. `port` is the port of the
+    /// node's output it is published to, through which an unsized list
+    /// in it ticks where it is published empty (`_whole_list`): with none
+    /// such a list fails as the graph runs.
+    pub(super) fn bundle_of(
+        &mut self,
+        ty: &Type,
+        at: Location,
+        written: String,
+        port: Option<&str>,
+    ) -> String {
         // A struct with no field is a `TS` of its class: what it publishes
         // is its one value, made by the provider of whatever is published,
         // a whole value or a delta, which has no property.
@@ -247,15 +287,30 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.only_value({written}, {class})");
         }
+        // The port is read only where an unsized list is in the value.
+        let port = port.filter(|_| holds_growing_list(self.program, ty));
         match ty {
-            // An unsized list's tick is the whole list, as a tuple that
-            // is made of it: hgraph keeps no list the program goes on
-            // changing.
-            Type::List { size: None, .. } => return format!("_py.tuple({written})"),
+            // TIME-7: a whole unsized list "replaces" what the list held,
+            // as a tuple made of it, which hgraph's unbounded `TSL` takes
+            // position by position, dropping the tail past it: hgraph
+            // keeps no list the program goes on changing.
+            Type::List {
+                element,
+                size: None,
+            } if whole_scalar(element) => {
+                self.natives = true;
+                return match port {
+                    Some(port) => format!("_core.list_replaced({port}, {written})"),
+                    None => format!("_core.bundled({written}, \"list\")"),
+                };
+            }
             // A fixed list's `TSL` takes a tuple of its elements, each
             // one's update as that position's own (TYPE-9): an element
             // that publishes whole and is not null is set by it.
-            Type::List { element, .. } if whole_scalar(element) => {
+            Type::List {
+                element,
+                size: Some(_),
+            } if whole_scalar(element) => {
                 return format!("_py.tuple({written})");
             }
             _ => {}
@@ -267,10 +322,10 @@ impl Emitter<'_> {
                 kind: NamedKind::Struct,
                 ..
             } => !inherited(self.program, *module, *declaration),
-            // `whole_shape` reports a fixed list with an element that
-            // is composite or nullable, and a dictionary, whose `TSD`
-            // takes its keys' changes: a whole dictionary also removes
-            // each key it has not, which hgraph is not told here.
+            // `whole_shape` reports a list with an element that is
+            // composite or nullable, and a dictionary, whose `TSD` takes
+            // its keys' changes: a whole dictionary also removes each key
+            // it has not, which hgraph is not told here.
             Type::Tuple(_) | Type::List { .. } | Type::Dict { .. } => false,
             _ => return written,
         };
@@ -283,16 +338,19 @@ impl Emitter<'_> {
         if simple && shape.flat {
             return format!("_core.bundled({written})");
         }
-        format!("_core.bundled({written}, {})", shape.text)
+        match port {
+            Some(port) => format!("_core.bundled({written}, {}, {port})", shape.text),
+            None => format!("_core.bundled({written}, {})", shape.text),
+        }
     }
 
     /// How a whole value of `ty`, a part of what a temporal struct or
     /// tuple publishes, is given to hgraph (`bundle_of`), as the
     /// provider's `bundled` reads it: `None` for a part that publishes
     /// whole, a `dict` of each field's for a struct, a tuple of each
-    /// position's for a tuple, and `[None]` for a fixed list of
-    /// elements that publish whole. `None`, reported, for a part not
-    /// written yet.
+    /// position's for a tuple, `[None]` for a fixed list of elements
+    /// that publish whole and `"list"` for an unsized one. `None`,
+    /// reported, for a part not written yet.
     ///
     /// TIME-7: a complete value is "published whole". TYPE-9 maps a
     /// struct's and a tuple's parts "to child fields", so a whole value
@@ -349,6 +407,16 @@ impl Emitter<'_> {
                 leaf: false,
                 flat: true,
             }),
+            // An unsized list of them, as a tuple of them too, which
+            // ticks through its own port where it is empty (`_whole_list`).
+            Type::List {
+                element,
+                size: None,
+            } if whole_scalar(element) => Some(Shape {
+                text: "\"list\"".to_string(),
+                leaf: false,
+                flat: true,
+            }),
             Type::List { .. } => {
                 self.unsupported(
                     at,
@@ -383,18 +451,19 @@ impl Emitter<'_> {
     /// one reading of a delta, for a direct input, a child of one at any
     /// depth (END-8) and a struct that holds a tuple: hgraph's own where
     /// it is the program's, a fixed list's `dict` of each position that
-    /// changed, its `updated` (see `list_delta`), and a dictionary's
-    /// `dict` of each key changed, with `REMOVE` for each removed (see
-    /// `dict_delta`); and where `ty` holds a tuple, whose bundle gives a
-    /// `dict` by each position's field, the tuple of each position's
-    /// delta, null where it did not change (`positions`, `delta_shape`).
-    /// An unsized list ticks whole here (`list_annotation`), and does not
-    /// say which positions changed: its delta is reported.
+    /// changed, with `REMOVE` for each that lost its value, an unsized
+    /// list's `TSLDelta`, which holds its `size_modified` too (see
+    /// `list_delta`), and a dictionary's `dict` of each key changed, with
+    /// `REMOVE` for each removed (see `dict_delta`); and where `ty` holds a
+    /// tuple, whose bundle gives a `dict` by each position's field, the
+    /// tuple of each position's delta, null where it did not change
+    /// (`positions`, `delta_shape`).
+    ///
+    /// END-3: "For a list, the delta read gives the new size where it
+    /// moves, never a negative one, and on a shrink names the dropped
+    /// tail positions in `removed`", as hgraph 0.9.5's unbounded `TSL`
+    /// reads it.
     pub(super) fn language_delta(&mut self, ty: &Type, delta: String, at: Location) -> String {
-        if growing_list(ty) {
-            self.unsupported(at, "the delta of an unsized list");
-            return "None".to_string();
-        }
         // TYPE-16: a struct's delta has "a property for each field": one
         // with no field has none, and its delta is the empty one.
         if empty_struct(self.program, ty) {
