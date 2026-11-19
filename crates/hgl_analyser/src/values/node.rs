@@ -500,6 +500,45 @@ impl<'a> Typer<'a> {
             Some(Hook::Stop) => ("`stop` requires no input to be", "TIME-5"),
             None => return,
         };
+        // TIME-1: "A read of a struct, a tuple or a fixed list whole,
+        // `return quote`, requires `all_valid` of it ... Where such a
+        // read is seen when the program is compiled and `all_valid` does
+        // not admit it, it rejects (`payload.unguarded`)." TIME-4: "The
+        // guard of a whole read of a struct, a tuple or a fixed list ...
+        // is a test of `all_valid` of what it reads". TIME-9: `valid` of
+        // a collection "admits no child's read", and a whole read is one
+        // of every child.
+        if children::read_whole_all_valid(&self.locals[local].ty) {
+            let all_valid = children::all_valid_fact(local);
+            if self.present.contains(&all_valid) {
+                return;
+            }
+            let given = if self.present.contains(&Fact::Valid(local)) {
+                format!("`valid({name})` is true once any child is, and admits no whole read")
+            } else {
+                unproved.to_string()
+            };
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::PAYLOAD_UNGUARDED,
+                    at,
+                    format!(
+                        "`{name}` is read whole here, and may not be all valid: {given}, and \
+                         no `all_valid({name})` guards the read"
+                    ),
+                    "TIME-1",
+                )
+                .with_note(format!(
+                    "a struct, a tuple or a fixed list is read whole where its `all_valid` \
+                     holds: `when all_valid({name}) {{ ... }}`"
+                )),
+            );
+            // One report for one input on a path.
+            self.present.push(Fact::Valid(local));
+            self.present.push(all_valid);
+            return;
+        }
         if self.present.contains(&Fact::Valid(local)) {
             return;
         }

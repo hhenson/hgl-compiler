@@ -1548,12 +1548,13 @@ impl Emitter<'_> {
     /// or as its composite is read whole, `let held = quote`.
     ///
     /// A part that has not published has no value to give, and none is
-    /// made up. The owner's decision so far, on hhenson/hgl_spec issue
-    /// 126, is that a whole read needs each required part valid, and
-    /// that a part whose type is optional may not be, and is then null
-    /// in the whole value; how the language says so is open there. Until
-    /// it says, this target reads a required part that is not valid as a
-    /// failure where the read runs, with the catalogued
+    /// made up. TIME-1: "A read of a struct, a tuple or a fixed list
+    /// whole, `return quote`, requires `all_valid` of it ... In the value
+    /// it reads, an optional child (TIME-9) that is not valid is null".
+    /// The analyser holds a whole read it sees to `all_valid`; one checked
+    /// when it runs, `rows[i]`, "that is not all valid fails it
+    /// (`value.unset_read`)" (ERR-14). So this target reads a required
+    /// part that is not valid as that failure, with the catalogued
     /// `value.unset_read` ("Executed operation requires an unset
     /// ordinary payload"), and an optional part that is not valid as
     /// null. A fixed list of required elements that publish whole is held

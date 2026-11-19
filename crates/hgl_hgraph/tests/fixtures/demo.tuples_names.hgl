@@ -22,7 +22,7 @@ fn quoted(price: i64) -> Quote {
 }
 
 fn price_of(quote: Quote) -> i64 {
-    when {
+    when all_valid(quote) {
         let whole = quote
         return whole.price
     }

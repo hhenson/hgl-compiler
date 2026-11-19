@@ -12,7 +12,7 @@ analyser: partial
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
 - A `return` to a `ref` result names an input or a child and reads no payload, so it needs no admission (FN-16)
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
-- Left: a struct, a tuple or a fixed list read whole, a child among them, admitted only by its `all_valid` (`payload.unguarded`): core's case `quote_without_admission` is listed as not yet rejected
+- A struct, a tuple or a fixed list read whole, an input or a child named when the program is compiled, `return quote`, `rows[0]`, is admitted only by its own `all_valid`, in a header or as a guard: `valid` of it, and `all_valid` of what holds it, do not admit it (`payload.unguarded`); a dictionary and an unsized list are read whole where `valid` holds, an `atomic<V>` as any value that publishes whole
 
 transpiler: done
 
@@ -62,7 +62,8 @@ analyser: partial
 - In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`)
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
-- Left: aggregate subscriptions; node-wide validity; the guard of a whole read of a struct, a tuple or a fixed list, `all_valid` of what it reads (TIME-1)
+- The guard of a whole read of a struct, a tuple or a fixed list, a child among them, is `all_valid` of what it reads (TIME-1)
+- Left: aggregate subscriptions; node-wide validity
 
 transpiler: partial
 
@@ -77,7 +78,7 @@ analyser: done
 
 - A node's declarations precede its hooks and stand in its body itself; one `start`, one `stop`; a source is held to the same
 - A state's initialiser reads no temporal input (`state.input_read`)
-- `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`)
+- `start` reads no temporal input and gives none to an endpoint operation (`input.lifecycle`); `stop` reads one under manual admission, each read under a guard (`payload.unguarded`), a struct's, a tuple's or a fixed list's whole read under its `all_valid` (TIME-4)
 - A cache's initialiser reads none either (TIME-1)
 - A read in an anonymous function written in any of them is held to the same
 
@@ -112,7 +113,9 @@ transpiler: partial
 - A part of `out` is assigned through its own port, a struct's field, a tuple's position and a fixed list's position, each by a whole value of its type (EXPR-3 has a part take no `delta<T>`), and a dictionary's entry as that key's change; a place inside a part that publishes whole gives the part a new value, published whole; `out` read after holds it, and a required part of it that is not valid fails the read with `value.unset_read`
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`); a whole empty dictionary or set ticks where it changes nothing (`_core.set_replaced`), as hgraph's do not
 - A delta that names no change, `delta<set<i64>>()`, `delta<dict<str, i64>>()` or `delta<list<i64>>()`, ticks only where it makes the value valid and empty, never published or invalidated, and is otherwise no tick: TIME-7 on the specification's `main` (the owner's decision on hhenson/hgl_spec#124, after the pin); so is one whose every entry is an ignored removal, which is proposed there
-- Left: a whole set published the same again, not empty, which hgraph's `TSS` does not tick for
+- A node's whole set published the same again, not empty, ticks: hgraph's `TSS` does not tick for it, and the provider removes one of its members and adds it again in the evaluation (`_core.set_replaced`)
+- A trace's cell written whole that changes nothing is replayed as the delta it makes, which names no change (`_core.whole_delta`; hgraph's `TSS` would take an empty `frozenset` as emptying the set): it leaves the input as it was, and where the input is valid it does not tick
+- Left: a trace's cell written whole the same again ticking, as TIME-7 has a whole value tick
 - An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a whole value that changes nothing hgraph sees, an empty list first among them, still ticks
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
 - A struct's or a tuple's delta that holds an unsized list's delta is published through the output, each list's size counted from what it holds (`_core.published_into`); a source's node publishes what it yields so when it is due, an empty list in a struct among them

@@ -3822,7 +3822,7 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
         [
             // A struct read whole, bound whole, and a dictionary of
             // windows bound whole.
-            "m.hgl:27:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
+            "m.hgl:27:35 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:31:20 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:43:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             // `out` that holds a window, invalidated.

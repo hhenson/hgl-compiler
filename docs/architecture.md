@@ -670,6 +670,14 @@ branch that returns to the end of its block. A read with none is
 itself rejected says nothing sure of what it admits, and its body's
 reads are not judged.
 
+A struct, a tuple or a fixed list read whole, an input or a child
+named when the program is compiled, `return quote`, `rows[0]`, is
+admitted by its own `all_valid` alone (TIME-1, TIME-4), in a header,
+`when all_valid(quote)`, or as a guard; neither the default admission,
+`valid(quote)`, nor `all_valid(rows)` admits it. A dictionary and an
+unsized list read whole need `valid`, and one at an index known when it
+runs, `rows[i]`, is checked then (ERR-14).
+
 The analyser records what the header asks in the `hir::Header` of its
 `Stmt::Hook`, read from the typed condition: the inputs whose tick wakes
 the handler, what it requires valid (the inputs it admits, and `out`
