@@ -3,7 +3,7 @@
 //! can then still be run.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hgl_analyser::{ParsedFile, analyse};
 use hgl_diagnostics::{Diagnostics, Location, render};
@@ -20,7 +20,8 @@ struct Emitted {
     sources: SourceMap,
     /// The files written, and the program's tests.
     output: Output,
-    /// What the target reported, each as `file:line:column code`.
+    /// What the target reported, each as `file:line:column code:
+    /// message`.
     reported: Vec<String>,
 }
 
@@ -34,6 +35,13 @@ impl Emitted {
             .find(|file| file.path == path)
             .unwrap_or_else(|| panic!("no file `{path}` was written"))
             .text
+    }
+
+    /// The text of the file the module `name` is written to: that of
+    /// `demo.scaling` is `_hgl/_m_demo/_m_scaling/__init__.py`.
+    fn module(&self, name: &str) -> &str {
+        let parts: Vec<String> = name.split('.').map(|part| format!("_m_{part}")).collect();
+        self.text(&format!("_hgl/{}/__init__.py", parts.join("/")))
     }
 
     /// The test named `name`, and its position among the tests.
@@ -112,10 +120,11 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
             assert_eq!(diagnostic.category.as_str(), "build");
             assert!(hgl_hgraph::codes::ALL.contains(&diagnostic.code.as_str()));
             format!(
-                "{}:{} {}",
+                "{}:{} {}: {}",
                 source.name(),
                 source.line_col(diagnostic.primary.span.start),
-                diagnostic.code.as_str()
+                diagnostic.code.as_str(),
+                diagnostic.message
             )
         })
         .collect();
@@ -123,6 +132,35 @@ fn emit(files: &[(&str, &str)]) -> Emitted {
         sources,
         output,
         reported,
+    }
+}
+
+/// [`emit`], for a program the target writes all of: nothing is
+/// reported.
+fn emit_clean(files: &[(&str, &str)]) -> Emitted {
+    let emitted = emit(files);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    emitted
+}
+
+/// A check of the text of a file the target wrote.
+trait Writes {
+    /// Asserts that the text has each of `expected` in it.
+    // `S: AsRef<str>` takes a list of `&str` and a list of `String` alike.
+    fn assert_writes<S: AsRef<str>>(&self, expected: &[S]);
+}
+
+// A trait, so that the check is written `python.assert_writes(&[...])`:
+// the text first, and the list as long as it needs.
+impl Writes for str {
+    fn assert_writes<S: AsRef<str>>(&self, expected: &[S]) {
+        for expected in expected {
+            let expected = expected.as_ref();
+            assert!(
+                self.contains(expected),
+                "the module has:\n{expected}\nin:\n{self}"
+            );
+        }
     }
 }
 
@@ -209,8 +247,7 @@ const DEMO_PYTHON: &str = concat!(
 
 #[test]
 fn a_module_is_written_as_python() {
-    let emitted = emit(&[("demo.hgl", DEMO)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[("demo.hgl", DEMO)]);
     let paths: Vec<&str> = emitted
         .output
         .files
@@ -229,10 +266,7 @@ fn a_module_is_written_as_python() {
             "_hgl/_harness.py"
         ]
     );
-    assert_eq!(
-        emitted.text("_hgl/_m_demo/_m_scaling/__init__.py"),
-        DEMO_PYTHON
-    );
+    assert_eq!(emitted.module("demo.scaling"), DEMO_PYTHON);
 }
 
 /// The target fixture for temporal scalar inputs, state and dense traces.
@@ -245,10 +279,9 @@ const SCALAR_TRACES: (&str, &str) = (
 /// a guarded scalar delta (END-3, FN-7) and dense traces (TST-6).
 #[test]
 fn dense_scalar_traces_are_written_as_hgraph_tests() {
-    let emitted = emit(&[SCALAR_TRACES]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_scalar_traces/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[SCALAR_TRACES]);
+    let python = emitted.module("demo.scalar_traces");
+    python.assert_writes(&[
         "def pass_i64(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    return value.delta_value\n",
         "    if (a.valid and (a.modified and a.valid)):\n        return a.delta_value\n",
         "    _state.count = _core.add__i64_i64(lhs=_state.count, rhs=1)\n",
@@ -257,9 +290,7 @@ fn dense_scalar_traces_are_written_as_hgraph_tests() {
         "        raise _py.AssertionError()\n",
         "    if not (_harness.same(_harness.evaluate(pass_str, {\"value\": _hgl_4core._inst_replay__str}, _hgl_4core._inst_record__str, value=[\"\", None, \"\", \"a\"]), [\"\", None, \"\", \"a\"])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(python.contains(expected), "the module has:\n{expected}");
-    }
+    ]);
     assert_eq!(
         python.matches("\ndef test_").count(),
         emitted.output.tests.len(),
@@ -365,10 +396,9 @@ const ENDPOINTS: &str = concat!(
 /// END-4: `inject out` is the node's output, which `invalidate` clears.
 #[test]
 fn a_when_header_says_what_wakes_and_admits_a_node() {
-    let emitted = emit(&[("endpoints.hgl", ENDPOINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_endpoints/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("endpoints.hgl", ENDPOINTS)]);
+    let python = emitted.module("demo.endpoints");
+    python.assert_writes(&[
         // `valid([])`: no input need be valid.
         "@_hg.compute_node(valid=())\ndef watched_valid(watched: _hg.TS[_py.int], probe: _hg.TS[_py.bool]) -> _hg.TS[_py.bool]:\n    return watched.valid\n",
         // `modified(probe) && valid()`: only `probe` wakes it.
@@ -392,19 +422,14 @@ fn a_when_header_says_what_wakes_and_admits_a_node() {
             "    if b.modified:\n",
             "        return b.value\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// END-6 and TIME-7: both an input and the node's own output keep a
 /// timestamp only while valid. The stop hook receives the output it reads.
 #[test]
 fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
-    let emitted = emit(&[(
+    let emitted = emit_clean(&[(
         "timestamps.hgl",
         concat!(
             "module timestamps\n",
@@ -421,9 +446,8 @@ fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
             "}\n",
         ),
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_timestamps/__init__.py");
-    for expected in [
+    let python = emitted.module("timestamps");
+    python.assert_writes(&[
         "    previous = (_output.last_modified_time if _output.valid else None)\n",
         "    return _core.published((value.last_modified_time if value.valid else None))\n",
         concat!(
@@ -432,12 +456,7 @@ fn last_modified_reads_valid_endpoint_timestamps_in_when_and_stop() {
             "    final_input = (value.last_modified_time if value.valid else None)\n",
             "    final_output = (_output.last_modified_time if _output.valid else None)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "expected:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Three modules: two that each export a `pick`, and one that has a
@@ -493,10 +512,9 @@ const MODULES: [(&str, &str); 3] = [
 /// `T?` may be left out, and is then null.
 #[test]
 fn names_configuration_and_omitted_arguments_are_kept() {
-    let emitted = emit(&MODULES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_configured/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&MODULES);
+    let python = emitted.module("demo.configured");
+    python.assert_writes(&[
         "import _hgl._m_demo._m_left as _hgl_4demo_4left\nimport _hgl._m_demo._m_right as _hgl_4demo_5right\n",
         concat!(
             "def chosen(fallback):\n",
@@ -510,12 +528,7 @@ fn names_configuration_and_omitted_arguments_are_kept() {
             "    _state.last = first\n",
         ),
         "    return _core.add__i64_i64(lhs=before, rhs=chosen(fallback=None))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Headers whose selectors add up, repeat an input, or name the node's
@@ -551,10 +564,9 @@ const SELECTORS: &str = concat!(
 /// header is hgraph's `_output`.
 #[test]
 fn a_headers_selectors_add_up() {
-    let emitted = emit(&[("selectors.hgl", SELECTORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_selectors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("selectors.hgl", SELECTORS)]);
+    let python = emitted.module("demo.selectors");
+    python.assert_writes(&[
         "@_hg.compute_node(valid=(\"a\", \"b\"))\ndef both_valid(",
         concat!(
             "@_hg.compute_node\n",
@@ -565,12 +577,7 @@ fn a_headers_selectors_add_up() {
             "        return command.value\n",
             "    return 1\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Defaults: of a value function's parameter, where it calls another
@@ -602,10 +609,9 @@ const DEFAULTS: &str = concat!(
 /// holds as a typed value.
 #[test]
 fn a_default_is_written_where_a_call_leaves_it_out() {
-    let emitted = emit(&[("defaults.hgl", DEFAULTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_defaults/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("defaults.hgl", DEFAULTS)]);
+    let python = emitted.module("demo.defaults");
+    python.assert_writes(&[
         // The function is always given the parameter.
         "def scale(value, factor):\n",
         "lhs=scale(value=3, factor=base()), rhs=6",
@@ -617,12 +623,7 @@ fn a_default_is_written_where_a_call_leaves_it_out() {
         "        raise _py.AssertionError()\n",
         "    if not (_harness.same(_harness.evaluate(offset, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1], by=1), [2])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A default written in one module and left out by a call in another,
@@ -661,21 +662,15 @@ const DEFAULT_MODULES: [(&str, &str); 2] = [
 /// so Python has no default to put in order.
 #[test]
 fn a_default_keeps_its_meaning_in_another_module() {
-    let emitted = emit(&DEFAULT_MODULES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_caller/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&DEFAULT_MODULES);
+    let python = emitted.module("demo.caller");
+    python.assert_writes(&[
         "def caller(base):\n",
         "_hgl_4demo_3lib.scale(value=3, factor=_hgl_4demo_3lib.base())",
         "_hgl_4demo_3lib.pick(first=None, second=1)",
         "_hgl_4demo_3lib.pick(first=7, second=5)",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let library = emitted.text("_hgl/_m_demo/_m_lib/__init__.py");
+    ]);
+    let library = emitted.module("demo.lib");
     assert!(library.contains("def pick(first, second):\n"));
 }
 
@@ -751,10 +746,9 @@ const DURATIONS: &str = concat!(
 /// as the provider's functions (OPS-1).
 #[test]
 fn a_duration_is_a_timedelta() {
-    let emitted = emit(&[("durations.hgl", DURATIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_durations/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("durations.hgl", DURATIONS)]);
+    let python = emitted.module("demo.durations");
+    python.assert_writes(&[
         "import datetime as _dt\n",
         "@_core.constant\ndef pause():\n    return _dt.timedelta(microseconds=5400000000)\n",
         "return _core.add__duration_duration(lhs=first, rhs=second)",
@@ -762,19 +756,10 @@ fn a_duration_is_a_timedelta() {
         "return _core.mul__duration_i64(lhs=length, rhs=count)",
         "return _core.mul__duration_f64(lhs=length, rhs=by)",
         "_hg.TS[_dt.timedelta]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // A module that names no duration does not import the library.
     let plain = emit(&[("demo.hgl", DEMO)]);
-    assert!(
-        !plain
-            .text("_hgl/_m_demo/_m_scaling/__init__.py")
-            .contains("import datetime")
-    );
+    assert!(!plain.module("demo.scaling").contains("import datetime"));
 }
 
 /// OPS-1: a duration by an `i64` or an `f64` is a duration, by a duration
@@ -822,22 +807,16 @@ const DIVIDED: &str = concat!(
 /// policy by name as a division of numbers is.
 #[test]
 fn a_duration_divided_takes_its_zero_policy() {
-    let emitted = emit(&[("divided.hgl", DIVIDED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_durations/_m_divided/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("divided.hgl", DIVIDED)]);
+    let python = emitted.module("demo.durations.divided");
+    python.assert_writes(&[
         "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"fail\")",
         "return _core.div__duration_f64(lhs=length, rhs=by, zero=\"fail\")",
         "return _core.div__duration_duration(lhs=first, rhs=second, zero=\"ieee\")",
         "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"fail\")",
         "return _core.div__duration_i64(lhs=length, rhs=among, zero=\"error\")",
         "return _core.floordiv__duration_duration(lhs=first, rhs=second, zero=\"error\")",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-2: a `date`, a `time`, a `datetime` and a `civil_datetime` are
@@ -882,10 +861,9 @@ const INSTANTS: &str = concat!(
 /// Python's (TYPE-2).
 #[test]
 fn a_date_a_time_and_an_instant_are_pythons_own() {
-    let emitted = emit(&[("instants.hgl", INSTANTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_instants/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("instants.hgl", INSTANTS)]);
+    let python = emitted.module("demo.instants");
+    python.assert_writes(&[
         "import datetime as _dt\n",
         "@_core.constant\ndef opened():\n    return _dt.datetime(2026, 9, 3, 9, 30, 0, 0)\n",
         "return _core.add__datetime_duration(lhs=at, rhs=by)",
@@ -900,12 +878,7 @@ fn a_date_a_time_and_an_instant_are_pythons_own() {
         "_dt.date(2026, 9, 3)",
         "_dt.time(9, 30, 0, 0)",
         "_hg.TS[_dt.datetime]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-10: "`assert raises(\"code\")` ... Run its block once. A matching
@@ -968,9 +941,8 @@ const RAISES_FAILS: &str = concat!(
 /// what escaped has the code, and whose `else` fails the test.
 #[test]
 fn an_assert_raises_is_a_try_the_harness_judges() {
-    let emitted = emit(&[("raises.hgl", RAISES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_raises/__init__.py");
+    let emitted = emit_clean(&[("raises.hgl", RAISES)]);
+    let python = emitted.module("demo.raises");
     let expected = concat!(
         "    try:\n",
         "        strict(a=1.0, b=0.0)\n",
@@ -993,32 +965,21 @@ fn an_assert_raises_is_a_try_the_harness_judges() {
 /// another module.
 #[test]
 fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
-    let emitted = emit(&CONSTANTS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_constants/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&CONSTANTS);
+    let python = emitted.module("demo.constants");
+    python.assert_writes(&[
         "@_core.constant\ndef scale():\n    return 2\n",
         "@_core.constant\ndef first():\n    return _core.add__i64_i64(lhs=_core.mul__i64_i64(lhs=3, rhs=late()), rhs=1)\n",
         "@_core.constant\ndef late():\n    return scale()\n",
         "@_core.constant\ndef side():\n    return Side[\"sell\"]\n",
         "def seed():\n    return first()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let reads = emitted.text("_hgl/_m_demo/_m_reads/__init__.py");
-    for expected in [
+    ]);
+    let reads = emitted.module("demo.reads");
+    reads.assert_writes(&[
         "@_core.constant\ndef twice():\n    return _core.mul__i64_i64(lhs=_hgl_4demo_9constants.scale(), rhs=2)\n",
         // In a graph a constant is a value known where it is built.
         "return scaled(value=value, factor=_hgl_4demo_9constants.scale())",
-    ] {
-        assert!(
-            reads.contains(expected),
-            "the module has:\n{expected}\nin:\n{reads}"
-        );
-    }
+    ]);
     // The provider has the function that runs one once. Its text is a
     // file of this repository, whose line ends are the checkout's.
     assert!(
@@ -1040,7 +1001,12 @@ fn a_default_is_not_written_inside_itself() {
             "const fn uses() -> i64 => again()\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:2:29 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:2:29 target.unsupported: the hgraph target does not write a default that leaves itself out yet"
+        ]
+    );
 }
 
 /// Names that Python, hgraph or the target would take: each is given a
@@ -1080,10 +1046,9 @@ const NAMES: &str = concat!(
 
 #[test]
 fn no_two_names_are_one_python_name() {
-    let emitted = emit(&[("names.hgl", NAMES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_names/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("names.hgl", NAMES)]);
+    let python = emitted.module("demo.names");
+    python.assert_writes(&[
         // Python's words, and one that is a word with a `_` after it.
         "def lambda_():\n    return 1\n",
         "def lambda__():\n    return 2\n",
@@ -1110,12 +1075,7 @@ fn no_two_names_are_one_python_name() {
         // An input named as the harness's own parameter is.
         "    if not (_harness.same(_harness.evaluate(pass_, {\"target\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, target=[1]), [1])):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A module whose path begins another's, with a `var` written `T?`
@@ -1161,9 +1121,8 @@ const SHADOW: &str = concat!(
 /// is, or as a module of Python's library is, takes no other's place.
 #[test]
 fn a_module_takes_no_other_packages_name() {
-    let emitted = emit(&[("shadow.hgl", SHADOW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_hgraph/__init__.py");
+    let emitted = emit_clean(&[("shadow.hgl", SHADOW)]);
+    let python = emitted.module("hgraph");
     assert!(python.contains("import hgraph as _hg\n"));
     // The module calls no function of the provider's, and its test
     // calls the harness, which imports the provider: both are written.
@@ -1222,21 +1181,15 @@ const PATHS: [(&str, &str); 4] = [
 
 #[test]
 fn paths_and_declarations_stay_apart() {
-    let emitted = emit(&PATHS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_paths/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&PATHS);
+    let python = emitted.module("paths");
+    python.assert_writes(&[
         "import _hgl._m_a_._m_b as _hgl_2a__1b\n",
         "import _hgl._m_a._m__b as _hgl_1a_2_b\n",
         "import _hgl._m_paths._m_util as _hgl_5paths_4util\n",
         "def util():\n    return 8\n",
         "def members():\n    return _py.frozenset((1, 2, 1))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Each module is a package, so one module's path may begin another's.
@@ -1244,8 +1197,7 @@ fn paths_and_declarations_stay_apart() {
 /// nothing in it is still a function.
 #[test]
 fn modules_nest_and_empty_forms_have_a_body() {
-    let emitted = emit(&NESTED);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&NESTED);
     let paths: Vec<&str> = emitted
         .output
         .files
@@ -1266,19 +1218,14 @@ fn modules_nest_and_empty_forms_have_a_body() {
             "_hgl/_harness.py"
         ]
     );
-    let python = emitted.text("_hgl/_m_demo/__init__.py");
-    for expected in [
+    let python = emitted.module("demo");
+    python.assert_writes(&[
         "import _hgl._m_demo._m_util as _hgl_4demo_4util\n",
         "def kept():\n    held = None\n    return held\n",
         "@idle.start\ndef _start_idle():\n    pass\n",
         "    if not ((kept() is None)):\n",
         "        raise _py.AssertionError()\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A form the target does not write yet is reported where it is
@@ -1321,7 +1268,7 @@ fn a_run_in_real_time_and_an_application_are_written() {
     // The eval's configuration is written (RUN-1), and so are the run
     // in real time and the application.
     assert_eq!(emitted.reported, Vec::<String>::new());
-    let module = emitted.text("_hgl/_m_m/__init__.py");
+    let module = emitted.module("m");
     assert!(
         module.contains(concat!(
             "def test_live():\n",
@@ -1351,7 +1298,7 @@ fn a_run_in_real_time_and_an_application_are_written() {
     let (_, brief) = written.test("brief");
     assert_eq!(brief.limit(), Some(std::time::Duration::from_millis(500)));
     assert_eq!(
-        emitted.text("_hgl/_m_m/_m_live/__init__.py"),
+        emitted.module("m.live"),
         concat!(
             "# Generated by the hgl compiler for hgraph, from application `m.live`. Do not edit.\n",
             "import builtins as _py\n",
@@ -1487,8 +1434,7 @@ const APPLICATIONS: [(&str, &str); 7] = [
 /// arguments by name, and the configuration.
 #[test]
 fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
-    let emitted = emit(&APPLICATIONS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&APPLICATIONS);
     let listed: Vec<(&str, bool, bool)> = emitted
         .output
         .applications
@@ -1512,7 +1458,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
             ("demo.ticks.silent", false, false),
         ]
     );
-    let backtest = emitted.text("_hgl/_m_demo/_m_ticks/_m_backtest/__init__.py");
+    let backtest = emitted.module("demo.ticks.backtest");
     assert!(
         backtest.ends_with(concat!(
             "def _application():\n",
@@ -1524,7 +1470,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
         "{backtest}"
     );
     // An argument left out takes its default, and `run` is real time.
-    let live = emitted.text("_hgl/_m_demo/_m_ticks/_m_live/__init__.py");
+    let live = emitted.module("demo.ticks.live");
     assert!(
         live.contains(concat!(
             "_harness.run(_hgl_4demo_5ticks.counted, _hgl_4core._inst_record__i64, True, ",
@@ -1536,7 +1482,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     // given to the run, which calls it before it builds the graph.
     // The instance of `sum` its value calls is written, as one a body
     // calls is (GEN-2).
-    let seeded = emitted.text("_hgl/_m_demo/_m_ticks/_m_seeded/__init__.py");
+    let seeded = emitted.module("demo.ticks.seeded");
     assert!(seeded.contains("def _inst_sum__i64(a, b):\n"), "{seeded}");
     assert!(
         seeded.ends_with(concat!(
@@ -1552,7 +1498,7 @@ fn an_applications_run_statement_is_a_function_that_runs_its_entry() {
     );
     // An entry with no result is given no `record`, and a statement
     // with no configuration writes none.
-    let silent = emitted.text("_hgl/_m_demo/_m_ticks/_m_silent/__init__.py");
+    let silent = emitted.module("demo.ticks.silent");
     assert!(
         silent.ends_with("    return _harness.run(_hgl_4demo_5ticks.quiet, None, False, upto=2)\n"),
         "{silent}"
@@ -1654,18 +1600,12 @@ const BOUNDED_FAILS: &str = concat!(
 /// after the call's arguments, as EXPR-13 evaluates them.
 #[test]
 fn an_evals_configuration_is_given_to_the_harness() {
-    let emitted = emit(&[("bounded.hgl", BOUNDED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_bounded/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("bounded.hgl", BOUNDED)]);
+    let python = emitted.module("demo.bounded");
+    python.assert_writes(&[
         "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, 2, 3, 4, 5], _config=",
         "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 #[test]
@@ -1728,17 +1668,17 @@ fn a_form_not_written_yet_is_reported() {
         [
             // `gated`, which injects a scheduler, and `stopped`, whose
             // `stop` reads `out`, are written (TIME-9, TIME-7).
-            "m.hgl:21:14 target.unsupported",
-            "m.hgl:24:17 target.unsupported",
+            "m.hgl:21:14 target.unsupported: the hgraph target does not write a default of a temporal input yet",
+            "m.hgl:24:17 target.unsupported: the hgraph target does not write a pack parameter yet",
             // `chosen`, a graph with an `if` over a connection, is
             // written (CTRL-13). The two of a struct, an atomic
             // tuple's, then what the test holds.
-            "m.hgl:40:39 target.unsupported",
-            "m.hgl:42:42 target.unsupported",
-            "m.hgl:43:11 target.unsupported",
+            "m.hgl:40:39 target.unsupported: the hgraph target does not write this expression in a graph yet",
+            "m.hgl:42:42 target.unsupported: the hgraph target does not write a generic struct made where its arguments are not known yet",
+            "m.hgl:43:11 target.unsupported: the hgraph target does not write the type `atomic<tuple<f64, f64>>` yet",
             // A node called in a test, outside an eval. The timed
             // traces of the line before it are written.
-            "m.hgl:28:17 target.unsupported",
+            "m.hgl:28:17 target.unsupported: the hgraph target does not write a call of a temporal function in a test, outside an eval yet",
         ]
     );
 }
@@ -1800,10 +1740,9 @@ const LIFTS: &str = concat!(
 /// TST-8: "A selected value helper uses ordinary lifting."
 #[test]
 fn a_value_function_given_a_connection_is_lifted() {
-    let emitted = emit(&[("lift.hgl", LIFTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_lift/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("lift.hgl", LIFTS)]);
+    let python = emitted.module("demo.lift");
+    python.assert_writes(&[
         // A symbol: the candidate selected for it, lifted.
         concat!(
             "@_hg.compute_node\n",
@@ -1867,12 +1806,7 @@ fn a_value_function_given_a_connection_is_lifted() {
             "    if not (_harness.same(_harness.evaluate(_lift_12_doubled, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[1, None, 3]), [2, None, 6])):\n",
             "        raise _py.AssertionError()\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert_eq!(python.matches("def _lift_7_add__i64_i64(").count(), 1);
 }
 
@@ -1964,10 +1898,9 @@ const TEMPORAL_CANDIDATES: [(&str, &str); 2] = [
 /// `_value_name` (FN-4).
 #[test]
 fn a_temporal_candidate_is_a_node_or_a_graph() {
-    let emitted = emit(&TEMPORAL_CANDIDATES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let joins = emitted.text("_hgl/_m_demo/_m_joins/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&TEMPORAL_CANDIDATES);
+    let joins = emitted.module("demo.joins");
+    joins.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def _impl_join__i64_i64(lhs: _hg.TS[_py.int], rhs: _hg.TS[_py.int], ",
@@ -1992,25 +1925,15 @@ fn a_temporal_candidate_is_a_node_or_a_graph() {
             "def plain(a, b):\n",
             "    return _value_impl_join__i64_i64(lhs=a, rhs=b)\n",
         ),
-    ] {
-        assert!(
-            joins.contains(expected),
-            "the module has:\n{expected}\nin:\n{joins}"
-        );
-    }
-    let joined = emitted.text("_hgl/_m_demo/_m_joined/__init__.py");
-    for expected in [
+    ]);
+    let joined = emitted.module("demo.joined");
+    joined.assert_writes(&[
         // The candidate of another module, through that module.
         "    return _hgl_4demo_5joins._impl_join__i64_i64(lhs=a, rhs=b)\n",
         "    return _hgl_4demo_5joins._impl_join__i64_bool(lhs=a, rhs=b)\n",
         // A value candidate is lifted, and a temporal one is not.
         "    return _hgl_4demo_5joins._impl_join__str_str(lhs=lhs.value, rhs=rhs.value)\n",
-    ] {
-        assert!(
-            joined.contains(expected),
-            "the module has:\n{expected}\nin:\n{joined}"
-        );
-    }
+    ]);
     assert_eq!(joined.matches("def _lift_").count(), 2, "{joined}");
 }
 
@@ -2085,11 +2008,10 @@ const GENERICS: &str = concat!(
 /// call gives.
 #[test]
 fn a_generic_temporal_function_is_written_for_each_call() {
-    let emitted = emit(&[("generics.hgl", GENERICS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[("generics.hgl", GENERICS)]);
     assert_eq!(emitted.blocked("generics_are_instances"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_generics/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.generics");
+    python.assert_writes(&[
         // A graph for each type, of core's candidate for that type.
         concat!(
             "@_hg.graph\n",
@@ -2126,17 +2048,12 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         "    return _inst_identity_sum__i64(lhs=a, rhs=b)\n",
         "    return _inst_scaled__3(value=value)\n",
         "_harness.evaluate(_inst_scaled__4, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[2])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Nothing calls `unused`, and nothing is written for it.
     assert!(!python.contains("unused"), "{python}");
     // Core's candidate is written in core's file, once for each type.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    let core = emitted.module("core");
+    core.assert_writes(&[
         concat!(
             "@_hg.compute_node(valid=())\n",
             "def _inst__impl_add__T_T__f64__identity(lhs: _hg.TS[_py.float], ",
@@ -2147,12 +2064,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
         ),
         "        return _core.add__duration_duration(lhs=lhs.value, rhs=rhs.value)\n",
         "        return _core.neg__f64(value=rhs.value)\n",
-    ] {
-        assert!(
-            core.contains(expected),
-            "core has:\n{expected}\nin:\n{core}"
-        );
-    }
+    ]);
     assert_eq!(
         core.matches("def _inst__impl_add__T_T__").count(),
         4,
@@ -2217,11 +2129,10 @@ const VALUE_GENERICS: &str = concat!(
 /// hook, a constant, and the node that lifts it in a graph or an eval.
 #[test]
 fn a_value_function_that_requires_is_written_for_each_call() {
-    let emitted = emit(&[("vals.hgl", VALUE_GENERICS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[("vals.hgl", VALUE_GENERICS)]);
     assert_eq!(emitted.blocked("values_are_instances"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_vals/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.vals");
+    python.assert_writes(&[
         concat!(
             "def _inst_twice__i64(value):\n",
             "    return _impl_join_i64_i64(lhs=value, rhs=value)\n",
@@ -2266,12 +2177,7 @@ fn a_value_function_that_requires_is_written_for_each_call() {
         "    return _inst_twice__i64(value=value.value)\n",
         "    return _inst_sum__f64(a=a.value, b=b.value)\n",
         "lhs=_inst_twice__i64(value=1), rhs=11,",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert!(!python.contains("def twice("), "{python}");
 }
 
@@ -2308,11 +2214,10 @@ const THROUGH: &str = concat!(
 /// written for each constant it is given.
 #[test]
 fn a_caller_of_an_instance_with_its_own_parameter_is_an_instance() {
-    let emitted = emit(&[("through.hgl", THROUGH)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&[("through.hgl", THROUGH)]);
     assert_eq!(emitted.blocked("a_caller_is_an_instance_too"), None);
-    let python = emitted.text("_hgl/_m_demo/_m_through/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.through");
+    python.assert_writes(&[
         // The candidate for any one type is written once.
         "def _impl_pick_T_T(lhs, rhs):\n",
         concat!(
@@ -2337,12 +2242,7 @@ fn a_caller_of_an_instance_with_its_own_parameter_is_an_instance() {
             "def _inst_wider__4():\n",
             "    return _core.add__i64_i64(lhs=_inst_width__4(), rhs=1)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     assert!(!python.contains("def wrapper("), "{python}");
 }
 
@@ -2379,22 +2279,16 @@ const CALLERS_TYPE: [(&str, &str); 2] = [
 /// there when the instance that names it is defined.
 #[test]
 fn a_module_has_its_types_before_it_imports_another() {
-    let emitted = emit(&CALLERS_TYPE);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let kept = emitted.text("_hgl/_m_demo/_m_kept/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&CALLERS_TYPE);
+    let kept = emitted.module("demo.kept");
+    kept.assert_writes(&[
         "import _hgl._m_demo._m_sides as _hgl_4demo_5sides\n",
         concat!(
             "def _inst_held__demo_sides__Side(value: _hg.TS[_hgl_4demo_5sides.Side]) ",
             "-> _hg.TS[_hgl_4demo_5sides.Side]:\n",
         ),
-    ] {
-        assert!(
-            kept.contains(expected),
-            "the module has:\n{expected}\nin:\n{kept}"
-        );
-    }
-    let sides = emitted.text("_hgl/_m_demo/_m_sides/__init__.py");
+    ]);
+    let sides = emitted.module("demo.sides");
     let defined = sides
         .find("Side = _enum.Enum(")
         .expect("the enum is written");
@@ -2435,17 +2329,20 @@ fn an_instance_that_is_not_written_is_reported() {
     assert_eq!(
         emitted.reported[..4],
         [
-            "held.hgl:2:12 target.unsupported",
-            "held.hgl:2:4 target.unsupported",
-            "held.hgl:5:13 target.unsupported",
-            "held.hgl:5:4 target.unsupported",
+            "held.hgl:2:12 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "held.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "held.hgl:5:13 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
+            "held.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet",
         ]
     );
     let [in_core] = &emitted.reported[4..] else {
         panic!("one more is reported: {:?}", emitted.reported);
     };
     assert!(
-        in_core.starts_with("<core>/core/core.hgl:") && in_core.ends_with(" target.unsupported"),
+        in_core.starts_with("<core>/core/core.hgl:")
+            && in_core.ends_with(
+                " target.unsupported: the hgraph target does not write the type `list<list<i64>>` yet"
+            ),
         "{in_core}"
     );
     assert_eq!(emitted.blocked("whole"), None);
@@ -2454,7 +2351,7 @@ fn an_instance_that_is_not_written_is_reported() {
         blocked.ends_with("the hgraph target does not write the type `list<list<i64>>` yet"),
         "{blocked}"
     );
-    let python = emitted.text("_hgl/_m_demo/_m_held/__init__.py");
+    let python = emitted.module("demo.held");
     assert!(python.contains("def _inst_held__i64("), "{python}");
     assert!(python.contains("def _inst_again__i64("), "{python}");
     assert!(!python.contains("def _inst_held__list"), "{python}");
@@ -2472,10 +2369,9 @@ fn an_instance_that_is_not_written_is_reported() {
 /// native ones are the provider's.
 #[test]
 fn a_candidate_with_a_body_is_a_function() {
-    let emitted = emit(&[("mixed.hgl", CANDIDATES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_mixed/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("mixed.hgl", CANDIDATES)]);
+    let python = emitted.module("demo.mixed");
+    python.assert_writes(&[
         "import _hgl._m_core as _hgl_4core\n",
         concat!(
             "def _impl_blend__i64_i64(lhs, rhs):\n",
@@ -2494,14 +2390,9 @@ fn a_candidate_with_a_body_is_a_function() {
         ),
         "    return _lift_2_blend_(lhs=left, rhs=right)\n",
         "    if not (_hgl_4core._impl_eq__f64_i64_f64_f64(lhs=2.0, rhs=2, abs=0.0, rel=0.0)):\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    ]);
+    let core = emitted.module("core");
+    core.assert_writes(&[
         "# Generated by the hgl compiler for hgraph, from module `core`. Do not edit.\n",
         concat!(
             "def _impl_add__f64_i64(lhs, rhs):\n",
@@ -2511,12 +2402,7 @@ fn a_candidate_with_a_body_is_a_function() {
             "def _impl_eq__f64_i64_f64_f64(lhs, rhs, abs, rel):\n",
             "    return _core.eq__i64_f64_f64_f64(lhs=rhs, rhs=lhs, abs=abs, rel=rel)\n",
         ),
-    ] {
-        assert!(
-            core.contains(expected),
-            "core has:\n{expected}\nin:\n{core}"
-        );
-    }
+    ]);
 
     // A program that uses nothing core writes in HGL has no file of
     // core's: an eval would, for its `replay` and `record`.
@@ -2559,7 +2445,10 @@ fn what_core_lacks_is_reported_where_a_program_reaches_it() {
     )]);
     assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
     assert!(
-        emitted.reported[0].starts_with("<core>/core/core.hgl:"),
+        emitted.reported[0].starts_with("<core>/core/core.hgl:")
+            && emitted.reported[0].ends_with(
+                " target.unsupported: the hgraph target does not write the candidate `mul_(str, i64)` yet"
+            ),
         "{:?}",
         emitted.reported
     );
@@ -2661,10 +2550,9 @@ const DIVISION_FAILS: &str = concat!(
 /// takes `.fail`).
 #[test]
 fn a_division_takes_its_zero_policy() {
-    let emitted = emit(&[("div.hgl", DIVISION)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_div/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("div.hgl", DIVISION)]);
+    let python = emitted.module("demo.div");
+    python.assert_writes(&[
         "def ratio(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")\n",
         "def nans(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")\n",
         "def strict(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"fail\")\n",
@@ -2679,12 +2567,7 @@ fn a_division_takes_its_zero_policy() {
             "def _lift_1_div__i64_i64(lhs: _hg.TS[_py.int], rhs: _py.int) -> _hg.TS[_py.float]:\n",
             "    return _core.div__i64_i64(lhs=lhs.value, rhs=rhs, zero=\"ieee\")\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Results and errors in value functions, and a `?` in a `when`.
@@ -2783,10 +2666,9 @@ const RESULT_FAILS: &str = concat!(
 /// implicitly fails a node nor requires an exception."
 #[test]
 fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
-    let emitted = emit(&[("results.hgl", RESULTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_results/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("results.hgl", RESULTS)]);
+    let python = emitted.module("demo.results");
+    python.assert_writes(&[
         "def checked(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")\n",
         // A `?` is inside an expression, where Python has no `return`:
         // the function returns what the provider raises.
@@ -2817,12 +2699,7 @@ fn a_result_is_a_value_and_a_failure_leaves_through_a_question_mark() {
         ),
         // In a `when` a failure fails the node.
         "    return _core.succeeded(checked(a=a.value, b=b.value))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // A function with no `?` catches nothing.
     assert_eq!(python.matches("except _core.Propagated").count(), 2);
 }
@@ -2895,10 +2772,9 @@ const CLOSE_FAILS: &str = concat!(
 /// configuration, and no input.
 #[test]
 fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
-    let emitted = emit(&[("close.hgl", CLOSE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_close/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("close.hgl", CLOSE)]);
+    let python = emitted.module("demo.close");
+    python.assert_writes(&[
         concat!(
             "def close(a, b, tolerance):\n",
             "    return _core.eq__f64_f64_f64_f64(lhs=a, abs=tolerance, rhs=b, rel=0.0)\n",
@@ -2917,12 +2793,7 @@ fn a_tolerance_is_an_argument_written_where_the_source_has_it() {
             "    return _core.eq__f64_f64_f64_f64(lhs=lhs.value, rhs=rhs.value, abs=abs, rel=0.0)\n",
         ),
         "    return _lift_0_eq__f64_f64_f64_f64(lhs=a, abs=0.5, rhs=b)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Enums: members, constructions, and an enum as the type of an
@@ -2999,10 +2870,9 @@ const ENUM_FAILS: &str = concat!(
 /// it where they are defined.
 #[test]
 fn an_enum_is_a_python_enum_and_a_scalar() {
-    let emitted = emit(&[("enums.hgl", ENUMS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_enums/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("enums.hgl", ENUMS)]);
+    let python = emitted.module("demo.enums");
+    python.assert_writes(&[
         "import enum as _enum\n",
         "Side = _enum.Enum(\"demo.enums::Side\", [(\"buy\", 0), (\"sell\", 5), (\"hold\", 6)])\n",
         // A name that `Enum` keeps has `hgl_` before it, and so has one
@@ -3032,12 +2902,7 @@ fn an_enum_is_a_python_enum_and_a_scalar() {
             "_harness.same(_harness.evaluate(flipped, {\"side\": _hgl_4core._inst_replay__demo_enums__Side}, _hgl_4core._inst_record__demo_enums__Side, side=[Side[\"buy\"], None, Side[\"sell\"], ",
             "Side[\"hold\"]]), [Side[\"sell\"], None, Side[\"buy\"], Side[\"hold\"]])",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // The enums come before the function that is declared before them.
     let at = |text: &str| python.find(text).expect("it is written");
     assert!(at("Side = _enum.Enum(") < at("def opposite("));
@@ -3252,10 +3117,9 @@ const STRUCT_FAILS: &str = concat!(
 /// dictionary that holds a NaN is not equal to itself."
 #[test]
 fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
-    let emitted = emit(&STRUCTS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_structs/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&STRUCTS);
+    let python = emitted.module("demo.structs");
+    python.assert_writes(&[
         "import _hgl._core_native as _core\n",
         // Every field the struct has, a parent's first; a Python word
         // has a `_` after it.
@@ -3309,12 +3173,7 @@ fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
             "    _state.seen = _core.set_field(_state.seen, \"count\", ",
             "_core.add__i64_i64(lhs=_state.seen.count, rhs=1))\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // The structs come before the function that is declared before
     // them.
     let at = |text: &str| python.find(text).expect("it is written");
@@ -3324,16 +3183,11 @@ fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
     // UNIT-7: "Imported defaults retain their defining closure,
     // including private references": a default is written where the
     // construction is, and names what it names through its module.
-    let user = emitted.text("_hgl/_m_demo/_m_structs/_m_user/__init__.py");
-    for expected in [
+    let user = emitted.module("demo.structs.user");
+    user.assert_writes(&[
         "Marker = _core.struct(\"Marker\", (\"at\", \"size\", \"label\"))\n",
         "    return Marker(label=label, at=_hgl_4demo_7structs.origin(), size=base())\n",
-    ] {
-        assert!(
-            user.contains(expected),
-            "the module has:\n{expected}\nin:\n{user}"
-        );
-    }
+    ]);
 }
 
 /// Loops and `switch` in value functions and in a node's `when`, and
@@ -3481,10 +3335,9 @@ const LOOP_FAILS: &str = concat!(
 /// uses default or fails." EXPR-9: a sequence of pairs is a dictionary.
 #[test]
 fn a_loop_and_a_switch_run_as_they_are_written() {
-    let emitted = emit(&[("loops.hgl", LOOPS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_loops/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("loops.hgl", LOOPS)]);
+    let python = emitted.module("demo.loops");
+    python.assert_writes(&[
         concat!(
             "    for item in items:\n",
             "        sum = _core.add__i64_i64(lhs=sum, rhs=item)\n",
@@ -3520,12 +3373,7 @@ fn a_loop_and_a_switch_run_as_they_are_written() {
         ),
         // A dictionary written out.
         "weighted(weights={\"a\": 1.5, \"skip\": 9.0, \"b\": 2.0})",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Two modules that each declare an enum `Side`, with other members,
@@ -3569,8 +3417,7 @@ const SAME_NAMES: [(&str, &str); 2] = [
 /// two `Side`s stay two, and core's `CmpResult` is not hgraph's.
 #[test]
 fn an_enums_class_is_named_with_its_module() {
-    let emitted = emit(&SAME_NAMES);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&SAME_NAMES);
     for (path, expected) in [
         (
             "_hgl/_m_demo/_m_sides/_m_left/__init__.py",
@@ -3724,10 +3571,9 @@ const ELEMENT_FAILS: &str = concat!(
 /// does.
 #[test]
 fn an_element_is_read_and_assigned_through_the_provider() {
-    let emitted = emit(&[("elements.hgl", ELEMENTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_elements/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("elements.hgl", ELEMENTS)]);
+    let python = emitted.module("demo.elements");
+    python.assert_writes(&[
         "def second(items):\n    return _core.item(items, 1)\n",
         "def last(pair):\n    return _core.item(pair, 1)\n",
         "def size(sizes, name):\n    return _core.entry(sizes, name)\n",
@@ -3751,12 +3597,7 @@ fn an_element_is_read_and_assigned_through_the_provider() {
         "        _state.seen = _core.set_entry(_state.seen, name.value, 1)\n",
         // `[]` where a dictionary is expected.
         "    seen = {}\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// `<=>` on numbers, strings and in a graph, and the Boolean operators
@@ -3802,10 +3643,9 @@ const COMPARE: &str = concat!(
 /// `CmpResult`, through core's module.
 #[test]
 fn a_full_comparison_gives_a_member_of_cores_enum() {
-    let emitted = emit(&[("compare.hgl", COMPARE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_compare/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("compare.hgl", COMPARE)]);
+    let python = emitted.module("demo.compare");
+    python.assert_writes(&[
         "import _hgl._m_core as _hgl_4core\n",
         concat!(
             "def ordered(lhs, rhs):\n",
@@ -3824,12 +3664,7 @@ fn a_full_comparison_gives_a_member_of_cores_enum() {
         "    return _core.and__bool_bool(lhs=lhs, rhs=rhs)\n",
         "    return _core.or__bool_bool(lhs=lhs, rhs=rhs)\n",
         "    return _core.not__bool(value=value)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A node whose `stop` reads an input under its guard, and one whose
@@ -3899,9 +3734,8 @@ const OUT_IN_STOP: &str = concat!(
 /// names it, as it gives the node: `out` is `_output` there too.
 #[test]
 fn a_stop_is_given_the_nodes_output() {
-    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_ended/__init__.py");
+    let emitted = emit_clean(&[("ended.hgl", OUT_IN_STOP)]);
+    let python = emitted.module("demo.ended");
     let expected = concat!(
         "@totalled.stop\n",
         "def _stop_totalled(expected: _py.int, value: _hg.TS[_py.int], ",
@@ -3993,10 +3827,9 @@ const CAPABILITIES_FAIL: &str = concat!(
 /// the store.
 #[test]
 fn a_cache_and_a_capability_are_the_nodes_own() {
-    let emitted = emit(&[("caps.hgl", CAPABILITIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_caps/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("caps.hgl", CAPABILITIES)]);
+    let python = emitted.module("demo.caps");
+    python.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def counted(value: _hg.TS[_py.int], _state: _hg.STATE = None, ",
@@ -4028,15 +3861,10 @@ fn a_cache_and_a_capability_are_the_nodes_own() {
         "_core.has_GlobalState_str(store=_store, key=\"last\")",
         "    _core.put_GlobalState_str_V(store=_store, key=\"last\", value=value.value)\n",
         "_core.member(_hgl_4core.LogLevel, _core.Logger_level(_logger))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Core's `log_info` is a function of core's module, which calls
     // the provider's `log`.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
+    let core = emitted.module("core");
     assert!(
         core.contains(concat!(
             "def log_info(logger, message):\n",
@@ -4185,10 +4013,9 @@ const SOURCES: &str = concat!(
 /// value` gives the generator's caller the time, then the value.
 #[test]
 fn a_source_is_a_generator_a_node_resumes() {
-    let emitted = emit(&[("sources.hgl", SOURCES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_sources/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("sources.hgl", SOURCES)]);
+    let python = emitted.module("demo.sources");
+    python.assert_writes(&[
         concat!(
             "def _yields_two_values(_state):\n",
             "    yield (_dt.timedelta(microseconds=1), 7)\n",
@@ -4269,12 +4096,7 @@ fn a_source_is_a_generator_a_node_resumes() {
         ),
         // A graph wires a source as any function.
         "def wired() -> _hg.TS[_py.int]:\n    return doubled(value=two_values())\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15: a `var` parameter. A call gives it a place and assigns it:
@@ -4424,10 +4246,9 @@ const PLACES: &str = concat!(
 /// the order of the parameters.
 #[test]
 fn a_call_assigns_the_places_its_var_parameters_are_given() {
-    let emitted = emit(&[("places.hgl", PLACES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_places/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("places.hgl", PLACES)]);
+    let python = emitted.module("demo.places");
+    python.assert_writes(&[
         // FN-15: "A function that fails leaves the place holding what
         // its parameter held when it failed": what fails is given
         // back in the result's place, with what each parameter holds.
@@ -4522,12 +4343,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
             "    _given = bump(count=_state.seen, by=1)\n",
             "    _state.seen = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15: a call that assigns a place is written with its assignments
@@ -4552,8 +4368,8 @@ fn a_place_call_inside_an_expression_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "inside.hgl:8:12 target.unsupported",
-            "inside.hgl:8:25 target.unsupported",
+            "inside.hgl:8:12 target.unsupported: the hgraph target does not write a call that assigns a place, inside an expression yet",
+            "inside.hgl:8:25 target.unsupported: the hgraph target does not write a call that assigns a place, inside an expression yet",
         ]
     );
 }
@@ -4645,10 +4461,9 @@ const NULLABLE: &str = concat!(
 /// publishes nothing. TYPE-16: a nullable's delta is hgraph's own.
 #[test]
 fn a_nullable_is_a_value_that_may_be_unset() {
-    let emitted = emit(&[("nullable.hgl", NULLABLE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_nullable/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("nullable.hgl", NULLABLE)]);
+    let python = emitted.module("demo.nullable");
+    python.assert_writes(&[
         concat!(
             "@_hg.compute_node\n",
             "def publish_nullable(command: _hg.TS[_py.int]) -> _hg.TS[_py.int | None]:\n",
@@ -4676,12 +4491,7 @@ fn a_nullable_is_a_value_that_may_be_unset() {
             "value=[_hg.Null, None, 7, _hg.Null, None])",
         ),
         "[7, _hg.Null, None, _hg.Null, 9]",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3 on hgraph, for a dictionary and for an element of a list: a
@@ -4764,10 +4574,9 @@ const ENTRIES: &str = concat!(
 /// it is.
 #[test]
 fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
-    let emitted = emit(&[("entries.hgl", ENTRIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_entries/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("entries.hgl", ENTRIES)]);
+    let python = emitted.module("demo.entries");
+    python.assert_writes(&[
         // Read by a function that gives an entry, and so is lent the
         // dictionary; then assigned where it is.
         "        counts = _core.set_entry(counts, name, _core.add__i64_i64(lhs=count_of(counts=counts, name=name), rhs=1))\n",
@@ -4792,12 +4601,7 @@ fn an_entry_and_an_element_are_assigned_where_the_collection_is() {
         "    rows = _core.set_at(rows, ((\"k\", \"a\"), (\"i\", 0),), lambda: 2)\n",
         // What a dictionary keeps of another place's list is a copy.
         "    rows = _core.set_entry(rows, \"b\", _core.copied(items))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3 and LIST-1 on hgraph for a collection inside another value: a
@@ -4948,10 +4752,9 @@ const INSIDE: &str = concat!(
 /// a `let` of what then changes, and by a result.
 #[test]
 fn a_collection_inside_a_value_is_changed_where_it_is() {
-    let emitted = emit(&[("inside.hgl", INSIDE)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_inside/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("inside.hgl", INSIDE)]);
+    let python = emitted.module("demo.inside");
+    python.assert_writes(&[
         // A struct's dictionary and list: the way in, and the value as
         // it is asked for.
         "        book = _core.set_at(book, ((\"f\", \"bids\"), (\"k\", i),), lambda: _core.mul__i64_i64(lhs=i, rhs=2))\n",
@@ -4985,12 +4788,7 @@ fn a_collection_inside_a_value_is_changed_where_it_is() {
         // A field that is no collection, of a struct that is no value:
         // the struct is changed where it is.
         "    book = _core.set_field(book, \"name\", \"b\")\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// FN-15, GEN-6: an operator whose value candidates each take a place.
@@ -5037,10 +4835,9 @@ const PUSHES: &str = concat!(
 /// stays where the call fails.
 #[test]
 fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
-    let emitted = emit(&[("pushes.hgl", PUSHES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_pushes/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("pushes.hgl", PUSHES)]);
+    let python = emitted.module("demo.pushes");
+    python.assert_writes(&[
         concat!(
             "def _impl_push_list_i64__i64(values, item):\n",
             "    try:\n",
@@ -5065,12 +4862,7 @@ fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
             "    book = _core.set_field(book, \"orders\", _given[1])\n",
             "    _core.raise_if_failed(_given[0])\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A tenor on hgraph (core's TEN-1 to TEN-9): its literal, its own
@@ -5127,10 +4919,9 @@ const MOVES: &str = concat!(
 /// candidate; core's functions ask the program's own `business_day`.
 #[test]
 fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
-    let emitted = emit(&[("moves.hgl", MOVES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_moves/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("moves.hgl", MOVES)]);
+    let python = emitted.module("demo.moves");
+    python.assert_writes(&[
         // LEX-28: a year is twelve months, a week seven days, and
         // business days a count of their own.
         "_core.Tenor(1, 0)",
@@ -5149,15 +4940,10 @@ fn a_tenor_moves_a_date_on_a_calendar_and_under_a_rule() {
         "_hgl_4core._inst__impl_add__date_tenor_C__demo_moves__Closed(lhs=trade, calendar=calendar, rhs=_core.Tenor(business=2))",
         // TEN-7, TEN-8: and for the rolling rule.
         "_hgl_4core._inst__impl_add__date_tenor_R__core__Rolling(lhs=spot, rolling_rule=_hgl_4core.Rolling[\"modified_following\"], rhs=_core.Tenor(3, 0))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // Core's own functions, written for the program's calendar, ask the
     // program's `business_day`.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
+    let core = emitted.module("core");
     assert!(
         core.contains(
             "_hgl_4demo_5moves._impl_business_day_Closed_date(calendar=calendar, day=at)"
@@ -5191,8 +4977,8 @@ fn a_nullable_set_is_not_written_as_a_temporal_type() {
     assert_eq!(
         emitted.reported,
         [
-            "sets.hgl:2:10 target.unsupported",
-            "sets.hgl:5:4 target.unsupported",
+            "sets.hgl:2:10 target.unsupported: the hgraph target does not write the type `set<i64>?` yet",
+            "sets.hgl:5:4 target.unsupported: the hgraph target does not write the type `set<i64>?` yet",
         ]
     );
 }
@@ -5236,10 +5022,9 @@ const LISTS: &str = concat!(
 /// and the call assigns the place (FN-15).
 #[test]
 fn a_list_grows_through_cores_append_and_extend() {
-    let emitted = emit(&[("lists.hgl", LISTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_lists/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("lists.hgl", LISTS)]);
+    let python = emitted.module("demo.lists");
+    python.assert_writes(&[
         // A node's `cache` is the place.
         concat!(
             "    _given = _core.fn_append(values=_state.seen, item=value.value)\n",
@@ -5251,12 +5036,7 @@ fn a_list_grows_through_cores_append_and_extend() {
             "    _given = _core.fn_append(values=entries, item=0)\n",
             "    entries = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A generic node whose configuration is of its generic parameter:
@@ -5296,10 +5076,9 @@ const KEPT: &str = concat!(
 /// for an argument left out.
 #[test]
 fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
-    let emitted = emit(&[("tagged.hgl", KEPT)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("tagged.hgl", KEPT)]);
+    let python = emitted.module("demo.tagged");
+    python.assert_writes(&[
         // A node keeps what a graph gives it: a copy of the graph's
         // parameter, which its caller may go on changing.
         "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(_core.copied(tags)))\n",
@@ -5318,12 +5097,7 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
         "value=[7], tag=_core.Held({\"a\": 1}))",
         "_harness.evaluate(_inst_tagged__i64, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=1)",
         "_harness.evaluate(_inst_optional__tuple_i64__str_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7], tag=_core.Held(None))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// LIST-3: "a value taken from the place before the call is as it
@@ -5458,10 +5232,9 @@ const SHARED: &str = concat!(
 /// nowhere.
 #[test]
 fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
-    let emitted = emit(&[("shared.hgl", SHARED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_shared/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("shared.hgl", SHARED)]);
+    let python = emitted.module("demo.shared");
+    python.assert_writes(&[
         // A `let` of a list its `var` then grows takes a copy.
         concat!(
             "    before = _core.copied(entries)\n",
@@ -5508,12 +5281,7 @@ fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        _given = failing(items=kept, zero=0)\n",
             "        kept = _given[1]\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     // No mark is kept at run time, and nothing is put back.
     for gone in ["_core.shared", "_core.each", "_core.restored", "_was_"] {
         assert!(!python.contains(gone), "the module has `{gone}`:\n{python}");
@@ -5542,10 +5310,9 @@ const STOP_FAILS: &str = concat!(
 /// as a `when` does. It gives a `start` none.
 #[test]
 fn a_stop_is_given_the_nodes_inputs() {
-    let emitted = emit(&[("stops.hgl", STOPS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_stops/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("stops.hgl", STOPS)]);
+    let python = emitted.module("demo.stops");
+    python.assert_writes(&[
         concat!(
             "@last_seen.start\n",
             "def _start_last_seen(scale: _py.int, _state: _hg.STATE = None):\n",
@@ -5557,12 +5324,7 @@ fn a_stop_is_given_the_nodes_inputs() {
             "    if value.valid:\n",
             "        _state.ended = _core.mul__i64_i64(lhs=value.value, rhs=scale)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Sets: a temporal `set<i64>` and its deltas.
@@ -5658,10 +5420,9 @@ const SET_FAILS: &str = concat!(
 /// for an added one.
 #[test]
 fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
-    let emitted = emit(&[("sets.hgl", SETS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_sets/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("sets.hgl", SETS)]);
+    let python = emitted.module("demo.sets");
+    python.assert_writes(&[
         "def members(command: _hg.TS[_py.int]) -> _hg.TSS[_py.int]:\n",
         concat!(
             "        return _hg.set_delta(added=_py.frozenset((3,)), ",
@@ -5689,12 +5450,7 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
         ),
         "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [])):\n",
         "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// A trace given to a `const fn`.
@@ -5753,20 +5509,14 @@ const GIVEN_FAILS: &str = concat!(
 /// The harness makes the list of the dense trace an eval gives.
 #[test]
 fn a_trace_given_to_a_const_fn_is_its_publications() {
-    let emitted = emit(&[("given.hgl", GIVEN)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_given/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("given.hgl", GIVEN)]);
+    let python = emitted.module("demo.given");
+    python.assert_writes(&[
         // `pass` is a word of Python's, and is written `pass_`.
         "ticks(seen=_harness.publications(_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[7, None, 7, 9])))",
         "    seen = _harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__i64, value=[None, 1, None, 2])\n",
         "total(seen=_harness.publications(seen))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-7 and CEVAL-2: accept offsets and instants, compare each actual
@@ -5774,8 +5524,7 @@ fn a_trace_given_to_a_const_fn_is_its_publications() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn timed_traces_replay_and_compare_at_the_runs_start() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_timed_traces");
+    let hgraph = on_hgraph("hgraph_timed_traces");
     let emitted = emit(&[("timed_keys.hgl", include_str!("fixtures/timed_traces.hgl"))]);
     let cases = [
         ("written_publications_preserve_absolute_instants", None),
@@ -5802,7 +5551,7 @@ fn timed_traces_replay_and_compare_at_the_runs_start() {
         ("invalid_expectation", Some("must strictly increase")),
     ];
     let tests: Vec<_> = cases.iter().map(|(name, _)| emitted.test(name).0).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    let ran = hgraph.run(&emitted, &tests);
     for ((name, error), outcome) in cases.iter().zip(&ran) {
         match error {
             None => assert_eq!(outcome, &Ran::Passed, "{name}"),
@@ -5893,9 +5642,9 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     assert_eq!(
         emitted.reported,
         [
-            "reach.hgl:5:29 target.unsupported",
-            "reach.hgl:18:21 target.unsupported",
-            "deep.hgl:2:37 target.unsupported",
+            "reach.hgl:5:29 target.unsupported: the hgraph target does not write a pack parameter yet",
+            "reach.hgl:18:21 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "deep.hgl:2:37 target.unsupported: the hgraph target does not write a pack parameter yet",
         ]
     );
     assert_eq!(emitted.blocked("direct"), None);
@@ -5920,15 +5669,13 @@ fn a_test_runs_when_all_it_reaches_is_written() {
     let (_, direct) = emitted.test("direct");
     assert_eq!(direct.identity(), "reach::direct");
 
-    let python = emitted.text("_hgl/_m_reach/__init__.py");
-    for written in [
+    let python = emitted.module("reach");
+    python.assert_writes(&[
         "def fine(",
         "def outer(",
         "def test_direct(",
         "def test_wrong(",
-    ] {
-        assert!(python.contains(written), "{written} is in:\n{python}");
-    }
+    ]);
     // What has such a form itself is left out. A test that only
     // reaches one is written, and is not run.
     for left_out in ["def looped(", "def test_own("] {
@@ -5987,10 +5734,71 @@ fn an_interpreter_that_does_not_start_runs_nothing() {
     assert!(directory.join("_hgl/_m_reach/__init__.py").is_file());
 }
 
-/// The Python interpreter the tests that need hgraph run on.
-fn python_with_hgraph() -> String {
-    std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph")
+/// Where a test that needs hgraph runs what the target wrote.
+struct Hgraph {
+    /// The Python interpreter that has hgraph.
+    python: PathBuf,
+    /// An empty directory of the test's own, to write the program into.
+    directory: PathBuf,
+}
+
+/// The interpreter the environment variable `HGL_HGRAPH_PYTHON` names,
+/// and the directory `name` under Cargo's scratch directory, emptied.
+fn on_hgraph(name: &str) -> Hgraph {
+    let python = std::env::var("HGL_HGRAPH_PYTHON")
+        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    // Cargo gives integration tests a scratch directory under `target/`.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    // Left over from an earlier run, perhaps; `ok()` ignores "not there".
+    fs::remove_dir_all(&directory).ok();
+    Hgraph {
+        python: PathBuf::from(python),
+        directory,
+    }
+}
+
+impl Hgraph {
+    /// Runs the tests of `emitted` at the positions `tests`, and gives
+    /// what each did.
+    fn run(&self, emitted: &Emitted, tests: &[usize]) -> Vec<Ran> {
+        run(&self.python, &self.directory, &emitted.output, tests)
+    }
+
+    /// Runs every test of `emitted`, in order.
+    fn run_all(&self, emitted: &Emitted) -> Vec<Ran> {
+        let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+        self.run(emitted, &all)
+    }
+}
+
+/// What each test at the positions `tests` did, as `ran` has it, beside
+/// its name: `name passed`, `name failed at message`, `at` the place of
+/// the statement it failed at or `?`, or `name not run: reason`.
+fn outcomes(emitted: &Emitted, tests: &[usize], ran: &[Ran]) -> Vec<String> {
+    assert_eq!(ran.len(), tests.len(), "one outcome for each test run");
+    tests
+        .iter()
+        .zip(ran)
+        .map(|(&test, ran)| {
+            let name = &emitted.output.tests[test].name;
+            match ran {
+                Ran::Passed => format!("{name} passed"),
+                Ran::Failed { at, message } => format!(
+                    "{name} failed {} {message}",
+                    at.map_or("?".to_string(), |at| emitted.place(at))
+                ),
+                Ran::NotRun(reason) => format!("{name} not run: {reason}"),
+            }
+        })
+        .collect()
+}
+
+/// The place and the message of the one test `ran` holds, which failed.
+fn failed(emitted: &Emitted, ran: &[Ran]) -> (Option<String>, String) {
+    let [Ran::Failed { at, message }] = ran else {
+        panic!("the test failed: {ran:?}");
+    };
+    (at.map(|at| emitted.place(at)), message.clone())
 }
 
 /// Runs the tests the target writes for its fixtures on hgraph. It needs
@@ -6000,9 +5808,7 @@ fn python_with_hgraph() -> String {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn the_generated_tests_pass_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_generated");
-    fs::remove_dir_all(&directory).ok();
+    let hgraph = on_hgraph("hgraph_generated");
     let mut files = vec![
         SCALAR_TRACES,
         ("demo.hgl", DEMO),
@@ -6079,11 +5885,10 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("shadow.hgl", SHADOW));
     files.extend(DEFAULT_MODULES);
     files.extend(PATHS);
-    let emitted = emit(&files);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let emitted = emit_clean(&files);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     assert!(!all.is_empty(), "the fixtures contain named HGL tests");
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let ran = hgraph.run(&emitted, &all);
     let not_passed: Vec<String> = emitted
         .output
         .tests
@@ -6106,13 +5911,9 @@ fn the_generated_tests_pass_on_hgraph() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_test_that_calls_no_native_loads_its_harness() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_harness_alone");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("shadow.hgl", SHADOW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let hgraph = on_hgraph("hgraph_harness_alone");
+    let emitted = emit_clean(&[("shadow.hgl", SHADOW)]);
+    let ran = hgraph.run_all(&emitted);
     assert_eq!(ran, [Ran::Passed]);
 }
 
@@ -6131,11 +5932,8 @@ fn a_test_that_calls_no_native_loads_its_harness() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_application_runs_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_applications");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&APPLICATIONS);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_applications");
+    let emitted = emit_clean(&APPLICATIONS);
     let ran = |path: &str| {
         let application = emitted
             .output
@@ -6144,8 +5942,8 @@ fn an_application_runs_on_hgraph() {
             .position(|application| application.path == path)
             .unwrap_or_else(|| panic!("no application `{path}` was written"));
         run_application(
-            Path::new(&python),
-            &directory,
+            &hgraph.python,
+            &hgraph.directory,
             &emitted.output,
             application,
             &Stop::new(),
@@ -6232,10 +6030,9 @@ const COPIES: &str = include_str!("fixtures/copies.hgl");
 /// a parameter or let is retained, then it needs to make the copy."
 #[test]
 fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
-    let emitted = emit(&[("copies.hgl", COPIES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_copies/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("copies.hgl", COPIES)]);
+    let python = emitted.module("demo.copies");
+    python.assert_writes(&[
         // A result: the function's own `var` and its own `let` as they
         // are, and a copy of what it was given, read through a name or
         // not.
@@ -6263,12 +6060,7 @@ fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
         // and given again.
         "    _given = push_all(items=rows, more=_core.copied(rows))\n",
         "    _given = both(left=twice, right=_core.copied(twice))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// The owner's rule for a struct, FN-15's failure, and FN-13's stable
@@ -6292,16 +6084,15 @@ const COPY_POINTS: &str = include_str!("fixtures/copy_points.hgl");
 /// changes."
 #[test]
 fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
-    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_copy_points/__init__.py");
+    let emitted = emit_clean(&[("copy_points.hgl", COPY_POINTS)]);
+    let python = emitted.module("demo.copy_points");
     let saved = format!(
         "            _state.saved = Ticket(id={}, size={}, price={})\n",
         part("current[\"id\"]"),
         part("current[\"size\"]"),
         part("current[\"price\"]")
     );
-    for expected in [
+    python.assert_writes(&[
         // A struct of two scalars is a value; one of three, one with a
         // `str`, one another inherits from, and one of structs are not.
         "Point = _core.struct(\"Point\", (\"x\", \"y\"), by_value=True)\n",
@@ -6399,12 +6190,7 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
         "    return summed(values=_core.Held(_core.copied(values)), tick=tick)\n",
         "    n = relayed(values=cfg, tick=tick)\n",
         "_core.Held(_core.copied(values)))\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// Every copy the target writes for `copy_points.hgl` is needed: with
@@ -6414,18 +6200,15 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn every_copy_the_copy_points_fixture_makes_is_needed() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_copy_points");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_copy_points");
+    let emitted = emit_clean(&[("copy_points.hgl", COPY_POINTS)]);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     // A test that a copy taken out sends round a loop without end is
     // stopped: it has not passed.
     let limit = |_: &Test| Some(std::time::Duration::from_secs(30));
     let ran = run_within(
-        Path::new(&python),
-        &directory.join("whole"),
+        &hgraph.python,
+        &hgraph.directory.join("whole"),
         &emitted.output,
         &all,
         &limit,
@@ -6451,8 +6234,8 @@ fn every_copy_the_copy_points_fixture_makes_is_needed() {
             .expect("the module is written");
         file.text.replace_range(at..at + copy.len(), "");
         let ran = run_within(
-            Path::new(&python),
-            &directory.join(format!("without_{number}")),
+            &hgraph.python,
+            &hgraph.directory.join(format!("without_{number}")),
             &output,
             &all,
             &limit,
@@ -6481,10 +6264,9 @@ const TIMERS: &str = include_str!("fixtures/timers.hgl");
 /// handler with no `modified` selector is run by an input's wake.
 #[test]
 fn a_timer_wakes_its_own_handlers() {
-    let emitted = emit(&[("timers.hgl", TIMERS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timers/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("timers.hgl", TIMERS)]);
+    let python = emitted.module("demo.timers");
+    python.assert_writes(&[
         // A scheduler: the node requires no input valid, and each
         // handler is under its own guard.
         concat!(
@@ -6536,12 +6318,7 @@ fn a_timer_wakes_its_own_handlers() {
             "def beats(every: _dt.timedelta, times: _py.int) -> _hg.TS[_py.int]:\n",
             "    return _node_beats(_begin=_hg.const(True), every=every, times=times)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-3 and TIME-9: `scheduled()` under a negation and in a
@@ -6555,10 +6332,9 @@ const TIMER_SELECTORS: &str = include_str!("fixtures/timer_selectors.hgl");
 /// wakes it: the node is dormant".
 #[test]
 fn scheduled_is_a_bool_where_it_selects_nothing() {
-    let emitted = emit(&[("timer_selectors.hgl", TIMER_SELECTORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timer_selectors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("timer_selectors.hgl", TIMER_SELECTORS)]);
+    let python = emitted.module("demo.timer_selectors");
+    python.assert_writes(&[
         // An input's wake, and no wake of the scheduler due.
         concat!(
             "    _timer_woke = _scheduler.is_scheduled_now\n",
@@ -6584,12 +6360,7 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
         "@_hg.sink_node(active=())\ndef null_sink(a: _hg.TS[_py.float]):\n    pass\n",
         "def half_dormant(a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    if a.modified:\n",
         "@_hg.compute_node(active=(), valid=())\ndef _node_idle(_begin: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    pass\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
@@ -6623,9 +6394,9 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:20 target.unsupported",
-            "m.hgl:12:19 target.unsupported",
-            "m.hgl:17:11 target.unsupported",
+            "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
+            "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write this expression yet",
         ]
     );
 }
@@ -6641,10 +6412,9 @@ const TIMER_FIXES: &str = include_str!("fixtures/timer_fixes.hgl");
 /// entered, and the empty tag is given a mark as every tag is.
 #[test]
 fn every_inputless_node_has_a_hidden_input() {
-    let emitted = emit(&[("timer_fixes.hgl", TIMER_FIXES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timer_fixes/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("timer_fixes.hgl", TIMER_FIXES)]);
+    let python = emitted.module("demo.timer_fixes");
+    python.assert_writes(&[
         concat!(
             "@_hg.sink_node(active=(), valid=())\n",
             "def _node_started_only(_begin: _hg.TS[_py.bool], _store: _hg.GlobalState = None):\n",
@@ -6652,12 +6422,7 @@ fn every_inputless_node_has_a_hidden_input() {
         ),
         "    _node_started_only(_begin=_hg.const(True))\n",
         "    _scheduler = _core.Wake(_scheduler)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
     let native = emitted.text("_hgl/_core_native.py");
     assert!(native.contains("return None if tag is None else \"#\" + tag"));
 }
@@ -6683,7 +6448,12 @@ fn an_empty_selection_beside_another_is_reported() {
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:5:10 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:5:10 target.unsupported: the hgraph target does not write `modified([])` beside another `modified` selector yet"
+        ]
+    );
 }
 
 /// TYPE-11: windows of ticks and of a duration, as inputs and results;
@@ -6699,18 +6469,17 @@ const WINDOWS: &str = include_str!("fixtures/windows.hgl");
 /// CEVAL-1), whose trace is each value that arrived (TST-5).
 #[test]
 fn a_window_is_hgraphs_tsw() {
-    let emitted = emit(&[("windows.hgl", WINDOWS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_windows/__init__.py");
+    let emitted = emit_clean(&[("windows.hgl", WINDOWS)]);
+    let python = emitted.module("demo.windows");
     let ticks = "_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]";
-    for expected in [
+    python.assert_writes(&[
         format!("def collect(price: _hg.TS[_py.float]) -> {ticks}:\n    return price.value\n"),
         format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
         "    if ((not _output.valid) and ".to_string(),
         "    _output.value = price.value\n".to_string(),
         concat!(
-            "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
-            "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
+        "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
+        "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
         )
         .to_string(),
         "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
@@ -6720,25 +6489,20 @@ fn a_window_is_hgraphs_tsw() {
         "(prices.last_modified_time if prices.valid else None)".to_string(),
         "-> _hg.TSW[Side, _hg.WindowSize[2], _hg.WindowSize[1]]:".to_string(),
         "def _inst_newest__i64_4(values: _hg.TSW[_py.int, _hg.WindowSize[4], _hg.WindowSize[1]])"
-            .to_string(),
+        .to_string(),
         "    return arrived(prices=collect(price=price))\n".to_string(),
         "_harness.evaluate(collect, {\"price\": _hgl_4core._inst_replay__f64}, \
          _hgl_4core._inst_record__rolling_window_f64__3__1_, "
-            .to_string(),
+        .to_string(),
         "_harness.evaluate(arrived, {\"prices\": _hgl_4core._inst_replay__rolling_window_f64__3__1_}, \
          _hgl_4core._inst_record__f64, "
-            .to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+        .to_string(),
+    ]);
     // TYPE-9: a window within a struct, a fixed list, a dictionary and
     // a tuple is that one's child, read by its port, and wired from it
     // in a graph; a part that is no window is read in a hook.
     let small = "_hg.TSW[_py.float, _hg.WindowSize[2], _hg.WindowSize[1]]";
-    for expected in [
+    python.assert_writes(&[
         format!("_core.schema(Book, {{\"prices\": {ticks}, \"last\": _hg.TS[_py.float]}})"),
         format!("_hg.TSL[{small}, _hg.Size[2]]"),
         format!("_hg.TSD[_py.str, {small}]"),
@@ -6748,20 +6512,13 @@ fn a_window_is_hgraphs_tsw() {
         "_core.changed(book.delta_value, \"prices\")".to_string(),
         "    return arrived(prices=booked(price=price)[\"prices\"])\n".to_string(),
         "    return arrived_two(prices=slots(slot=slot, price=price)[1])\n".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
     // Core's `replay` and `record` written for the window.
-    let core = emitted.text("_hgl/_m_core/__init__.py");
-    for expected in [
+    let core = emitted.module("core");
+    core.assert_writes(&[
         format!("def _inst_replay__rolling_window_f64__3__1_(items: _py.object) -> {ticks}:"),
         format!("def _inst_record__rolling_window_f64__3__1_(input: {ticks}, "),
-    ] {
-        assert!(core.contains(&expected), "missing {expected} in:\n{core}");
-    }
+    ]);
 }
 
 /// What this target does not write of a window is reported. FN-12:
@@ -6822,13 +6579,13 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         reported,
         [
-            "m.hgl:3:9 target.unsupported",
-            "m.hgl:6:10 target.unsupported",
-            "m.hgl:10:19 target.unsupported",
-            "m.hgl:15:12 target.unsupported",
-            "m.hgl:21:12 target.unsupported",
-            "m.hgl:23:4 target.unsupported",
-            "m.hgl:26:4 target.unsupported",
+            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
+            "m.hgl:10:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
+            "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
+            "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
         ]
     );
     // The record of `recent`'s window is core's, which reads it.
@@ -6917,19 +6674,19 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
         [
             // The readiness of a field's window, of a list's element of
             // a duration, of a dictionary's value, and of `out`'s field.
-            "m.hgl:10:9 target.unsupported",
-            "m.hgl:13:10 target.unsupported",
-            "m.hgl:16:10 target.unsupported",
-            "m.hgl:22:12 target.unsupported",
+            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
+            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
             // A struct read whole, bound whole, its window field, a
             // dictionary of windows bound whole, a tuple's window.
-            "m.hgl:27:19 target.unsupported",
-            "m.hgl:31:20 target.unsupported",
-            "m.hgl:37:22 target.unsupported",
-            "m.hgl:43:19 target.unsupported",
-            "m.hgl:49:22 target.unsupported",
+            "m.hgl:27:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:31:20 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:37:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:43:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:49:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
             // `out` that holds a window, invalidated.
-            "m.hgl:55:12 target.unsupported",
+            "m.hgl:55:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
         ]
     );
 }
@@ -7012,12 +6769,12 @@ fn a_window_a_target_cannot_carry_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:20:5 target.unsupported",
-            "m.hgl:24:5 target.unsupported",
-            "m.hgl:33:5 target.unsupported",
-            "m.hgl:38:9 target.unsupported",
-            "m.hgl:45:34 target.unsupported",
-            "m.hgl:50:12 target.unsupported",
+            "m.hgl:20:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:24:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:33:5 target.unsupported: the hgraph target does not write a window given to the graph of a branch or of a loop yet",
+            "m.hgl:38:9 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+            "m.hgl:45:34 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+            "m.hgl:50:12 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
         ]
     );
 }
@@ -7036,7 +6793,7 @@ const CAPTURES: &str = include_str!("fixtures/captures.hgl");
 /// provider's `captured` lets the failures of a `start` or a `stop` out.
 #[test]
 fn a_capture_is_a_try_except() {
-    let emitted = emit(&[
+    let emitted = emit_clean(&[
         ("captures.hgl", CAPTURES),
         (
             "sink.hgl",
@@ -7050,17 +6807,14 @@ fn a_capture_is_a_try_except() {
             ),
         ),
     ]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_captures/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.captures");
+    python.assert_writes(&[
         "    boundary = _core.captured(_hg.try_except(doubled, value=value))\n    return boundary.out\n",
         "    return is_negative(failure=_core.captured_error(boundary.exception))\n",
         "    outer = _core.captured(_hg.try_except(handled, value=value, repeat=repeat))\n",
         "def handled(value: _hg.TS[_py.int], repeat: _hg.TS[_py.bool]) -> _hg.TS[_core.Error]:\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
-    let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
+    ]);
+    let sink = emitted.module("demo.sink");
     let expected = concat!(
         "    @_hg.graph\n",
         "    def _capture_0(value: _hg.TS[_py.int]) -> None:\n",
@@ -7087,10 +6841,9 @@ const ERRORS: &str = include_str!("fixtures/errors.hgl");
 /// call each held, and the defaults left out in the call of the child.
 #[test]
 fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
-    let emitted = emit(&[("errors.hgl", ERRORS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_errors/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("errors.hgl", ERRORS)]);
+    let python = emitted.module("demo.errors");
+    python.assert_writes(&[
         // A node is called in a graph of the capture's own, which no
         // call outside it shares.
         concat!(
@@ -7125,9 +6878,7 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
             "    boundary = _core.captured(_hg.try_except(_capture_9, value=value))\n",
         ),
         "    return _core.lifted_is_err(value)\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
+    ]);
 }
 
 /// ERR-1: "Distinguish source rejection, execution failure, ordinary
@@ -7140,22 +6891,20 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_no_hgl_error");
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
+    let hgraph = on_hgraph("hgraph_no_hgl_error");
+    fs::create_dir_all(&hgraph.directory).unwrap();
     fs::write(
-        directory.join("_core_native.py"),
+        hgraph.directory.join("_core_native.py"),
         include_str!("../support/core_native.py"),
     )
     .unwrap();
-    let script = directory.join("escapes.py");
+    let script = hgraph.directory.join("escapes.py");
     fs::write(&script, include_str!("fixtures/escapes.py")).unwrap();
-    let ran = std::process::Command::new(&python)
+    let ran = std::process::Command::new(&hgraph.python)
         .arg("-I")
         .arg("-B")
         .arg(&script)
-        .arg(&directory)
+        .arg(&hgraph.directory)
         .output()
         .expect("the interpreter starts");
     assert!(
@@ -7200,10 +6949,10 @@ fn a_capture_outside_a_let_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:4:12 target.unsupported",
-            "m.hgl:7:20 target.unsupported",
-            "m.hgl:12:12 target.unsupported",
-            "m.hgl:15:16 target.unsupported",
+            "m.hgl:4:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
+            "m.hgl:7:20 target.unsupported: the hgraph target does not write a capture of a lifted operator or native function yet",
+            "m.hgl:12:12 target.unsupported: the hgraph target does not write a capture of a node, of a lifted call or of a graph given a wiring-time value, other than as the value of a `let` yet",
+            "m.hgl:15:16 target.unsupported: the hgraph target does not write a capture in a test, outside an eval yet",
         ]
     );
 }
@@ -7219,10 +6968,9 @@ fn a_capture_outside_a_let_is_reported() {
 /// composed: Python's own `if`.
 #[test]
 fn a_graph_if_and_switch_are_child_graphs() {
-    let emitted = emit(&[("conditionals.hgl", CONDITIONALS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_conditionals/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("conditionals.hgl", CONDITIONALS)]);
+    let python = emitted.module("demo.conditionals");
+    python.assert_writes(&[
         // No `else`: the false branch is a graph that never ticks.
         concat!(
             "    @_hg.graph\n",
@@ -7289,20 +7037,14 @@ fn a_graph_if_and_switch_are_child_graphs() {
         ),
         // A read after the branch assigns the `var` is no input.
         "    return _hg.switch_(flag, {True: _case_17_0, False: _case_17_1}, left=left, right=right)\n",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 #[test]
 fn notification_and_publication_have_distinct_guards() {
-    let emitted = emit(&[("notified.hgl", NOTIFIED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_notified/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("notified.hgl", NOTIFIED)]);
+    let python = emitted.module("demo.notified");
+    python.assert_writes(&[
         "@_hg.compute_node(valid=())\ndef on_publication(",
         "@_hg.compute_node(valid=())\ndef on_notification(",
         "@_hg.compute_node(valid=())\ndef watch_both(",
@@ -7312,12 +7054,7 @@ fn notification_and_publication_have_distinct_guards() {
             "    if ((left.modified and left.valid) or (right.modified and right.valid)) ",
             "and (probe.modified and probe.valid):\n        return True"
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// EXPR-3: "A compound assignment reads the place first". EXPR-2: an
@@ -7364,9 +7101,8 @@ const COMPOUND: &str = concat!(
 /// came to (EXPR-2, EXPR-3).
 #[test]
 fn a_compound_assignment_evaluates_its_place_once() {
-    let emitted = emit(&[("compound.hgl", COMPOUND)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_compound/__init__.py");
+    let emitted = emit_clean(&[("compound.hgl", COMPOUND)]);
+    let python = emitted.module("demo.compound");
     assert!(
         python.contains(concat!(
             "    _at_1 = next_slot(store=_store)\n",
@@ -7427,10 +7163,9 @@ const WRAPPED: &str = concat!(
 /// function runs, and a call on it there is run then (FN-9).
 #[test]
 fn a_graph_sets_the_store_where_it_is_built() {
-    let emitted = emit(&[("wrapped.hgl", WRAPPED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_wrapped/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("wrapped.hgl", WRAPPED)]);
+    let python = emitted.module("demo.wrapped");
+    python.assert_writes(&[
         concat!(
             "@_hg.graph\n",
             "def seeded(limit: _py.int) -> _hg.TS[_py.int]:\n",
@@ -7444,12 +7179,7 @@ fn a_graph_sets_the_store_where_it_is_built() {
             "    factor = _core.get_GlobalState_str(store=_store, key=\"factor\")\n",
             "    return scaled(value=value, factor=factor)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// OPS-4: "`convert<T>(value)` converts a value to the type T." OPS-6
@@ -7616,10 +7346,9 @@ const CONVERSIONS: &str = concat!(
 /// division's `zero` is (NUM-9), and `rounding` and `nan` as arguments.
 #[test]
 fn a_conversion_is_the_providers_function_for_what_it_gives() {
-    let emitted = emit(&[("converted.hgl", CONVERSIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_converted/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("converted.hgl", CONVERSIONS)]);
+    let python = emitted.module("demo.converted");
+    python.assert_writes(&[
         "def as_float(value):\n    return _core.convert_i64_to_f64(value=value)\n",
         "def as_flag(value):\n    return _core.convert_f64_to_bool(value=value)\n",
         concat!(
@@ -7645,12 +7374,7 @@ fn a_conversion_is_the_providers_function_for_what_it_gives() {
             "    return _core.convert_f64_to_str(",
             "value=_core.convert_str_to_f64(value=text, invalid=\"fail\"))\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-5: "A trace written out is dense, `[7, _, 9]`, or timed, `[0s: 7,
@@ -7691,10 +7415,9 @@ const TIMED: &str = concat!(
 /// a publication, in the order written (TST-7).
 #[test]
 fn a_timed_trace_is_its_entries() {
-    let emitted = emit(&[("timed.hgl", TIMED)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_timed/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("timed.hgl", TIMED)]);
+    let python = emitted.module("demo.timed");
+    python.assert_writes(&[
         concat!(
             "_harness.evaluate(pass_, {\"value\": _hgl_4core._inst_replay__i64}, ",
             "_hgl_4core._inst_record__i64, ",
@@ -7704,12 +7427,7 @@ fn a_timed_trace_is_its_entries() {
             "(_dt.timedelta(microseconds=2000000), 2)]))",
         ),
         "_harness.timed([(later(), 7)])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TST-17: "An integration test ... is a named test that may run in
@@ -7772,18 +7490,15 @@ const INTEGRATION: &str = concat!(
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_integration_test_runs_in_real_time_within_its_limit() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_integration");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("live.hgl", INTEGRATION)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
+    let hgraph = on_hgraph("hgraph_integration");
+    let emitted = emit_clean(&[("live.hgl", INTEGRATION)]);
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
     // An integration test that writes no limit is given three seconds
     // here, where it has a minute: long enough for a slow host to run
     // the ones that end. One that writes its own keeps it.
     let ran = run_within(
-        Path::new(&python),
-        &directory,
+        &hgraph.python,
+        &hgraph.directory,
         &emitted.output,
         &all,
         &|test: &Test| {
@@ -7791,21 +7506,7 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
                 .then(|| test.timeout.unwrap_or(std::time::Duration::from_secs(3)))
         },
     );
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let described = outcomes(&emitted, &all, &ran);
     assert_eq!(
         described,
         [
@@ -7826,13 +7527,9 @@ fn an_integration_test_runs_in_real_time_within_its_limit() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_stop_reads_what_the_node_published() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_out_in_stop");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("ended.hgl", OUT_IN_STOP)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let hgraph = on_hgraph("hgraph_out_in_stop");
+    let emitted = emit_clean(&[("ended.hgl", OUT_IN_STOP)]);
+    let ran = hgraph.run_all(&emitted);
     let described: Vec<String> = emitted
         .output
         .tests
@@ -7869,10 +7566,8 @@ fn a_stop_reads_what_the_node_published() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_conversion_that_fails_under_fail_escapes() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_escapes");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
+    let hgraph = on_hgraph("hgraph_escapes");
+    let emitted = emit_clean(&[(
         "escapes.hgl",
         concat!(
             "module demo.escapes\n",
@@ -7883,24 +7578,9 @@ fn a_conversion_that_fails_under_fail_escapes() {
             "test no_flag { assert convert<bool>(\"yes\", invalid: .fail) }\n",
         ),
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let ran = hgraph.run(&emitted, &all);
+    let described = outcomes(&emitted, &all, &ran);
     assert_eq!(
         described,
         [
@@ -7920,7 +7600,6 @@ fn a_conversion_that_fails_under_fail_escapes() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_run_in_real_time_is_stopped_by_its_host() {
-    let python = python_with_hgraph();
     let emitted = emit(&APPLICATIONS);
     let endless = emitted
         .output
@@ -7929,11 +7608,10 @@ fn a_run_in_real_time_is_stopped_by_its_host() {
         .position(|application| application.path == "demo.ticks.endless")
         .expect("the application is written");
     let ran = |name: &str, stop: &Stop| {
-        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
-        fs::remove_dir_all(&directory).ok();
+        let hgraph = on_hgraph(name);
         run_application(
-            Path::new(&python),
-            &directory,
+            &hgraph.python,
+            &hgraph.directory,
             &emitted.output,
             endless,
             stop,
@@ -7997,9 +7675,7 @@ fn a_run_in_real_time_is_stopped_by_its_host() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_names_the_statement_that_failed() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_failures");
-    fs::remove_dir_all(&directory).ok();
+    let hgraph = on_hgraph("hgraph_failures");
     let mut files = REACH.to_vec();
     files.push(("fails.hgl", DIVISION_FAILS));
     files.push(("node.hgl", RESULT_FAILS));
@@ -8015,117 +7691,103 @@ fn a_failure_names_the_statement_that_failed() {
     files.push(("sets.hgl", SET_FAILS));
     files.push(("given.hgl", GIVEN_FAILS));
     let emitted = emit(&files);
-    let tests = [
-        emitted.test("direct").0,
-        emitted.test("wrong").0,
-        emitted.test("overflows").0,
-        emitted.test("too_long").0,
-        emitted.test("too_late").0,
-        emitted.test("whole_by_zero").0,
-        emitted.test("strict_by_zero").0,
-        emitted.test("negative_tolerance").0,
-        emitted.test("no_number").0,
-        emitted.test("no_name").0,
-        emitted.test("given").0,
-        emitted.test("omitted").0,
-        emitted.test("in_order").0,
-        emitted.test("unequal").0,
-        emitted.test("unmatched").0,
-        emitted.test("beyond").0,
-        emitted.test("before").0,
-        emitted.test("absent").0,
-        emitted.test("outside").0,
-        emitted.test("removed_is_not_added").0,
-        emitted.test("one_more").0,
-        emitted.test("removed_first").0,
-        emitted.test("silence_counted").0,
-        emitted.test("nothing_raised").0,
-        emitted.test("another_code").0,
-        emitted.test("nested_assertion").0,
-        emitted.test("nested_raises").0,
-        emitted.test("nested_then_raised").0,
-        emitted.test("both_ends").0,
-        emitted.test("too_dense").0,
-    ];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
-    let said: Vec<String> = ran
-        .iter()
-        .map(|ran| match ran {
-            Ran::Passed => "passed".to_string(),
-            Ran::Failed { at, message } => format!(
-                "failed {} {message}",
-                at.map_or("nowhere".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("not run {reason}"),
-        })
-        .collect();
+    let tests: Vec<usize> = [
+        "direct",
+        "wrong",
+        "overflows",
+        "too_long",
+        "too_late",
+        "whole_by_zero",
+        "strict_by_zero",
+        "negative_tolerance",
+        "no_number",
+        "no_name",
+        "given",
+        "omitted",
+        "in_order",
+        "unequal",
+        "unmatched",
+        "beyond",
+        "before",
+        "absent",
+        "outside",
+        "removed_is_not_added",
+        "one_more",
+        "removed_first",
+        "silence_counted",
+        "nothing_raised",
+        "another_code",
+        "nested_assertion",
+        "nested_raises",
+        "nested_then_raised",
+        "both_ends",
+        "too_dense",
+    ]
+    .iter()
+    .map(|name| emitted.test(name).0)
+    .collect();
+    let ran = hgraph.run(&emitted, &tests);
     assert_eq!(
-        said,
+        outcomes(&emitted, &tests, &ran),
         [
-            "passed",
-            "failed reach.hgl:22:5 the assertion does not hold",
-            "failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed reach.hgl:30:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
-            "failed reach.hgl:33:5 HglError: numeric.out_of_range: an instant result is outside the years 1 to 9999",
-            "failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
-            "failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
-            "failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
-            "failed enums.hgl:5:18 HglError: `Side` has no member 9",
-            "failed enums.hgl:6:16 HglError: `Side` has no member 'none'",
+            "direct passed",
+            "wrong failed reach.hgl:22:5 the assertion does not hold",
+            "overflows failed reach.hgl:26:5 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "too_long failed reach.hgl:30:5 HglError: numeric.out_of_range: a duration result is outside the signed 64-bit range of microseconds",
+            "too_late failed reach.hgl:33:5 HglError: numeric.out_of_range: an instant result is outside the years 1 to 9999",
+            "whole_by_zero failed fails.hgl:4:22 HglError: numeric.division_by_zero: a division by zero",
+            "strict_by_zero failed fails.hgl:5:23 HglError: numeric.division_by_zero: a division by zero",
+            "negative_tolerance failed close.hgl:3:27 HglError: the tolerance `abs` is not finite and nonnegative",
+            "no_number failed enums.hgl:5:18 HglError: `Side` has no member 9",
+            "no_name failed enums.hgl:6:16 HglError: `Side` has no member 'none'",
             // TYPE-5: "Defaults are evaluated only when omitted", and
             // "Written arguments evaluate once in source order; failure
             // prevents later arguments."
-            "passed",
-            "failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
-            "failed structs.hgl:11:17 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed structs.hgl:12:16 the assertion does not hold",
+            "given passed",
+            "omitted failed structs.hgl:10:16 HglError: numeric.division_by_zero: a division by zero",
+            "in_order failed structs.hgl:11:17 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "unequal failed structs.hgl:12:16 the assertion does not hold",
             // CTRL-6: "An unmatched selector uses default or fails."
-            "failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
+            "unmatched failed loops.hgl:9:18 HglError: no case of the `switch` has the value 'z'",
             // EXPR-3: "An index outside a list fails where it is
             // evaluated", and ERR-6: a strict read of a key that is
             // not there.
-            "failed elements.hgl:9:15 HglError: the index 2 is outside a sequence of 2",
-            "failed elements.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
-            "failed elements.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
-            "failed elements.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
+            "beyond failed elements.hgl:9:15 HglError: the index 2 is outside a sequence of 2",
+            "before failed elements.hgl:10:15 HglError: the index -1 is outside a sequence of 2",
+            "absent failed elements.hgl:11:15 HglError: value.missing_key: the dictionary has no key 'z'",
+            "outside failed elements.hgl:12:16 HglError: the index 5 is outside a sequence of 2",
             // TST-4: a delta that removed an element is not one that
             // added it, and a trace of one cell is not one of two.
-            "failed sets.hgl:9:5 the assertion does not hold",
-            "failed sets.hgl:12:5 the assertion does not hold",
+            "removed_is_not_added failed sets.hgl:9:5 the assertion does not hold",
+            "one_more failed sets.hgl:12:5 the assertion does not hold",
             // EXPR-13: a delta's properties are evaluated as written.
-            "failed sets.hgl:16:26 HglError: numeric.division_by_zero: a division by zero",
+            "removed_first failed sets.hgl:16:26 HglError: numeric.division_by_zero: a division by zero",
             // TST-16: a `_` of a dense trace gives a `const fn` no
             // tuple, so two publications are counted, and not three.
-            "failed given.hgl:10:24 the assertion does not hold",
+            "silence_counted failed given.hgl:10:24 the assertion does not hold",
             // TST-10: a block that completes fails at the assertion, and
             // one that lets out another code fails where that was
             // raised, with what it says. TST-11: a failed assertion in
             // the block is the test's failure.
-            "failed raises.hgl:6:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
-            "failed raises.hgl:9:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
-            "failed raises.hgl:13:9 the assertion does not hold",
+            "nothing_raised failed raises.hgl:6:5 AssertionError: the block raised nothing, and `numeric.division_by_zero` was expected",
+            "another_code failed raises.hgl:9:49 HglError: numeric.out_of_range: an i64 result is outside the signed 64-bit range",
+            "nested_assertion failed raises.hgl:13:9 the assertion does not hold",
             // A refused error fails the inner assertion, and is no
             // match for the outer one though it has its code.
-            "failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
-            "passed",
+            "nested_raises failed raises.hgl:18:46 HglError: numeric.division_by_zero: a division by zero",
+            "nested_then_raised passed",
             // CRUN-2: an `end` with a `length`. TST-6: a publication a
             // second after the start is not one at the start.
-            "failed bounded.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
-            "failed bounded.hgl:12:5 the assertion does not hold",
+            "both_ends failed bounded.hgl:9:5 HglError: run.end_and_length: a run's configuration gives both an `end` and a `length`",
+            "too_dense failed bounded.hgl:12:5 the assertion does not hold",
         ]
     );
 
     // hgraph words a node's failure itself, and the error's own line
     // is in what it says.
     let node = [emitted.test("node_fails").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &node);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("node.hgl:6:19".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &node));
+    assert_eq!(at, Some("node.hgl:6:19".to_string()));
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),
         "{message}"
@@ -8134,14 +7796,8 @@ fn a_failure_names_the_statement_that_failed() {
     // TIME-5: a `stop` reads an input under its guard. The input is
     // valid here, so the guarded statement is run, and fails.
     let stop = [emitted.test("stop_fails").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &stop);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("stops.hgl:9:19".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &stop));
+    assert_eq!(at, Some("stops.hgl:9:19".to_string()));
     assert!(
         message.contains("HglError: numeric.division_by_zero: a division by zero"),
         "{message}"
@@ -8149,14 +7805,8 @@ fn a_failure_names_the_statement_that_failed() {
 
     // CAP-6: "an absent key fails the node."
     let absent = [emitted.test("an_absent_key_fails_the_node").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &absent);
-    let [Ran::Failed { at, message }] = ran.as_slice() else {
-        panic!("the test failed: {ran:?}");
-    };
-    assert_eq!(
-        at.map(|at| emitted.place(at)),
-        Some("caps.hgl:7:9".to_string())
-    );
+    let (at, message) = failed(&emitted, &hgraph.run(&emitted, &absent));
+    assert_eq!(at, Some("caps.hgl:7:9".to_string()));
     assert!(
         message.contains("HglError: the global store holds nothing under 'nothing'"),
         "{message}"
@@ -8168,7 +7818,7 @@ fn a_failure_names_the_statement_that_failed() {
 /// data handler even if another input woke the node.
 #[test]
 fn changing_input_activity_preserves_a_modified_guard() {
-    let emitted = emit(&[(
+    let emitted = emit_clean(&[(
         "activity.hgl",
         concat!(
             "module activity\n",
@@ -8180,15 +7830,12 @@ fn changing_input_activity_preserves_a_modified_guard() {
             "}\n",
         ),
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_activity/__init__.py");
-    for expected in [
+    let python = emitted.module("activity");
+    python.assert_writes(&[
         "data.make_active()",
         "data.make_passive()",
         "if data.valid and data.modified:",
-    ] {
-        assert!(python.contains(expected), "{python}");
-    }
+    ]);
 }
 
 /// END-5, TIME-3: querying activity reads the input at that point in the
@@ -8196,7 +7843,7 @@ fn changing_input_activity_preserves_a_modified_guard() {
 /// requirement and stays in the executable condition.
 #[test]
 fn an_activity_query_in_a_guard_reads_the_direct_input() {
-    let emitted = emit(&[(
+    let emitted = emit_clean(&[(
         "observed.hgl",
         concat!(
             "module observed\n",
@@ -8210,22 +7857,19 @@ fn an_activity_query_in_a_guard_reads_the_direct_input() {
             "}\n",
         ),
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_observed/__init__.py");
-    for expected in [
+    let python = emitted.module("observed");
+    python.assert_writes(&[
         "@_hg.compute_node(active=(\"probe\",), valid=())\ndef sample(",
         "data.active:\n        data.make_passive()\n        return data.active\n",
         "    final_activity = data.active\n",
-    ] {
-        assert!(python.contains(expected), "{python}");
-    }
+    ]);
 }
 
 /// TST-5, FN-6, TYPE-16: the replay publishes a nullable or a set to
 /// the lifted function. Its wire carries the payload, not the trace delta.
 #[test]
 fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
-    let emitted = emit(&[(
+    let emitted = emit_clean(&[(
         "payload.hgl",
         concat!(
             "module payload\n",
@@ -8237,8 +7881,7 @@ fn a_value_helper_in_eval_is_lifted_with_the_replayed_payload_type() {
             "}\n",
         ),
     )]);
-    assert!(emitted.reported.is_empty(), "{:?}", emitted.reported);
-    let python = emitted.text("_hgl/_m_payload/__init__.py");
+    let python = emitted.module("payload");
     assert!(python.contains("def _lift_0_keep(value: _hg.TS[_py.int | None])"));
     assert!(python.contains("def _lift_1_from_members(values: _hg.TSS[_py.int])"));
 }
@@ -8255,14 +7898,13 @@ const TEMPORAL_STRUCTS: &str = include_str!("fixtures/temporal_structs.hgl");
 /// fields that changed.
 #[test]
 fn a_temporal_struct_is_a_bundle_of_its_fields() {
-    let emitted = emit(&[("temporal_structs.hgl", TEMPORAL_STRUCTS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_bundles/__init__.py");
+    let emitted = emit_clean(&[("temporal_structs.hgl", TEMPORAL_STRUCTS)]);
+    let python = emitted.module("demo.bundles");
     let quote = concat!(
         "_hg.TSB[_core.schema(Quote, ",
         "{\"bid\": _hg.TS[_py.int], \"ask\": _hg.TS[_py.int]})]"
     );
-    for expected in [
+    python.assert_writes(&[
         format!("def quoted(bid: _hg.TS[_py.int], ask: _hg.TS[_py.int]) -> {quote}:"),
         "    return _core.bundled(Quote(bid=bid.value, ask=ask.value))".to_string(),
         "        return _core.struct_delta(bid=price.value)".to_string(),
@@ -8301,12 +7943,7 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
             part("quote[\"bid\"]"),
             part("quote[\"ask\"]")
         ),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-9: a dictionary field of a temporal struct is a `TSD`, which
@@ -8330,7 +7967,12 @@ fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet"
+        ]
+    );
 }
 
 /// CTRL-13 and TYPE-9: an ordinary fixed list or dictionary of structs
@@ -8355,7 +7997,12 @@ fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:11:12 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet"
+        ]
+    );
     // A dictionary of structs as a branch's constant would be given each
     // struct whole, where its `TSD`'s children take their fields.
     let emitted = emit(&[(
@@ -8375,7 +8022,12 @@ fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:11:12 target.unsupported: the hgraph target does not write an ordinary dictionary of composites as a branch's connection yet"
+        ]
+    );
 }
 
 /// TYPE-9: temporalization maps "lists to child positions, dictionaries
@@ -8390,12 +8042,11 @@ const TEMPORAL_COLLECTIONS: &str = include_str!("fixtures/temporal_collections.h
 /// helper as a Python list or dict.
 #[test]
 fn a_temporal_list_or_dictionary_is_written_by_its_children() {
-    let emitted = emit(&[("temporal_collections.hgl", TEMPORAL_COLLECTIONS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_collections/__init__.py");
+    let emitted = emit_clean(&[("temporal_collections.hgl", TEMPORAL_COLLECTIONS)]);
+    let python = emitted.module("demo.collections");
     let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
     let prices = "_hg.TSD[_py.str, _hg.TS[_py.int]]";
-    for expected in [
+    python.assert_writes(&[
         "-> _hg.TS[_py.tuple[_py.int, ...]]:".to_string(),
         "        return _py.tuple([])".to_string(),
         "    return _core.item(_py.list(values.value), 1)".to_string(),
@@ -8416,12 +8067,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "store=_core.updated(change), key=\"A\"".to_string(),
         "    return _core.entry_of(priced(key=key, price=price), _hg.const(\"B\", tp=_hg.TS[_py.str]))".to_string(),
         "    return _core.entry_of(priced(key=key, price=price), chosen)".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a temporal list or dictionary
@@ -8467,13 +8113,13 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:45 target.unsupported",
-            "m.hgl:9:23 target.unsupported",
-            "m.hgl:11:11 target.unsupported",
-            "m.hgl:15:19 target.unsupported",
-            "m.hgl:18:19 target.unsupported",
-            "m.hgl:23:44 target.unsupported",
-            "m.hgl:24:4 target.unsupported",
+            "m.hgl:5:45 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` takes no removed position and no size yet",
+            "m.hgl:9:23 target.unsupported: the hgraph target does not write the delta of an unsized list yet",
+            "m.hgl:11:11 target.unsupported: the hgraph target does not write the type `list<Quote>` yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet",
+            "m.hgl:18:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
+            "m.hgl:23:44 target.unsupported: the hgraph target does not write a list's element at a position that ticks yet",
+            "m.hgl:24:4 target.unsupported: the hgraph target does not write the type `dict<str, list<i64>>` yet",
         ]
     );
 }
@@ -8493,10 +8139,9 @@ const SCALARS: &str = include_str!("fixtures/scalars.hgl");
 /// made by the provider's function, which checks it.
 #[test]
 fn every_scalar_is_a_temporal_type() {
-    let emitted = emit(&[("scalars.hgl", SCALARS)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_scalars/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("scalars.hgl", SCALARS)]);
+    let python = emitted.module("demo.scalars");
+    python.assert_writes(&[
         "def pass_bytes(value: _hg.TS[_py.bytes]) -> _hg.TS[_py.bytes]:",
         "def pass_tenor(value: _hg.TS[_core.Tenor]) -> _hg.TS[_core.Tenor]:",
         "def pass_zone(value: _hg.TS[_core.Timezone]) -> _hg.TS[_core.Timezone]:",
@@ -8510,12 +8155,7 @@ fn every_scalar_is_a_temporal_type() {
         "_core.zoned_time(_dt.time(9, 30, 0, 0), \"Europe/London\")",
         "_core.zoned_datetime(_dt.datetime(2026, 9, 3, 9, 30, 0, 0), 60, \"Europe/London\")",
         "_core.add__zoned_datetime_duration(lhs=",
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-2: "Instants/durations use signed 64-bit microseconds", and an
@@ -8542,9 +8182,9 @@ fn an_instant_outside_the_calendar_in_utc_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "edges.hgl:2:22 target.unsupported",
-            "edges.hgl:3:23 target.unsupported",
-            "edges.hgl:4:23 target.unsupported",
+            "edges.hgl:2:22 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "edges.hgl:3:23 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
+            "edges.hgl:4:23 target.unsupported: the hgraph target does not write an instant outside the years 1 to 9999 yet",
         ]
     );
     assert_eq!(emitted.blocked("inside"), None);
@@ -8559,10 +8199,8 @@ fn an_instant_outside_the_calendar_in_utc_is_reported() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn the_run_provider_checks_a_zone() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_zones");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
+    let hgraph = on_hgraph("hgraph_zones");
+    let emitted = emit_clean(&[(
         "zones.hgl",
         concat!(
             "module zones\n",
@@ -8573,24 +8211,9 @@ fn the_run_provider_checks_a_zone() {
             "test consistent { let at = @2026-03-29T02:30+01:00[Europe/London] }\n",
         ),
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
     let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
-    let described: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .map(|(test, ran)| match ran {
-            Ran::Passed => format!("{} passed", test.name),
-            Ran::Failed { at, message } => format!(
-                "{} failed {} {message}",
-                test.name,
-                at.map_or("?".to_string(), |at| emitted.place(at))
-            ),
-            Ran::NotRun(reason) => format!("{} not run: {reason}", test.name),
-        })
-        .collect();
+    let ran = hgraph.run(&emitted, &all);
+    let described = outcomes(&emitted, &all, &ran);
     let absent = "HglError: the zone `Mars/Olympus` is not in the run provider's zone catalogue";
     let offset = "is not the offset of the zone `Europe/London` at that time";
     assert_eq!(
@@ -8638,21 +8261,16 @@ fn collection_validity_and_a_lists_delta_are_written() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:15 target.unsupported",
-            "m.hgl:12:19 target.unsupported"
+            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta published to an unsized list yet",
+            "m.hgl:12:19 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` does not report a position that became invalid yet"
         ]
     );
-    let python = emitted.text("_hgl/_m_m/__init__.py");
-    for expected in [
+    let python = emitted.module("m");
+    python.assert_writes(&[
         "pair.valid and pair.all_valid",
         "_output: _hg.TS_OUT[_py.tuple[_py.int, ...]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-16: "A delta written with a smaller `size_modified` and no
@@ -8663,10 +8281,8 @@ fn collection_validity_and_a_lists_delta_are_written() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_negative_size");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
+    let hgraph = on_hgraph("hgraph_negative_size");
+    let emitted = emit_clean(&[(
         "sizes.hgl",
         concat!(
             "module sizes\n",
@@ -8690,9 +8306,8 @@ fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
     let tests = [emitted.test("shrinks").0, emitted.test("negative").0];
-    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    let ran = hgraph.run(&emitted, &tests);
     assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
     assert!(matches!(ran[1], Ran::Passed), "{:?}", ran[1]);
 }
@@ -8713,10 +8328,9 @@ const GRAPH_FOR: &str = include_str!("fixtures/graph_for.hgl");
 /// performs no conditional work": `switch_` of graphs with no output.
 #[test]
 fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
-    let emitted = emit(&[("graph_for.hgl", GRAPH_FOR)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_graph_for/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("graph_for.hgl", GRAPH_FOR)]);
+    let python = emitted.module("demo.graph_for");
+    python.assert_writes(&[
         // Unrolled where the graph is built, carrying the `var`.
         concat!(
             "    running = price\n",
@@ -8768,12 +8382,7 @@ fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
             "        return _lift_10_add__i64_i64(lhs=taken, rhs=1)\n",
             "    return _hg.switch_(flag, {True: _case_4_0, False: _case_4_1}, left=left, right=right)\n",
         ),
-    ] {
-        assert!(
-            python.contains(expected),
-            "the module has:\n{expected}\nin:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a graph's loops is reported: a
@@ -8820,13 +8429,13 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:6:12 target.unsupported",
-            "m.hgl:11:25 target.unsupported",
-            "m.hgl:16:9 target.unsupported",
+            "m.hgl:6:12 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
+            "m.hgl:11:25 target.unsupported: the hgraph target does not write a loop's key or member read other than as the argument of a temporal parameter yet",
+            "m.hgl:16:9 target.unsupported: the hgraph target does not write a `return` under a branch selected at runtime in a loop unrolled where the graph is built yet",
             // A nullable element of an unsized list (TYPE-14).
-            "m.hgl:21:10 target.unsupported",
-            "m.hgl:22:5 target.unsupported",
-            "m.hgl:25:23 target.unsupported",
+            "m.hgl:21:10 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
+            "m.hgl:22:5 target.unsupported: the hgraph target does not write a loop over `list<i64?>` yet",
+            "m.hgl:25:23 target.unsupported: the hgraph target does not write a `return` in an `if` over a connection that gives a `let` or a `var` its value, with a branch that has no value yet",
         ]
     );
 }
@@ -8850,13 +8459,9 @@ const TUPLES_NAMES: &str = include_str!("fixtures/tuples_names.hgl");
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_struct_names");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let hgraph = on_hgraph("hgraph_struct_names");
+    let emitted = emit_clean(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
+    let ran = hgraph.run_all(&emitted);
     let not_passed: Vec<String> = emitted
         .output
         .tests
@@ -8876,12 +8481,11 @@ fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
 /// its fields and a set field whole; a part of `out` is its own port.
 #[test]
 fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
-    let emitted = emit(&[("tuples.hgl", TUPLES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_tuples/__init__.py");
+    let emitted = emit_clean(&[("tuples.hgl", TUPLES)]);
+    let python = emitted.module("demo.tuples");
     let pair = "_hg.TSB[\"_0\": _hg.TS[_py.int], \"_1\": _hg.TS[_py.str]]";
     let shape = "_hg.TSB[_core.schema(Shape, {\"id\": _hg.TS[_py.int]})]";
-    for expected in [
+    python.assert_writes(&[
         // TYPE-9, TYPE-10, TYPE-16: a tuple.
         format!("-> {pair}:\n    return _core.bundled((a.value, b.value,), (None, None,))"),
         "    only_first = (value.value, None,)".to_string(),
@@ -8891,7 +8495,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
             part("pair[\"_0\"]"),
             part("pair[\"_1\"]")
         ),
-        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)".to_string(),
+        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)"
+            .to_string(),
         "_core.positions(parts.delta_value, (None, (None, None,),))".to_string(),
         "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
         "    return paired(a=a, b=b)[\"_0\"]".to_string(),
@@ -8923,7 +8528,8 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
-        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))".to_string(),
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))"
+            .to_string(),
         // TIME-7: `out` assigned by part, and read back.
         format!(
             "    _output[\"ask\"].value = _core.add__i64_i64(lhs={}, rhs=1)",
@@ -8946,12 +8552,7 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
             part("_output[\"bid\"]"),
             part("_output[\"ask\"]")
         ),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// What this target does not write of a temporal tuple or struct is
@@ -9001,12 +8602,12 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:7:20 target.unsupported",
-            "m.hgl:15:33 target.unsupported",
-            "m.hgl:16:21 target.unsupported",
-            "m.hgl:21:22 target.unsupported",
-            "m.hgl:27:12 target.unsupported",
-            "m.hgl:32:37 target.unsupported",
+            "m.hgl:7:20 target.unsupported: the hgraph target does not write a whole value of the temporal `Shape` yet",
+            "m.hgl:15:33 target.unsupported: the hgraph target does not write a whole value of the temporal `Shape` yet",
+            "m.hgl:16:21 target.unsupported: the hgraph target does not write the type `Shape` yet",
+            "m.hgl:21:22 target.unsupported: the hgraph target does not write the delta of a list or a dictionary that holds a tuple yet",
+            "m.hgl:27:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
+            "m.hgl:32:37 target.unsupported: the hgraph target does not write a composite value in a tuple of connections yet",
         ]
     );
 }
@@ -9031,17 +8632,17 @@ const REFERENCES: &str = include_str!("fixtures/references.hgl");
 /// input as its whole value.
 #[test]
 fn a_reference_is_a_ref_and_a_signal_a_signal() {
-    let emitted = emit(&[("references.hgl", REFERENCES)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_references/__init__.py");
+    let emitted = emit_clean(&[("references.hgl", REFERENCES)]);
+    let python = emitted.module("demo.references");
     let reference = "_hg.REF[_hg.TS[_py.int]]";
-    for expected in [
+    python.assert_writes(&[
         format!(
             "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}) -> {reference}:"
         ),
         "        return left.value\n".to_string(),
         "    held = target.value\n    return held\n".to_string(),
-        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:".to_string(),
+        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:"
+            .to_string(),
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:".to_string(),
         "    return _lift_0_doubled(value=pick(use_left=use_left, left=left, right=right))"
             .to_string(),
@@ -9050,7 +8651,8 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
             .to_string(),
         format!("def _inst_ref_ticks__i64(value: {reference}, "),
         "    return _inst_same__ref_i64_(value=left)".to_string(),
-        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))".to_string(),
+        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
+            .to_string(),
         // A captured call binds what it leaves out as a call does.
         "        return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
             .to_string(),
@@ -9058,17 +8660,13 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
         "    whole = _output.value\n".to_string(),
-        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:".to_string(),
+        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:"
+            .to_string(),
         // An atomic input's value is hgraph's: a `var` takes a copy.
         "    saved = _core.copied(triple.value)\n".to_string(),
         "        whole = quote.value\n".to_string(),
         "rhs=quote.value.ask), rhs=quote.value.ask)".to_string(),
-    ] {
-        assert!(
-            python.contains(&expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TIME-10 and GEN-11: a lifted helper given a reference to a reference,
@@ -9077,7 +8675,7 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
 /// analyser admits it by.
 #[test]
 fn a_lifted_input_follows_every_reference_it_is_given() {
-    let emitted = emit(&[(
+    let emitted = emit_clean(&[(
         "m.hgl",
         concat!(
             "module m\n",
@@ -9086,19 +8684,13 @@ fn a_lifted_input_follows_every_reference_it_is_given() {
             "fn optional(left: ref<i64>?) -> i64 => doubled(left)\n",
         ),
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_m/__init__.py");
+    let python = emitted.module("m");
     assert!(!python.contains("value: _hg.REF"), "{python}");
-    for expected in [
+    python.assert_writes(&[
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:",
         "def twice(left: _hg.REF[_hg.REF[_hg.TS[_py.int]]]) -> _hg.TS[_py.int]:",
         "def optional(left: _hg.REF[_hg.TS[_py.int]]) -> _hg.TS[_py.int]:",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 /// TYPE-3: a struct is a value where an abstract struct it inherits from
@@ -9131,8 +8723,8 @@ fn an_inherited_struct_across_a_reference_is_not_written_yet() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:14:41 target.unsupported",
-            "m.hgl:16:41 target.unsupported",
+            "m.hgl:14:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
+            "m.hgl:16:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
         ]
     );
 }
@@ -9167,9 +8759,9 @@ fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:11 target.unsupported",
-            "m.hgl:12:10 target.unsupported",
-            "m.hgl:15:9 target.unsupported",
+            "m.hgl:9:11 target.unsupported: the hgraph target does not write the type `Routed` yet",
+            "m.hgl:12:10 target.unsupported: the hgraph target does not write the type `Maybe` yet",
+            "m.hgl:15:9 target.unsupported: the hgraph target does not write the type `list<ref<i64>, 2>` yet",
         ]
     );
 }
@@ -9194,10 +8786,9 @@ const STRUCT_REVIEW: &str = include_str!("fixtures/struct_review.hgl");
 /// its one value.
 #[test]
 fn a_part_not_published_and_a_composite_constant_are_written() {
-    let emitted = emit(&[("struct_review.hgl", STRUCT_REVIEW)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_struct_review/__init__.py");
-    for expected in [
+    let emitted = emit_clean(&[("struct_review.hgl", STRUCT_REVIEW)]);
+    let python = emitted.module("demo.struct_review");
+    python.assert_writes(&[
         "    return _core.add__i64_i64(lhs=(quote[\"ask\"].value if quote[\"ask\"].valid else _core.unset_read()), rhs=1)",
         "    price = (level[\"price\"].value if level[\"price\"].valid else None)",
         "    held = ((pair[\"_0\"].value if pair[\"_0\"].valid else _core.unset_read()), (pair[\"_1\"].value if pair[\"_1\"].valid else _core.unset_read()),)",
@@ -9207,12 +8798,7 @@ fn a_part_not_published_and_a_composite_constant_are_written() {
         "def emptied(a: _hg.TS[_py.int]) -> _hg.TS[Empty]:\n    return _core.only_value(Empty(), Empty)",
         "    _output.value = _core.only_value(_core.struct_delta(), Empty)",
         "    return _py.tuple([e.valid, e.all_valid, (e.modified and e.valid)])",
-    ] {
-        assert!(
-            python.contains(expected),
-            "missing {expected} in:\n{python}"
-        );
-    }
+    ]);
 }
 
 // ---- Analyser value rules ----
@@ -9232,7 +8818,12 @@ fn a_list_of_structs_converted_to_their_parent_is_reported() {
             "export const fn widened(values: list<Round>) -> list<Shape> => convert<list<Shape>>(values)\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:4:64 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:4:64 target.unsupported: the hgraph target does not write a list of structs converted to a list of their parent yet"
+        ]
+    );
 }
 
 /// CTRL-6, CTRL-13, CTRL-14 and TYPE-14: a label that is a constant, a
@@ -9247,7 +8838,7 @@ const CONTROL_REVIEW: &str = include_str!("fixtures/control_review.hgl");
 /// `switch` does.
 #[test]
 fn a_nullable_branch_and_an_unmatched_selector_are_written() {
-    let emitted = emit(&[
+    let emitted = emit_clean(&[
         ("control_review.hgl", CONTROL_REVIEW),
         (
             "m.hgl",
@@ -9262,23 +8853,18 @@ fn a_nullable_branch_and_an_unmatched_selector_are_written() {
             ),
         ),
     ]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_control_review/__init__.py");
-    for expected in [
+    let python = emitted.module("demo.control_review");
+    python.assert_writes(&[
         "        return _core.nullable(price, _py.int)\n",
         "        return _hg.const(_core.published(None), _hg.TS[_py.int | None])\n",
         "    return _hg.const(_core.published(t), _hg.TS[_py.int | None])\n",
-    ] {
-        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
-    }
-    let routed = emitted.text("_hgl/_m_m/__init__.py");
-    for expected in [
+    ]);
+    let routed = emitted.module("m");
+    routed.assert_writes(&[
         "    _core.unmatched(key.value)\n",
         "def _case_0_1(key: _hg.TS[_py.int], a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
         "    return _hg.switch_(route, {1: _case_0_0, _hg.DEFAULT: _case_0_1}, a=a)\n",
-    ] {
-        assert!(routed.contains(expected), "{expected}\nnot in\n{routed}");
-    }
+    ]);
 }
 
 /// CTRL-14: "After the `if` the `var` is one connection: the branch's
@@ -9328,10 +8914,10 @@ fn a_control_form_that_would_be_wrong_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:4:17 target.unsupported",
-            "m.hgl:14:17 target.unsupported",
-            "m.hgl:21:21 target.unsupported",
-            "m.hgl:29:14 target.unsupported",
+            "m.hgl:4:17 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:14:17 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:21:21 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
+            "m.hgl:29:14 target.unsupported: the hgraph target does not write a `switch` two of whose labels have one value in an instance yet",
         ]
     );
 }
@@ -9342,10 +8928,8 @@ fn a_control_form_that_would_be_wrong_is_reported() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_unmatched_selector_fails_alike_on_each_path() {
-    let python = python_with_hgraph();
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_unmatched");
-    fs::remove_dir_all(&directory).ok();
-    let emitted = emit(&[(
+    let hgraph = on_hgraph("hgraph_unmatched");
+    let emitted = emit_clean(&[(
         "u.hgl",
         concat!(
             "module u\n",
@@ -9383,9 +8967,7 @@ fn an_unmatched_selector_fails_alike_on_each_path() {
             "test matched { assert eval(routed(route: [1, 1], a: [1, 2])) == [1, 2] }\n",
         ),
     )]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
-    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let ran = hgraph.run_all(&emitted);
     let messages: Vec<String> = ran
         .iter()
         .map(|ran| match ran {
@@ -9414,11 +8996,10 @@ const VALIDITY: &str = include_str!("fixtures/validity.hgl");
 /// and a fixed list's `out` is hgraph's `TS_OUT[TSL[...]]`.
 #[test]
 fn a_collections_child_is_an_endpoint_of_its_own() {
-    let emitted = emit(&[("validity.hgl", VALIDITY)]);
-    assert_eq!(emitted.reported, Vec::<String>::new());
-    let python = emitted.text("_hgl/_m_demo/_m_validity/__init__.py");
+    let emitted = emit_clean(&[("validity.hgl", VALIDITY)]);
+    let python = emitted.module("demo.validity");
     let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
-    for expected in [
+    python.assert_writes(&[
         "    if _core.position_of(parts, 1).valid:\n".to_string(),
         "    if parts.all_valid:\n".to_string(),
         "    if quote[\"ask\"].valid:\n".to_string(),
@@ -9433,9 +9014,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
         format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
         "    _output.value = {key.value: value.value}\n".to_string(),
         "    _output[0].value = value.value\n".to_string(),
-    ] {
-        assert!(python.contains(&expected), "missing {expected} in:\n{python}");
-    }
+    ]);
 }
 
 /// What this target does not write of a collection is reported: an
@@ -9486,14 +9065,14 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:2:4 target.unsupported",
-            "m.hgl:5:4 target.unsupported",
-            "m.hgl:9:19 target.unsupported",
-            "m.hgl:13:12 target.unsupported",
-            "m.hgl:21:31 target.unsupported",
-            "m.hgl:21:70 target.unsupported",
-            "m.hgl:21:96 target.unsupported",
-            "m.hgl:29:36 target.unsupported",
+            "m.hgl:2:4 target.unsupported: the hgraph target does not write the type `list<i64?>` yet",
+            "m.hgl:5:4 target.unsupported: the hgraph target does not write the type `list<i64, 0>` yet",
+            "m.hgl:9:19 target.unsupported: the hgraph target does not write an endpoint of an unsized list's element, a whole tuple here yet",
+            "m.hgl:13:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
+            "m.hgl:21:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
         ]
     );
 }

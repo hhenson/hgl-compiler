@@ -5,29 +5,12 @@
 
 mod common;
 
-use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, ExprKind, Stmt, ValueCategory};
+use common::{Checked, body, module};
+use hgl_analyser::hir::{Callee, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Role};
 
 /// No lines.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
-}
 
 /// The locals of `name` as `local: type`, with ` (connection)` after one
 /// that is a connection and ` (unsettled)` after one that may be.

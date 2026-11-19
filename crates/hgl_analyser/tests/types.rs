@@ -3,17 +3,11 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, check, module};
 use hgl_analyser::{Detail, Type};
 
 /// No findings.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
 
 /// Every type written in module `m`, as HGL writes it, in source order.
 fn written(checked: &Checked) -> Vec<String> {

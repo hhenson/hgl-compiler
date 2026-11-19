@@ -8,17 +8,11 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, module};
 use hgl_analyser::hir::ValueCategory;
 
 /// No lines.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
 
 /// The locals of the function `name` of module `m`, its parameters
 /// first, as `local: type`, with ` (connection)` after one that is a
