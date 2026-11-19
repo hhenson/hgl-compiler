@@ -1526,11 +1526,11 @@ impl<'a> Emitter<'a> {
             } if function.mode == Mode::Graph => {
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("while {condition}:"));
-                let before = self.bound.clone();
-                self.unrolling += 1;
-                self.block(function, body, depth + 1);
-                self.unrolling -= 1;
-                self.bound = before;
+                self.scoped(|emitter| {
+                    emitter.unrolling += 1;
+                    emitter.block(function, body, depth + 1);
+                    emitter.unrolling -= 1;
+                });
             }
             // CTRL-15: a `for` of a graph over ordinary data "composes its
             // body once for each element", and over a connection of
@@ -1553,14 +1553,14 @@ impl<'a> Emitter<'a> {
                 if self.connects(function, sequence) && !fixed {
                     self.each(function, names, sequence, body, *at, depth);
                 } else {
-                    let before = self.bound.clone();
-                    for &name in names.iter() {
-                        self.bind(function, name);
-                    }
-                    self.unrolling += 1;
-                    self.for_loop(function, (names, sequence), body, *at, depth);
-                    self.unrolling -= 1;
-                    self.bound = before;
+                    self.scoped(|emitter| {
+                        for &name in names.iter() {
+                            emitter.bind(function, name);
+                        }
+                        emitter.unrolling += 1;
+                        emitter.for_loop(function, (names, sequence), body, *at, depth);
+                        emitter.unrolling -= 1;
+                    });
                 }
             }
             // CTRL-12: "`while condition { ... }` repeats its body while
@@ -1574,9 +1574,7 @@ impl<'a> Emitter<'a> {
                 let condition = self.expression(function, condition);
                 self.line(depth, &format!("while {condition}:"));
                 // A body may not run: what it binds is not bound after.
-                let before = self.bound.clone();
-                self.block(function, body, depth + 1);
-                self.bound = before;
+                self.scoped(|emitter| emitter.block(function, body, depth + 1));
             }
             Stmt::While {
                 condition: None,
@@ -1592,12 +1590,12 @@ impl<'a> Emitter<'a> {
                 body,
                 at,
             } if function.mode.runs() => {
-                let before = self.bound.clone();
-                for &name in names.iter() {
-                    self.bind(function, name);
-                }
-                self.for_loop(function, (names, sequence), body, *at, depth);
-                self.bound = before;
+                self.scoped(|emitter| {
+                    for &name in names.iter() {
+                        emitter.bind(function, name);
+                    }
+                    emitter.for_loop(function, (names, sequence), body, *at, depth);
+                });
             }
             Stmt::Switch {
                 selector,
@@ -1607,9 +1605,9 @@ impl<'a> Emitter<'a> {
             } if function.mode.runs() => {
                 // Only the case selected runs: what a case binds is not
                 // bound after.
-                let before = self.bound.clone();
-                self.switch(function, selector, cases, default.as_deref(), depth);
-                self.bound = before;
+                self.scoped(|emitter| {
+                    emitter.switch(function, selector, cases, default.as_deref(), depth)
+                });
             }
             // FN-9: "A graph injects `global_state` and no other, and
             // uses it where the graph is built: each call on it is
