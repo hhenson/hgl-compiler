@@ -273,6 +273,10 @@ struct Introduced {
     /// where it is declared. `None` where that struct is this one, or
     /// there is no default: its parameters stand for themselves.
     default_arguments: Option<Bindings>,
+    /// The other defaults parents give this field by other paths, each
+    /// with the arguments of its path, which a struct below compares
+    /// once its own arguments are in place (UNIT-9).
+    alternatives: Vec<Alternative>,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
     origin: (Id, usize),
@@ -281,6 +285,20 @@ struct Introduced {
     /// The position, among the parents of the struct being checked, of
     /// the parent it came through.
     via: usize,
+}
+
+/// A default a field has from a parent by another path than the one
+/// whose default the field takes (UNIT-9).
+#[derive(Debug, Clone, PartialEq)]
+struct Alternative {
+    /// The field that writes it: the struct, and the field's position
+    /// among that struct's own fields.
+    of: (Id, usize),
+    /// What the generic parameters of that struct stand for in the
+    /// struct that has the field.
+    arguments: Bindings,
+    /// Where it is written.
+    from: Location,
 }
 
 /// A field of a struct, its own or one from a parent, whose type names
@@ -873,19 +891,50 @@ impl Structs<'_> {
                         .map(|(at, argument)| (*at, self.carried(argument, parent)))
                         .collect()
                 });
+                // The other defaults the parent has for the field, with
+                // this struct's arguments in place.
+                let alternatives: Vec<Alternative> = field
+                    .alternatives
+                    .iter()
+                    .map(|alternative| Alternative {
+                        arguments: alternative
+                            .arguments
+                            .iter()
+                            .map(|(at, argument)| (*at, self.carried(argument, parent)))
+                            .collect(),
+                        ..alternative.clone()
+                    })
+                    .collect();
                 let field = Introduced {
                     ty,
                     via,
                     default_arguments,
+                    alternatives,
                     ..field.clone()
                 };
-                let same = |other: &Introduced| {
-                    other.name == field.name
-                        && other.default_of == field.default_of
-                        && other.default_arguments == field.default_arguments
-                };
-                if field.has_default && !given.iter().any(same) {
-                    given.push(field.clone());
+                // The field's default, and each other, as a default of
+                // its own to compare.
+                let mut defaults_of = Vec::new();
+                if field.has_default {
+                    defaults_of.push(field.clone());
+                }
+                defaults_of.extend(field.alternatives.iter().map(|alternative| Introduced {
+                    has_default: true,
+                    default_of: Some(alternative.of),
+                    default_arguments: Some(alternative.arguments.clone()),
+                    default_from: Some(alternative.from),
+                    alternatives: Vec::new(),
+                    ..field.clone()
+                }));
+                for default in defaults_of {
+                    let same = |other: &Introduced| {
+                        other.name == default.name
+                            && other.default_of == default.default_of
+                            && other.default_arguments == default.default_arguments
+                    };
+                    if !given.iter().any(same) {
+                        given.push(default);
+                    }
                 }
                 // The same field by another path is one field.
                 let listed = inherited
@@ -902,8 +951,33 @@ impl Structs<'_> {
                         first.default_from = field.default_from;
                         first.default_of = field.default_of;
                         first.default_arguments = field.default_arguments;
+                        first.alternatives = field.alternatives;
                     }
-                    Some(_) => {}
+                    // Its default and its others, where they are not the
+                    // one the field takes, are kept as others, so that a
+                    // struct below compares them with its arguments in
+                    // place.
+                    Some(first) => {
+                        let mut others = field.alternatives;
+                        if let (Some(of), Some(arguments), Some(from)) = (
+                            field.default_of,
+                            field.default_arguments,
+                            field.default_from,
+                        ) {
+                            others.push(Alternative {
+                                of,
+                                arguments,
+                                from,
+                            });
+                        }
+                        for other in others {
+                            let taken = first.default_of == Some(other.of)
+                                && first.default_arguments.as_ref() == Some(&other.arguments);
+                            if !taken && !first.alternatives.contains(&other) {
+                                first.alternatives.push(other);
+                            }
+                        }
+                    }
                     None => inherited.push(field),
                 }
             }
@@ -942,6 +1016,7 @@ impl Structs<'_> {
                     inherited.default_from = Some(field.at);
                     inherited.default_of = Some((id, index));
                     inherited.default_arguments = None;
+                    inherited.alternatives.clear();
                 }
             }
         }
@@ -959,6 +1034,7 @@ impl Structs<'_> {
                         default_from: field.has_default.then_some(field.at),
                         default_of: field.has_default.then_some((id, index)),
                         default_arguments: None,
+                        alternatives: Vec::new(),
                         origin: (id, index),
                         at: field.at,
                         via: 0,

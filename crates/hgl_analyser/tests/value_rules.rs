@@ -184,8 +184,8 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`Differ` has `size` from two parents with different defaults, and gives it none of \
-         its own: write `size = ...` in `Differ`"
+        "`Differ` has two different defaults for `size` from its parents, and gives it none \
+         of its own: write `size = ...` in `Differ`"
     );
 }
 
@@ -355,6 +355,33 @@ fn a_default_that_is_not_judged_hides_no_conflict() {
             "m.hgl:5:26 local:type/default.conflict UNIT-9",
             "m.hgl:6:27 local:type/default.conflict UNIT-9",
             "m.hgl:12:32 local:type/default.conflict UNIT-9",
+        ]
+    );
+}
+
+/// UNIT-9: a struct below one that has two defaults for a field has
+/// both, with its own arguments in place: a pair not judged in a
+/// generic struct is judged where the argument is given. A conflict is
+/// reported where it first stands, and not again in a struct below.
+#[test]
+fn defaults_a_parent_has_are_judged_with_the_arguments_below() {
+    let checked = module(concat!(
+        "abstract struct Base { x: i64 }\n",
+        "abstract struct ByParam<const N: i64> : Base { x = N }\n",
+        "abstract struct Two : Base { x = 2 }\n",
+        "abstract struct Mid<const N: i64> : ByParam<N>, Two {}\n",
+        "struct Bad : Mid<1> {}\n",
+        "struct Fine : Mid<2> {}\n",
+        "abstract struct P { y: i64 = 1 }\n",
+        "abstract struct Q { y: i64 = 2 }\n",
+        "abstract struct PQ : P, Q {}\n",
+        "struct Below : PQ {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:6:14 local:type/default.conflict UNIT-9",
+            "m.hgl:10:25 local:type/default.conflict UNIT-9",
         ]
     );
 }

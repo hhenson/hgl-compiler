@@ -69,15 +69,21 @@ const DEPTH: usize = 32;
 ///
 /// Only a field whose type is concrete, with no generic parameter in it
 /// and nothing unknown, is judged, and only where each default is a
-/// constant value of that type: see [`Known`].
+/// constant value of that type: see [`Known`]. A struct below one that
+/// has the same two defaults in conflict has them from it: the conflict
+/// is reported where it first stands, and not again below.
 pub(crate) fn check(
     program: &Program,
     pending: &[InheritedDefaults],
     diagnostics: &mut Diagnostics,
 ) {
-    let mut reported: Vec<((usize, usize), &str)> = Vec::new();
+    // Each conflict found: the pair, and its two defaults' fields.
+    let mut conflicts: Vec<(&InheritedDefaults, [FieldRef; 2])> = Vec::new();
     for pair in pending {
-        if reported.contains(&(pair.owner, pair.field.as_str())) || !concrete(&pair.ty) {
+        let found = |known: &(&InheritedDefaults, [FieldRef; 2])| {
+            known.0.owner == pair.owner && known.0.field == pair.field
+        };
+        if conflicts.iter().any(found) || !concrete(&pair.ty) {
             continue;
         }
         let [earlier, later] = &pair.defaults;
@@ -87,14 +93,25 @@ pub(crate) fn check(
         ) else {
             continue;
         };
-        if first == second {
+        if first != second {
+            conflicts.push((pair, [earlier.written, later.written]));
+        }
+    }
+    for (pair, written) in &conflicts {
+        let above = ancestors(program, pair.owner);
+        let inherited = conflicts.iter().any(|(other, other_written)| {
+            above.contains(&other.owner)
+                && other.field == pair.field
+                && (other_written == written || *other_written == [written[1], written[0]])
+        });
+        if inherited {
             continue;
         }
-        reported.push((pair.owner, pair.field.as_str()));
+        let [earlier, later] = &pair.defaults;
         let owner = &program.modules[pair.owner.0].declarations[pair.owner.1].name;
         let message = format!(
-            "`{owner}` has `{}` from two parents with different defaults, and gives it none \
-             of its own: write `{} = ...` in `{owner}`",
+            "`{owner}` has two different defaults for `{}` from its parents, and gives it \
+             none of its own: write `{} = ...` in `{owner}`",
             pair.field, pair.field
         );
         diagnostics.emit(
@@ -109,6 +126,31 @@ pub(crate) fn check(
             .with_related(later.at, "the other"),
         );
     }
+}
+
+/// Every struct `id` inherits from, through any number of parents; not
+/// `id` itself unless it inherits from itself, which is reported.
+fn ancestors(program: &Program, id: (usize, usize)) -> Vec<(usize, usize)> {
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    let mut to_do = vec![id];
+    while let Some(current) = to_do.pop() {
+        let Some(Detail::Struct(read)) = program.modules[current.0].details.get(current.1) else {
+            continue;
+        };
+        for parent in &read.parents {
+            if let Type::Named {
+                module,
+                declaration,
+                ..
+            } = parent
+                && !found.contains(&(*module, *declaration))
+            {
+                found.push((*module, *declaration));
+                to_do.push((*module, *declaration));
+            }
+        }
+    }
+    found
 }
 
 /// A default as the constant value it is, of the field's type.
