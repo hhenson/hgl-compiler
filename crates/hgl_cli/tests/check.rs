@@ -501,3 +501,163 @@ fn json_clean_warning_and_invocation_failure() {
         assert!(failed.stdout.is_empty() && !failed.stderr.is_empty());
     }
 }
+
+/// Runs `hgl check --json` on `roots`, and gives its exit status and
+/// the report it wrote. It writes nothing else: standard error is empty.
+fn json_check(roots: &[&str]) -> (Option<i32>, serde_json::Value) {
+    let output = hgl(&[&["check", "--json"], roots].concat());
+    assert_eq!(text(&output.stderr), "");
+    let report = serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    (output.status.code(), report)
+}
+
+/// A place as the report writes it: the file, and the line and the
+/// character of each end of the range.
+fn place(file: &str, start: (u32, u32), end: (u32, u32)) -> serde_json::Value {
+    serde_json::json!({
+        "file": file,
+        "start": {"line": start.0, "character": start.1},
+        "end": {"line": end.0, "character": end.1},
+    })
+}
+
+/// ERR-1: "Distinguish source rejection, execution failure, ...". A
+/// syntax error rejects the source: it is in the report, and the check
+/// exits with status 1. Both of the file's errors are there: the `{`
+/// where a parameter is missing, and what is missing at the end of the
+/// file, which is after its last line break: line 2, character 0.
+#[test]
+fn json_reports_a_syntax_error_and_exits_one() {
+    let root = scratch("json-syntax");
+    let file = write(&root, "a.hgl", "module m\nfn scale( {}\n");
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{report}");
+    for item in items {
+        assert_eq!(item["severity"], "error", "{report}");
+        assert_eq!(item["category"], "parse", "{report}");
+        assert_eq!(item["code"], "syntax.expected_token", "{report}");
+    }
+    assert_eq!(items[0]["primary"], place(&file, (1, 10), (1, 11)));
+    assert_eq!(items[1]["primary"], place(&file, (2, 0), (2, 0)));
+}
+
+/// LEX-16: "One U+FEFF at the start of a source is ignored." A column
+/// of the first line counts from after it: `1bad` is characters 7 to 11
+/// of line 0, as it is in the file without the mark.
+#[test]
+fn json_columns_of_the_first_line_count_after_a_byte_order_mark() {
+    let root = scratch("json-bom");
+    let file = write(&root, "a.hgl", "\u{feff}module 1bad\n");
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert!(!items.is_empty(), "{report}");
+    for item in items {
+        assert_eq!(item["primary"], place(&file, (0, 7), (0, 11)), "{report}");
+    }
+}
+
+/// LEX-15: "A line break is a line feed, a carriage return immediately
+/// followed by a line feed, or a carriage return alone." In a file whose
+/// lines end in a carriage return alone, the second `scale` (UNIT-5) is
+/// on line 2, and the first, the related place, on line 1.
+#[test]
+fn json_counts_lines_that_end_in_a_lone_carriage_return() {
+    let root = scratch("json-cr");
+    let file = write(&root, "a.hgl", "module m\rfn scale() {}\rfn scale() {}\r");
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["code"], "name.duplicate");
+    assert_eq!(items[0]["rule"], "UNIT-5");
+    assert_eq!(items[0]["primary"], place(&file, (2, 3), (2, 8)));
+    assert_eq!(
+        items[0]["related"][0]["location"],
+        place(&file, (1, 3), (1, 8))
+    );
+}
+
+/// What is missing at the end of a file with no line break after its
+/// last line is at the end of that line: line 1, character 9.
+#[test]
+fn json_places_an_error_at_the_end_of_a_file_with_no_final_newline() {
+    let root = scratch("json-eof");
+    let file = write(&root, "a.hgl", "module m\nfn scale(");
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["code"], "syntax.expected_token");
+    assert_eq!(items[0]["primary"], place(&file, (1, 9), (1, 9)));
+}
+
+/// LEX-16: "Source that is not well-formed UTF-8 is a source error."
+/// The file is reported once, as `syntax.invalid_encoding`, with a range
+/// of no width at the first byte that is not UTF-8: line 1, character 0.
+#[test]
+fn json_reports_a_file_that_is_not_utf8_once() {
+    let root = scratch("json-encoding");
+    let path = root.join("a.hgl");
+    fs::write(&path, b"module m\n\xff\n").unwrap();
+    let file = argument(&path);
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["category"], "parse");
+    assert_eq!(items[0]["code"], "syntax.invalid_encoding");
+    assert_eq!(items[0]["rule"], "LEX-16");
+    assert_eq!(items[0]["primary"], place(&file, (1, 0), (1, 0)));
+}
+
+/// UNIT-12: "outside core's mandatory module neither a declaration nor
+/// an import alias takes a prelude name". A program that declares a
+/// function core's module has is rejected, and core's declaration is
+/// the related place. That is in the core the compiler supplies, which
+/// was read from no path: its file is the compiler's display name for it.
+#[test]
+fn json_names_a_file_of_the_supplied_core_by_its_display_name() {
+    let root = scratch("json-core");
+    let file = write(
+        &root,
+        "a.hgl",
+        "module m\nexport const fn log_debug(logger: Logger, message: str) {\n}\n",
+    );
+    let (status, report) = json_check(&[&file]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["code"], "name.duplicate");
+    assert_eq!(items[0]["rule"], "UNIT-12");
+    assert_eq!(items[0]["primary"]["file"], file.as_str());
+    assert_eq!(
+        items[0]["related"][0]["location"]["file"],
+        "<core>/core/core.hgl"
+    );
+}
+
+/// UNIT-5: "Duplicate ordinary functions of the same name/role ... in
+/// one scope are rejected." Two source roots given together are one
+/// program, with one report: the second `scale` is in one root's file
+/// and the first, the related place, in the other's, each named by its
+/// path under the root it was found in.
+#[test]
+fn json_reports_two_source_roots_together() {
+    let root = scratch("json-roots");
+    let first = write(&root, "one/a.hgl", "module m\nfn scale() {}\n");
+    let second = write(&root, "two/b.hgl", "module m part second\nfn scale() {}\n");
+    let (status, report) =
+        json_check(&[&argument(&root.join("one")), &argument(&root.join("two"))]);
+    assert_eq!(status, Some(1));
+    let items = report["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{report}");
+    assert_eq!(items[0]["code"], "name.duplicate");
+    assert_eq!(items[0]["primary"], place(&second, (1, 3), (1, 8)));
+    assert_eq!(
+        items[0]["related"][0]["location"],
+        place(&first, (1, 3), (1, 8))
+    );
+}
