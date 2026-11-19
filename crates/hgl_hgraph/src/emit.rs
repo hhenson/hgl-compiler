@@ -7062,7 +7062,8 @@ impl Emitter<'_> {
     /// struct's fields, a tuple's positions, a list's elements. A set and
     /// a dictionary of values that publish whole are given as they are,
     /// which a constant's one publication takes whole: it has no earlier
-    /// members or keys. A dictionary of composites is reported.
+    /// members or keys, and a null entry is hgraph's `Null`. A dictionary
+    /// of composites is reported.
     fn constant_connection(&mut self, ty: &Type, at: Location, written: String) -> String {
         let composite = matches!(
             ty,
@@ -7089,6 +7090,12 @@ impl Emitter<'_> {
                     "an ordinary dictionary of composites as a branch's connection",
                 );
                 return "None".to_string();
+            }
+            // A null entry is published as hgraph's `Null`: `None` would
+            // leave its child unset.
+            Type::Dict { value, .. } if is_nullable(value) => {
+                self.natives = true;
+                format!("{{_key: _core.published(_entry) for _key, _entry in ({written}).items()}}")
             }
             Type::Set(_) | Type::Dict { .. } => written,
             _ => self.bundle_of(ty, at, written),
@@ -7408,9 +7415,12 @@ impl Emitter<'_> {
             Type::List { element, .. } if publishes_whole(element) => {
                 return format!("_py.list({port}.value)");
             }
+            // An element of composites is read as a part is
+            // (`part_value_at`): each of its own required parts where it is
+            // valid, and an optional one null where it is not.
             Type::List { element, .. } => {
                 let child = format!("_child{depth}");
-                let read = self.port_value_at(element, &child, depth + 1, at);
+                let read = self.part_value_at(element, &child, depth + 1, at);
                 return format!("[{read} for {child} in {port}]");
             }
             // TYPE-9: "dictionaries to keyed children". A dictionary's
@@ -7490,9 +7500,9 @@ impl Emitter<'_> {
     /// failure where the read runs, with the catalogued
     /// `value.unset_read` ("Executed operation requires an unset
     /// ordinary payload"), and an optional part that is not valid as
-    /// null. A fixed list of required elements is held to each of them
-    /// (`all_valid`); any other part to its own `valid`, and a struct's or
-    /// a tuple's parts each in turn.
+    /// null. A fixed list of required elements that publish whole is held
+    /// to each of them (`all_valid`); any other part to its own `valid`,
+    /// and a struct's, a tuple's or a list's parts each in turn.
     fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
         self.part_value_at(ty, port, 0, at)
     }
@@ -7500,11 +7510,15 @@ impl Emitter<'_> {
     /// `part_value` of a port read inside `depth` comprehensions.
     fn part_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         let read = self.port_value_at(ty, port, depth, at);
+        // A fixed list of required elements that publish whole is read
+        // whole from its `TSL`, so it is held to each of them. One of
+        // composites reads each element as a part, whose own optional
+        // parts may be invalid.
         let ready = match ty {
             Type::List {
                 element,
                 size: Some(_),
-            } if !publishes_whole_null(element) => "all_valid",
+            } if publishes_whole(element) && !is_nullable(element) => "all_valid",
             _ => "valid",
         };
         if publishes_whole_null(ty) {
