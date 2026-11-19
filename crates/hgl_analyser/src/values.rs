@@ -2525,7 +2525,13 @@ impl<'a> Typer<'a> {
                 self.locals[local].kind,
                 LocalKind::Var | LocalKind::State | LocalKind::Cache
             );
-        let target = self.expression(place, None);
+        let mut target = self.expression(place, None);
+        // A hook reads `out` of an atomic as its whole V (`read_local`);
+        // as the root of a place it is the atomic it is declared, a part
+        // that publishes whole (TYPE-9).
+        if is_out {
+            root_as_declared(&mut target, &self.locals);
+        }
         // NATIVE-6: "None is assigned." TYPE-16: a delta that is a type
         // of its own "has properties, none is assigned". Each is
         // read-only wherever the value is reached from:
@@ -11638,6 +11644,19 @@ impl<'a> Typer<'a> {
             }
         }
         false
+    }
+}
+
+/// The place `place` with its root, a local, of the type the local is
+/// declared with, and not of the type a hook reads it as: an atomic's
+/// V (TYPE-9), or the type under a `?` that marks omission (TYPE-14).
+fn root_as_declared(place: &mut Expr, locals: &[Local]) {
+    if let ExprKind::Local(local) = place.kind {
+        place.ty = locals[local].ty.clone();
+        return;
+    }
+    if let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &mut place.kind {
+        root_as_declared(base, locals);
     }
 }
 
