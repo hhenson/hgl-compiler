@@ -3578,9 +3578,11 @@ fn a_timer_wakes_its_own_handlers() {
         // node was entered.
         "    _input_woke = ((value.modified or value.invalidated) and value.active)\n",
         // The scheduler's operations and properties are the
-        // provider's.
-        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=every, tag=None, on_wall_clock=False)",
-        "_core.schedule_Alarm_duration(capability=_scheduler, at=every)",
+        // provider's. TIME-8: a duration that is a `const` parameter is
+        // checked as the program runs, in `start` and in a `when`.
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=True), tag=None, on_wall_clock=False)",
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=False), tag=None, on_wall_clock=False)",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(every, starting=True))",
         "_core.fn_un_schedule(scheduler=_scheduler, tag=None)",
         "_core.Scheduler_is_scheduled(_scheduler)",
         // hgraph takes no node without an input: one with none is
@@ -3643,23 +3645,79 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
     ]);
 }
 
-/// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
-/// in `start` or `stop`, where it is reported. TIME-3: `modified([])`
-/// "Where it is a bool, in a body or under a negation or a disjunction,
-/// it is true in a cycle where no temporal input was modified", which
-/// this target does not write yet, and reports.
+/// TIME-3, TIME-8 and core's CAP-4: `modified([])` read as a bool, a
+/// wake's duration checked as the program runs, and a wake that stays
+/// due for the rest of its evaluation.
+const TIMERS_WAVE3: (&str, &str) = fixture!("demo.timers_wave3.hgl");
+
+/// TIME-3: "In that handler's body `modified([])`, as a bool, is true
+/// ... Elsewhere, in another body or under a negation or a disjunction,
+/// it is true in a cycle where no temporal input was modified": `True`
+/// in the body of the handler whose header selects it, and elsewhere
+/// that no input is modified as `modified(input)` asks it, so that an
+/// invalidation is none, and a `ref` parameter is modified where its
+/// designation changed; `True` in a node with no input. TIME-8: a
+/// duration that is no literal is given through `_core.wake_delay`,
+/// which fails the call where it is not more than zero, but for a zero
+/// in `start`; a literal the analyser has judged is given as it is.
 #[test]
-fn scheduled_in_a_lifecycle_hook_is_reported() {
+fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
+    let emitted = emit_clean(&[TIMERS_WAVE3]);
+    let python = emitted.module("demo.timers_wave3");
+    python.assert_writes(&[
+        concat!(
+            "    if _scheduler.is_scheduled_now:\n",
+            "        return _py.tuple([True, (value.modified and value.valid)])\n",
+        ),
+        "    if _scheduler.is_scheduled_now and not (value.modified or value.invalidated):\n        if True:\n",
+        "    if _scheduler.is_scheduled_now:\n        return (not ((value.modified and value.valid)))\n",
+        "    if _timer_woke and (not (not ((value.modified and value.valid)))):\n",
+        "    return _py.tuple([(not ((input.modified and input.valid))), (not (not ((input.modified and input.valid))))])\n",
+        "    if ((not ((input.modified and input.valid))) or (input.modified and input.valid)):\n",
+        "        return (not ((a.modified and a.valid) or (b.modified and b.valid)))\n",
+        "_begin: _hg.TS[_py.bool], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if _scheduler.is_scheduled_now:\n        return True\n",
+        "        return (not (target.modified))\n",
+        // A literal, which the analyser has judged.
+        "at=_dt.timedelta(microseconds=1000000), tag=\"with input\"",
+        "at=_core.wake_delay(delay.value, starting=False), tag=\"next\"",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(delay.value, starting=False))",
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=True), tag=None",
+        "_core.schedule_Alarm_duration(capability=_scheduler, at=_core.wake_delay(every, starting=True))",
+        concat!(
+            "def _stop_asked_in_stop(every: _dt.timedelta, value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None):\n",
+            "    _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(every, starting=False)",
+        ),
+        // An instance's literal, which the analyser did not see: one
+        // more than zero is given as it is, and zero is checked.
+        "at=_dt.timedelta(microseconds=1000000), tag=None",
+        "def _inst_generic_after__0us(value: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.bool]:\n    _scheduler = _core.Wake(_scheduler)\n    if value.modified:\n        _core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=_core.wake_delay(_dt.timedelta(microseconds=0), starting=False)",
+    ]);
+    let support = emitted.text("_hgl/_core_support.py");
+    assert!(support.contains("code=\"schedule.non_positive_duration\""));
+}
+
+/// TIME-3: `modified([])` is "true in a cycle where no temporal input
+/// was modified", and `start` and `stop` are no cycle of the node: what
+/// it is there the rule does not say, and it is reported. TIME-8: "A
+/// wake asked for with a `duration` takes one more than zero, but in
+/// `start`": whether a value function given the scheduler or the alarm
+/// asks in `start` the rule does not say, and a duration there that may
+/// be zero, a literal, a constant or a parameter, is reported; one that
+/// is more than zero, and an instant, are written.
+#[test]
+fn what_a_timer_form_not_written_is_reported() {
     let emitted = emit(&[fixture!(
-        "scheduled_in_a_lifecycle_hook_is_reported",
+        "what_a_timer_form_not_written_is_reported",
         "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` read as a bool yet",
+            "m.hgl:6:16 target.unsupported: the hgraph target does not write `modified([])` in `start` or `stop` yet",
+            "m.hgl:16:20 target.unsupported: the hgraph target does not write `modified([])` in `start` or `stop` yet",
+            "m.hgl:20:59 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
+            "m.hgl:21:77 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
+            "m.hgl:22:56 target.unsupported: the hgraph target does not write a wake asked for with a duration that may be zero in a value function (TIME-8) yet",
         ]
     );
 }

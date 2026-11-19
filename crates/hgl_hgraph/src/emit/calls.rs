@@ -15,58 +15,74 @@ impl<'a> Emitter<'a> {
         (Some(module) == self.program.core() && provides(&python)).then_some(python)
     }
 
-    /// Reports a wake asked of the scheduler or the alarm, a call of
-    /// core's `schedule` (CAP-4, CAP-5), with a duration that may not be
-    /// more than zero outside `start`. TIME-8: "A wake asked for with a
+    /// The parameter, by its position, of a wake's duration that is
+    /// checked as the program runs: a call of core's `schedule` (CAP-4,
+    /// CAP-5) given a duration. TIME-8: "A wake asked for with a
     /// `duration` takes one more than zero, but in `start`, which takes
-    /// zero too ... A duration that is not admitted ... rejects where the
-    /// compiler sees its value ... and elsewhere fails the call as the
-    /// program runs." Neither is written yet, so a duration there that is
-    /// a literal of no more than zero, or that reads what the node holds
-    /// as it runs, an input, a local or a state, is reported. One made of
-    /// literals, constants and `const` parameters, its configuration, is
-    /// not: its value is the program's to keep more than zero.
-    fn wake_durations(
+    /// zero too ... A duration that is not admitted, a negative one in
+    /// `start` included, rejects where the compiler sees its value, a
+    /// literal or a constant (UNIT-13), and elsewhere fails the call as
+    /// the program runs."
+    ///
+    /// In a hook a literal that is admitted there is given as it is; any
+    /// other duration is given through the provider's `wake_delay`, which
+    /// fails the call where it is not admitted. A literal that is not
+    /// admitted is one an instance gives a generic value parameter, which
+    /// the analyser did not see. A value function is given the
+    /// capability by a parameter, and whether a zero there is "in
+    /// `start`" the rule does not say: a duration there that may be zero,
+    /// anything but a literal more than zero or a constant that is one,
+    /// is reported.
+    fn wake_duration(
         &mut self,
         function: &Function,
         callee: (usize, usize),
         signature: &Signature,
         arguments: &[Argument],
-    ) {
+    ) -> Option<usize> {
         let program = self.program;
         if Some(callee.0) != program.core()
             || program.modules[callee.0].declarations[callee.1].name != "schedule"
-            || function.mode == Mode::Lifecycle
         {
-            return;
+            return None;
         }
-        for argument in arguments {
-            let duration = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index))
-                .is_some_and(|parameter| parameter.ty == Type::Scalar(Scalar::Duration));
-            let not_positive = matches!(
-                argument.value.kind,
-                ExprKind::Literal(Value::Duration(micros)) if micros <= 0
-            );
-            let mut runtime = false;
-            argument.value.walk(&mut |part| {
-                if let ExprKind::Local(local) = part.kind {
-                    let declared = &function.locals[local];
-                    let configuration = declared.kind == LocalKind::Parameter
-                        && function.signature.is_some_and(|own| {
-                            own.parameters.iter().any(|parameter| {
-                                parameter.name == declared.name && parameter.constant
-                            })
-                        });
-                    runtime |= !configuration;
+        let (index, given) = arguments.iter().find_map(|argument| {
+            let index = argument.parameter?;
+            let parameter = signature.parameters.get(index)?;
+            (parameter.ty == Type::Scalar(Scalar::Duration)).then_some((index, &argument.value))
+        })?;
+        // A literal, or a constant followed to what it is written as: the
+        // analyser has rejected a constant that depends on itself
+        // (`constant.cycle`), so the chain ends.
+        let mut value = given;
+        while let ExprKind::Constant {
+            module,
+            declaration,
+        } = value.kind
+            && let Some(Some(constant)) = program.modules[module].constants.get(declaration)
+        {
+            value = constant;
+        }
+        let literal = match value.kind {
+            ExprKind::Literal(Value::Duration(micros)) => Some(micros),
+            _ => None,
+        };
+        match function.mode {
+            Mode::Node | Mode::Stop | Mode::Lifecycle => {
+                let starting = function.mode == Mode::Lifecycle;
+                let admitted = matches!(given.kind, ExprKind::Literal(Value::Duration(micros))
+                    if micros > 0 || (micros == 0 && starting));
+                (!admitted).then_some(index)
+            }
+            _ => {
+                if !literal.is_some_and(|micros| micros > 0) {
+                    self.unsupported(
+                        given.at,
+                        "a wake asked for with a duration that may be zero in a value function \
+                         (TIME-8)",
+                    );
                 }
-            });
-            if duration && (not_positive || runtime) {
-                self.unsupported(
-                    argument.value.at,
-                    "a wake asked for with a duration that may not be more than zero (TIME-8)",
-                );
+                None
             }
         }
     }
@@ -88,7 +104,7 @@ impl<'a> Emitter<'a> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
-        self.wake_durations(function, callee, signature, arguments);
+        let checked_delay = self.wake_duration(function, callee, signature, arguments);
         let kept = self.kept_configuration(callee, generics, signature);
         // Whether the callee is a node: a node keeps what a graph
         // gives it that is no connection, so such an argument is
@@ -182,6 +198,19 @@ impl<'a> Emitter<'a> {
                     } else {
                         written
                     }
+                };
+                // TIME-8: a wake's duration known only as the program
+                // runs, checked then (`wake_duration`).
+                let value = if checked_delay == Some(index) {
+                    self.natives = true;
+                    let starting = if function.mode == Mode::Lifecycle {
+                        "True"
+                    } else {
+                        "False"
+                    };
+                    format!("_core.wake_delay({value}, starting={starting})")
+                } else {
+                    value
                 };
                 let value = self.held_value(kept[index], value);
                 Some(format!("{}={value}", name(&parameter.name)))
