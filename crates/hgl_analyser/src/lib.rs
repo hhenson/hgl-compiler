@@ -13,7 +13,8 @@
 //! # What is built so far
 //!
 //! The program's modules, what each declares, what each name in it is
-//! bound to, and what each type written in it means.
+//! bound to, what each type written in it means, and the typed body of
+//! each function and test.
 //!
 //! * `assemble` groups the files into modules by the `module` line of
 //!   each (UNIT-1);
@@ -47,9 +48,15 @@
 //!   is one kind across an operator's candidates (GEN-13, GEN-6);
 //! * `documentation` checks that a documentation comment's `Args:` and
 //!   `Type Args:` keys name the declaration's parameters and generic
-//!   parameters (SDOC-3), and records nothing (SDOC-6).
+//!   parameters (SDOC-3), and records nothing (SDOC-6);
+//! * `values` types the body of every value function, node, source,
+//!   graph and test, and writes each down as a [`hir::Body`] for the
+//!   stages after this one;
+//! * `cycles` rejects a constant whose value depends on itself, read
+//!   from the typed program (UNIT-13).
 //!
-//! What an expression is, phases and constants are not checked yet.
+//! The repository's `docs/rules.md` says what each pass leaves of each
+//! rule.
 //!
 //! # The prelude
 //!

@@ -1,12 +1,13 @@
-//! Types the bodies of value functions.
+//! Types the bodies of value functions, nodes, sources, graphs and
+//! tests.
 //!
 //! `read` says what each written type means and `declared` checks the
-//! declarations against one another. This pass reads what a value
-//! function, `const fn`, does: it gives every expression of the body a
-//! type, checks each against the type its place requires, and writes the
-//! body down as [`hir::Body`] for the stages after the analyser.
+//! declarations against one another. This pass reads what a body does:
+//! it gives every expression of the body a type, checks each against
+//! the type its place requires, and writes the body down as
+//! [`hir::Body`] for the stages after the analyser.
 //!
-//! It is built up form by form. This part reads:
+//! It is built up form by form. It reads, among the rest:
 //!
 //! * literals, each with the type its form gives it (TYPE-1, TYPE-2,
 //!   LEX-11);
@@ -18,13 +19,18 @@
 //! * calls of value functions and constructions of structs, each
 //!   argument given to its parameter or field (EXPR-2, TYPE-5);
 //! * members of enums, fields of struct values, and the elements of
-//!   lists and dictionaries (TYPE-7, EXPR-7, ERR-6).
+//!   lists and dictionaries (TYPE-7, EXPR-7, ERR-6);
+//! * blocks, `if`, `switch`, `for` and `while` (CTRL-10, CTRL-12), and
+//!   in a graph what each composes (CTRL-13 to CTRL-15);
+//! * a node's hooks, what each admits, and what a node publishes
+//!   (TIME-3, TIME-7);
+//! * a test's `assert`, `eval` and `run` (TST-3, TST-4, TST-17).
 //!
 //! A form it does not read yet is left [`ExprKind::Unread`], with no
-//! type and no report: control flow, operators given configuration, a
-//! call of what is no value function or struct. A type that is not
-//! known is reported once, where it was found, and never again where it
-//! is used (ERR-9).
+//! type and no report: configuration given to `!`, `&&` or `||`, an
+//! anonymous function's body, and a conversion written with a type's
+//! name, `str(value)`. A type that is not known is reported once, where
+//! it was found, and never again where it is used (ERR-9).
 
 use std::collections::HashMap;
 
@@ -1430,15 +1436,6 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// The inputs a `when` header admits by its own `valid` selectors;
-    /// `None` when it has none, and the default stands.
-    ///
-    /// TIME-3: "A selector sets subscription or admission when it
-    /// stands alone in the header or appears as a top-level conjunct.
-    /// Selectors under negation or disjunction leave the default in
-    /// place." A selector is the language's `valid`: a name a
-    /// declaration binds is a call of that declaration, and no selector
-    /// (TIME-9).
     /// True when the name at `name` may be one of the language's own
     /// forms: nothing binds it, or core's module declares it. TIME-9
     /// has core declare the endpoint operations, and in a `when` header
@@ -1468,6 +1465,15 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The inputs a `when` header admits by its own `valid` selectors;
+    /// `None` when it has none, and the default stands.
+    ///
+    /// TIME-3: "A selector sets subscription or admission when it
+    /// stands alone in the header or appears as a top-level conjunct.
+    /// Selectors under negation or disjunction leave the default in
+    /// place." A selector is the language's `valid`: a name a
+    /// declaration binds is a call of that declaration, and no selector
+    /// (TIME-9).
     fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
         let header = &ungrouped(header.clone());
         match header.kind() {
@@ -12084,10 +12090,6 @@ impl<'a> Typer<'a> {
         ));
     }
 
-    /// True when a value of type `ty` is a value of `expected`: the same
-    /// type as far as each is known; a `T` where a `T?` is expected
-    /// (TYPE-14: "either a T or null"); or a struct where an abstract
-    /// struct it inherits from is expected.
     /// True when an argument of type `later` widens a generic parameter
     /// that an earlier argument decided is `decided`.
     ///
@@ -12112,6 +12114,10 @@ impl<'a> Typer<'a> {
             && self.inherits(decided, later)
     }
 
+    /// True when a value of type `ty` is a value of `expected`: the same
+    /// type as far as each is known; a `T` where a `T?` is expected
+    /// (TYPE-14: "either a T or null"); or a struct where an abstract
+    /// struct it inherits from is expected.
     fn admits(&self, expected: &Type, ty: &Type) -> bool {
         if open(expected) || open(ty) || agree(expected, ty) {
             return true;
@@ -15283,8 +15289,6 @@ fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
     (label.is_none() && arguments.next().is_none()).then_some(argument)
 }
 
-/// The arguments of an argument list, in order: each with its name,
-/// when it has one, and its value.
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as
 /// every check reads it: EXPR-1, "Parentheses select grouping", so
 /// `valid((quote.bid))` names what `valid(quote.bid)` does, and grouping
@@ -15302,6 +15306,8 @@ fn endpoint_arguments(list: &SyntaxNode) -> Vec<SyntaxNode> {
         .collect()
 }
 
+/// The arguments of an argument list, in order: each with its name,
+/// when it has one, and its value.
 fn arguments_of(list: &SyntaxNode) -> Vec<(Option<SyntaxToken>, SyntaxNode)> {
     list.children()
         .filter(|argument| argument.kind() == SyntaxKind::Arg)
