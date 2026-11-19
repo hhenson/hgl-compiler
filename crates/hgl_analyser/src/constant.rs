@@ -1309,6 +1309,11 @@ fn unary(
     if configured(node) {
         return configured_value(node, scope, read.ty);
     }
+    // TYPE-14: "It does not make null an admitted value of unqualified
+    // T": `-` and `!` take no `T?`, a `const A: i64? = 1` among them.
+    if nullable(&read) {
+        return Ok(Typed::unevaluated(None));
+    }
     let value = negated_or_not(operator, &read.value);
     Ok(Typed {
         value,
@@ -1378,7 +1383,15 @@ fn binary(
     if configured(node) {
         return configured_value(node, scope, None);
     }
-    if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) {
+    // TYPE-14: "It does not make null an admitted value of unqualified
+    // T": core's operators take no `T?` operand, a `const A: i64? = 1`
+    // among them, but `==` and `!=`, which compare two of a `T?`; "A T
+    // is a value where a `T?` is expected", and so is `null`.
+    let equality = matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual);
+    if !equality && (nullable(&left) || nullable(&right)) {
+        return Ok(Typed::unevaluated(None));
+    }
+    if equality {
         // TYPE-7: an implied member is of the enum its place expects:
         // `Mode.fast == .slow` compares two of `Mode`, as core's `==`
         // is selected for them, and `[Mode.fast] == [.slow]` two lists
@@ -1459,6 +1472,11 @@ fn implied(read: Typed, other: &Typed, program: &Program) -> Option<Typed> {
     };
     let value = fit(read, Some(ty), program).ok()?;
     (!implies(&value)).then(|| Typed::of(value, Some(ty.clone())))
+}
+
+/// True where `read` is of a nullable type, `T?`.
+fn nullable(read: &Typed) -> bool {
+    matches!(read.ty, Some(Type::Nullable(_)))
 }
 
 /// True where `value` is or holds an implied member, `.slow`, that is
@@ -1861,6 +1879,9 @@ fn one_type(left: &ConstantValue, right: &ConstantValue) -> bool {
     use ConstantValue as V;
     match (left, right) {
         (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => true,
+        // TYPE-14: "`null` has the nullable type its place expects":
+        // beside a `T`, a `T?`'s.
+        (V::Null, _) | (_, V::Null) => true,
         (V::Temporal(left), V::Temporal(right)) => temporal_type(left) == temporal_type(right),
         // TYPE-7: "Enum members are distinct typed constants"; one whose
         // enum is not given it yet may be of either.

@@ -813,21 +813,45 @@ fn a_constant_in_a_type_an_option_and_an_equality_are_read_in_context() {
 }
 
 /// TYPE-14: a constant of a `T?` that is no null is a value of a place
-/// of that `T?`, and of no place of a `T`.
+/// of that `T?`, and of no place of a `T`. "It does not make null an
+/// admitted value of unqualified T": core's `+`, `-`, `<` take no
+/// `T?` operand, and an operation on one is worked out to nothing. `==`
+/// and `!=` compare two of a `T?`, `null` with a `T` among them.
 #[test]
 fn a_nullable_constant_is_a_value_of_its_nullable_type() {
     let shared = concat!(
         "const A: i64? = 1\n",
         "struct Box<const X: i64?> { v: i64 }\n",
         "struct IBox<const X: i64> { v: i64 }\n",
+        "struct Flag<const X: bool> { v: i64 }\n",
     );
     expect(
-        &format!("{shared}const fn a(x: Box<A>) -> Box<1> => x\n"),
+        &format!(
+            "{shared}const fn a(x: Box<A>) -> Box<1> => x\n\
+             const fn b(x: Flag<(A == 1)>, y: Flag<(A != null)>) -> Flag<true> => y\n\
+             const fn c(x: Flag<(1 == null)>) -> Flag<false> => x\n\
+             const fn d<const N: i64?>(x: Flag<(N == null)>) -> Flag<(N == null)> => x\n\
+             const fn e(x: Flag<true>) -> Flag<true> => d<null>(x)\n"
+        ),
         &[],
     );
     expect(
-        &format!("{shared}const fn a(x: IBox<A>) -> i64 => 1\n"),
-        &["5 type.mismatch"],
+        &format!(
+            "{shared}const fn a(x: IBox<A>) -> i64 => 1\n\
+             const fn b(x: IBox<(1 + A)>) -> IBox<2> => x\n\
+             const fn c(x: Box<(-A)>) -> i64 => 1\n\
+             const fn d(x: Flag<(A < 2)>) -> i64 => 1\n\
+             const fn e<const N: i64?>(x: Flag<(N == null)>) -> Flag<(N == null)> => x\n\
+             const fn f(x: Flag<true>) -> Flag<true> => e<1>(x)\n"
+        ),
+        &[
+            "6 type.mismatch",
+            "7 generic.argument_constant",
+            "8 generic.argument_constant",
+            "9 generic.argument_constant",
+            "11 type.mismatch",
+            "11 type.mismatch",
+        ],
     );
 }
 
