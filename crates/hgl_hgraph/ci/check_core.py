@@ -62,7 +62,7 @@ def case_rows(output):
     return rows
 
 
-def verify(discovered, result, expected, unrejected):
+def verify(discovered, result, expected, unrejected=frozenset()):
     """Require every discovered case and account for every non-passing
     outcome. A rejection case in `unrejected` must fail by not being
     rejected, as listed: rejected, or failing another way, it fails the
