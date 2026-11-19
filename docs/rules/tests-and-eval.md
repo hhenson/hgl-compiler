@@ -61,10 +61,10 @@ analyser: partial
 - An eval's first argument is a call of a function of a module, the temporal definition where there are both (`eval.target`: an operator, a struct, a value)
 - The call's arguments are bound as any call's are, its generic arguments among them: a `const` parameter takes configuration and every other a trace
 - A cell is written as a `return` is: a T whole or a `delta<T>`, each by its type, for a list, a set, a dictionary, a struct and a tuple; a tuple that is a T is the whole tuple, a null position a published null, and one that is no T, `(null, 3)` of a `tuple<i64, i64>`, its delta, a tuple of its positions
-- A generic target's parameters are found from the cells
+- A generic target's parameters are found from the cells, or from a trace an eval gave; a tuple that names one, `tuple<T, T>`, has its cells read as any tuple's once they are found
 - A trace is an argument of the eval's call and of no call inside it, which takes a value there (`type.mismatch`)
 - A second argument is a `RunConfig` of core's, and an eval takes no third
-- Left: a generic target given structural cells
+- Left: a generic target given structural cells other than a tuple's
 
 transpiler: partial
 
