@@ -933,7 +933,8 @@ fn a_constructed_members_enum_and_a_named_lists_size_count() {
 /// constant `false`: OPS-2, "`==` and `!=` compare two values of one
 /// type", and two enums' members are of two (TYPE-7). An implied
 /// member, alone or in a list or a tuple, is of the enum of the value
-/// beside it, and is no member of none.
+/// beside it, and is no member of none. A comparison of lists or tuples
+/// holding a generic value parameter is worked out once it is given.
 #[test]
 fn a_collections_shape_and_an_equalitys_operands_count() {
     let shared = concat!(
@@ -948,7 +949,10 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
             "{shared}const fn f(x: LBox<[]>, y: Flag<(A.x == A.x)>, z: Flag<([A.x] != [A.x])>) -> i64 => 1\n\
              const fn g(x: Flag<(1 == 1.0)>, y: Flag<(A.x != .y)>) -> Flag<true> => x\n\
              const fn h<const M: A>(x: Flag<(M == .x)>) -> i64 => 1\n\
-             const fn i(x: Flag<([A.x] == [.x])>, y: Flag<((.y, 1) != (A.x, 1))>) -> Flag<true> => y\n"
+             const fn i(x: Flag<([A.x] == [.x])>, y: Flag<((.y, 1) != (A.x, 1))>) -> Flag<true> => y\n\
+             const fn j<const N: i64>(x: Flag<([N] == [1])>) -> Flag<([N] == [1])> => x\n\
+             const fn k(x: Flag<true>, y: Flag<false>) -> Flag<false> => j<2>(y)\n\
+             const fn l(x: Flag<true>) -> Flag<true> => j<1>(x)\n"
         ),
         &[],
     );
@@ -964,7 +968,9 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
              const fn m(x: Flag<(.y != A.x)>) -> Flag<false> => x\n\
              const fn n(x: Flag<([.x] == [.x])>) -> i64 => 1\n\
              const fn o(x: Flag<([.x] != [])>) -> i64 => 1\n\
-             const fn p(x: Flag<([A.x] == [.z])>) -> i64 => 1\n"
+             const fn p(x: Flag<([A.x] == [.z])>) -> i64 => 1\n\
+             const fn q<const N: i64>(x: Flag<((N, 1) == (1, 1))>) -> Flag<((N, 1) == (1, 1))> => x\n\
+             const fn r(x: Flag<true>) -> Flag<true> => q<2>(x)\n"
         ),
         &[
             "7 type.mismatch",
@@ -978,6 +984,8 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
             "15 generic.argument_constant",
             "16 generic.argument_constant",
             "17 generic.argument_constant",
+            "19 type.mismatch",
+            "19 type.mismatch",
         ],
     );
 }

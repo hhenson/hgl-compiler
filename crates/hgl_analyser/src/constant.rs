@@ -1617,16 +1617,19 @@ pub(crate) fn combined(
 ) -> ConstantValue {
     use BinaryOperator as Op;
     use ConstantValue as V;
-    let symbolic = |value: &ConstantValue| {
-        matches!(
-            value,
+    // A value is symbolic where any part of it is: `[N] == [1]` is
+    // worked out once `N` is given its value.
+    fn symbolic(value: &ConstantValue) -> bool {
+        match value {
             V::Parameter { .. }
-                | V::Named { .. }
-                | V::Constructed { .. }
-                | V::Unary(..)
-                | V::Binary(..)
-        )
-    };
+            | V::Named { .. }
+            | V::Constructed { .. }
+            | V::Unary(..)
+            | V::Binary(..) => true,
+            V::List(values) | V::Tuple(values) => values.iter().any(symbolic),
+            _ => false,
+        }
+    }
     if matches!(left, V::Unknown) || matches!(right, V::Unknown) {
         return V::Unknown;
     }
