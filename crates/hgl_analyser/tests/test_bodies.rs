@@ -6,14 +6,8 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, module};
 use hgl_analyser::hir::Stmt;
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
 
 /// What each statement of the test `name`'s block is, in a word.
 fn outline(checked: &Checked, name: &str) -> Vec<&'static str> {
