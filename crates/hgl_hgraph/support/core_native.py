@@ -739,6 +739,17 @@ class _AbsentEntry:
     valid = False
     all_valid = False
     modified = False
+    value = None
+    delta_value = None
+    last_modified_time = None
+
+    def __getitem__(self, key):
+        # A child of an entry that is absent is absent too: a field, a
+        # position, an entry.
+        return self
+
+    def keys(self):
+        return ()
 
 
 _ABSENT_ENTRY = _AbsentEntry()
@@ -747,7 +758,9 @@ _ABSENT_ENTRY = _AbsentEntry()
 def position_of(port, index):
     """The endpoint of a fixed list's element at `index`, hgraph's child
     of the list's input (TIME-1). "An index outside a list fails where it
-    is evaluated" (EXPR-3)."""
+    is evaluated" (EXPR-3). A position of an absent entry is absent."""
+    if port is _ABSENT_ENTRY:
+        return port
     if not 0 <= index < len(port):
         raise HglError(f"the index {index} is outside a sequence of {len(port)}")
     return port[index]

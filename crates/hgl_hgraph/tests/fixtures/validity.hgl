@@ -253,3 +253,42 @@ test a_node_publishes_what_it_changes {
     assert eval(pair_changes(value: [1, 5])) == [1, 5]
     assert eval(b_of(key: ["A", "B"], price: [1, 2])) == [_, 2]
 }
+
+# ---- What the review of this lane found ----
+
+fn relayed(value: i64) -> i64 {
+    when { return value }
+}
+
+struct Tagged {
+    value: i64
+    tags: set<i64>
+}
+
+fn tagged(value: i64) -> Tagged {
+    when { return delta<Tagged>(value: value) }
+}
+
+fn nested(key: str, inner: str, price: i64) -> dict<str, dict<str, i64>> {
+    when {
+        return delta<dict<str, dict<str, i64>>>(updated: [key: delta<dict<str, i64>>(updated: [inner: price])])
+    }
+}
+
+fn has_inner(book: dict<str, dict<str, i64>>) -> bool {
+    when { return valid(book["outer"]["inner"]) }
+}
+
+fn inner_of(key: str, inner: str, price: i64) -> bool => has_inner(nested(key, inner, price))
+
+test what_the_review_found {
+    # A recording given to another eval replays what it published.
+    let seen = eval(relayed(value: [7, _, 9]))
+    assert eval(relayed(value: seen)) == [7, _, 9]
+    # A part that is not valid leaves the value held unread, and the
+    # delta is still compared.
+    assert eval(tagged(value: [1])) == [delta<Tagged>(value: 1)]
+    # A child of an absent entry is absent too.
+    assert eval(inner_of(key: ["other", "outer"], inner: ["inner", "inner"], price: [1, 2])) ==
+        [false, true]
+}

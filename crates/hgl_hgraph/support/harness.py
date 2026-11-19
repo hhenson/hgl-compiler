@@ -140,6 +140,9 @@ def _replay_entries(trace, start):
     for after, published in _relative(trace, start):
         if after < _datetime.timedelta(0):
             raise _core.HglError("a timed trace has a key before the run's start")
+        # A recording given as an input replays what it published.
+        if isinstance(published, _Published):
+            published = published.delta
         if isinstance(published, _Whole):
             published = _core.whole_delta(published.value, keys)
         if isinstance(published, dict):
@@ -228,6 +231,18 @@ def stop_withdrawn():
     _stop_wanted.clear()
 
 
+class _Unreadable:
+    """A value held that is not whole: equal to no value written."""
+
+    def __eq__(self, other):
+        return False
+
+    __hash__ = None
+
+
+_UNREADABLE = _Unreadable()
+
+
 # What `_held_by` reads, while a run that reads it is under way: the
 # function of the result's port that gives the value it holds, and what
 # it has read, by instant. A run is one at a time.
@@ -239,7 +254,14 @@ def _held_by(published: _hg.TIME_SERIES_TYPE, _clock: _hg.EvaluationClock = None
     """Reads the value the result holds at each of its publications, as
     core's `record` records its delta: where it is valid and modified."""
     if published.valid and published.modified:
-        _holding["held"][_clock.evaluation_time] = _holding["read"](published)
+        try:
+            held = _holding["read"](published)
+        except (TypeError, AttributeError, KeyError, IndexError):
+            # A part that is not valid, an unset list in a struct say, is
+            # no whole value: a cell written whole is not equal to it, and
+            # a delta is compared as recorded.
+            held = _UNREADABLE
+        _holding["held"][_clock.evaluation_time] = held
 
 
 def _ran(target, replays, record, replayed, arguments, start, end, real_time, seed=None, hold=None):
@@ -439,7 +461,7 @@ def _same_cell(left, right):
         if isinstance(other, _Whole):
             return _core._equal(whole.value, other.value)
         if isinstance(other, _Published):
-            return other.held is not None and _core._equal(whole.value, other.held)
+            return other.held not in (None, _UNREADABLE) and _core._equal(whole.value, other.held)
         return _core._equal(whole.value, other)
     if isinstance(left, _Published):
         left = left.delta

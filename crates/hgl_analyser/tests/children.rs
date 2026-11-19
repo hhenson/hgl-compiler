@@ -316,3 +316,27 @@ fn an_overlap_is_found_by_the_constants_value() {
         ]
     );
 }
+
+/// TIME-1: "Where the read names its child when the program is
+/// compiled ... one that is not admitted rejects". A constant of a
+/// module names its child as the literal it is written as does
+/// (UNIT-13: "The constant has that one value wherever it is read").
+#[test]
+fn a_constant_of_a_module_names_a_child_when_compiled() {
+    let checked = module(concat!(
+        "const KEY: str = \"bid\"\n",
+        "fn unguarded(book: dict<str, i64>) -> i64 {\n",
+        "    when { return book[KEY] }\n",
+        "}\n",
+        "fn guarded(book: dict<str, i64>) -> i64 {\n",
+        "    when {\n",
+        "        if valid(book[\"bid\"]) { return book[KEY] }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:4:19 phase/payload.unguarded TIME-1"]
+    );
+}

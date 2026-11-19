@@ -20,6 +20,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
+use hgl_lexer::literal::{decode_float, decode_string};
+
 use super::{BOOL, Fact, Index, Typer, constant_index, not_null, nullable, tokens};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId, Value};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
@@ -59,6 +61,11 @@ pub(super) enum Step {
     /// A dictionary's key that is a member of an enum: its module, its
     /// declaration and its position among the members.
     Member(usize, usize, usize),
+    /// A dictionary's key that is a constant of a module whose value is
+    /// not a literal this pass reads: the constant, by its module and its
+    /// declaration. UNIT-13: "The constant has that one value wherever
+    /// it is read", so it names one child.
+    Constant(usize, usize),
 }
 
 /// What a child of a temporal input is, as the program names it.
@@ -190,7 +197,38 @@ impl Typer<'_> {
                 declaration,
                 member,
             } => Some(Step::Member(*module, *declaration, *member)),
+            ExprKind::Constant {
+                module,
+                declaration,
+            } => Some(self.constant_key(*module, declaration)),
             _ => None,
+        }
+    }
+
+    /// The key a constant of a module names (UNIT-13): the literal it is
+    /// written as, a `str`, a `bool` or an `f64`, so that `book[KEY]` and
+    /// `book["bid"]` are one child where `KEY` is `"bid"`; and the
+    /// constant itself where it is written otherwise.
+    fn constant_key(&self, module: usize, declaration: &usize) -> Step {
+        let declared = &self.program.modules[module].declarations[*declaration];
+        let ty = crate::read::type_child(&declared.syntax);
+        let written = declared
+            .syntax
+            .children()
+            .find(|child| Some(child) != ty.as_ref());
+        let literal = written
+            .filter(|written| written.kind() == SyntaxKind::Literal)
+            .and_then(|written| tokens(&written).next())
+            .and_then(|token| match token.kind() {
+                SyntaxKind::Str => decode_string(token.text()).ok().map(Value::Str),
+                SyntaxKind::KwTrue => Some(Value::Bool(true)),
+                SyntaxKind::KwFalse => Some(Value::Bool(false)),
+                SyntaxKind::Float => decode_float(token.text()).ok().map(Value::Float),
+                _ => None,
+            });
+        match literal {
+            Some(value) => Step::Key(value),
+            None => Step::Constant(module, *declaration),
         }
     }
 
