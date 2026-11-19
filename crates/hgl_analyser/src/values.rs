@@ -64,6 +64,13 @@ mod children;
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    // The signature of what has none: a test, a run statement, a
+    // constant.
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+    };
     // UNIT-13: the value each constant is written with, read as a value
     // of the constant's type with no parameter in scope. Every module's
     // are read before any body, which may read one as a `switch` label
@@ -71,10 +78,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
-        let empty = Signature {
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result: None,
+        let found = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
         };
         let constants: Vec<Option<Expr>> = module
             .declarations
@@ -84,50 +91,18 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 let Some(Detail::Constant(ty)) = module.details.get(position) else {
                     return None;
                 };
-                Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    &empty,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .constant(ty)
+                Typer::new(program, module, declaration, &empty, found, diagnostics).constant(ty)
             })
             .collect();
         program.modules[index].constants = constants;
     }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
-        // What each name resolved to, by where it is used (UNIT-10).
-        let bindings: HashMap<(FileId, u32), &Binding> = module
-            .uses
-            .iter()
-            .map(|used| ((used.at.file, used.at.span.start), &used.binding))
-            .collect();
-        // What each written type means, by where it starts.
-        let written: HashMap<(FileId, u32), &Type> = module
-            .written
-            .iter()
-            .map(|written| ((written.at.file, written.at.span.start), &written.ty))
-            .collect();
-        // The generic arguments each call writes, by where its callee
-        // starts (GEN-8).
-        let calls: HashMap<(FileId, u32), &CallArguments> = module
-            .call_arguments
-            .iter()
-            .map(|call| ((call.at.file, call.at.span.start), call))
-            .collect();
-        // The signature of what has none: a test, a run statement, a
-        // constant.
-        let empty = Signature {
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result: None,
+        let (bindings, written, calls) = tables(module);
+        let found = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
         };
         let mut bodies = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
@@ -138,19 +113,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     DeclarationKind::Function(Role::Value)
                     | DeclarationKind::Implementation(Role::Value, _),
                     Some(Detail::Callable(signature)),
-                ) => Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    signature,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .body(),
+                ) => Typer::new(program, module, declaration, signature, found, diagnostics).body(),
                 // FN-2: a node, whose hooks are read as value code
                 // (FN-3: "In a hook a temporal parameter is a value of
                 // its declared type, read as in a value function"). A
@@ -161,18 +124,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Node)) => {
-                    let typer = Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    );
+                    let typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
                     if crate::phases::is_source(declaration) {
                         typer.source()
                     } else {
@@ -184,19 +137,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     DeclarationKind::Function(Role::Temporal)
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
-                ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    signature,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .graph(),
+                ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => {
+                    Typer::new(program, module, declaration, signature, found, diagnostics).graph()
+                }
                 // A declaration with no body to read writes types too:
                 // a struct's fields, an operator's parameters, a
                 // constant's type. Each is held to the `requires` of
@@ -208,27 +151,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     let signature = match detail {
                         Some(Detail::Callable(signature)) => signature,
                         Some(Detail::Struct(read)) => {
-                            of_struct = Signature {
-                                generics: read.generics.clone(),
-                                parameters: Vec::new(),
-                                result: None,
-                            };
+                            of_struct = Signature::of_struct(read);
                             &of_struct
                         }
                         _ => &empty,
                     };
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    );
+                    Typer::new(program, module, declaration, signature, found, diagnostics);
                     None
                 }
             };
@@ -240,82 +168,25 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
         for test in &module.tests {
-            let stand_in = Declaration {
-                name: test.name.clone(),
-                at: test.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: true,
-                file: test.file,
-                syntax: test.syntax.clone(),
-            };
-            let body = Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .test(test.integration);
+            let stand_in =
+                Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
+            let body = Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .test(test.integration);
             test_bodies.push(body);
         }
         // RUN-1: an application's run statement. It is no declaration
         // either, and is read as a graph with no parameter is.
         let run_body = module.run.as_ref().and_then(|run| {
-            let stand_in = Declaration {
-                name: "run".to_string(),
-                at: run.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: false,
-                file: run.file,
-                syntax: run.syntax.clone(),
-            };
-            Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .run_statement()
+            let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics).run_statement()
         });
         // UNIT-14: the statements an application sets its run's store
         // with are no declaration either. They are read together, as
         // the statements of one block are.
         let store_body = module.store.first().and_then(|first| {
-            let stand_in = Declaration {
-                name: "store".to_string(),
-                at: first.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: false,
-                file: first.file,
-                syntax: first.syntax.clone(),
-            };
-            Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .store(&module.store)
+            let stand_in =
+                Declaration::stand_in("store", first.at, first.file, &first.syntax, false);
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics).store(&module.store)
         });
         // UNIT-8: "Defaults remain required-constant/cold expressions
         // checked against the expected type. Any parameter but a pack
@@ -332,19 +203,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                         .iter()
                         .any(|parameter| parameter.has_default) =>
                 {
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    )
-                    .defaults()
+                    Typer::new(program, module, declaration, signature, found, diagnostics)
+                        .defaults()
                 }
                 Some(Detail::Callable(signature)) => vec![None; signature.parameters.len()],
                 // TYPE-4: a field's default is read as a value of the
@@ -353,24 +213,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     // A struct has no parameter and no result: what a
                     // default may name of it is its generic parameters
                     // (UNIT-7: "with its generic environment").
-                    let signature = Signature {
-                        generics: read.generics.clone(),
-                        parameters: Vec::new(),
-                        result: None,
-                    };
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        &signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    )
-                    .field_defaults(read)
+                    let signature = Signature::of_struct(read);
+                    Typer::new(program, module, declaration, &signature, found, diagnostics)
+                        .field_defaults(read)
                 }
                 Some(Detail::Struct(read)) => vec![None; read.fields.len()],
                 _ => Vec::new(),
@@ -427,7 +272,9 @@ struct Called<'a> {
 }
 
 /// What the earlier passes found of a module, each by the file and
-/// offset it is written at.
+/// offset it is written at. It holds references only, so it is copied
+/// to each `Typer` (`Copy`).
+#[derive(Clone, Copy)]
 struct Tables<'a> {
     /// What each name resolved to (UNIT-10).
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,

@@ -614,6 +614,20 @@ pub struct Signature {
     pub result: Option<Type>,
 }
 
+impl Signature {
+    /// The signature a struct's declaration is read with: its generic
+    /// parameters, and neither a parameter nor a result. What a field's
+    /// type or default may name of it is its generic parameters
+    /// (UNIT-7: "with its generic environment").
+    pub(crate) fn of_struct(read: &StructType) -> Signature {
+        Signature {
+            generics: read.generics.clone(),
+            parameters: Vec::new(),
+            result: None,
+        }
+    }
+}
+
 /// One parameter of a callable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameter {
