@@ -165,6 +165,7 @@ analyser: done
 - One with a declaration or a hook has its declarations, `start`, one block that holds every `yield` (`{ }`, `while` or `for`), and `stop`, in that order and nothing else: a statement outside the block, a second block, a hook out of order and a `yield` in a hook are `source.statement`
 - Its declarations and hooks stand in its body itself and each hook once, as a node's do (TIME-5)
 - Its body is read: its declarations and hooks as a node's, and its other statements as value code, with each `yield`'s value held to the result's type
+- It injects neither `scheduler` nor `alarm`, so `scheduled()` in it is `inject.no_scheduler` (TIME-9)
 
 transpiler: partial
 

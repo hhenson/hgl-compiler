@@ -28,3 +28,9 @@ fn identified(shape: Shape) -> i64 {
 test below_cells {
     assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]
 }
+fn halves(pair: tuple<i64, list<i64>>) -> i64 {
+    when { return 1 }
+}
+test tuple_cells {
+    assert eval(halves(pair: [(1, [2])])) == [1]
+}
