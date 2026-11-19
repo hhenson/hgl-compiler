@@ -3818,11 +3818,18 @@ impl<'a> Typer<'a> {
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V", and TYPE-16: "an atomic publishes whole". In a hook an
         // atomic input's payload, and `out`'s, is that whole V, an
-        // ordinary value.
+        // ordinary value. TYPE-14: the `?` of an input whose type is
+        // no ordinary value marks one that may be left out, and no
+        // null: what a hook reads of `atomic<Quote>?` is a `Quote`, and
+        // of `ref<f64>?` a `ref<f64>` (`Type::omission_removed`).
         let endpoint = self.is_temporal_input(local) || Some(local) == self.out;
-        let ty = match ty {
-            Type::Atomic(payload) if self.hook.is_some() && endpoint => *payload,
-            ty => ty,
+        let ty = if self.hook.is_some() && endpoint {
+            match ty.omission_removed() {
+                Type::Atomic(payload) => (**payload).clone(),
+                under => under.clone(),
+            }
+        } else {
+            ty
         };
         Expr {
             kind: ExprKind::Local(local),

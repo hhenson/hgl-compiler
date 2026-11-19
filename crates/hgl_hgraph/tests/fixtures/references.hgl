@@ -112,11 +112,14 @@ fn widened(bid: i64) -> atomic<Quote> {
     }
 }
 
-# An atomic input that may be left out (TYPE-14) is the atomic's port.
+# An atomic input that may be left out (TYPE-14) is the atomic's port,
+# and a valid one is read as its whole V: the `?` marks omission, and no
+# null.
 fn bid_or(value: i64, quote: atomic<Quote>?) -> i64 {
     when valid(value) {
         if valid(quote) {
-            if quote != null { return quote.bid }
+            let whole: Quote = quote
+            return whole.bid + quote.ask - quote.ask
         }
         return -value
     }

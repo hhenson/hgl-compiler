@@ -264,8 +264,9 @@ fn a_hook_returns_a_reference_and_gives_it_to_no_value_function() {
 /// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V", and
 /// TYPE-16: "an atomic publishes whole". In a hook an atomic input, and
 /// `out` (TIME-7), is read as that V: bound to a `let` of V, given to a
-/// value function of V, compared, and projected. A graph keeps the
-/// atomic's shape: it is no struct's bundle.
+/// value function of V, compared, and projected; one that may be left
+/// out (TYPE-14: the `?` marks omission) the same, where it is valid. A
+/// graph keeps the atomic's shape: it is no struct's bundle.
 #[test]
 fn a_hook_reads_an_atomic_input_as_its_whole_value() {
     let checked = module(concat!(
@@ -290,6 +291,15 @@ fn a_hook_reads_an_atomic_input_as_its_whole_value() {
         "    }\n",
         "}\n",
         "fn reshaped(bid: i64) -> Quote => snapshot(bid)\n",
+        "fn optional(value: i64, quote: atomic<Quote>?) -> i64 {\n",
+        "    when valid(value) {\n",
+        "        if valid(quote) {\n",
+        "            let whole: Quote = quote\n",
+        "            return width(whole) + quote.bid\n",
+        "        }\n",
+        "        return value\n",
+        "    }\n",
+        "}\n",
     ));
     assert_eq!(checked.summary(), ["m.hgl:22:35 type/type.mismatch EXPR-5"]);
 }
