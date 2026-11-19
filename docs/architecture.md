@@ -1450,7 +1450,9 @@ only where the program reaches it, at core's source.
 | `[key: value, ...]`, and `[]` where a dictionary is expected (EXPR-9) | `{key: value, ...}`, `{}` |
 | In a value function and a node's hooks, `for item in items`, `for key, value in entries`, `while condition` (CTRL-12) | `for item in items:`, `for key, value in entries.items():`, `while condition:` |
 | `switch selector { case label: ... default: ... }` there (CTRL-6) | `_selected_N = selector`, N the depth it is written at, then `if _selected_N == label:` for the first case, `elif` for each after, and `else:` with the `default`, or with `_core.unmatched(_selected_N)`, which fails |
-| `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
+| `bool`, `i64`, `f64`, `str`, `bytes` (TYPE-1) | `_py.bool`, `_py.int`, `_py.float`, `_py.str`, `_py.bytes`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
+| `date`, `time`, `datetime`, `civil_datetime`, `duration` (TYPE-2) | `_dt.date`, `_dt.time`, `_dt.datetime`, `_dt.datetime`, `_dt.timedelta`, of `import datetime as _dt`: an instant is a `datetime` in UTC that names no zone, as hgraph has them |
+| `tenor`, `timezone`, `zoned_datetime`, `zoned_time` (TYPE-2, TYPE-17) | `_core.Tenor`, `_core.Timezone`, `_core.ZonedDatetime`, `_core.ZonedTime`: frozen dataclasses of the provider, which hgraph holds by their fields, so each is `_hg.TS[...]` and `_hg.TS[... \| None]`. A zone is its name; a zoned datetime its instant in UTC and its zone. `@[Europe/London]`, `@09:30[Europe/London]` and `@2026-09-03T09:30+01:00[Europe/London]` are `_core.timezone("Europe/London")`, `_core.zoned_time(_dt.time(9, 30, 0, 0), "Europe/London")` and `_core.zoned_datetime(_dt.datetime(2026, 9, 3, 9, 30, 0, 0), 60, "Europe/London")`, which check the zone against the run's catalogue and the offset against the zone (LEX-12) |
 | `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
 | `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
 | `if flag { a } else { b }`, `switch route { ... }` in a graph, over a connection (CTRL-13 to CTRL-15) | `_hg.switch_(flag, {True: _case_0_0, False: _case_0_1}, value=value)`: a `@_hg.graph` for each branch, written before the statement, that takes the connections the branches read. hgraph starts a branch's graph where its key is selected and stops it where another is. A branch that returns takes the rest of the block for the other branch, as does one that gives a `let` its value and has a `return`; branches that assign a `var` give it, and it is assigned what `switch_` gives; branches that assign none are graphs with no output (CTRL-3), the omitted `else` one with nothing in it. A connection whose name `switch_` or `map_` keeps for itself, `key` or `name`, is taken as `_taken_key`. Over an ordinary value an `if` is Python's own, and a `switch` is `_selected_N = route` and an `if` on it |
@@ -1655,8 +1657,9 @@ TEN-2, TEN-3, TEN-9). `date + tenor` is core's HGL, in
 value function, once for each calendar and rolling rule a call gives, and
 what it writes asks the program's own `business_day` and `roll`. The four
 parts that HGL is written with are the provider's too: `fn_moved`,
-`fn_business_days`, `fn_weekend` and `fn_same_month`. A tenor as the type
-of a temporal input or result is not written yet.
+`fn_business_days`, `fn_weekend` and `fn_same_month`. `Tenor` is a frozen
+dataclass, which hgraph holds by its fields: a temporal tenor is
+`_hg.TS[_core.Tenor]`, and a nullable one `_hg.TS[_core.Tenor | None]`.
 
 hgraph makes a value of its own of what it is given to keep, a node's
 configuration and what its global state holds, and has none for a tuple
@@ -1676,7 +1679,7 @@ its publications and their recorded UTC instants through `publications`
 dense positions (CRUN-3) and preserves absolute datetime keys.
 
 Reported as not written yet (`target.unsupported`): as the type of an
-input, an output or configuration, any but the four scalars above, an
+input, an output or configuration, `any` and any other but the scalars above, an
 enum, a set of one of those and a nullable scalar or enum, a struct
 among them; a
 delta that is not a set's; a struct made in a graph;
@@ -1699,7 +1702,7 @@ temporal parameter; a block with statements inside another expression;
 a pack in a lifted call; a temporal function called in a test outside an
 `eval`;
 a loop and a `switch` in a test;
-a zoned datetime, a zoned time and a time zone; a `result` or an `error` as the type of an input or an output;
+a literal instant outside the years 1 to 9999 in UTC; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 
 A module is written a piece at a time: each declaration, then each

@@ -19,6 +19,11 @@ result outside the signed 64-bit range is an error with the code
 A `duration` is a `timedelta`, and its arithmetic is done on its count of
 whole microseconds, which is held to the same range (TYPE-2, OPS-10).
 
+A `tenor`, a `timezone`, a `zoned_datetime` and a `zoned_time` are frozen
+dataclasses here, which hgraph holds by their fields, so that each is a
+temporal value and a nullable one (TYPE-2, TYPE-14, TYPE-17). A zone
+literal is made by a function that checks the zone (LEX-12).
+
 A division takes `zero`, the name of a member of core's `ZeroPolicy`,
 which says what a zero divisor gives (NUM-3, NUM-12): `"ieee"` what IEEE
 arithmetic does, `"nan"` a NaN, and `"fail"` an error with the code
@@ -43,6 +48,7 @@ import json as _json
 import math as _math
 import re as _re
 import sys as _sys
+import zoneinfo as _zoneinfo
 from fractions import Fraction as _Fraction
 
 from hgraph import (
@@ -1917,30 +1923,148 @@ def sub__date_duration(lhs, rhs):
     return _moved(_datetime.datetime.combine(lhs, _datetime.time()), -rhs)
 
 
+# TYPE-2: "named `timezone`, resolved `zoned_datetime`, and
+# date-independent `zoned_time`". Each is a frozen dataclass, a value
+# hgraph holds by its fields, so that it is a temporal value and a
+# nullable one (TYPE-14). A zone is kept by its name: "zone aliases are
+# distinct names", so two names are two zones whatever each links to,
+# and the dataclass compares the names.
+
+
+@_dataclasses.dataclass(frozen=True, repr=False)
+class Timezone:
+    """A `timezone`: a zone of the run provider's catalogue, by name."""
+
+    name: str
+
+    def __repr__(self):
+        return f"@[{self.name}]"
+
+
+@_dataclasses.dataclass(frozen=True, repr=False)
+class ZonedDatetime:
+    """A `zoned_datetime`: an instant, a `datetime` in UTC that names no
+    zone as hgraph has them, resolved in the zone named `zone`.
+
+    Two are equal where both the instants and the zones are: "Same-instant
+    zoned values need not be equal" (TYPE-2), and two zones are two names.
+    The offset is the zone's at the instant, so it is no field.
+    """
+
+    instant: _datetime.datetime
+    zone: str
+
+    def __repr__(self):
+        try:
+            local = self.instant.replace(tzinfo=_datetime.UTC).astimezone(_zone_info(self.zone))
+        except (HglError, OverflowError):
+            return f"@{self.instant.isoformat()}Z[{self.zone}]"
+        return f"@{local.isoformat()}[{self.zone}]"
+
+
+@_dataclasses.dataclass(frozen=True, repr=False)
+class ZonedTime:
+    """A `zoned_time`: a time of day in the zone named `zone`, on no date,
+    so with no offset."""
+
+    time: _datetime.time
+    zone: str
+
+    def __repr__(self):
+        return f"@{self.time.isoformat()}[{self.zone}]"
+
+
+@_functools.cache
+def _catalogue():
+    """The names of the run provider's zone catalogue: those of the IANA
+    database Python's `zoneinfo` reads, aliases included. Read once."""
+    return frozenset(_zoneinfo.available_timezones())
+
+
+def _zone_info(name):
+    """The zone `name` names. LEX-12: "The selected run provider checks
+    exact catalog membership": a name the catalogue has not is a
+    failure. The catalogue is the run's, so "Provider checks do not
+    depend on the compiler's local time-zone database". No code is
+    catalogued for the failure."""
+    if name not in _catalogue():
+        raise HglError(f"the zone `{name}` is not in the run provider's zone catalogue")
+    return _zoneinfo.ZoneInfo(name)
+
+
+@_functools.cache
+def timezone(name):
+    """A `timezone` literal, `@[Europe/London]`, checked (LEX-12)."""
+    _zone_info(name)
+    return Timezone(name)
+
+
+@_functools.cache
+def zoned_time(written, name):
+    """A `zoned_time` literal, `@09:30[Europe/London]`: the time `written`
+    in the zone `name`, checked to be in the catalogue (LEX-12). It is
+    on no date, so it has no offset to check."""
+    _zone_info(name)
+    return ZonedTime(written, name)
+
+
+@_functools.cache
+def zoned_datetime(written, minutes, name):
+    """A `zoned_datetime` literal, `@2026-09-03T09:30+01:00[Europe/London]`:
+    the date and time `written`, `minutes` east of UTC, in the zone `name`.
+
+    LEX-11: "A zoned datetime requires an explicit offset", and LEX-12:
+    the provider checks "offset consistency". The written offset is
+    consistent where it is the zone's own at the instant it gives, and
+    then that instant in the zone is the date and time written. A time
+    a change of offset repeats is one instant at each of its two
+    offsets, and a time it skips is at none.
+    """
+    zone = _zone_info(name)
+    at = instant(written, minutes)
+    try:
+        offset = at.replace(tzinfo=_datetime.UTC).astimezone(zone).utcoffset()
+    except OverflowError:
+        # The instant in the zone is outside Python's years, so not the
+        # date and time written: the zone's offset is another.
+        offset = None
+    if offset != _datetime.timedelta(minutes=minutes):
+        raise HglError(
+            f"the offset of `{written.isoformat()}` is not the offset of the zone `{name}` at that time"
+        )
+    return ZonedDatetime(at, name)
+
+
+def add__zoned_datetime_duration(lhs, rhs):
+    """OPS-1: a `zoned_datetime` and a `duration` give "that instant's
+    type". A duration is elapsed time, so the instant moves by it and
+    the zone is kept; the offset is the zone's at the new instant."""
+    return ZonedDatetime(_moved(lhs.instant, rhs), lhs.zone)
+
+
+def sub__zoned_datetime_duration(lhs, rhs):
+    return ZonedDatetime(_moved(lhs.instant, -rhs), lhs.zone)
+
+
+@_dataclasses.dataclass(frozen=True, repr=False)
 class Tenor:
     """A `tenor`, a rule for moving a date (the language's TYPE-17): "a
     count of months and a count of days, or it is a count of business
     days".
 
     `business` is `None` for a tenor of months and days. Two are equal
-    "when they are of the same form and their counts are equal".
+    "when they are of the same form and their counts are equal": the
+    dataclass compares the three counts.
+
+    A frozen dataclass is what hgraph holds as a value of fields, so a
+    tenor is a temporal value, `TS[Tenor]`, and a nullable one,
+    `TS[Tenor | None]`, too (TYPE-14). hgraph holds a class of no
+    fields as an object, which may not be unset.
     """
 
-    __slots__ = ("months", "days", "business")
-
-    def __init__(self, months=0, days=0, business=None):
-        self.months = months
-        self.days = days
-        self.business = business
-
-    def _counts(self):
-        return (self.months, self.days, self.business)
-
-    def __eq__(self, other):
-        return isinstance(other, Tenor) and self._counts() == other._counts()
-
-    def __hash__(self):
-        return hash(self._counts())
+    months: int = 0
+    days: int = 0
+    business: int | None = None
 
     def __repr__(self):
         return convert_tenor_to_str(self)
