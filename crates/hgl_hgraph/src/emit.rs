@@ -250,6 +250,95 @@ struct Function<'a> {
     copies: Copies,
 }
 
+impl<'a> Function<'a> {
+    /// The function `body` belongs to, read in `mode`: its locals, its
+    /// signature (`None` for a test or a module's store, which have
+    /// none) and the copies its body takes.
+    fn of(
+        program: &Program,
+        body: &'a Body,
+        signature: Option<&'a Signature>,
+        mode: Mode,
+    ) -> Function<'a> {
+        Function {
+            locals: &body.locals,
+            signature,
+            mode,
+            copies: Copies::of(program, body),
+        }
+    }
+
+    /// A function with no local in scope and no signature: what reads
+    /// a module's constant, a default, or an application's run
+    /// statement.
+    fn cold(mode: Mode) -> Function<'a> {
+        Function {
+            locals: &[],
+            signature: None,
+            mode,
+            copies: Copies::default(),
+        }
+    }
+
+    /// The same body read in another `mode`: a node's `start` and
+    /// `stop` read the locals the node's hooks read. The copies are
+    /// the body's, so they are not worked out again.
+    fn in_mode(&self, mode: Mode) -> Function<'a> {
+        Function {
+            locals: self.locals,
+            signature: self.signature,
+            mode,
+            copies: self.copies.clone(),
+        }
+    }
+
+    /// True when `local` is a temporal input of the node being written:
+    /// a parameter that is not `const`.
+    fn is_input(&self, local: usize) -> bool {
+        let declared = &self.locals[local];
+        declared.kind == LocalKind::Parameter
+            && self.signature.is_some_and(|signature| {
+                signature
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.name == declared.name && !parameter.constant)
+            })
+    }
+
+    /// True when `local` is the node's `inject out` (TIME-7).
+    fn is_out(&self, local: usize) -> bool {
+        let declared = &self.locals[local];
+        declared.kind == LocalKind::Inject && declared.name == "out"
+    }
+
+    /// The type of what the port `value` reads in a hook holds: an
+    /// input's or `out`'s declared type, and not the type the analyser
+    /// reads it as, an atomic's V (TYPE-9) or the type under a `?` that
+    /// marks omission (TYPE-14). hgraph keeps an atomic's value whole in
+    /// its port, and its read is that value, not one made anew. Any
+    /// other read is of its own type.
+    fn port_type<'f>(&'f self, value: &'f Expr) -> &'f Type {
+        match value.kind {
+            ExprKind::Local(local) if self.is_input(local) || self.is_out(local) => {
+                &self.locals[local].ty
+            }
+            _ => &value.ty,
+        }
+    }
+
+    /// True when what the function being written publishes of `value`
+    /// may be a null that is Python's `None`: its result's type is
+    /// written `T?`, and `value` is a value of it. A value that is the
+    /// nullable's delta is hgraph's own already, `Null` or the value
+    /// (TYPE-16).
+    fn publishes_null(&self, value: &Expr) -> bool {
+        self.signature
+            .and_then(|signature| signature.result.as_ref())
+            .is_some_and(publishes_whole_null)
+            && !matches!(&value.ty, Type::Delta(of) if is_nullable(of))
+    }
+}
+
 /// The words a generated module leaves to Python: its keywords. A
 /// built-in name such as `float` is no keyword, and a program may use
 /// it: the target reaches Python's built-ins through a name of its
@@ -1316,12 +1405,7 @@ impl Emitter<'_> {
             &format!("def {}():", self.definition_name(self.module, index)),
         );
         // It reads no parameter and no local (UNIT-13).
-        let function = Function {
-            locals: &[],
-            signature: None,
-            mode: Mode::Value,
-            copies: Copies::default(),
-        };
+        let function = Function::cold(Mode::Value);
         self.propagates = false;
         let written = self.expression(&function, value);
         if std::mem::take(&mut self.propagates) {
@@ -1457,12 +1541,7 @@ impl Emitter<'_> {
         self.line(0, "");
         self.line(0, "");
         self.line(0, &format!("def {python}({}):", parameters.join(", ")));
-        let function = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Value,
-            copies: Copies::of(self.program, body),
-        };
+        let function = Function::of(self.program, body, Some(signature), Mode::Value);
         // FN-15: "what it holds when the function returns is what the
         // place is given". Python has no place to give a value to, so
         // the function returns what each `var` parameter holds after
@@ -2381,12 +2460,7 @@ impl Emitter<'_> {
     fn node(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
-        let function = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Node,
-            copies: Copies::of(self.program, body),
-        };
+        let function = Function::of(self.program, body, Some(signature), Mode::Node);
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
         self.window_inputs(signature);
         self.window_published_once(signature, body);
@@ -2402,7 +2476,7 @@ impl Emitter<'_> {
             .collect();
         // The temporal inputs, as positions among the locals.
         let inputs: Vec<usize> = (0..body.locals.len())
-            .filter(|&local| Self::is_input(&function, local))
+            .filter(|&local| function.is_input(local))
             .collect();
         // What the body is made of: the declarations, and each hook.
         let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
@@ -2828,18 +2902,8 @@ impl Emitter<'_> {
             self.line(1, "pass");
         }
         // `start` and `stop` are read as what they are to hgraph.
-        let lifecycle_hook = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Lifecycle,
-            copies: Copies::of(self.program, body),
-        };
-        let stop_hook = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Stop,
-            copies: Copies::of(self.program, body),
-        };
+        let lifecycle_hook = function.in_mode(Mode::Lifecycle);
+        let stop_hook = function.in_mode(Mode::Stop);
         // `start`: the state's first values, then the hook's own
         // statements.
         if has_state || start.is_some() {
@@ -2990,12 +3054,7 @@ impl Emitter<'_> {
         self.line(0, "");
         self.line(0, "");
         self.line(0, &format!("def {generator}({}):", given.join(", ")));
-        let yielding = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Source,
-            copies: Copies::of(self.program, body),
-        };
+        let yielding = Function::of(self.program, body, Some(signature), Mode::Source);
         self.block(&yielding, &block, 1);
 
         // The node. The clock and the scheduler are the target's own
@@ -3040,12 +3099,7 @@ impl Emitter<'_> {
 
         // `start`: the first values, the hook, and the generator.
         let hooks = hooks.join(", ");
-        let lifecycle_hook = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Lifecycle,
-            copies: Copies::of(self.program, body),
-        };
+        let lifecycle_hook = yielding.in_mode(Mode::Lifecycle);
         self.line(0, "");
         self.line(0, "");
         self.line(0, &format!("@{node}.start"));
@@ -3078,12 +3132,7 @@ impl Emitter<'_> {
             self.statements(&lifecycle_hook, start, 1);
         }
         if let Some(stop) = stop {
-            let stop_hook = Function {
-                locals: &body.locals,
-                signature: Some(signature),
-                mode: Mode::Stop,
-                copies: Copies::of(self.program, body),
-            };
+            let stop_hook = yielding.in_mode(Mode::Stop);
             self.line(0, "");
             self.line(0, "");
             self.line(0, &format!("@{node}.stop"));
@@ -3126,12 +3175,7 @@ impl Emitter<'_> {
     fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
-        let function = Function {
-            locals: &body.locals,
-            signature: Some(signature),
-            mode: Mode::Graph,
-            copies: Copies::of(self.program, body),
-        };
+        let function = Function::of(self.program, body, Some(signature), Mode::Graph);
         let (parameters, result) = self.temporal_signature(declaration, signature);
         self.hgraph = true;
         self.line(0, "");
@@ -3159,12 +3203,7 @@ impl Emitter<'_> {
                     self.line(0, "");
                     self.line(0, "");
                     self.line(0, &format!("def {}():", test_function(&test.name)));
-                    let function = Function {
-                        locals: &body.locals,
-                        signature: None,
-                        mode: Mode::Test,
-                        copies: Copies::of(self.program, body),
-                    };
+                    let function = Function::of(self.program, body, None, Mode::Test);
                     self.block(&function, &body.statements, 1);
                 }
                 // The analyser gave the test no body to write.
@@ -3205,12 +3244,7 @@ impl Emitter<'_> {
         // run's own before it builds the graph (core's CRUN-7).
         let seeded = match &module.store_body {
             Some(body) => {
-                let setting = Function {
-                    locals: &body.locals,
-                    signature: None,
-                    mode: Mode::Lifecycle,
-                    copies: Copies::of(self.program, body),
-                };
+                let setting = Function::of(self.program, body, None, Mode::Lifecycle);
                 // The `inject` is the function's parameter.
                 let puts: Vec<Stmt> = body
                     .statements
@@ -3234,12 +3268,7 @@ impl Emitter<'_> {
             Some(run) => {
                 // The statement stands in no function: it has no local
                 // to name, and is read as a test's statement is.
-                let function = Function {
-                    locals: &[],
-                    signature: None,
-                    mode: Mode::Test,
-                    copies: Copies::default(),
-                };
+                let function = Function::cold(Mode::Test);
                 let line = self.text.matches('\n').count();
                 self.piece.statements.push((line, run.at));
                 let mut written = self.run_statement(&function, run);
@@ -4480,24 +4509,7 @@ impl Emitter<'_> {
     fn made_anew(&self, function: &Function, value: &Expr) -> bool {
         matches!(function.mode, Mode::Node | Mode::Stop)
             && self.input_port(function, value).is_some()
-            && built_anew(self.program, Self::port_type(function, value), 0)
-    }
-
-    /// The type of what the port `value` reads in a hook holds: an
-    /// input's or `out`'s declared type, and not the type the analyser
-    /// reads it as, an atomic's V (TYPE-9) or the type under a `?` that
-    /// marks omission (TYPE-14). hgraph keeps an atomic's value whole in
-    /// its port, and its read is that value, not one made anew. Any
-    /// other read is of its own type.
-    fn port_type<'f>(function: &'f Function, value: &'f Expr) -> &'f Type {
-        match value.kind {
-            ExprKind::Local(local)
-                if Self::is_input(function, local) || Self::is_out(function, local) =>
-            {
-                &function.locals[local].ty
-            }
-            _ => &value.ty,
-        }
+            && built_anew(self.program, function.port_type(value), 0)
     }
 
     /// True where `value` is a connection of a graph: hgraph's wiring,
@@ -4714,7 +4726,7 @@ impl Emitter<'_> {
                     // from: a copy, a nullable one among them.
                     let value = self.copied(function, assigned, value);
                     let value = self.bundled(function, assigned, value);
-                    if Self::publishes_null(function, assigned) {
+                    if function.publishes_null(assigned) {
                         self.published(value)
                     } else {
                         value
@@ -4742,8 +4754,7 @@ impl Emitter<'_> {
                 while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
                     root = base;
                 }
-                let to_out =
-                    matches!(root.kind, ExprKind::Local(local) if Self::is_out(function, local));
+                let to_out = matches!(root.kind, ExprKind::Local(local) if function.is_out(local));
                 // EXPR-3: "A compound assignment reads the place
                 // first". The place is written once, so each index of
                 // it is evaluated once (EXPR-2), and is the index of
@@ -4845,12 +4856,11 @@ impl Emitter<'_> {
                     value
                 };
                 // A node that publishes a nullable publishes its null.
-                let value =
-                    if function.mode == Mode::Node && Self::publishes_null(function, returned) {
-                        self.published(value)
-                    } else {
-                        value
-                    };
+                let value = if function.mode == Mode::Node && function.publishes_null(returned) {
+                    self.published(value)
+                } else {
+                    value
+                };
                 let given = self.returned(&value);
                 self.line(depth, &format!("return {given}"));
             }
@@ -4935,7 +4945,7 @@ impl Emitter<'_> {
                 // goes on after its `yield`.
                 let value = self.copied(function, yielded, value);
                 let value = self.bundled(function, yielded, value);
-                let value = if Self::publishes_null(function, yielded) {
+                let value = if function.publishes_null(yielded) {
                     self.published(value)
                 } else {
                     value
@@ -5399,38 +5409,6 @@ impl Emitter<'_> {
 
     // ---- Expressions ----
 
-    /// True when what the function being written publishes of `value`
-    /// may be a null that is Python's `None`: its result's type is
-    /// written `T?`, and `value` is a value of it. A value that is the
-    /// nullable's delta is hgraph's own already, `Null` or the value
-    /// (TYPE-16).
-    fn publishes_null(function: &Function, value: &Expr) -> bool {
-        function
-            .signature
-            .and_then(|signature| signature.result.as_ref())
-            .is_some_and(publishes_whole_null)
-            && !matches!(&value.ty, Type::Delta(of) if is_nullable(of))
-    }
-
-    /// True when `local` is the node's `inject out` (TIME-7).
-    fn is_out(function: &Function, local: usize) -> bool {
-        let declared = &function.locals[local];
-        declared.kind == LocalKind::Inject && declared.name == "out"
-    }
-
-    /// True when `local` is a temporal input of the node being written:
-    /// a parameter that is not `const`.
-    fn is_input(function: &Function, local: usize) -> bool {
-        let declared = &function.locals[local];
-        declared.kind == LocalKind::Parameter
-            && function.signature.is_some_and(|signature| {
-                signature
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.name == declared.name && !parameter.constant)
-            })
-    }
-
     /// An expression as Python. One with no Python here yet is reported
     /// and written `None`.
     fn expression(&mut self, function: &Function, value: &Expr) -> String {
@@ -5475,17 +5453,15 @@ impl Emitter<'_> {
                 let read = self.place(function, *local);
                 // In a hook a temporal input is read through its
                 // payload: in a `when`, and in `stop` (TIME-5).
-                if matches!(function.mode, Mode::Node | Mode::Stop)
-                    && Self::is_input(function, *local)
-                {
+                if matches!(function.mode, Mode::Node | Mode::Stop) && function.is_input(*local) {
                     self.port_value(&function.locals[*local].ty, &read, value.at)
                 } else if matches!(function.mode, Mode::Node | Mode::Stop)
-                    && Self::is_out(function, *local)
+                    && function.is_out(*local)
                 {
                     // `out` read whole: a struct's value is made from
                     // its bundle's fields (TYPE-9), as an input's is.
                     self.port_value(&function.locals[*local].ty, "_output", value.at)
-                } else if function.mode == Mode::Lifecycle && Self::is_input(function, *local) {
+                } else if function.mode == Mode::Lifecycle && function.is_input(*local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
@@ -6613,12 +6589,7 @@ impl Emitter<'_> {
             self.unsupported(value.at, "a default that leaves itself out");
             return "None".to_string();
         }
-        let cold = Function {
-            locals: &[],
-            signature: None,
-            mode: Mode::Value,
-            copies: Copies::default(),
-        };
+        let cold = Function::cold(Mode::Value);
         self.expanding.push(key);
         let written = self.expression(&cold, value);
         self.expanding.pop();
@@ -7390,12 +7361,7 @@ impl Emitter<'_> {
                 return Some("None".to_string());
             }
             // A default is read with no local in scope.
-            let cold = Function {
-                locals: &[],
-                signature: None,
-                mode: Mode::Value,
-                copies: Copies::default(),
-            };
+            let cold = Function::cold(Mode::Value);
             self.expanding.push(key);
             let value = self.expression(&cold, default);
             self.expanding.pop();
@@ -7912,7 +7878,7 @@ impl Emitter<'_> {
     /// unsized list, which is a whole tuple here.
     fn child_port(&mut self, function: &Function, child: &Expr) -> Option<String> {
         match &child.kind {
-            ExprKind::Local(local) if Self::is_input(function, *local) => {
+            ExprKind::Local(local) if function.is_input(*local) => {
                 Some(name(&function.locals[*local].name))
             }
             ExprKind::Field { base, member } => {
@@ -7954,7 +7920,7 @@ impl Emitter<'_> {
                 // The input is a collection (TIME-9): an `atomic<V>`, a `T?`
                 // and a `ref<T>` have no child, as the analyser has it.
                 ExprKind::Local(local) => {
-                    Emitter::is_input(function, *local)
+                    function.is_input(*local)
                         && matches!(
                             function.locals[*local].ty,
                             Type::List { .. }
@@ -8058,7 +8024,7 @@ impl Emitter<'_> {
         if let ExprKind::Index { base, index } = &read.kind
             && growing_list(&base.ty)
             && let ExprKind::Local(local) = base.kind
-            && Self::is_input(function, local)
+            && function.is_input(local)
         {
             let port = name(&function.locals[local].name);
             let index = self.expression(function, index);
@@ -8088,11 +8054,11 @@ impl Emitter<'_> {
     /// `atomic<V>`'s field among them, which is read from its value.
     fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
-            ExprKind::Local(local) if Self::is_input(function, *local) => {
+            ExprKind::Local(local) if function.is_input(*local) => {
                 Some(name(&function.locals[*local].name))
             }
             // The node's own output, hgraph's `_output`.
-            ExprKind::Local(local) if Self::is_out(function, *local) => Some("_output".to_string()),
+            ExprKind::Local(local) if function.is_out(*local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
                 // An atomic input is one port of the whole value, read
                 // in a hook as that value (TYPE-9), and has no port of

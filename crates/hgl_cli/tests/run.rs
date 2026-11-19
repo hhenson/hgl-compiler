@@ -3,49 +3,11 @@
 //! The programs are written by the tests when they run, into a scratch
 //! directory of their own each.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod common;
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .output()
-        .expect("the hgl binary runs")
-}
+use std::process::Command;
 
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
-}
-
-/// An empty directory for the test named `test`.
-fn scratch(test: &str) -> PathBuf {
-    // Cargo gives integration tests a scratch directory under `target/`.
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("run")
-        .join(test);
-    // Left over from an earlier run, perhaps; `ok()` ignores "not there".
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes `text` to `directory/name` and gives the path as `hgl` will
-/// print it.
-fn write(directory: &Path, name: &str, text: &str) -> String {
-    let path = directory.join(name);
-    fs::write(&path, text).unwrap();
-    path.display().to_string()
-}
-
-/// A path as an argument.
-fn argument(path: &Path) -> String {
-    path.display().to_string()
-}
+use common::{argument, hgl, interpreter, scratch, text, write};
 
 /// A module with an entry, a source that counts, and one whose run
 /// fails.
@@ -356,8 +318,8 @@ fn a_type_of_the_same_name_is_another_type() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_application_runs_with_what_starts_it_replaces() {
-    std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    // `hgl` finds the interpreter by itself; this checks it is named.
+    interpreter();
     let root = scratch("replaced");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
@@ -581,8 +543,7 @@ const ENDLESS: &str = concat!(
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_interrupt_of_hgl_alone_stops_the_run() {
-    let python = std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let python = interpreter();
     let root = scratch("interrupted");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "endless.hgl", ENDLESS);
@@ -628,8 +589,7 @@ fn an_interrupt_of_hgl_alone_stops_the_run() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn an_application_runs_on_hgraph() {
-    let python = std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let python = interpreter();
     let root = scratch("on_hgraph");
     write(&root, "ticks.hgl", TICKS);
     write(&root, "backtest.hgl", BACKTEST);
