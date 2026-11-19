@@ -6055,6 +6055,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
     files.push(("timer_selectors.hgl", TIMER_SELECTORS));
+    files.push(("timer_fixes.hgl", TIMER_FIXES));
     files.push(("copies.hgl", COPIES));
     files.push(("copy_points.hgl", COPY_POINTS));
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
@@ -6396,6 +6397,9 @@ fn a_timer_wakes_its_own_handlers() {
             "@_hg.compute_node(valid=())\n",
             "def sampled(price: _hg.TS[_py.float], every: _dt.timedelta, ",
             "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.float]:\n",
+            // CAP-4: the wake being delivered is taken as the node is
+            // entered, and is no longer pending.
+            "    _scheduler = _core.Wake(_scheduler)\n",
             // What woke the node is read where it is entered: a
             // handler before the one that asks may change it.
             "    _timer_woke = _scheduler.is_scheduled_now\n",
@@ -6430,6 +6434,7 @@ fn a_timer_wakes_its_own_handlers() {
             "@_hg.compute_node(active=(), valid=())\n",
             "def _node_beats(_begin: _hg.TS[_py.bool], every: _dt.timedelta, times: _py.int, ",
             "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler)\n",
             "    if _scheduler.is_scheduled_now:\n",
         ),
         concat!(
@@ -6474,6 +6479,7 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
         concat!(
             "@_hg.compute_node\n",
             "def either(a: _hg.TS[_py.int], b: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler)\n",
             "    _timer_woke = _scheduler.is_scheduled_now\n",
             "    if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):\n",
         ),
@@ -6528,6 +6534,62 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
             "m.hgl:17:11 target.unsupported",
         ]
     );
+}
+
+/// Core's CAP-4 and CAP-5: a wake not ahead of the current evaluation,
+/// the empty tag, the wake being delivered; and a node with no input,
+/// no handler and no timer.
+const TIMER_FIXES: &str = include_str!("fixtures/timer_fixes.hgl");
+
+/// hgraph takes no node without an input: every node with no temporal
+/// input is given one that never wakes it, one with only a `start`
+/// among them. CAP-4: the wake being delivered is taken as the node is
+/// entered, and the empty tag is given a mark as every tag is.
+#[test]
+fn every_inputless_node_has_a_hidden_input() {
+    let emitted = emit(&[("timer_fixes.hgl", TIMER_FIXES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_timer_fixes/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.sink_node(active=(), valid=())\n",
+            "def _node_started_only(_begin: _hg.TS[_py.bool], _store: _hg.GlobalState = None):\n",
+            "    pass\n",
+        ),
+        "    _node_started_only(_begin=_hg.const(True))\n",
+        "    _scheduler = _core.Wake(_scheduler)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    let native = emitted.text("_hgl/_core_native.py");
+    assert!(native.contains("return None if tag is None else \"#\" + tag"));
+}
+
+/// TIME-3: what `modified([])` asks beside a `modified` selector that
+/// names inputs is not settled, and is reported; beside `valid([])` it
+/// is the spec's own illustration, and is written.
+#[test]
+fn an_empty_selection_beside_another_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn both(a: i64) -> i64 {\n",
+            "    inject scheduler\n",
+            "    start { schedule(scheduler, 1s) }\n",
+            "    when modified([]) && modified(a) { return a }\n",
+            "}\n",
+            "fn sampled(a: i64) -> i64 {\n",
+            "    inject scheduler\n",
+            "    start { schedule(scheduler, 1s) }\n",
+            "    when modified([]) && valid([]) { return 0 }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:5:10 target.unsupported"]);
 }
 
 /// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection

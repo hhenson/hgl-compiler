@@ -1,0 +1,164 @@
+module demo.timer_fixes
+
+# CAP-4 and CAP-5 say nothing of a wake asked for a time no cycle can
+# still run at: the current evaluation time, or before it (core's CRUN-3).
+# Neither the scheduler nor the alarm delivers it, and the wake pending
+# stays.
+fn alarm_now(value: i64) -> i64 {
+    inject alarm
+    start { schedule(alarm, 2s) }
+    when modified(value) {
+        schedule(alarm, 0s)
+        return value
+    }
+    when scheduled() { return 0 }
+}
+
+fn alarm_past(value: i64, const at: datetime) -> i64 {
+    inject alarm
+    when modified(value) {
+        schedule(alarm, at)
+        return value
+    }
+}
+
+fn scheduler_now(value: i64, const at: datetime) -> i64 {
+    inject scheduler
+    start { schedule(scheduler, 2s) }
+    when modified(value) {
+        schedule(scheduler, 0s)
+        schedule(scheduler, at)
+        return value
+    }
+    when scheduled() { return 0 }
+}
+
+# A node with no temporal input, no handler and no timer: hgraph takes no
+# node without an input, so it is given one that never wakes it.
+fn started_only() {
+    inject global_state
+    start { put(global_state, "x", 1) }
+}
+
+fn reader(tick: bool) -> i64 {
+    inject global_state
+    when modified(tick) {
+        if has(global_state, "x") { return get<i64>(global_state, "x") }
+        return 0
+    }
+}
+
+fn started_then_read(tick: bool) -> i64 {
+    started_only()
+    return reader(tick)
+}
+
+# CAP-4: `tag` is a `str?`, and "A wake asked for under a tag replaces the
+# pending wake of that tag": the empty tag is a tag.
+fn empty_tag() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1s, tag: "")
+        schedule(scheduler, 2s, tag: "")
+    }
+    when scheduled() { return true }
+}
+
+fn empty_tag_cancelled() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1s, tag: "")
+        schedule(scheduler, 2s, tag: "other")
+        un_schedule(scheduler, tag: "")
+    }
+    when scheduled() { return true }
+}
+
+# CAP-4: a wake is pending until it is delivered. In the wake of "a" at
+# 1s, the earliest pending wake is "b", at 3s: `un_schedule` "Cancels the
+# earliest pending wake", `is_scheduled` is "True while a wake is
+# pending", and `next_scheduled_time` is "The time of the earliest
+# pending wake; null with none".
+fn cancel_next() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1s, tag: "a")
+        schedule(scheduler, 3s, tag: "b")
+    }
+    when scheduled() {
+        un_schedule(scheduler)
+        return true
+    }
+}
+
+fn still_pending() -> bool {
+    inject scheduler
+    start {
+        schedule(scheduler, 1s, tag: "a")
+        schedule(scheduler, 3s, tag: "b")
+    }
+    when scheduled() { return scheduler.is_scheduled }
+}
+
+fn next_after(const every: duration) -> duration? {
+    inject scheduler, clock
+    start {
+        schedule(scheduler, every, tag: "a")
+        schedule(scheduler, every * 3, tag: "b")
+    }
+    when scheduled() {
+        let next = scheduler.next_scheduled_time
+        if next == null { return null }
+        return next - clock.evaluation_time
+    }
+}
+
+# TIME-9: `scheduled()` "is the scheduler's `is_scheduled_now`", which
+# asking again under the tag that is due leaves as it was.
+fn agree() -> bool {
+    inject scheduler
+    start { schedule(scheduler, 1s, tag: "t") }
+    when scheduled() {
+        schedule(scheduler, 1s, tag: "t")
+        return scheduled() == scheduler.is_scheduled_now
+    }
+}
+
+# CAP-5: an alarm asked again in its own wake "keeps the earliest".
+fn alarm_earliest() -> i64 {
+    state n: i64 = 0
+    inject alarm
+    start { schedule(alarm, 1s) }
+    when scheduled() {
+        n += 1
+        if n < 3 {
+            schedule(alarm, 2s)
+            schedule(alarm, 1s)
+            schedule(alarm, 3s)
+        }
+        return n
+    }
+}
+
+test a_wake_that_is_not_ahead_is_not_delivered {
+    assert eval(alarm_now(value: [0s: 1, 1s: 2]), RunConfig(length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
+    assert eval(alarm_past(value: [1, 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z)) == [1, 2]
+    assert eval(scheduler_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
+}
+
+test a_node_with_no_input_and_no_handler_starts {
+    assert eval(started_then_read(tick: [_, true])) == [_, 1]
+}
+
+test the_empty_tag_is_a_tag {
+    assert eval(empty_tag()) == [2s: true]
+    assert eval(empty_tag_cancelled()) == [2s: true]
+}
+
+test the_wake_being_delivered_is_not_pending {
+    assert eval(cancel_next()) == [1s: true]
+    assert eval(still_pending()) == [1s: true, 3s: false]
+    assert eval(next_after(every: 1s)) == [1s: 2s, 3s: null]
+    assert eval(agree(), RunConfig(length: 2500ms)) == [1s: true, 2s: true]
+    assert eval(alarm_earliest(), RunConfig(length: 5s)) == [1s: 1, 2s: 2, 3s: 3]
+}

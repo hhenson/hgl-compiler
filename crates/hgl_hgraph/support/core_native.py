@@ -838,6 +838,33 @@ def fn_log(logger, level, message):
     logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
 
 
+class Wake:
+    """A node's scheduler for one evaluation (CAP-4, CAP-5).
+
+    hgraph holds the wake it delivers until the node has run: in its own
+    evaluation that wake is still its earliest, so `un_schedule` would
+    cancel it, `is_scheduled` count it and `next_scheduled_time` give the
+    current time. CAP-4 has a wake pending until it is delivered:
+    `is_scheduled` is "True while a wake is pending". So each wake due
+    now is taken as the node is entered, and `is_scheduled_now` keeps
+    that one was: "whether a wake asked of the scheduler is due in the
+    current evaluation", which asking again does not change. The rest is
+    hgraph's scheduler, as it now stands."""
+
+    def __init__(self, scheduler):
+        self._scheduler = scheduler
+        due = False
+        # hgraph's `un_schedule()` with no tag takes its earliest wake,
+        # and that wake's tag with it.
+        while scheduler.is_scheduled_now:
+            scheduler.un_schedule()
+            due = True
+        self.is_scheduled_now = due
+
+    def __getattr__(self, name):
+        return getattr(self._scheduler, name)
+
+
 def Scheduler_next_scheduled_time(scheduler):
     """CAP-4: "The time of the earliest pending wake; null with none".
     hgraph gives its earliest time where none is pending."""
@@ -855,16 +882,28 @@ def Scheduler_is_scheduled_now(scheduler):
     return scheduler.is_scheduled_now
 
 
+def _tag(tag):
+    """CAP-4's `tag`, a `str?`, as hgraph's scheduler keeps it. hgraph
+    keeps no wake under the empty tag, which is a tag as any other is:
+    each is given a mark before it, and no tag stays none."""
+    return None if tag is None else "#" + tag
+
+
 def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
     """CAP-4: "With a `duration`, a wake that long after the current
     evaluation time". hgraph counts a `timedelta` from then, and "a wake
-    asked for under a tag replaces the pending wake of that tag"."""
-    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+    asked for under a tag replaces the pending wake of that tag".
+
+    A wake at a time no cycle can still run at, the current evaluation
+    time or before (core's CRUN-3: each cycle's time "is later than the
+    one before"), is kept by no scheduler of hgraph's: it is not
+    delivered, as an alarm's is not (`_alarm`)."""
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
 def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
     """CAP-4: "with a `datetime`, a wake then"."""
-    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
 def fn_un_schedule(scheduler, tag):
@@ -874,7 +913,7 @@ def fn_un_schedule(scheduler, tag):
     if tag is None:
         scheduler.un_schedule()
     else:
-        scheduler.un_schedule(tag)
+        scheduler.un_schedule(_tag(tag))
 
 
 def fn_reset(scheduler):
@@ -898,16 +937,16 @@ def _alarm(scheduler, at):
     `at` is an instant, or a duration from the current evaluation time.
     hgraph says which instant a duration comes to where it is asked
     for: it is asked under a second tag, and the tag is taken back.
+    hgraph keeps none at a time no cycle can still run at, the current
+    evaluation time or before: that wake is not delivered, as a
+    scheduler's is not, and the one pending stays. The alarm's wake that
+    is due was taken as the node was entered (`Wake`).
     """
-    # In the evaluation a wake is due in, hgraph still holds it: it is
-    # the alarm's own wake, taken now, and no longer one that is
-    # pending.
-    due = scheduler.next_scheduled_time if scheduler.is_scheduled_now else None
     scheduler.schedule(at, tag=_ASKED)
-    asked = scheduler.pop_tag(_ASKED)
+    asked = scheduler.pop_tag(_ASKED, None)
+    if asked is None:
+        return
     pending = scheduler.pop_tag(_ALARM, None)
-    if pending is not None and pending == due:
-        pending = None
     scheduler.schedule(asked if pending is None or asked < pending else pending, tag=_ALARM)
 
 
