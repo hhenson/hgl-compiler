@@ -743,11 +743,7 @@ fn assigned_outside(statements: &[Stmt]) -> Vec<usize> {
         Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
         Node::Statement(Stmt::Assign { local, .. }) => assigned.push(*local),
         Node::Statement(Stmt::AssignPlace { place, .. }) => {
-            let mut root = place;
-            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
-                root = base;
-            }
-            if let ExprKind::Local(local) = root.kind {
+            if let ExprKind::Local(local) = place_root(place).kind {
                 assigned.push(local);
             }
         }
@@ -2094,7 +2090,7 @@ impl Emitter<'_> {
             }
             // A whole tuple of hgraph's holds no `None`: a nullable
             // element (TYPE-14) has no place in it.
-            None if publishes_whole(element) && !is_nullable(element) => {
+            None if whole_scalar(element) => {
                 let element = self.annotation(element, false, at)?;
                 self.hgraph = true;
                 Some(format!("_hg.TS[_py.tuple[{element}, ...]]"))
@@ -2131,7 +2127,7 @@ impl Emitter<'_> {
     ) -> Option<String> {
         // TYPE-12: a window is no ordinary value, so it is only ever a
         // temporal one.
-        if !temporal || !publishes_whole(value) || is_nullable(value) {
+        if !temporal || !whole_scalar(value) {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -2234,10 +2230,7 @@ impl Emitter<'_> {
         if !temporal {
             return Some(class);
         }
-        let (Some(Detail::Struct(read)), Some(types)) = (
-            program.modules[module].details.get(declaration),
-            program.field_types(ty),
-        ) else {
+        let Some(fields) = fields_of(program, ty) else {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         };
@@ -2246,7 +2239,7 @@ impl Emitter<'_> {
         // collection" valid and all valid. Its one value is published
         // whole, as a `TS` of its class (`empty_struct`). An abstract
         // one's value would be of a struct below it.
-        if read.members.is_empty() {
+        if fields.is_empty() {
             if is_abstract {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
@@ -2254,16 +2247,16 @@ impl Emitter<'_> {
             self.hgraph = true;
             return Some(format!("_hg.TS[{class}]"));
         }
-        let mut fields = Vec::new();
-        for (member, field) in read.members.iter().zip(&types) {
+        let mut written = Vec::new();
+        for (member, field) in &fields {
             let field = self.child_annotation(ty, field, at)?;
-            fields.push(format!("{}: {field}", string(&name(&member.name))));
+            written.push(format!("{}: {field}", string(&name(&member.name))));
         }
         self.hgraph = true;
         self.natives = true;
         Some(format!(
             "_hg.TSB[_core.schema({class}, {{{}}})]",
-            fields.join(", ")
+            written.join(", ")
         ))
     }
 
@@ -2399,13 +2392,7 @@ impl Emitter<'_> {
                     found.push((*at, true));
                 }
                 Node::Statement(Stmt::AssignPlace { place, at, .. }) => {
-                    let mut root = place;
-                    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } =
-                        &root.kind
-                    {
-                        root = base;
-                    }
-                    if matches!(root.kind, ExprKind::Local(local) if out(local)) {
+                    if matches!(place_root(place).kind, ExprKind::Local(local) if out(local)) {
                         found.push((*at, true));
                     }
                 }
@@ -2829,16 +2816,7 @@ impl Emitter<'_> {
         if holds_input {
             self.line(1, &format!("_input_woke = {input_woke}"));
         }
-        // An endpoint as the node's code names it: an input by its
-        // name, and the node's own output as hgraph's `_output`.
-        let endpoint = |local: usize| {
-            let declared = &body.locals[local];
-            if declared.kind == LocalKind::Inject {
-                "_output".to_string()
-            } else {
-                name(&declared.name)
-            }
-        };
+        let endpoint = |local: usize| endpoint_name(&body.locals[local]);
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
             // TIME-3: "A wake by the scheduler or alarm wakes the
@@ -4043,7 +4021,7 @@ impl Emitter<'_> {
         at: Location,
     ) -> String {
         let scalar = match self.current_result(function) {
-            Some(Type::Nullable(inner)) if publishes_whole(&inner) && !is_nullable(&inner) => {
+            Some(Type::Nullable(inner)) if whole_scalar(&inner) => {
                 self.annotation(&inner, false, at)
             }
             _ => None,
@@ -4750,10 +4728,7 @@ impl Emitter<'_> {
             } => {
                 // TIME-7: a part of `out` is assigned through its port
                 // (`assigned_to_out`).
-                let mut root = place;
-                while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
-                    root = base;
-                }
+                let root = place_root(place);
                 let to_out = matches!(root.kind, ExprKind::Local(local) if function.is_out(local));
                 // EXPR-3: "A compound assignment reads the place
                 // first". The place is written once, so each index of
@@ -5185,7 +5160,7 @@ impl Emitter<'_> {
         if let Some(key) = key {
             // hgraph's key is a `TS` of a scalar.
             let ty = &function.locals[key].ty;
-            if !publishes_whole(ty) || is_nullable(ty) {
+            if !whole_scalar(ty) {
                 self.unsupported(at, &format!("a loop's key or member of type `{ty}`"));
             }
             let of = self
@@ -5450,18 +5425,18 @@ impl Emitter<'_> {
                 declaration,
             } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
-                let read = self.place(function, *local);
                 // In a hook a temporal input is read through its
-                // payload: in a `when`, and in `stop` (TIME-5).
-                if matches!(function.mode, Mode::Node | Mode::Stop) && function.is_input(*local) {
-                    self.port_value(&function.locals[*local].ty, &read, value.at)
-                } else if matches!(function.mode, Mode::Node | Mode::Stop)
-                    && function.is_out(*local)
+                // payload: in a `when`, and in `stop` (TIME-5). So is
+                // `out` read whole: a struct's value is made from its
+                // bundle's fields (TYPE-9), as an input's is. The port
+                // holds a value of the declared type (`port_type`).
+                if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && let Some(port) = self.input_port(function, value)
                 {
-                    // `out` read whole: a struct's value is made from
-                    // its bundle's fields (TYPE-9), as an input's is.
-                    self.port_value(&function.locals[*local].ty, "_output", value.at)
-                } else if function.mode == Mode::Lifecycle && function.is_input(*local) {
+                    return self.port_value(function.port_type(value), &port, value.at);
+                }
+                let read = self.place(function, *local);
+                if function.mode == Mode::Lifecycle && function.is_input(*local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
@@ -5500,12 +5475,7 @@ impl Emitter<'_> {
                 if !given {
                     self.unsupported(value.at, "this endpoint read in `start` or `stop`");
                 }
-                // The node's own output is hgraph's `_output`.
-                let input = if endpoint.kind == LocalKind::Inject {
-                    "_output".to_string()
-                } else {
-                    name(&endpoint.name)
-                };
+                let input = endpoint_name(endpoint);
                 // The endpoint of what holds a window, itself or within
                 // (`windows_in`): an input's readiness is asked of its
                 // parameter (`window_inputs`), and `out`'s here.
@@ -5905,10 +5875,7 @@ impl Emitter<'_> {
                 }
                 // TYPE-9: an `atomic<V>` of a struct holds the whole
                 // struct, whose fields are read as the struct's.
-                let whole = match &base.ty {
-                    Type::Atomic(payload) => &**payload,
-                    other => other,
-                };
+                let whole = payload_of(&base.ty);
                 // In a graph that field of an atomic struct's connection
                 // is hgraph's `getattr_`, told the field's type: the
                 // provider's class does not declare one.
@@ -6532,37 +6499,20 @@ impl Emitter<'_> {
             };
             written.push(format!("{}={value}", name(&field.name)));
         }
-        let class = self.type_name(of.0, of.1);
+        // The class for the construction's arguments (`struct_class`).
+        // A struct with no generic parameter is its own class.
         let applied = match &whole.ty {
-            Type::Named { arguments, .. } if !arguments.is_empty() => {
-                let texts: Option<Vec<String>> = arguments
-                    .iter()
-                    .map(|argument| canonical_argument(program, argument))
-                    .collect();
-                match texts {
-                    Some(texts) => {
-                        self.natives = true;
-                        format!("_core.applied({class}, {})", string(&texts.join(", ")))
-                    }
-                    None => {
-                        self.unsupported(
-                            at,
-                            "a generic struct made where its arguments are not known",
-                        );
-                        class
-                    }
-                }
-            }
-            // A struct with no generic parameter is its own class.
-            _ if read.generics.is_empty() => class,
-            _ => {
-                self.unsupported(
-                    at,
-                    "a generic struct made where its arguments are not known",
-                );
-                class
-            }
+            Type::Named { arguments, .. } if !arguments.is_empty() => self.struct_class(&whole.ty),
+            _ if read.generics.is_empty() => Some(self.type_name(of.0, of.1)),
+            _ => None,
         };
+        let applied = applied.unwrap_or_else(|| {
+            self.unsupported(
+                at,
+                "a generic struct made where its arguments are not known",
+            );
+            self.type_name(of.0, of.1)
+        });
         format!("{applied}({})", written.join(", "))
     }
 
@@ -6622,16 +6572,11 @@ impl Emitter<'_> {
         written: String,
     ) -> Option<(String, String)> {
         // The steps from `out` in to the place, the outermost first.
-        let mut steps = Vec::new();
-        let mut at = place;
-        while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
-            steps.push(at);
-            at = base;
-        }
+        let mut steps: Vec<&Expr> = place_steps(place).map(|(step, _)| step).collect();
         steps.reverse();
         let mut port = "_output".to_string();
         // The part the port holds.
-        let mut part = at;
+        let mut part = place_root(place);
         for (taken, step) in steps.iter().enumerate() {
             let child = match &step.kind {
                 ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
@@ -6708,10 +6653,7 @@ impl Emitter<'_> {
             ExprKind::Field { base, member } => {
                 // TYPE-9: an `atomic<V>` of a struct holds the whole
                 // struct, whose fields are the struct's.
-                let whole = match &base.ty {
-                    Type::Atomic(payload) => &**payload,
-                    other => other,
-                };
+                let whole = payload_of(&base.ty);
                 let Some(field) = field_of(self.program, whole, *member) else {
                     self.unsupported(place.at, "an assignment to this member");
                     return None;
@@ -6804,30 +6746,28 @@ impl Emitter<'_> {
         // that is changed where it is.
         let mut changed = matches!(place.ty, Type::List { .. } | Type::Dict { .. });
         let mut steps = 0;
-        let mut at = place;
-        loop {
-            match &at.kind {
-                ExprKind::Local(local) => {
-                    let root = function.mode != Mode::Graph && owns(self.program, function, *local);
-                    return (root && changed && steps >= least).then_some(*local);
-                }
-                ExprKind::Field { base, member } => {
+        for (step, base) in place_steps(place) {
+            match &step.kind {
+                ExprKind::Field { member, .. } => {
                     field_of(self.program, &base.ty, *member)?;
                     changed |= struct_in_place(self.program, &base.ty);
-                    at = base;
                 }
-                ExprKind::Index { base, index } => {
+                ExprKind::Index { index, .. } => {
                     if !self.simple_index(index) && goes_through_a_collection(base) {
                         return None;
                     }
                     element_read(&base.ty)?;
                     changed |= matches!(base.ty, Type::List { .. } | Type::Dict { .. });
-                    at = base;
                 }
-                _ => return None,
+                _ => unreachable!("a place's steps are fields and indices"),
             }
             steps += 1;
         }
+        let ExprKind::Local(local) = place_root(place).kind else {
+            return None;
+        };
+        let root = function.mode != Mode::Graph && owns(self.program, function, local);
+        (root && changed && steps >= least).then_some(local)
     }
 
     /// The key `index`, written `written`, as a dictionary keeps it where
@@ -6870,8 +6810,7 @@ impl Emitter<'_> {
     /// something else holds the key and may change it (`copied`).
     fn steps(&mut self, function: &Function, place: &Expr, assigned: bool) -> String {
         let mut written = Vec::new();
-        let mut at = place;
-        while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
+        for (at, base) in place_steps(place) {
             let step = match &at.kind {
                 ExprKind::Field { member, .. } => {
                     let field = field_of(self.program, &base.ty, *member)
@@ -6899,7 +6838,6 @@ impl Emitter<'_> {
                 _ => unreachable!("the loop is over fields and indices"),
             };
             written.push(step);
-            at = base;
         }
         // From the root inward, with the comma a tuple of one needs.
         written.reverse();
@@ -7653,7 +7591,7 @@ impl Emitter<'_> {
             // one's update as that position's own (TYPE-9): an element
             // that publishes whole and is not null is set by it.
             Type::List { element, .. } => {
-                if publishes_whole(element) && !is_nullable(element) {
+                if whole_scalar(element) {
                     return format!("_py.tuple({written})");
                 }
                 self.unsupported(
@@ -7714,22 +7652,16 @@ impl Emitter<'_> {
     fn whole_shape(&mut self, ty: &Type, at: Location) -> Option<Shape> {
         match ty {
             Type::Named {
-                module,
-                declaration,
                 kind: NamedKind::Struct,
                 ..
             } => {
-                let program = self.program;
-                let (Some(Detail::Struct(read)), Some(types)) = (
-                    program.modules[*module].details.get(*declaration),
-                    program.field_types(ty),
-                ) else {
+                let Some(fields) = fields_of(self.program, ty) else {
                     self.unsupported(at, &format!("a whole `{ty}` published"));
                     return None;
                 };
                 let mut flat = true;
                 let mut written = Vec::new();
-                for (member, field) in read.members.iter().zip(&types) {
+                for (member, field) in &fields {
                     let part = self.whole_shape(field, at)?;
                     flat &= part.leaf;
                     written.push(format!("{}: {}", string(&name(&member.name)), part.text));
@@ -7757,7 +7689,7 @@ impl Emitter<'_> {
             Type::List {
                 element,
                 size: Some(_),
-            } if publishes_whole(element) && !is_nullable(element) => Some(Shape {
+            } if whole_scalar(element) => Some(Shape {
                 text: "[None]".to_string(),
                 leaf: false,
                 flat: true,
@@ -7836,22 +7768,12 @@ impl Emitter<'_> {
                 Some(format!("({},)", parts.join(", ")))
             }
             Type::Named {
-                module,
-                declaration,
                 kind: NamedKind::Struct,
                 ..
             } => {
-                let program = self.program;
-                let (Some(Detail::Struct(read)), Some(types)) = (
-                    program.modules[*module].details.get(*declaration),
-                    program.field_types(ty),
-                ) else {
-                    return None;
-                };
-                let parts: Vec<String> = read
-                    .members
+                let fields = fields_of(self.program, ty)?;
+                let parts: Vec<String> = fields
                     .iter()
-                    .zip(&types)
                     .filter_map(|(member, field)| {
                         let part = self.delta_shape(field, at)?;
                         Some(format!("{}: {part}", string(&name(&member.name))))
@@ -8054,11 +7976,9 @@ impl Emitter<'_> {
     /// `atomic<V>`'s field among them, which is read from its value.
     fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
-            ExprKind::Local(local) if function.is_input(*local) => {
-                Some(name(&function.locals[*local].name))
+            ExprKind::Local(local) if function.is_input(*local) || function.is_out(*local) => {
+                Some(endpoint_name(&function.locals[*local]))
             }
-            // The node's own output, hgraph's `_output`.
-            ExprKind::Local(local) if function.is_out(*local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
                 // An atomic input is one port of the whole value, read
                 // in a hook as that value (TYPE-9), and has no port of
@@ -8157,34 +8077,28 @@ impl Emitter<'_> {
             }
             _ => {}
         }
-        let fields = match ty {
+        let (
+            Some(fields),
             Type::Named {
                 module,
                 declaration,
-                kind: NamedKind::Struct,
                 ..
-            } => match self.program.modules[*module].details.get(*declaration) {
-                Some(Detail::Struct(read)) => Some((*module, *declaration, &read.members)),
-                _ => None,
             },
-            _ => None,
-        };
-        let Some((module, declaration, members)) = fields else {
+        ) = (fields_of(self.program, ty), ty)
+        else {
             return format!("{port}.value");
         };
         // An abstract struct's value is of a struct below it, which its
         // bundle does not say (`struct_annotation`).
         let class = match self.struct_class(ty) {
-            Some(class) if !inherited(self.program, module, declaration) => class,
+            Some(class) if !inherited(self.program, *module, *declaration) => class,
             _ => {
                 self.unsupported(at, &format!("a whole value of the temporal `{ty}`"));
                 return "None".to_string();
             }
         };
-        let types = self.program.field_types(ty).unwrap_or_default();
-        let fields: Vec<String> = members
+        let fields: Vec<String> = fields
             .iter()
-            .zip(&types)
             .map(|(member, field_ty)| {
                 let field = name(&member.name);
                 let child = format!("{port}[{}]", string(&field));
@@ -8226,7 +8140,7 @@ impl Emitter<'_> {
             Type::List {
                 element,
                 size: Some(_),
-            } if publishes_whole(element) && !is_nullable(element) => "all_valid",
+            } if whole_scalar(element) => "all_valid",
             _ => "valid",
         };
         if publishes_whole_null(ty) {
@@ -8268,9 +8182,7 @@ impl Emitter<'_> {
         };
         let mut given = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
-            if !self.connects(function, entry)
-                && !(publishes_whole(&entry.ty) && !is_nullable(&entry.ty))
-            {
+            if !self.connects(function, entry) && !whole_scalar(&entry.ty) {
                 self.unsupported(entry.at, "a composite value in a tuple of connections");
                 return "None".to_string();
             }
@@ -8297,10 +8209,7 @@ impl Emitter<'_> {
         let ExprKind::Field { base, .. } = &value.kind else {
             return false;
         };
-        let whole = match &base.ty {
-            Type::Atomic(payload) => &**payload,
-            other => other,
-        };
+        let whole = payload_of(&base.ty);
         matches!(
             whole,
             Type::Named {
@@ -9025,7 +8934,7 @@ impl Emitter<'_> {
     /// tuple of a list holds no null (see `bundle_of`).
     fn parts_publish_whole(&self, ty: &Type) -> bool {
         match ty {
-            Type::List { element, .. } => publishes_whole(element) && !is_nullable(element),
+            Type::List { element, .. } => whole_scalar(element),
             Type::Set(_) => true,
             Type::Dict { value, .. } => publishes_whole(value),
             Type::Named {
@@ -9541,31 +9450,48 @@ fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     }
 }
 
+/// Each step of the way in to `place`, from the outside in: the step,
+/// a field `base.member` or an index `base[index]`, with its `base`.
+/// `rows[0].orders` gives `rows[0].orders` with `rows[0]`, and then
+/// `rows[0]` with `rows`. A place that is a name has no step.
+fn place_steps(place: &Expr) -> impl Iterator<Item = (&Expr, &Expr)> {
+    // `successors` gives the first step, and then each next one from
+    // the one before it, until there is none.
+    std::iter::successors(step_of(place), |&(_, base)| step_of(base))
+}
+
+/// `at` with what it is a step of, where it is a field or an index.
+fn step_of(at: &Expr) -> Option<(&Expr, &Expr)> {
+    match &at.kind {
+        ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => Some((at, base)),
+        _ => None,
+    }
+}
+
+/// What the steps of `place` start from: `rows` for `rows[0].orders`,
+/// and a place that is a name itself.
+pub(crate) fn place_root(place: &Expr) -> &Expr {
+    place_steps(place).last().map_or(place, |(_, base)| base)
+}
+
 /// Whether reading `place` reads an element of a list or an entry of
 /// a dictionary, which may fail.
-fn reads_an_element(mut place: &Expr) -> bool {
-    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
-        if matches!(place.kind, ExprKind::Index { .. }) {
-            return true;
-        }
-        place = base;
-    }
-    false
+fn reads_an_element(place: &Expr) -> bool {
+    place_steps(place).any(|(step, _)| matches!(step.kind, ExprKind::Index { .. }))
 }
 
 /// The indices of a place that are evaluated, from its root outward as
 /// they are written. Each is with what it is an index of, where reading
 /// that may fail.
-fn indices_of(mut place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
+fn indices_of(place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
     let mut indices = Vec::new();
-    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &place.kind {
-        if let ExprKind::Index { index, .. } = &place.kind
+    for (step, base) in place_steps(place) {
+        if let ExprKind::Index { index, .. } = &step.kind
             && !matches!(index.kind, ExprKind::Literal(_))
         {
-            let of = reads_an_element(base).then_some(&**base);
+            let of = reads_an_element(base).then_some(base);
             indices.push((of, &**index));
         }
-        place = base;
     }
     indices.reverse();
     indices
@@ -9578,34 +9504,20 @@ fn indices_of(mut place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
 /// is a `Line` of three fields. Not `point.x`, nor `pair[0].x` of a
 /// tuple of `Point`s, two values.
 fn changed_on_the_way(program: &Program, place: &Expr) -> bool {
-    let mut at = place;
-    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
-        let changed = match &at.kind {
-            ExprKind::Index { .. } => matches!(base.ty, Type::List { .. } | Type::Dict { .. }),
-            _ => struct_in_place(program, &base.ty),
-        };
-        if changed {
-            return true;
-        }
-        at = base;
-    }
-    false
+    place_steps(place).any(|(step, base)| match &step.kind {
+        ExprKind::Index { .. } => matches!(base.ty, Type::List { .. } | Type::Dict { .. }),
+        _ => struct_in_place(program, &base.ty),
+    })
 }
 
 /// True where the way to `place` from its root reads an element of a
 /// list or an entry of a dictionary: `rows[key][0]`, `book.bids[price]`,
 /// and not `line.end.x`.
 fn goes_through_a_collection(place: &Expr) -> bool {
-    let mut at = place;
-    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
-        if matches!(at.kind, ExprKind::Index { .. })
+    place_steps(place).any(|(step, base)| {
+        matches!(step.kind, ExprKind::Index { .. })
             && matches!(base.ty, Type::List { .. } | Type::Dict { .. })
-        {
-            return true;
-        }
-        at = base;
-    }
-    false
+    })
 }
 
 /// True for a local that holds a value of its own that is changed where
@@ -9867,6 +9779,54 @@ fn publishes_whole(ty: &Type) -> bool {
         } => true,
         other => scalar(other).is_some(),
     }
+}
+
+/// The fields of the struct `ty`, each its member and its type with
+/// `ty`'s generic arguments given (TYPE-4: a `Box<i64>`'s `value: T`
+/// is an `i64`), a parent's first. `None` where `ty` is no struct of
+/// the program.
+fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Type)>> {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
+        return None;
+    };
+    Some(read.members.iter().zip(program.field_types(ty)?).collect())
+}
+
+/// An endpoint of a node, an input or its `inject out`, as the node's
+/// code names it: an input by its name, and the node's own output as
+/// hgraph's `_output`.
+fn endpoint_name(endpoint: &Local) -> String {
+    if endpoint.kind == LocalKind::Inject {
+        "_output".to_string()
+    } else {
+        name(&endpoint.name)
+    }
+}
+
+/// What a value of `ty` holds, with the `atomic` taken off: TYPE-9's
+/// `atomic<V>` holds the whole V, whose fields and parts are V's. Any
+/// other type is itself.
+fn payload_of(ty: &Type) -> &Type {
+    match ty {
+        Type::Atomic(payload) => payload,
+        other => other,
+    }
+}
+
+/// True for a type hgraph holds as one value under `TS[...]` that is
+/// not nullable: a scalar or an enum. It looks at the top of the type
+/// only.
+fn whole_scalar(ty: &Type) -> bool {
+    publishes_whole(ty) && !is_nullable(ty)
 }
 
 /// True where a cell of a trace of `trace` holds a value of `ty` whole:

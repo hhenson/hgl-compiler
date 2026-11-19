@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local, Node, Stmt, walk_statement_nodes};
 use hgl_analyser::{Detail, LocalKind, Program};
 
-use crate::emit::changed_in_place;
+use crate::emit::{changed_in_place, place_root};
 
 /// What one body's `let`s and loop names are bound to.
 #[derive(Clone, Default)]
@@ -540,9 +540,8 @@ pub(crate) fn is_place(locals: &[Local], local: usize) -> bool {
 
 /// The place a written place is inside: `rows` for `rows[0].orders`.
 pub(crate) fn place_of(locals: &[Local], place: &Expr) -> Option<usize> {
-    match &place.kind {
-        ExprKind::Local(local) if is_place(locals, *local) => Some(*local),
-        ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => place_of(locals, base),
+    match place_root(place).kind {
+        ExprKind::Local(local) if is_place(locals, local) => Some(local),
         _ => None,
     }
 }
