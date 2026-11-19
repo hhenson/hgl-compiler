@@ -320,15 +320,17 @@ impl<'a> Typer<'a> {
         if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
             return;
         }
-        // The constant a member, a key or a position is, by its value
-        // (`ConstantValue::same`): `-1`, an enum's member however it is
-        // written, a module's constant, `60s` and `1m` alike.
+        // The constant a member, a key or a position is, compared as the
+        // language's `==` compares it (`ConstantValue::equals`), as the
+        // collection does when the graph runs: `-1`, an enum's member
+        // however it is written, a module's constant, `60s` and `1m`
+        // alike.
         let removed = self.delta_entries(written, 1);
         let changed = self.delta_entries(written, 0);
         for (changed, value) in changed {
             let clash = removed
                 .iter()
-                .find(|(_, other)| other.same(&value) == Some(true))
+                .find(|(_, other)| other.equals(&value) == Some(true))
                 .map(|(gone, _)| *gone);
             if let Some(gone) = clash {
                 let later = if gone.span.start > changed.span.start {

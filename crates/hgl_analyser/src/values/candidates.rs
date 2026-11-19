@@ -565,12 +565,16 @@ impl<'a> Typer<'a> {
             let ty = placed(substitute_within(&read.ty, &map), &own);
             whole(&ty).then_some(ty)
         };
+        // A candidate's condition not told is no admission either way
+        // (`Admits::Unknown`), whatever it is not told for.
+        let unvalued = std::cell::Cell::new(false);
         let condition_of = Condition {
             value_of: &value_of,
             constant: &constant,
             type_of: &type_of,
             written: &written,
             callable: &callable,
+            unvalued: &unvalued,
         };
         match holds(&condition, &condition_of) {
             Some(true) => Admits::Yes,

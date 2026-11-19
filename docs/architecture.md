@@ -836,7 +836,7 @@ its module. What is read of it:
 | Its type | `Detail::Constant` | The type it is written with, an ordinary value type (`type.not_ordinary`) |
 | Its expression | `Module::constants` | Read as a value of that type by a typer with no parameter, so it names no parameter and no local. A call of a temporal function is `call.role` |
 | A read of it | `ExprKind::Constant` | By its name, of its own module or one imported. It is a constant expression (FN-1), so a `const` parameter takes it, and a compile-time constant (GEN-8) |
-| Its value, where one is needed | `constant::read` | Every place that needs a constant's value reads it with the one reader of `constant`, given the type the place expects: a generic value argument, a `requires` operand, a generic value parameter's default, a parameter's default a candidate's condition reads, a `switch` label, a list's and a window's size, a delta's key, a tuple's index and an enum's number. A constant of a module is followed to its value, read as a value of its own type; the ones it names are worked out first, so a chain of any length is read once each and on no call stack. One whose value is not worked out, computed by a call, is held by its name (`ConstantValue::Named`) |
+| Its value, where one is needed | `constant::read` | Every place that needs a constant's value reads it with the one reader of `constant`, given the type the place expects: a generic value argument, a `requires` operand, a generic value parameter's default, a parameter's default a candidate's condition reads, a `switch` label, a list's and a window's size, a delta's key, a tuple's index and an enum's number. A constant of a module is followed to its value, read as a value of its own type; the ones it names are worked out first, so a chain of any length is read once each and on no call stack. One computed by a call is held by its name (`ConstantValue::Named`). One whose evaluation fails is `constant.failure` where it is declared (UNIT-13, ERR-9), and one the reader does not work out otherwise is not valued (`ConstantValue::Unevaluated`). An expression is read in a loop along a chain of operators, and by a call for what nests in the source, so the reader's depth is the source's nesting, which the parser bounds |
 | A cycle | `cycles::check` | Asked of the typed program, after the values pass. Each constant, function body, parameter default and struct's field defaults is a node of a graph, with an edge to each it reads: a constant named, the definition a call selected (the value one of a pair, FN-4; the candidate of an operator, by name or as a symbol, OPS-2), and the defaults of the parameters a call leaves out (UNIT-8). A constant in a cycle of that graph depends on itself (`constant.cycle`). `Expr::walk` visits every expression of a typed body. A constant named where the typed program keeps only its value, a size or a generic value argument, is an edge too, from the part the name is written in. The graph is of the whole program: an operator's candidates are found wherever they are declared (GEN-5), so a value may be worked out through a module that does not import the constant's |
 
 A constant's value is a `ConstantValue`: the value the type of its
@@ -847,20 +847,27 @@ parameter, or a symbol over one, as written (`N + 1`), which is worked
 out where the parameter is given a value; `Unevaluated` for what is not
 worked out; `Unknown` for what was reported. The written text stays
 beside it (`Constant::text`), for messages, and nothing compares or keys
-by it. `ConstantValue::same` is the one comparison: equal as values of
-the type (`1.0` is `1.00`, `60s` is `1m`, two datetimes as instants, a
-zoned datetime as an instant and a zone), and `None` where either is not
-known, which is neither equal nor unequal. `ConstantValue::key` is the
-text a target keys an instance by, one for each value.
+by it. Two questions are asked of two constants, each by one function.
+`ConstantValue::same` says whether they are the same constant: the same
+value of the type (`1.0` is `1.00`, `60s` is `1m`, two datetimes as
+instants, a zoned datetime as an instant and a zone), which for an `f64`
+is not `==`: `-0.0` is not `0.0`, and a NaN is a NaN (`same_float`,
+hhenson/hgl_spec#139, written in UNIT-13). Type identity and a target's
+instances ask it. `ConstantValue::equals` says whether they are equal as
+the language's `==` compares them, `-0.0` equal to `0.0` and a NaN to
+nothing: what the program compares asks it, a `requires`, a `switch`
+label's duplicates and a delta's overlap. Each gives `None` where either
+is not known, which is neither equal nor unequal. `ConstantValue::key`
+is the text a target keys an instance by, one for each constant.
 
 | A caller | Asks | Where a value is not known |
 | --- | --- | --- |
 | A type's identity | `declared::agree`: known to be the same | Not the same; `Unknown` agrees with any (ERR-9) |
 | A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
-| `requires` | `holds`: `same` of the option's value and each operand | Not told: nothing reported |
+| `requires` | `holds`: `equals` of the option's value and each operand | Not told for a generic parameter the call passes on: told for each instance a call that gives every argument makes (`requirements::instances_hold`). Not told for a constant not worked out: `requires.unmet` |
 | A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
-| A `switch` label | CTRL-6 | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
-| A delta's key, a tuple's index | TYPE-16, EXPR-7 | No overlap, and the element's type not known |
+| A `switch` label | CTRL-6: `equals` of two labels | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
+| A delta's key, a tuple's index | TYPE-16: `equals` of two keys; EXPR-7 | No overlap, and the element's type not known |
 
 Not done: an operation the reader does not work out (one given
 configuration, a date moved by a tenor, a set's constant). The cycle check counts every field
@@ -1210,7 +1217,17 @@ the struct applied:
 | A type written that applies a struct, at any depth, in any declaration: a signature, a body, a struct's field, a constant's type | The same |
 
 A function and a struct with no generic parameter are held to a
-`requires` they state too. Nothing is reported where it cannot be told.
+`requires` they state too. What cannot be told where a generic body
+passes on a parameter of its own is told once the typed program is
+whole, for each instance a call that gives every argument makes, at any
+depth (`requirements::instances_hold`), and reported at that call. Only
+the calls that reach a `requires` are followed, each instance once
+however many calls make it, and at most 4096 instances from one, whose
+arguments are no longer than 65536 characters written out; a call whose
+instances go past that is local
+`generic.instance_limit`, for what is past it is not told. What
+is not told for a constant this compiler does not work out is reported
+as not known to hold; nothing else that cannot be told is reported.
 A generic parameter of the declaration a call is written in is no one
 type, so a membership of it is not told; a named operator requirement
 of it is, by what that declaration states (GEN-7), a struct's as a

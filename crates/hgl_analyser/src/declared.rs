@@ -2018,6 +2018,22 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
     agree_as(left, right, false)
 }
 
+/// Whether two types are one: `Some(true)` where they are known to be,
+/// `Some(false)` where they are known to differ, and `None` where a
+/// constant in either is not known, `FBox<X>` beside `FBox<2.0>` with `X`
+/// still to be given. GEN-3: "under negation/disjunction it only tests
+/// already-resolved data", so a type equality has the three answers a
+/// constant's has ([`ConstantValue::same`]).
+pub(crate) fn same_type(left: &Type, right: &Type) -> Option<bool> {
+    if agree_as(left, right, false) {
+        Some(true)
+    } else if !agree_as(left, right, true) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// [`agree`], with `unknown` what two constants count as where whether
 /// they are one value is not known: false where the question is whether
 /// two types are known to be one, true where it is whether they are

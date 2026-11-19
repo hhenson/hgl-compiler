@@ -176,6 +176,10 @@ impl<'a> Typer<'a> {
             let expected = type_of(index, found);
             match self.unfit_default(declaration, &default, &expected, declared) {
                 Some(Ok(value)) => {
+                    let Some(value) = defaulted_value(value, index, &own, found) else {
+                        found[index] = None;
+                        continue;
+                    };
                     // The default as a value of the type the call
                     // resolves (EXPR-5): the `f64` 2 where `T` is one.
                     found[index] = Some(Argument::Constant(Constant {
@@ -218,9 +222,23 @@ impl<'a> Typer<'a> {
         if !whole(resolved) {
             return None;
         }
-        let read = self
-            .typed_in(declaration.at.file, default, Some(resolved))
-            .ok()?;
+        let file = declaration.at.file;
+        // An implied member is of no type but an enum, and of no enum
+        // but one that has it (TYPE-7: "With no enum type expected,
+        // `.member` rejects"): `.slow` where the call resolves `T` to an
+        // `i64`, and `.medium` where it resolves it to a `Mode` with no
+        // such member. Where the declared type names a parameter, it is
+        // the call's to tell; otherwise it is reported where declared.
+        let no_member = |fault: &Fault| matches!(fault, Fault::NoEnum | Fault::NoMember(_));
+        let as_written = || -> Option<Result<ConstantValue, String>> {
+            let read = self.typed_in(file, default, None).ok()?;
+            Some(Err(crate::constant::described(&read)))
+        };
+        let read = match self.typed_in(file, default, Some(resolved)) {
+            Ok(read) => read,
+            Err(fault) if no_member(&fault) && names_parameter(declared) => return as_written(),
+            Err(_) => return None,
+        };
         let fits_declared = names_parameter(declared)
             || crate::constant::fit(read.clone(), Some(declared), self.program).is_ok();
         match crate::constant::fit(read.clone(), Some(resolved), self.program) {
@@ -228,6 +246,7 @@ impl<'a> Typer<'a> {
             Err(Fault::Mismatch(_)) if fits_declared => {
                 Some(Err(crate::constant::described(&read)))
             }
+            Err(fault) if no_member(&fault) && names_parameter(declared) => as_written(),
             Err(_) => None,
         }
     }
@@ -525,8 +544,12 @@ impl<'a> Typer<'a> {
         for (index, default) in defaults.iter().enumerate() {
             if found[index].is_none()
                 && let Some(default) = default
+                && let Some(value) = defaulted_value(default.value.clone(), index, &own, &found)
             {
-                found[index] = Some(Argument::Constant(default.clone()));
+                found[index] = Some(Argument::Constant(Constant {
+                    text: default.text.clone(),
+                    value,
+                }));
                 defaulted.push(index);
             }
         }
@@ -935,4 +958,38 @@ pub(super) fn mentions(ty: &Type, own: &[Location]) -> bool {
 /// of `list<i64, N + 1>`, of `Box<[N]>`.
 fn names_value_of(ty: &Type, own: &[Location]) -> bool {
     ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
+}
+
+/// The default `value` of the generic value parameter at `index`, of a
+/// declaration whose generic parameters are declared at `own`, with what
+/// a call has `found` for the others in place. A default that names a
+/// parameter before its own, `<const N: i64 = 1, const M: i64 = N>`, is
+/// of what the call gives that one. `None` for one that names its own,
+/// or one the call leaves unresolved, which gives it no value: GEN-8, "A
+/// call rejects when it leaves a generic parameter unresolved".
+fn defaulted_value(
+    value: ConstantValue,
+    index: usize,
+    own: &[Location],
+    found: &[Option<Argument>],
+) -> Option<ConstantValue> {
+    // What the call gives the parameter declared at `at`: none for the
+    // one whose default this is.
+    let given = |at: Location| -> Option<ConstantValue> {
+        let other = own.iter().position(|own| *own == at)?;
+        match found.get(other)? {
+            Some(Argument::Constant(given)) if other != index => Some(given.value.clone()),
+            _ => None,
+        }
+    };
+    // The default is asked of what it names before what the call gives
+    // is put in its place: a call in the function's own body may give
+    // `N` its own `N`, `rec<N>(v)`, which is then no default left
+    // unresolved.
+    let unresolved: Vec<Location> = own
+        .iter()
+        .copied()
+        .filter(|at| given(*at).is_none())
+        .collect();
+    (!value.names_one_of(&unresolved)).then(|| value.substituted(&given))
 }

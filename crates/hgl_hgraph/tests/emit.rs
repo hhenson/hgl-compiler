@@ -6165,6 +6165,32 @@ fn a_constant_argument_is_written_by_its_value() {
     assert_eq!(python.matches("def _inst_scaled__").count(), 2, "{python}");
 }
 
+/// hhenson/hgl_spec#139: "`-0.0` and `0.0` are different constants:
+/// different type arguments, different instances." Each instance is
+/// written with its own constant, whichever call is met first: core's
+/// `1.0 / -0.0` is negative infinity and `1.0 / 0.0` positive.
+#[test]
+fn a_negative_zero_is_an_instance_of_its_own() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn negative<const k: f64>(x: f64) -> bool => x / k < 0.0\n",
+            "fn first(x: f64) -> bool => negative<-0.0>(x)\n",
+            "fn second(x: f64) -> bool => negative<0.0>(x)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    assert_eq!(
+        python.matches("def _inst_negative__").count(),
+        2,
+        "{python}"
+    );
+    assert!(python.contains("div__f64_f64(lhs=x, rhs=-0.0)"), "{python}");
+    assert!(python.contains("div__f64_f64(lhs=x, rhs=0.0)"), "{python}");
+}
+
 /// GEN-13: a constant given a `list<any>` is written whole, however
 /// deep: a nested list, a tuple and a member each say their own type.
 #[test]
