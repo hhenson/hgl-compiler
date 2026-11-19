@@ -374,7 +374,12 @@ impl Walk<'_> {
                 };
                 // NATIVE-3: a body makes an implementation; none, a
                 // declaration. NATIVE-1: with `impl`, the declaration
-                // is a candidate of an operator.
+                // is a candidate of an operator. NATIVE-7: "Checking an
+                // interface needs no executable provider loading." The
+                // role is the one written here, and every later pass
+                // checks a call against what the declaration says:
+                // nothing a provider supplies is read, and a declaration
+                // with no implementation part keeps its role.
                 let kind = match (function.is_impl(), function.body().is_some()) {
                     (false, false) => DeclarationKind::NativeFunction(role),
                     (false, true) => DeclarationKind::NativeImplementation(role),
