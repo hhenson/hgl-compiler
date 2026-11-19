@@ -8842,6 +8842,42 @@ fn a_lifted_input_follows_every_reference_it_is_given() {
     }
 }
 
+/// TYPE-3: a struct is a value where an abstract struct it inherits from
+/// is expected, and its connection is narrowed to the abstract struct's
+/// bundle. Across a reference, designated or followed, that narrowing is
+/// not written yet: reported, where the same struct on both sides is not.
+#[test]
+fn an_inherited_struct_across_a_reference_is_not_written_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "abstract struct Shape {\n",
+            "    id: i64\n",
+            "}\n",
+            "struct Circle : Shape {\n",
+            "    radius: i64\n",
+            "}\n",
+            "fn circled(id: i64) -> Circle {\n",
+            "    when { return Circle(id: id, radius: 1) }\n",
+            "}\n",
+            "fn shape_id(shape: Shape) -> i64 {\n",
+            "    when { return shape.id }\n",
+            "}\n",
+            "fn designated(id: i64) -> ref<Shape> => circled(id)\n",
+            "fn same(id: i64) -> ref<Circle> => circled(id)\n",
+            "fn followed(id: i64) -> i64 => shape_id(same(id))\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:14:41 target.unsupported",
+            "m.hgl:16:41 target.unsupported",
+        ]
+    );
+}
+
 /// What this target does not write of a reference is reported: one as
 /// a field of a temporal struct or an element of a temporal list, and
 /// an atomic field that may be left out (TYPE-14).
