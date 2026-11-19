@@ -798,6 +798,25 @@ def entry_child(port, key):
     return port[key]
 
 
+class NotWhole(Exception):
+    """A value held that has no whole value: a part of a struct, a tuple
+    or a fixed list that is required is not valid. The owner's decision on
+    hgl_spec issue 126: "A whole read of a struct, a tuple or a fixed list
+    needs `all_valid`", which "ignores a child whose type is optional"."""
+
+
+def held_part(port, read, optional):
+    """A part of a value held whole, `read` of its port where it is valid.
+    One that is not valid is null where its type is optional ("An optional
+    child that is not valid, in the whole value, is null"), and leaves no
+    whole value where it is required (`NotWhole`)."""
+    if not port.valid:
+        if optional:
+            return None
+        raise NotWhole()
+    return read(port)
+
+
 def child_modified(port):
     """`modified` of a child's endpoint (END-8): whether it published in
     this cycle, held to its being valid, as an input's is (END-4)."""

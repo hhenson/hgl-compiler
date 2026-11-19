@@ -256,10 +256,11 @@ def _held_by(published: _hg.TIME_SERIES_TYPE, _clock: _hg.EvaluationClock = None
     if published.valid and published.modified:
         try:
             held = _holding["read"](published)
-        except (TypeError, AttributeError, KeyError, IndexError):
-            # A part that is not valid, an unset list in a struct say, is
-            # no whole value: a cell written whole is not equal to it, and
-            # a delta is compared as recorded.
+        except _core.NotWhole:
+            # A required part that is not valid leaves no whole value (the
+            # owner's decision on hgl_spec issue 126): a cell written whole
+            # is not equal to what is held, and a delta is compared as
+            # recorded.
             held = _UNREADABLE
         _holding["held"][_clock.evaluation_time] = held
 

@@ -292,3 +292,69 @@ test what_the_review_found {
     assert eval(inner_of(key: ["other", "outer"], inner: ["inner", "inner"], price: [1, 2])) ==
         [false, true]
 }
+
+# ---- What the second review of this lane found ----
+
+struct Holder {
+    pair: tuple<i64, i64>
+    count: i64
+}
+
+fn holding(a: i64, b: i64) -> Holder {
+    when { return delta<Holder>(pair: (a, b)) }
+}
+
+# END-8: a child's delta is read as a direct input's of its type is: a
+# tuple's, each position's delta (TYPE-16).
+fn first_change(holder: Holder) -> i64 {
+    when {
+        if valid(holder.pair) && modified(holder.pair) {
+            let first = delta_value(holder.pair)[0]
+            if first == null { return -1 }
+            return first
+        }
+        return -2
+    }
+}
+
+fn first_change_of(a: i64, b: i64) -> i64 => first_change(holding(a, b))
+
+fn one_set(slot: i64, member: i64) -> list<set<i64>, 2> {
+    when { return delta<list<set<i64>, 2>>(updated: [slot: delta<set<i64>>(added: [member])]) }
+}
+
+# TIME-1: a child admitted is read through its own endpoint, never
+# through its siblings, the second set here, which is not valid.
+fn first_members(parts: list<set<i64>, 2>) -> set<i64> {
+    when valid(parts[0]) { return parts[0] }
+}
+
+fn first_members_of(slot: i64, member: i64) -> set<i64> => first_members(one_set(slot, member))
+
+struct Maybe {
+    value: i64
+    optional: i64?
+}
+
+struct Both {
+    first: i64
+    second: i64
+}
+
+fn maybe_value(value: i64) -> Maybe {
+    when { return delta<Maybe>(value: value) }
+}
+
+fn both_first(value: i64) -> Both {
+    when { return delta<Both>(first: value) }
+}
+
+test what_the_second_review_found {
+    assert eval(first_change_of(a: [7], b: [8])) == [7]
+    assert eval(first_members_of(slot: [0], member: [3])) == [[3]]
+    # The owner's decision on hgl_spec#126: an optional part that is not
+    # valid is null in the whole value, and a required one leaves none.
+    assert eval(maybe_value(value: [1])) == [Maybe(value: 1, optional: null)]
+    assert eval(both_first(value: [1])) == [delta<Both>(first: 1)]
+    assert eval(both_first(value: [1])) != [Both(first: 1, second: 0)]
+}
