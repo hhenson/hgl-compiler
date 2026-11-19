@@ -1738,10 +1738,10 @@ fn designates(value: &Expr) -> bool {
 /// How a node designates a temporal input (FN-16: "A parameter that is
 /// not `ref` may be designated too"): whole, or by a position of it, a
 /// fixed list. hgraph makes a reference only from a `REF` input, so the
-/// node is given the input a second time as a hidden `REF` input of that
-/// shape, `_ref_name` (`node`), which is active whatever the node's own
-/// activity is: a `ref` parameter among them, whose own `REF` is as
-/// active as the body has it.
+/// node is given the input a second time as a hidden `REF` input,
+/// `_ref_name`, or one for each position, `_ref0_name` (`node`), which
+/// is active whatever the node's own activity is: a `ref` parameter
+/// that may be passive among them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Designated {
     /// `return value`
@@ -1774,7 +1774,9 @@ fn designated(function: &Function, value: &Expr) -> Option<(usize, Designated)> 
 }
 
 /// The name of the hidden `REF` input a node designates `input` through
-/// (`Designated`). Every name the target makes up starts with `_`.
+/// (`Designated`), and the name the provider is told it by where there
+/// is one for each position. Every name the target makes up starts with
+/// `_`, and a program's own never does.
 fn designated_name(input: &Local) -> String {
     format!("_ref_{}", name(&input.name))
 }

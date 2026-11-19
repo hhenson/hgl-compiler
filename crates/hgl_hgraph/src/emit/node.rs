@@ -240,13 +240,13 @@ impl Emitter<'_> {
         // does (TIME-3: "the node is dormant"), and its `start` and
         // `stop` run as any node's.
         let hidden = inputs.is_empty();
-        // FN-16: each input that is no `ref` parameter and that the node
-        // designates, given to the node a second time as a hidden `REF`
-        // input, after its own (`Designated`). The node is then written
-        // under another name too, and the graph of the function's own
-        // name gives it each such input twice.
-        // Whether the body changes an input's activity, `activate` or
-        // `passivate`.
+        // FN-16: each input that is no `ref` parameter, or that may be
+        // passive, and that the node designates, given to the node a
+        // second time as a hidden `REF` input, after its own
+        // (`designated_inputs`). The node is then written under another
+        // name too, and the graph of the function's own name gives it
+        // each such input twice. `changes` is whether the body changes
+        // an input's activity, `activate` or `passivate`.
         let mut changes = false;
         hgl_analyser::hir::walk_statements(&body.statements, &mut |part| {
             changes |= matches!(
@@ -669,13 +669,14 @@ impl Emitter<'_> {
     }
 
     /// Whether a temporal input or the node's scheduler or alarm woke
-    /// the node whose body is `body`: `inputs` are its
-    /// temporal inputs, `active` those a handler subscribes to, and
-    /// `timer` what says its scheduler or alarm woke it, where it injects
-    /// one, and `changes` whether the body changes an input's activity. An input wakes it where it is active and published or was
-    /// invalidated (END-4: "The transition to invalid notifies active
-    /// subscribers"), and the hidden `REF` inputs of its designations
-    /// (`designated_inputs`) do not.
+    /// the node whose body is `body`: `inputs` are its temporal inputs,
+    /// `active` those a handler subscribes to, `changes` whether the
+    /// body changes an input's activity, and `timer` what says its
+    /// scheduler or alarm woke it, where it injects one. An input wakes
+    /// it where it is active and published or was invalidated (END-4:
+    /// "The transition to invalid notifies active subscribers"), and the
+    /// hidden `REF` inputs of its designations (`designated_inputs`) do
+    /// not.
     fn woken(
         &self,
         body: &Body,
@@ -718,9 +719,9 @@ impl Emitter<'_> {
     /// a hidden `REF` input (`Designated`). So is a `ref` parameter that
     /// may be passive: the hidden one is active, and wakes the node where
     /// what the parameter is bound to is re-bound. The input whole is
-    /// `REF` of its type, and a position of a fixed list a `TSL` of
-    /// `REF`s, which hgraph binds to the list's own positions. One
-    /// designated both ways is reported.
+    /// `REF` of its type, and each position of a fixed list a `REF` of
+    /// the element's, which the graph gives the position. One designated
+    /// both ways is reported.
     fn designated_inputs(
         &mut self,
         function: &Function,
