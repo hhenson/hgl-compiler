@@ -6064,6 +6064,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("graph_for.hgl", GRAPH_FOR));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("windows.hgl", WINDOWS));
     files.push(("scalars.hgl", SCALARS));
     files.push(("errors.hgl", ERRORS));
     files.extend(MODULES);
@@ -6608,6 +6609,142 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
             "m.hgl:12:19 target.unsupported",
             "m.hgl:17:11 target.unsupported",
         ]
+    );
+}
+
+/// TYPE-11: windows of ticks and of a duration, as inputs and results;
+/// TYPE-16: a window's delta is "V: the value that arrived".
+const WINDOWS: &str = include_str!("fixtures/windows.hgl");
+
+/// TYPE-11: "`rolling_window<V, Max, Min>` is a rolling window of V ...
+/// Omitted minimum equals maximum". It is hgraph's `TSW`, of a count of
+/// ticks or of a `timedelta`, which takes one size as both. TYPE-16: a
+/// window's delta is "V: the value that arrived", so a node publishes
+/// one value to it, `delta_value` is the value that arrived, and an
+/// eval's replay and record of one are core's for the window (core's
+/// CEVAL-1), whose trace is each value that arrived (TST-5).
+#[test]
+fn a_window_is_hgraphs_tsw() {
+    let emitted = emit(&[("windows.hgl", WINDOWS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_windows/__init__.py");
+    let ticks = "_hg.TSW[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]]";
+    for expected in [
+        format!("def collect(price: _hg.TS[_py.float]) -> {ticks}:\n    return price.value\n"),
+        format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
+        "    if ((not _output.valid) and ".to_string(),
+        "    _output.value = price.value\n".to_string(),
+        concat!(
+            "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
+            "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
+        )
+        .to_string(),
+        "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
+        format!("def arrived(prices: {ticks}) -> _hg.TS[_py.float]:\n    return prices.delta_value\n"),
+        "    return prices.valid\n".to_string(),
+        "    return (prices.modified and prices.valid)\n".to_string(),
+        "(prices.last_modified_time if prices.valid else None)".to_string(),
+        "-> _hg.TSW[Side, _hg.WindowSize[2], _hg.WindowSize[1]]:".to_string(),
+        "def _inst_newest__i64_4(values: _hg.TSW[_py.int, _hg.WindowSize[4], _hg.WindowSize[1]])"
+            .to_string(),
+        "    return arrived(prices=collect(price=price))\n".to_string(),
+        "_harness.evaluate(collect, {\"price\": _hgl_4core._inst_replay__f64}, \
+         _hgl_4core._inst_record__rolling_window_f64__3__1_, "
+            .to_string(),
+        "_harness.evaluate(arrived, {\"prices\": _hgl_4core._inst_replay__rolling_window_f64__3__1_}, \
+         _hgl_4core._inst_record__f64, "
+            .to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+    // Core's `replay` and `record` written for the window.
+    let core = emitted.text("_hgl/_m_core/__init__.py");
+    for expected in [
+        format!("def _inst_replay__rolling_window_f64__3__1_(items: _py.object) -> {ticks}:"),
+        format!("def _inst_record__rolling_window_f64__3__1_(input: {ticks}, "),
+    ] {
+        assert!(core.contains(&expected), "missing {expected} in:\n{core}");
+    }
+}
+
+/// What this target does not write of a window is reported. FN-12:
+/// "Fixed-size lists and windows retain their own shape/readiness
+/// contracts", and core has none for a window yet, so a window is read
+/// only where its minimum is one tick, which every reading makes ready
+/// at its first value: an input or `out` read otherwise, and an eval's
+/// record of such a window, are reported. So are what a window holds,
+/// which no core operation reads, the invalidation of a window, which
+/// hgraph's `TSW` survives with what it holds, and a window of a value
+/// that is no scalar or enum.
+#[test]
+fn a_window_form_not_written_yet_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote { bid: f64 }\n",
+            "fn full(prices: rolling_window<f64, 3>) -> f64 {\n",
+            "    when { return delta_value(prices) }\n",
+            "}\n",
+            "fn timed(prices: rolling_window<f64, 5s, 0s>) -> f64 {\n",
+            "    when { return delta_value(prices) }\n",
+            "}\n",
+            "fn whole(prices: rolling_window<f64, 3, 1>) -> rolling_window<f64, 3, 1> {\n",
+            "    when { return prices }\n",
+            "}\n",
+            "fn own(price: f64) -> rolling_window<f64, 3> {\n",
+            "    inject out\n",
+            "    when {\n",
+            "        if valid(out) { return }\n",
+            "        out = price\n",
+            "    }\n",
+            "}\n",
+            "fn cleared(price: f64) -> rolling_window<f64, 3, 1> {\n",
+            "    inject out\n",
+            "    when { invalidate(out) }\n",
+            "}\n",
+            "fn quotes(quote: Quote) -> rolling_window<Quote, 3, 1> {\n",
+            "    when { return quote }\n",
+            "}\n",
+            "fn maybe(price: f64?) -> rolling_window<f64?, 3, 1> {\n",
+            "    when { return price }\n",
+            "}\n",
+            "fn recent(price: f64) -> rolling_window<f64, 5s> {\n",
+            "    when { return price }\n",
+            "}\n",
+            "test recorded {\n",
+            "    assert eval(recent(price: [1.0])) == [1.0]\n",
+            "}\n",
+        ),
+    )]);
+    let reported: Vec<&String> = emitted
+        .reported
+        .iter()
+        .filter(|place| place.starts_with("m.hgl:"))
+        .collect();
+    assert_eq!(
+        reported,
+        [
+            "m.hgl:3:9 target.unsupported",
+            "m.hgl:6:10 target.unsupported",
+            "m.hgl:10:19 target.unsupported",
+            "m.hgl:15:12 target.unsupported",
+            "m.hgl:21:12 target.unsupported",
+            "m.hgl:23:4 target.unsupported",
+            "m.hgl:26:4 target.unsupported",
+        ]
+    );
+    // The record of `recent`'s window is core's, which reads it.
+    let blocked = emitted.blocked("recorded").expect("the test is blocked");
+    assert!(
+        blocked.ends_with(
+            "the hgraph target does not write the readiness of `rolling_window<f64, 5s>`, \
+             which core leaves undefined, yet"
+        ),
+        "{blocked}"
     );
 }
 
