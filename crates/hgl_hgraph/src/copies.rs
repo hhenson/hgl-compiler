@@ -1,7 +1,8 @@
 //! Where a value is copied.
 //!
-//! A `var`, a `state` and a `cache` are places: what one holds is
-//! changed where it is, and never copied for a change. A `let`, a
+//! A `var`, a `state` and a `cache` are places: the list, the
+//! dictionary or the struct that is no value (`emit::by_value`) one
+//! holds is changed where it is, and never copied for a change. A `let`, a
 //! parameter and a loop's name are references: each names a value
 //! something else may hold. So a copy is made where a reference is
 //! made to what a place holds and the place then changes, and where a
@@ -28,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local, Node, Stmt, walk_statement_nodes};
 use hgl_analyser::{Detail, LocalKind, Program};
 
-use crate::emit::holds_collection;
+use crate::emit::changed_in_place;
 
 /// What one body's `let`s and loop names are bound to.
 #[derive(Default)]
@@ -347,9 +348,9 @@ impl Copies {
 
 /// True where nothing else holds what `value` gives: a value written
 /// out, and what a function of the program returns, which copies what
-/// it was given before it returns it. A value of a type that holds no
-/// list and no dictionary is never changed where it is, and counts as
-/// one too: nothing of it is copied.
+/// it was given before it returns it. A value of a type that nothing
+/// changes where it is ([`changed_in_place`]), a scalar or a struct of
+/// two scalars, counts as one too: nothing of it is copied.
 ///
 /// A name does not: a `let`, a parameter and a loop's name are
 /// references, and what a place holds is the place's. Nor does what a
@@ -357,7 +358,7 @@ impl Copies {
 /// given or of the run's store, nor a constant of a module, whose one
 /// value every read of it has.
 pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
-    if !holds_collection(program, &value.ty, 0) {
+    if !changed_in_place(program, &value.ty, 0) {
         return true;
     }
     match &value.kind {
@@ -381,7 +382,7 @@ pub(crate) fn fresh(program: &Program, value: &Expr) -> bool {
                     arguments
                         .iter()
                         .any(|argument| argument.parameter == Some(index))
-                        || !holds_collection(program, &member.ty, 0)
+                        || !changed_in_place(program, &member.ty, 0)
                 }),
                 _ => false,
             };

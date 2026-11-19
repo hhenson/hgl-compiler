@@ -1460,7 +1460,10 @@ only where the program reaches it, at core's source.
 | `bool`, `i64`, `f64`, `str` | `_py.bool`, `_py.int`, `_py.float`, `_py.str`: Python's built-ins are reached through `import builtins as _py`, so a program's own `float` or `frozenset` is free |
 | `state name: T = value`, `cache name: T = value` (TIME-6) | A field of the node's `STATE`, given its value in the node's `start`, in the order written. hgraph's `STATE` is the node's own and is recorded nowhere, so a `cache` is rebuilt on every start, as it is to be |
 | `inject clock`, `inject logger`, `inject global_state` (TIME-8) | `_clock: _hg.EvaluationClock = None`, `_logger: _hg.LOGGER = None`, `_store: _hg.GlobalState = None`: a parameter of the node, of its `start` and of its `stop`. hgraph gives a capability for one call and no longer, which is the language's rule too: it "is not retained" |
-| `if flag { a } else { b }`, `switch route { ... }` in a graph, over a connection (CTRL-13 to CTRL-15) | `_hg.switch_(flag, {True: _case_0_0, False: _case_0_1}, value=value)`: a `@_hg.graph` for each branch, written before the statement, that takes the connections the branches read. hgraph starts a branch's graph where its key is selected and stops it where another is. A branch that returns takes the rest of the block for the other branch; branches that assign a `var` give it, and it is assigned what `switch_` gives. Over an ordinary value an `if` is Python's own |
+| `if flag { a } else { b }`, `switch route { ... }` in a graph, over a connection (CTRL-13 to CTRL-15) | `_hg.switch_(flag, {True: _case_0_0, False: _case_0_1}, value=value)`: a `@_hg.graph` for each branch, written before the statement, that takes the connections the branches read. hgraph starts a branch's graph where its key is selected and stops it where another is. A branch that returns takes the rest of the block for the other branch, as does one that gives a `let` its value and has a `return`; branches that assign a `var` give it, and it is assigned what `switch_` gives; branches that assign none are graphs with no output (CTRL-3), the omitted `else` one with nothing in it. A connection whose name `switch_` or `map_` keeps for itself, `key` or `name`, is taken as `_taken_key`. Over an ordinary value an `if` is Python's own, and a `switch` is `_selected_N = route` and an `if` on it |
+| `for item in items`, `while condition` in a graph, over ordinary data or a connection of `list<T, N>` (CTRL-15) | Python's own loop where the graph is built, `for item in items:`, `for key, value in entries.items():`, `while condition:`: the body is composed on each pass, and a `var` is carried. A fixed list's `TSL` gives a port for each position |
+| `for name, price in prices`, `for item in items`, `for member in members` in a graph, over a connection of `dict<K, V>`, `list<T>`, `set<T>` (CTRL-7, CTRL-15) | `_hg.map_(_each_0, price=prices, __key_arg__="name", level=_hg.pass_through(level))`: a `@_hg.graph` for the body, which takes the key's port, the member's, and the connections the body reads from outside, whole. A list is given as its positions, `item=_hg.convert[_hg.TSD[_py.int, _hg.TS[_py.int]]](items)`, and a set as the keys, `__keys__=members`. hgraph keeps a child while its key stays, stops it where the key is removed, and starts a fresh one where it is added again. The key is read only as the argument of a temporal parameter: hgraph gives it as a port |
+| `let made = if up { let doubled = a * 2; doubled + 1 } else { a }` in a value function or a hook (CTRL-10) | `if up:`, the branch's statements, `made = ...`, and `else:` likewise: a block's statements come before its value. The same for a `var`, an assignment to a name and a `return`. With no `else`, `made = None`; an `if` with no `else` in an expression, `(a if c else None)` |
 | `let seen = capture(child, value)`, `seen.value`, `seen.error` in a graph (ERR-7, ERR-8) | `seen = _core.captured(_hg.try_except(child, value=value))`, `seen.out`, `_core.captured_error(seen.exception)`. hgraph catches an evaluation failure of the child, which runs on; start and stop failures escape. It gives a failure as its traceback's text, so an `HglError` writes its error as a JSON note the traceback ends with, which `captured_error` reads back with the node, phase and time. The phase of a failure with no note is told by the traceback's first frame, the function hgraph called: `_start_name` or `_stop_name` for a hook. hgraph also catches the failure of a `start` or `stop` the evaluation triggers, a `switch_` branch selected or left: `captured` wires a sink beside the capture that raises such a failure again. An outputless child's failures are put in a bundle, `_hg.combine(exception=...)`. A value function lifted over a connection is captured as its lifted node. A temporal `error` and `result` are `_hg.TS[_core.Error]` and `_hg.TS[_core.Result]`; `is_ok(value)` of a connection is `_core.lifted_is_ok(value)` |
 | `let seen = capture(scaled, value, 2)`, `scaled` a graph with a `const` parameter (ERR-7) | `try_except` takes no graph with a scalar input: `_capture_0_by = 2`, a `@_hg.graph` `_capture_0(value)` that returns `scaled(value=value, by=_capture_0_by)`, and `seen = _core.captured(_hg.try_except(_capture_0, value=value))`, all where the `let` is. Each argument is evaluated in its order before the `let`, a wiring-time value and a connection that is no local or literal held under such a name; a default left out is in the call of the child |
 | `failure.context`, `context.node`, `.phase`, `.evaluation_time` (ERR-4) | The provider's `Error.context`, `None` or an `ErrorContext`, whose three parts are attributes; two contexts are equal when their parts are |
@@ -1470,7 +1473,7 @@ only where the program reaches it, at core's source.
 | `when !scheduled() { ... }`, `when modified(a) \|\| scheduled() { ... }` (TIME-3, TIME-9) | `scheduled()` is a bool, what woke the node, read where it is entered: `_timer_woke = _scheduler.is_scheduled_now`, with an alarm `and not (a.modified or a.invalidated ...)`. The handler keeps the defaults: `if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):`, in a node that requires every input valid. In a handler's body it is `_timer_woke` too |
 | A handler or a node that nothing wakes (TIME-3) | A handler that subscribes to no input, in a node that injects neither a scheduler nor an alarm, is not written. A node none of whose handlers subscribes to an input is `active=()`; one with no input is `_node_name` with `_begin`, as above |
 | A source, a `fn` with a `yield` (SOURCE-1) | Three functions and a graph. `_yields_name(config, _state)` is a Python generator that holds the source's statements, each `yield time: value` a `yield (time, value)`. `_source_name` is a `@_hg.compute_node` that resumes it, `_core.resume(_state._source, _clock.evaluation_time, _scheduler)`, and returns what is due. Its `start` gives each `cache` and `state` its value, runs the source's `start` and makes the generator; its `stop` is the source's. `name`, a `@_hg.graph`, is what a call names: the node, given `_hg.const(True)`. hgraph takes no node without an input, so the constant is its one input, and wakes it once as the graph starts; its own scheduler wakes it after |
-| `const fn bump(var count: i64, by: i64)`, and `bump(sum, value)` (FN-15) | `def bump(count, by): ...; return (None, count)`: Python has no place to give a value to, so a function with `var` parameters returns its result and then what each holds, at every way out. The call is the whole of a statement: `_given = bump(count=sum, by=value)` and then `sum = _given[1]`, each place in the order of the parameters; a place inside a value is assigned as any is, `book = _core.with_field(book, orders=_given[1])`. A call's own result is `_given[0]`. A function that fails raises, and assigns nothing |
+| `const fn bump(var count: i64, by: i64)`, and `bump(sum, value)` (FN-15) | `def bump(count, by): try: ...; return (None, count)`: Python has no place to give a value to, so a function with `var` parameters returns its result and then what each holds, at every way out. The call is the whole of a statement: `_given = bump(count=sum, by=value)` and then `sum = _given[1]`, each place in the order of the parameters; a place inside a value is assigned as any is, `book = _core.set_field(book, "orders", _given[1])`. A call's own result is `_given[0]`. A function that fails gives `_core.Failed(...)` in its result's place, beside what each parameter held then (`except _py.Exception as _failed: return (_core.Failed(_failed), count)`): the call assigns the places, and `_core.raise_if_failed(_given[0])` raises it again |
 | `clock.evaluation_time`, `logger.level` (CAP-1) | `_core.Clock_evaluation_time(_clock)`, and `_core.member(LogLevel, _core.Logger_level(_logger))`: a property of a native type is the provider's to read, named for the type and the property |
 | `log(logger, .info, message)`, a native function of core (NATIVE-7) | `_core.fn_log(logger=_logger, level=LogLevel["info"], message=message)`: the provider's function, `fn_` and the name it binds |
 | `get<i64>(global_state, "key")`, `has(...)`, `put(...)` (CAP-6) | Core's candidates for the store, the provider's as any native candidate: `_core.get_GlobalState_str(store=_store, key="key")` |
@@ -1489,13 +1492,13 @@ only where the program reaches it, at core's source.
 | `operator` | Nothing: its candidates are the functions |
 | `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("demo.orders::Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. The class is named with its module's path: hgraph knows a Python enum by its class's name, so two modules' `Side`s would be one type to it, and core's `CmpResult` hgraph's own. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |
 | `.buy`, `Side.buy`; `Side(1)`, `Side("buy")` | `Side["buy"]`; `_core.member(Side, value)`, which fails for a value that is no member's. A member's name that starts with `_` or is `mro`, which `Enum` keeps, has `hgl_` before it |
-| `struct Point { x: f64, y: f64 = 0.0 }` (TYPE-3) | `Point = _core.struct("Point", ("x", "y"))`: a class the provider makes, with every field the struct has, a parent's first. Its values are never changed, and two are equal when each field is. A module's structs are written before its functions, with its enums. An abstract struct is a class too, of which no value is made. Equality is the provider's, field by field with no shortcut for one object compared with itself: a field may be a NaN (NUM-5) |
+| `struct Point { x: f64, y: f64 = 0.0 }` (TYPE-3) | `Point = _core.struct("Point", ("x", "y"), by_value=True)`: a class the provider makes, with every field the struct has, a parent's first. A struct of at most two fields, each an enum or a scalar other than a `str`, a `bytes` or an `any`, with no generic parameter and that no other inherits from, is a value, `by_value`: its values are never changed. Any other's value is changed where a place holds it (see below). Two are equal when each field is. A module's structs are written before its functions, with its enums. An abstract struct is a class too, of which no value is made. Equality is the provider's, field by field with no shortcut for one object compared with itself: a field may be a NaN (NUM-5) |
 | A value of a generic struct, `Box(value: 1)` (TYPE-3) | `_core.applied(Box, "i64")(value=1)`: each application is a class of its own, made once, so a `Box<i64>` is no `Box<f64>` where the two meet as values of a parent. The arguments are written as text no other type has, a named type with its module's path |
 | `Point(x: 1.0)` (TYPE-5) | `Point(x=1.0, y=0.0)`: the arguments in the order written, which is the order Python evaluates them in, then each field left out with its default in its place, read from the analysed program as a parameter's is (`Module::defaults`, `Member::default`), or `None` for an optional field with none |
-| `point.x`; `point.x = 1.0`, `line.end.x += by` (EXPR-3) | `point.x`; `point = _core.with_field(point, x=1.0)`, and at depth `line = _core.with_field(line, end=_core.with_field(line.end, x=...))`. The place's root is given a new value and the old one is as it was, for whatever else holds it (TYPE-5: "later mutation of a source cannot change an earlier retained value"). A `state` is assigned the same way |
+| `point.x`; `point.x = 1.0`, `line.end.x += by` (EXPR-3) | `point.x`; `point = _core.with_field(point, x=1.0)` for a struct that is a value, and `line = _core.set_field(line, "class_", 4)` and at depth `line = _core.set_at(line, (("f", "end"), ("f", "x"),), lambda: ...)` for one that is not: the place's own struct is changed where it is, and a value on the way, `end` here, is given a new one. What took the old value took a copy, and is as it was (TYPE-5: "later mutation of a source cannot change an earlier retained value"). The provider gives a value of a `by_value` class a new one though a parent's type stands for it. A `state` is assigned the same way |
 | `items[1]`, `pair[0]`; `sizes[name]` (EXPR-7, ERR-6) | `_core.item(items, 1)`, which fails for an index outside the sequence, a negative one among them; `_core.entry(sizes, name)`, which fails with `value.missing_key` for a key that is not there |
 | `get(sizes, name)`, core's candidate for a dictionary (ERR-6) | `_core.get_dict_K__T__K(store=sizes, key=name)`: the value, or `None` |
-| `items[0] = 1`, `sizes[name] += 1`, `rows[1][0] = 9` (EXPR-3) | `items = _core.with_item(items, 0, 1)`, `sizes = _core.with_entry(sizes, name, ...)`, and at depth as a field is: a list, a tuple and a dictionary are never changed, and the place's root is given a new one. A key the dictionary has not is added, and an index outside a list fails |
+| `items[0] = 1`, `sizes[name] += 1`, `rows[1][0] = 9` (EXPR-3) | `items = _core.with_item(items, 0, 1)`, `sizes = _core.with_entry(sizes, name, ...)` for a tuple, and for a list or a dictionary that is no place's own, which are given a new one; the place's own list and dictionary are changed where they are (see below). A key the dictionary has not is added, and an index outside a list fails |
 | `a <=> b`, `compare_(a, b)` (NUM-6, OPS-3) | `_core.member(_hgl_4core.CmpResult, _core.compare__T_T(lhs=a, rhs=b))`. A native candidate that gives an enum gives its member's name, as one that takes an enum is given it: the provider declares no enum of the program's, and the member is read from the enum the program has, core's here |
 | `ok(value)`, `err(value)`, `error(message: m, code: c)` (ERR-2, ERR-4) | `_core.Ok(value)`, `_core.Err(value)`, `_core.Error(message=m, code=c)`: values of the provider's, equal when their parts are |
 | `is_ok(r)`, `is_err(r)`; `r.value`, `r.error`; `e.message`, `e.code` (ERR-3, ERR-4) | `_py.isinstance(r, _core.Ok)`, `_py.isinstance(r, _core.Err)`; the attribute of the same name |
@@ -1576,9 +1579,10 @@ instances a program asks for, and an eval asks for these two, each for
 the type it is of. Core does not export them: a run wires them, and no
 module names them.
 
-A list and a dictionary are Python's, each one object that every name
-of it sees change, and a value of HGL's does not change (LIST-3: "a value
-taken from the place before the call is as it was"). The target follows
+A list, a dictionary and a struct are Python's, each one object that
+every name of it sees change, and a value of HGL's does not change
+(LIST-3: "a value taken from the place before the call is as it was").
+The target follows
 the owner's rule for it (issue 151): "all var mutations are mutations,
 not copies. The copies only occur when: 1. the value is passed to a
 function and the function also recieves a var reference to the item or
@@ -1586,8 +1590,12 @@ items it contains, othewise they are safe to pass through. 2. let
 assignment". So a `var`, a `state` and a `cache` change what they hold
 where it is, with no check when the program runs, and the compiler says
 where a copy is made: where a reference is made to what a place holds
-and the place then changes, and where a reference is kept. A struct and
-a tuple are never changed: a change to one makes a new one.
+and the place then changes, and where a reference is kept. "The copy by
+value exception is for trivial structures (think sizeof(i64))": a struct
+of at most two scalar fields is a value, copied nowhere and never
+changed, and a change to one makes a new one; so does a change to a
+tuple. Any other struct is changed where it is, and copied where a list
+is.
 
 | What is written | Where |
 | --- | --- |
@@ -1600,15 +1608,17 @@ a tuple are never changed: a change to one makes a new one.
 | `_core.fn_append(values=rows, item=_core.copied(row))` | What a native function with a `var` parameter puts into its place, where the place may hold it: `append` keeps its item, and `extend(values, more)` keeps the numbers `more` holds and takes `more` as it is |
 | `return _core.copied(value)`, `return out` | A result is the caller's to keep: a copy of what the function was given, and its own `var` or `let` as it is |
 | `_output.value = _core.copied(...)`, `yield`, a hook's `return` of a `state` | What is published is the runtime's to keep. The provider copies what it puts in a run's store |
-| `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)` | An element or an entry assigned: the place's own collection, changed where it is. A `var` parameter is the caller's place, and is changed where it is too |
-| `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)` | A place further in: the provider goes in and changes each list and dictionary on the way where it is. The value is asked for once the way in has been read |
+| `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)`, `order = _core.set_field(order, "size", 2)` | An element, an entry or a field assigned: the place's own list, dictionary or struct, changed where it is. A `var` parameter is the caller's place, and is changed where it is too. A dictionary keeps a copy of a key it has not, where something else holds it: `counts = _core.set_entry(counts, _core.copied(key), 1)` |
+| `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)` | A place further in: the provider goes in and changes each list, dictionary and struct that is no value on the way where it is, and gives a value on the way a new one. The value is asked for once the way in has been read |
 | `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))` | A native function of core given a place further in, and then `book = _given[1]` |
 
-`_core.copied` shares no list and no dictionary with what it copies; a
-struct, a tuple and a result are made again only to hold the copies of
-what is inside them, and a value that holds no collection is given as it
-is. A way in whose index is an expression after an element read is
-given new values on the way, so that the index is evaluated only once
+`_core.copied` shares no list, no dictionary and no struct that is
+changed where it is with what it copies, a dictionary's keys and a set's
+members among them; a tuple, a set and a result are made again only to
+hold the copies of what is inside them, and a value that holds nothing
+changed where it is is given as it is. A way in whose index is an
+expression after an element read is given new values on the way, so
+that the index is evaluated only once
 what it is an index of has been read. The provider reads the way in,
 then asks for the value, and only then changes anything: the value may
 hold a collection on the way in, `append(rows[0], rows)`, of which the
@@ -1618,13 +1628,26 @@ own result is kept as it is, and a `let` costs a copy only where its
 place changes while it is in scope.
 
 FN-15: "A function that fails leaves the place holding what its
-parameter held when it failed: no change it had made is undone." A list
-and a dictionary are changed where they are, so what a function did to
-one stays where it fails. Left: a `var` parameter of any other type, an
-`i64` or a struct, is given back when the function returns, and is as
-it was where the function fails; and a struct of more than two scalar
-fields, which the owner's rule has changed where it is too, is still
-made again for each change.
+parameter held when it failed: no change it had made is undone." A list,
+a dictionary and a struct that is no value are changed where they are,
+so what a function did to one stays where it fails. A parameter of any
+other type, and one the function gave a value of its own, is a name of
+the function's: the function catches what fails and gives it back as
+`_core.Failed` beside what each parameter holds, and the call assigns
+each place before it raises it again. An argument that fails is
+evaluated before the call, which then assigns nothing.
+
+FN-13: an argument is a reference, which the function cannot change,
+and nothing else runs while it does; where the call also gives a `var`
+parameter what the argument is read from, the argument is a copy. What a
+function returns of an argument is a copy, and what a node keeps of an
+input a copy too, so a retained result is independent of later
+publications. No argument is a view: what hgraph gives is a value of its
+own, a list made of its tuple, a struct of its bundle, or the value a
+`TS` holds, which nothing changes where it is.
+
+Left: a tuple is given a new one for a change of a position, where the
+owner's rule has any value but a trivial one changed where it is.
 
 A `tenor` (TYPE-17) is the provider's `Tenor`: a count of months and a
 count of days, or a count of business days. Its literal is written by its
@@ -1672,9 +1695,13 @@ wakes, `modified([])`;
 a bare payload read of `out` in `stop`;
 in a graph, any expression but a name, a literal and a call, an `if`
 that is not a whole statement or the whole value of a `let` or a
-`return`, and branches that assign more than one `var`; a pack in a lifted
-call; a temporal function called in a test outside an `eval`;
-a loop and a `switch` in a graph or a test;
+`return`, branches that assign more than one `var`, a `return` under a
+branch selected at runtime in a loop unrolled where the graph is built,
+and a loop's key or member read other than as the argument of a
+temporal parameter; a block with statements inside another expression;
+a pack in a lifted call; a temporal function called in a test outside an
+`eval`;
+a loop and a `switch` in a test;
 a zoned datetime, a zoned time and a time zone; a `result` or an `error` as the type of an input or an output;
 and a candidate of core the provider has no function for.
 
