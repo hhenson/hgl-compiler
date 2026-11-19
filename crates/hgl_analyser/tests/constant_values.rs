@@ -1214,6 +1214,43 @@ fn a_constant_that_fails_is_rejected_where_it_is_declared() {
     );
 }
 
+/// GEN-8: "A call rejects when it leaves a generic parameter
+/// unresolved": a default that names its own parameter gives it no
+/// value. A default that names a parameter before its own is of what
+/// that one takes, in a call and in a struct written with no arguments,
+/// which takes its defaults (GEN-2): `W2` is `W2<1, 1>`.
+#[test]
+fn a_default_that_names_its_own_parameter_gives_no_value() {
+    let shared = concat!(
+        "struct IBox<const X: i64> { v: i64 }\n",
+        "const fn sized<const N: i64 = N>(v: i64) -> i64 => N + v\n",
+        "struct Selfish<const X: i64 = X> { v: i64 }\n",
+        "struct W2<const A: i64 = 1, const B: i64 = A> { v: i64 }\n",
+        "const fn d<const N: i64 = 1, const M: i64 = N>(v: i64) -> IBox<M> => IBox<M>(v: v)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(w: W2) -> W2<1, 1> => w\n\
+             const fn b() -> i64 => sized<1>(2)\n\
+             const fn c() -> i64 {{\n    let one = d(1)\n    let three = d<3>(1)\n    \
+             let x: IBox<1> = one\n    let y: IBox<3> = three\n    return 1\n}}\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => sized(1)\n\
+             const fn b(s: Selfish) -> i64 => 1\n\
+             const fn c() -> i64 {{\n    let one = d(1)\n    let x: IBox<2> = one\n    return 1\n}}\n"
+        ),
+        &[
+            "7 generic.unresolved",
+            "8 generic.argument_count",
+            "11 type.mismatch",
+        ],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

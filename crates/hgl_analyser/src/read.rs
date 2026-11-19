@@ -2405,6 +2405,12 @@ impl Reader<'_> {
         }
         let file = self.program.modules[module].files[declaration.file].file;
         let types = self.parameter_types((module, index));
+        // Where each parameter is declared: what a default that names one
+        // is bound to.
+        let own: Vec<Location> = forms
+            .iter()
+            .map(|(_, name, _)| Location::new(file, name.span()))
+            .collect();
         let mut arguments = Vec::new();
         for (position, (parameter, _, form)) in forms.iter().enumerate() {
             let default = match form {
@@ -2428,15 +2434,32 @@ impl Reader<'_> {
                 };
                 crate::constant::read(&default, expected.as_ref(), &scope)
             };
+            // What is wrong with a default is reported where it is
+            // written (`signatures`), and says nothing more (ERR-9).
+            let value = match read {
+                Ok(value) => value,
+                Err(Fault::NotConstant) => ConstantValue::Unevaluated,
+                Err(_) => ConstantValue::Unknown,
+            };
+            // A default that names a parameter before its own is of the
+            // value that one takes: `W2` of `struct W2<const A: i64 = 1,
+            // const B: i64 = A>` is `W2<1, 1>`. One that names its own,
+            // or one after it, gives it no value (GEN-8: "A call rejects
+            // when it leaves a generic parameter unresolved"), and the
+            // struct is written with too few arguments.
+            let value = value.substituted(&|at| {
+                let before = own.iter().position(|own| *own == at)?;
+                match arguments.get(before)? {
+                    Argument::Constant(given) => Some(given.value.clone()),
+                    Argument::Type(_) => None,
+                }
+            });
+            if value.names_one_of(&own) {
+                return None;
+            }
             arguments.push(Argument::Constant(Constant {
                 text: text_of(&default),
-                // What is wrong with a default is reported where it is
-                // written (`signatures`), and says nothing more (ERR-9).
-                value: match read {
-                    Ok(value) => value,
-                    Err(Fault::NotConstant) => ConstantValue::Unevaluated,
-                    Err(_) => ConstantValue::Unknown,
-                },
+                value,
             }));
         }
         Some(arguments)

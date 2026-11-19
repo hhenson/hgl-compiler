@@ -176,6 +176,10 @@ impl<'a> Typer<'a> {
             let expected = type_of(index, found);
             match self.unfit_default(declaration, &default, &expected, declared) {
                 Some(Ok(value)) => {
+                    let Some(value) = defaulted_value(value, index, &own, found) else {
+                        found[index] = None;
+                        continue;
+                    };
                     // The default as a value of the type the call
                     // resolves (EXPR-5): the `f64` 2 where `T` is one.
                     found[index] = Some(Argument::Constant(Constant {
@@ -540,8 +544,12 @@ impl<'a> Typer<'a> {
         for (index, default) in defaults.iter().enumerate() {
             if found[index].is_none()
                 && let Some(default) = default
+                && let Some(value) = defaulted_value(default.value.clone(), index, &own, &found)
             {
-                found[index] = Some(Argument::Constant(default.clone()));
+                found[index] = Some(Argument::Constant(Constant {
+                    text: default.text.clone(),
+                    value,
+                }));
                 defaulted.push(index);
             }
         }
@@ -937,4 +945,27 @@ pub(super) fn mentions(ty: &Type, own: &[Location]) -> bool {
 /// of `list<i64, N + 1>`, of `Box<[N]>`.
 fn names_value_of(ty: &Type, own: &[Location]) -> bool {
     ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
+}
+
+/// The default `value` of the generic value parameter at `index`, of a
+/// declaration whose generic parameters are declared at `own`, with what
+/// a call has `found` for the others in place. A default that names a
+/// parameter before its own, `<const N: i64 = 1, const M: i64 = N>`, is
+/// of what the call gives that one. `None` for one that names its own,
+/// or one the call leaves unresolved, which gives it no value: GEN-8, "A
+/// call rejects when it leaves a generic parameter unresolved".
+fn defaulted_value(
+    value: ConstantValue,
+    index: usize,
+    own: &[Location],
+    found: &[Option<Argument>],
+) -> Option<ConstantValue> {
+    let value = value.substituted(&|at| {
+        let other = own.iter().position(|own| *own == at)?;
+        match found.get(other)? {
+            Some(Argument::Constant(given)) if other != index => Some(given.value.clone()),
+            _ => None,
+        }
+    });
+    (!value.names_one_of(own)).then_some(value)
 }
