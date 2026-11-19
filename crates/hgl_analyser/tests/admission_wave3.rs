@@ -169,3 +169,126 @@ fn scheduled_takes_no_generic_argument() {
         ]
     );
 }
+
+/// FN-14: "An anonymous function's scope is the scope around it plus its
+/// parameters". TIME-9: "A call gives an `endpoint<T>` parameter a
+/// temporal input of the enclosing node by its name, a child of one ...
+/// or `out`, and nothing else", and "`all_valid` takes only a
+/// collection or a window; another endpoint is rejected
+/// (`endpoint.argument`)". So an operation in an anonymous function is
+/// given what it would be given where the function is written: not the
+/// function's own parameter, nor a `let` of its body, and not an
+/// endpoint at all in a value function; core's `is_active` alike, and a
+/// child of the function's parameter is no child of an input. Each is
+/// held to the number of arguments it takes too, `scheduled()` none and
+/// `delta_value` one, and to the type its generic argument names
+/// (EXPR-5); and a `signal` has no delta, and a `ref` parameter's is not
+/// read (TYPE-16, FN-16).
+#[test]
+fn an_endpoint_operation_in_an_anonymous_function_takes_what_it_would_where_written() {
+    let checked = module(concat!(
+        "fn parameter(value: i64) -> bool {\n",
+        "    when { return (fn(given: i64) => valid(given))(value) }\n",
+        "}\n",
+        "fn bound(value: i64) -> bool {\n",
+        "    when {\n",
+        "        return (fn() {\n",
+        "            let held = value\n",
+        "            return modified(held)\n",
+        "        })()\n",
+        "    }\n",
+        "}\n",
+        "fn scalar(value: i64) -> bool {\n",
+        "    when { return (fn() => all_valid(value))() }\n",
+        "}\n",
+        "const fn plain(flag: bool) -> bool => (fn() => valid(flag))()\n",
+        "fn counted(value: i64) -> bool {\n",
+        "    inject scheduler\n",
+        "    start { schedule(scheduler, 1s) }\n",
+        "    when { return (fn() => scheduled(value) || delta_value() == 1)() }\n",
+        "}\n",
+        "fn active(value: i64) -> bool {\n",
+        "    when { return (fn(given: i64) => is_active(given))(value) }\n",
+        "}\n",
+        "fn typed(value: i64) -> bool {\n",
+        "    when { return (fn() => valid<f64>(value))() }\n",
+        "}\n",
+        "fn child(parts: list<i64>) -> bool {\n",
+        "    when { return (fn(given: list<i64>) => valid(given[0]))(parts) }\n",
+        "}\n",
+        "fn ticked(probe: signal, ref pointer: f64) -> bool {\n",
+        "    when {\n",
+        "        let first = (fn() => delta_value(probe))()\n",
+        "        let second = (fn() => delta_value(pointer))()\n",
+        "        return true\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:44 phase/endpoint.argument TIME-9",
+            "m.hgl:9:29 phase/endpoint.argument TIME-9",
+            "m.hgl:14:38 phase/endpoint.argument TIME-9",
+            "m.hgl:16:54 phase/endpoint.argument TIME-9",
+            "m.hgl:20:38 type/argument.unexpected TIME-9",
+            "m.hgl:20:48 type/argument.missing TIME-9",
+            "m.hgl:23:48 phase/endpoint.argument TIME-9",
+            "m.hgl:26:34 type/type.mismatch EXPR-5",
+            "m.hgl:29:50 phase/endpoint.argument TIME-9",
+            "m.hgl:33:30 shape/delta.unsupported_shape TYPE-16",
+            "m.hgl:34:31 phase/ref.read FN-16",
+        ]
+    );
+}
+
+/// TIME-4 and TIME-5 with FN-14: what is right where the function is
+/// written stays right in it. `valid` and `modified` of an input are
+/// metadata, and a `valid(value)` in the function guards its own read;
+/// one in a header is no selector, as it is no top-level conjunct, and
+/// the default admission stands (TIME-3); `modified([])` there selects
+/// nothing, and is not warned of. A test of a call's result proves
+/// nothing (TIME-4: "A saved bool proves nothing"), and `start` gives no
+/// input to an endpoint operation (TIME-5). A `return` in the function
+/// is the function's, and its `bool` no mismatch with what the node
+/// publishes (TIME-7).
+#[test]
+fn an_endpoint_operation_in_an_anonymous_function_keeps_its_guards_and_phases() {
+    let checked = module(concat!(
+        "fn guarded(value: i64) -> bool {\n",
+        "    when valid([]) { return (fn() => valid(value) && value > 0)() }\n",
+        "}\n",
+        "fn metadata(value: i64) -> bool {\n",
+        "    when valid([]) { return (fn() => modified(value) || valid(value))() }\n",
+        "}\n",
+        "fn header(value: i64) -> i64 {\n",
+        "    when (fn() => valid(value))() { return value }\n",
+        "}\n",
+        "fn empty(value: i64) -> i64 {\n",
+        "    when (fn() => modified([]))() { return value }\n",
+        "}\n",
+        "fn saved(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        if (fn() => valid(value))() { return value }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+        "fn started(value: i64) -> i64 {\n",
+        "    start { let seen = (fn() => modified(value))() }\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn published(value: i64) -> str {\n",
+        "    when {\n",
+        "        let seen = (fn() { return valid(value) })()\n",
+        "        return \"seen\"\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:46 phase/payload.unguarded TIME-4",
+            "m.hgl:21:33 phase/input.lifecycle TIME-5",
+        ]
+    );
+}
