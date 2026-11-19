@@ -600,6 +600,59 @@ fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
     assert_eq!(locals(&checked, "cells"), ["count: i64"]);
 }
 
+/// TST-5: a cell of a trace given to a parameter is "written as a
+/// `return` is", the parameter's type T saying which a cell is. A
+/// generic target's parameters of types written out are the same with
+/// its generic arguments in place (GEN-2): a tuple's trace there is a
+/// trace of that tuple, so a trace an earlier eval gave is taken, and a
+/// cell written as a T is read whole.
+#[test]
+fn a_tuple_trace_is_given_to_a_generic_target() {
+    let checked = module(concat!(
+        "fn two(command: i64) -> tuple<i64, i64> {\n",
+        "    when { return (command, command) }\n",
+        "}\n",
+        "fn consume<T>(pair: tuple<i64, i64?>, const tag: T) -> i64 {\n",
+        "    when all_valid(pair) { return pair[0] }\n",
+        "}\n",
+        "fn forwarded<T>(pair: tuple<i64, i64>, const tag: T) -> tuple<i64, i64> {\n",
+        "    when { return pair }\n",
+        "}\n",
+        "test given {\n",
+        "    let pairs = eval(two(command: [1, 2]))\n",
+        "    assert eval(forwarded(pair: pairs, tag: 1)) == [(1, 1), (2, 2)]\n",
+        "    assert eval(consume(pair: [(1, null)], tag: 1)) == [1]\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let mut cells = Vec::new();
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |expression| {
+        if let ExprKind::Trace(written) = &expression.kind {
+            cells.extend(
+                written
+                    .iter()
+                    .filter_map(|cell| cell.value.as_ref())
+                    .map(|value| value.ty.to_string()),
+            );
+        }
+    });
+    assert_eq!(
+        cells,
+        [
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
+            "tuple<i64, i64>",
+            "tuple<i64, i64?>",
+            "i64"
+        ]
+    );
+}
+
 /// TYPE-16: "A delta that names one member, key or position both as
 /// added or updated and as removed is malformed. A constant one is
 /// rejected (`delta.overlap`)." TIME-7: "A value that is no T and is a
