@@ -237,19 +237,14 @@ impl<'a> Typer<'a> {
         // conjuncts are written in, and for the body. What the header
         // admits is what the hook's record of it says (`header_of`),
         // which the target follows too: one decision. The condition's
-        // own reads are judged by it, so the condition is read once to
-        // learn the record, that reading taken back, and read again
-        // where it stands.
+        // own reads are judged by it (TIME-4: "A payload read under
+        // manual admission must be dominated by a successful guard"),
+        // so the record is learnt first (`header_requires`), and the
+        // condition is then read where it stands.
         if hook == Hook::When {
             let required = match &header {
-                Some(header) if self.may_reread() => {
-                    let mark = self.mark();
-                    let probe = self.condition(header);
-                    let required = self.header_of(Some(&probe)).required;
-                    self.take_back(mark, false);
-                    required
-                }
-                _ => self.header_of(None).required,
+                Some(header) => self.header_requires(header),
+                None => self.header_of(None).required,
             };
             self.admit(&required);
         }
@@ -319,6 +314,32 @@ impl<'a> Typer<'a> {
             body,
             at,
         }
+    }
+
+    /// What the `when` header `header` requires valid, by its record
+    /// (`header_of`), learnt before the header is read where it stands.
+    ///
+    /// Which conjuncts are selectors is known only once the condition is
+    /// typed: a name a declaration other than core's binds is no
+    /// selector, `c::valid(a)` through an alias of core is one, and
+    /// under a configured `&&{...}` nothing is a top-level conjunct. So
+    /// the condition is read once with nothing of it admitted, its
+    /// record taken, and that reading taken back: what it reported,
+    /// declared and assigned, and what it spent of the function's
+    /// rereads ([`super::REREADS`]), so the reading that stands is the
+    /// one there would be without it. A `when` stands only at the top of
+    /// a node's body, and is read once there, so this is one more
+    /// reading of each header and no more: it needs no bound, and the
+    /// judgment of a header's reads never falls back to the default
+    /// admission, however many handlers come before it.
+    fn header_requires(&mut self, header: &SyntaxNode) -> Vec<LocalId> {
+        let rereads = self.rereads;
+        let mark = self.mark();
+        let probe = self.condition(header);
+        let required = self.header_of(Some(&probe)).required;
+        self.take_back(mark, false);
+        self.rereads = rereads;
+        required
     }
 
     /// Holds the temporal inputs among `required`, what a `when`
