@@ -3075,18 +3075,6 @@ impl<'a> Typer<'a> {
         if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
             return;
         }
-        // The constant a member, a key or a position is, by its value
-        // (`constant_key`).
-        let constant = |module: usize, declaration: usize| match crate::read::constant_value(
-            self.program,
-            module,
-            declaration,
-            &self.constant_values,
-        ) {
-            ConstantValue::Int(value) => Index::Known(value),
-            _ => Index::Unevaluated,
-        };
-        let literal = |entry: &Expr| constant_key(entry, &constant);
         // Each entry of the property at `index`: a set's members, or a
         // dictionary's keys.
         let entries = |index: usize| -> Vec<&Expr> {
@@ -3100,14 +3088,23 @@ impl<'a> Typer<'a> {
                 })
                 .collect()
         };
-        let removed = entries(1);
-        for changed in entries(0) {
-            let Some(value) = literal(changed) else {
-                continue;
-            };
+        // The constant a member, a key or a position is, by its value,
+        // as a `switch` label's is resolved (`label_value`): `-1`, an
+        // enum's member, a module's constant, and an `i64` widened to an
+        // `f64` key as the `f64` of the same number.
+        let removed: Vec<(&Expr, Option<Label>)> = entries(1)
+            .into_iter()
+            .map(|gone| (gone, self.label_value(gone)))
+            .collect();
+        let changed: Vec<(&Expr, Label)> = entries(0)
+            .into_iter()
+            .filter_map(|changed| Some((changed, self.label_value(changed)?)))
+            .collect();
+        for (changed, value) in changed {
             let clash = removed
                 .iter()
-                .find(|gone| literal(gone).is_some_and(|other| other == value));
+                .find(|(_, other)| other.as_ref() == Some(&value))
+                .map(|(gone, _)| *gone);
             if let Some(gone) = clash {
                 let later = if gone.at.span.start > changed.at.span.start {
                     gone.at
@@ -14915,6 +14912,15 @@ impl Typer<'_> {
         if let Some(found) = label_of(label) {
             return Some(found);
         }
+        // EXPR-5, NUM-1: an `i64` widened where an `f64` is expected is
+        // the `f64` of the same number, so `1` and `1.0` of an `f64` are
+        // one value.
+        if let ExprKind::Widen(inner) = &label.kind {
+            return match self.label_within(inner, depth)? {
+                Label::Int(value) => Label::float(value as f64),
+                other => Some(other),
+            };
+        }
         if let ExprKind::Constant {
             module,
             declaration,
@@ -14976,10 +14982,12 @@ fn label_of(label: &Expr) -> Option<Label> {
         ExprKind::Literal(Value::Int(value)) => Some(Label::Int(*value)),
         ExprKind::Literal(Value::Bool(value)) => Some(Label::Bool(*value)),
         ExprKind::Literal(Value::Str(value)) => Some(Label::Str(value.clone())),
+        ExprKind::Literal(Value::Float(value)) => Label::float(*value),
         ExprKind::EnumMember { member, .. } => Some(Label::Member(*member)),
-        // `-1`: a minus over an integer literal.
+        // `-1`: a minus over an integer literal, and `-1.5` over a float.
         _ => match &negated(label)?.kind {
             ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
+            ExprKind::Literal(Value::Float(value)) => Label::float(-*value),
             _ => None,
         },
     }
@@ -15029,51 +15037,6 @@ fn whole(ty: &Type) -> bool {
         | Type::Signal
         | Type::Error
         | Type::ErrorContext => true,
-    }
-}
-
-/// The value of a constant that names a member, a key or a position
-/// (`constant_key`).
-#[derive(Debug, Clone, PartialEq)]
-enum ConstantKey {
-    /// An integer.
-    Int(i64),
-    /// A float.
-    Float(f64),
-    /// A member of an enum: its module, its declaration and its position
-    /// among the members.
-    Member(usize, usize, usize),
-    /// A literal of another kind.
-    Other(Value),
-}
-
-/// The value `entry` is where it is a constant: `-1` is the integer it
-/// negates, `.buy` the enum's member, an `i64` widened where an `f64` is
-/// expected the `f64` of the same number (EXPR-5, NUM-1), so `1` and
-/// `1.0` of an `f64` key are one key, and integers joined by arithmetic
-/// or a constant of a module as `constant_index` reads them. One reading
-/// for a delta's entries (`delta.overlap`) and a child's key (TIME-1).
-fn constant_key(entry: &Expr, constant: &dyn Fn(usize, usize) -> Index) -> Option<ConstantKey> {
-    if let Index::Known(value) = constant_index(entry, constant) {
-        return Some(ConstantKey::Int(value));
-    }
-    match &entry.kind {
-        ExprKind::Literal(Value::Null) => None,
-        ExprKind::Literal(Value::Float(value)) => Some(ConstantKey::Float(*value)),
-        ExprKind::Literal(value) => Some(ConstantKey::Other(value.clone())),
-        ExprKind::EnumMember {
-            module,
-            declaration,
-            member,
-        } => Some(ConstantKey::Member(*module, *declaration, *member)),
-        ExprKind::Widen(inner) => match constant_key(inner, constant)? {
-            ConstantKey::Int(value) => Some(ConstantKey::Float(value as f64)),
-            other => Some(other),
-        },
-        _ => match negated(entry).map(|operand| constant_key(operand, constant))? {
-            Some(ConstantKey::Float(value)) => Some(ConstantKey::Float(-value)),
-            _ => None,
-        },
     }
 }
 

@@ -20,11 +20,9 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
-use hgl_lexer::literal::{decode_float, decode_string};
-
-use super::{BOOL, ConstantKey, Fact, Index, Typer, constant_key, not_null, nullable, tokens};
-use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId, Value};
-use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
+use super::{BOOL, Fact, Typer, not_null, nullable, tokens};
+use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId};
+use crate::types::{Detail, NamedKind, Scalar, Type};
 use crate::{codes, error};
 
 /// A child of a temporal input that the program names when it is
@@ -56,16 +54,9 @@ pub(super) enum Step {
     Field(usize),
     /// A list's or a tuple's position, or a dictionary's integer key.
     Position(i64),
-    /// A dictionary's key that is a literal of another kind.
-    Key(Value),
-    /// A dictionary's key that is a member of an enum: its module, its
-    /// declaration and its position among the members.
-    Member(usize, usize, usize),
-    /// A dictionary's key that is a constant of a module whose value is
-    /// not a literal this pass reads: the constant, by its module and its
-    /// declaration. UNIT-13: "The constant has that one value wherever
-    /// it is read", so it names one child.
-    Constant(usize, usize),
+    /// A dictionary's key of another kind, by its value: a string, a
+    /// bool, a float or a member of the key's enum.
+    Key(LabelValue),
 }
 
 /// What a child of a temporal input is, as the program names it.
@@ -178,64 +169,12 @@ impl Typer<'_> {
     /// one that reads a local, a parameter, a `const` parameter among
     /// them, or a call.
     fn step(&self, of: &Type, index: &Expr) -> Option<Step> {
-        let constant = |module: usize, declaration: usize| match crate::read::constant_value(
-            self.program,
-            module,
-            declaration,
-            &self.constant_values,
-        ) {
-            ConstantValue::Int(value) => Index::Known(value),
-            _ => Index::Unevaluated,
-        };
-        let key = constant_key(index, &constant);
-        if !matches!(of, Type::Dict { .. }) {
-            return match key? {
-                ConstantKey::Int(value) => Some(Step::Position(value)),
-                _ => None,
-            };
-        }
-        match (key, &index.kind) {
-            (Some(ConstantKey::Int(value)), _) => Some(Step::Position(value)),
-            (Some(ConstantKey::Float(value)), _) => Some(Step::Key(Value::Float(value))),
-            (Some(ConstantKey::Other(value)), _) => Some(Step::Key(value)),
-            (Some(ConstantKey::Member(module, declaration, member)), _) => {
-                Some(Step::Member(module, declaration, member))
-            }
-            (
-                None,
-                ExprKind::Constant {
-                    module,
-                    declaration,
-                },
-            ) => Some(self.module_constant_key(*module, declaration)),
-            (None, _) => None,
-        }
-    }
-
-    /// The key a constant of a module names (UNIT-13): the literal it is
-    /// written as, a `str`, a `bool` or an `f64`, so that `book[KEY]` and
-    /// `book["bid"]` are one child where `KEY` is `"bid"`; and the
-    /// constant itself where it is written otherwise.
-    fn module_constant_key(&self, module: usize, declaration: &usize) -> Step {
-        let declared = &self.program.modules[module].declarations[*declaration];
-        let ty = crate::read::type_child(&declared.syntax);
-        let written = declared
-            .syntax
-            .children()
-            .find(|child| Some(child) != ty.as_ref());
-        let literal = written
-            .filter(|written| written.kind() == SyntaxKind::Literal)
-            .and_then(|written| tokens(&written).next())
-            .and_then(|token| match token.kind() {
-                SyntaxKind::Str => decode_string(token.text()).ok().map(Value::Str),
-                SyntaxKind::KwTrue => Some(Value::Bool(true)),
-                SyntaxKind::KwFalse => Some(Value::Bool(false)),
-                SyntaxKind::Float => decode_float(token.text()).ok().map(Value::Float),
-                _ => None,
-            });
-        match literal {
-            Some(value) => Step::Key(value),
-            None => Step::Constant(module, *declaration),
+        // The value the index comes to as a `switch` label's is resolved
+        // (`label_value`): one reading of a constant's value.
+        match self.label_value(index)? {
+            LabelValue::Int(value) => Some(Step::Position(value)),
+            key if matches!(of, Type::Dict { .. }) => Some(Step::Key(key)),
+            _ => None,
         }
     }
 

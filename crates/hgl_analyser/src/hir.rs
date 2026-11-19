@@ -339,6 +339,21 @@ pub enum LabelValue {
     Str(String),
     /// A member of the selector's enum, by its position.
     Member(usize),
+    /// A float, by its bits, with one zero: `-0.0` is `0.0`. A NaN is
+    /// equal to nothing (NUM-5), and has no value here.
+    Float(u64),
+}
+
+impl LabelValue {
+    /// The value of the float `value`; `None` for a NaN, which is equal
+    /// to nothing, itself among them (NUM-5).
+    pub fn float(value: f64) -> Option<LabelValue> {
+        if value.is_nan() {
+            return None;
+        }
+        let one_zero = if value == 0.0 { 0.0 } else { value };
+        Some(LabelValue::Float(one_zero.to_bits()))
+    }
 }
 
 /// One expression, with its type.
