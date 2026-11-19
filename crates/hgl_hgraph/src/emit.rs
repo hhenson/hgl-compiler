@@ -116,6 +116,9 @@ pub(crate) fn module(
         captured: 0,
         bound: Vec::new(),
         in_case: 0,
+        looped: 0,
+        ported: Vec::new(),
+        unrolling: 0,
         scheduled: None,
         candidates: BTreeSet::new(),
         propagates: false,
@@ -516,6 +519,9 @@ enum Tail {
     Nothing,
     /// Its statements end with a `return` of their own.
     Returns,
+    /// Nothing, and the graph has no output: CTRL-3, "An outputless if
+    /// has no synthetic result".
+    Outputless,
 }
 
 /// The statements of a branch of an `if` that stands as a statement:
@@ -572,6 +578,49 @@ fn continued(statements: &[Stmt], rest: &[Stmt]) -> Vec<Stmt> {
         all.extend_from_slice(rest);
     }
     all
+}
+
+/// The name a child graph of `switch_` or `map_` takes the connection
+/// named `python` by. hgraph's `switch_` and `map_` keep some names for
+/// their own parameters, and those of the function they wire with:
+/// `switch_(key, cases, ..., reload_on_ticked)`, `map_(func, ...)` and
+/// `wire(name, ..., tp, output_type)`; and a branch of `switch_` whose
+/// first parameter is `key` is given the selector there. A connection
+/// of one of those names is taken under a name of the target's own,
+/// `_taken_name`, which the child's first lines give it back
+/// (`Emitter::renamed`).
+fn taken_name(python: &str) -> String {
+    const KEPT: [&str; 7] = [
+        "key",
+        "cases",
+        "reload_on_ticked",
+        "func",
+        "name",
+        "tp",
+        "output_type",
+    ];
+    if KEPT.contains(&python) {
+        format!("_taken_{python}")
+    } else {
+        python.to_string()
+    }
+}
+
+/// Adds what `node`, a part of a child graph's statements, names to
+/// `read`, and what it declares to `declared`: a local read or
+/// assigned, and a `let`, a `var` or a loop's names.
+fn named_in(node: hgl_analyser::hir::Node, read: &mut Vec<usize>, declared: &mut Vec<usize>) {
+    use hgl_analyser::hir::Node;
+    match node {
+        Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
+        Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
+        Node::Statement(Stmt::Assign { local, .. }) => read.push(*local),
+        Node::Expression(Expr {
+            kind: ExprKind::Local(local),
+            ..
+        }) => read.push(*local),
+        _ => {}
+    }
 }
 
 /// True where every path through `statements` ends in a `return`: the
@@ -764,6 +813,18 @@ struct Emitter<'a> {
     /// How many branch graphs of a `switch_` enclose what is being
     /// written: a `return` of an ordinary value there is a constant.
     in_case: usize,
+    /// How many loops of a graph that make one child for each member
+    /// have been written: each names its child's graph with its number.
+    looped: usize,
+    /// The locals of the graph being written that the language has as
+    /// ordinary values and hgraph gives as connections: the key or the
+    /// member of a loop that makes one child for each member, which
+    /// hgraph's `map_` gives its child as a port (`Emitter::each`).
+    ported: Vec<usize>,
+    /// How many loops unrolled where the graph is built enclose what is
+    /// being written. A `return` under a branch selected at runtime
+    /// there would need the passes after it as its other path.
+    unrolling: usize,
     /// While the `when`s of a node that injects a scheduler or an alarm
     /// are written, what `scheduled()` is there (TIME-9): the name what
     /// woke the node is held under where the node is entered. `None`
@@ -2933,9 +2994,115 @@ impl Emitter<'_> {
                     Branched::Ended => break,
                 }
             }
+            if function.mode.runs() && self.valued(function, statement, depth) {
+                continue;
+            }
             self.statement(function, statement, depth);
         }
         self.text[before..].lines().count()
+    }
+
+    /// CTRL-10: "A block whose last statement is an expression has that
+    /// expression's value and type". A `let`, a `var`, an assignment to
+    /// a name or a `return` whose value is a block with statements in
+    /// it, or an `if` with such a block for a branch, in a value
+    /// function and a node's hooks, written where `statement` is one:
+    /// says whether it was. Python has no expression with statements in
+    /// it, so the statements are written in their order and the value
+    /// is given after them, in each branch of Python's `if`. "With no
+    /// `else` it is as if its `else` were null", and "A branch that
+    /// returns from the function gives the `if` no value" (CTRL-5).
+    fn valued(&mut self, function: &Function, statement: &Stmt, depth: usize) -> bool {
+        // A value that has statements in it, at any depth of blocks and
+        // `if`s; any other is written as an expression.
+        fn has_statements(value: &Expr) -> bool {
+            match &value.kind {
+                ExprKind::Block { statements, value } => {
+                    !statements.is_empty() || value.as_deref().is_some_and(has_statements)
+                }
+                ExprKind::If {
+                    then, otherwise, ..
+                } => has_statements(then) || otherwise.as_deref().is_some_and(has_statements),
+                _ => false,
+            }
+        }
+        let value = match statement {
+            Stmt::Declare {
+                value: Some(value), ..
+            }
+            | Stmt::Assign {
+                operator: None,
+                value,
+                ..
+            }
+            | Stmt::Return {
+                value: Some(value), ..
+            } if has_statements(value) => value,
+            _ => return false,
+        };
+        // The statement again, with `value` in place of its own.
+        let given = |value: Expr| -> Stmt {
+            let mut again = statement.clone();
+            match &mut again {
+                Stmt::Declare { value: place, .. } | Stmt::Return { value: place, .. } => {
+                    *place = Some(value)
+                }
+                Stmt::Assign { value: place, .. } => *place = value,
+                _ => {}
+            }
+            again
+        };
+        match &value.kind {
+            ExprKind::Block {
+                statements,
+                value: Some(inner),
+            } => {
+                let mut all = statements.clone();
+                all.push(given((**inner).clone()));
+                self.statements(function, &all, depth);
+            }
+            ExprKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let condition = self.expression(function, condition);
+                self.line(depth, &format!("if {condition}:"));
+                // A branch's statements, then the statement given its
+                // value: a block's last expression, or the branch
+                // itself; null where it has none.
+                let null = Expr {
+                    kind: ExprKind::Literal(Value::Null),
+                    ty: value.ty.clone(),
+                    at: value.at,
+                };
+                for (position, branch) in [Some(&**then), otherwise.as_deref()]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if position == 1 {
+                        self.line(depth, "else:");
+                    }
+                    let mut all = Vec::new();
+                    match branch.map(|branch| &branch.kind) {
+                        Some(ExprKind::Block { statements, value }) => {
+                            all.extend(statements.iter().cloned());
+                            if !always_returns(statements) {
+                                let value = value.as_deref().cloned().unwrap_or(null.clone());
+                                all.push(given(value));
+                            }
+                        }
+                        Some(_) => all.extend(branch.cloned().map(given)),
+                        None => all.push(given(null.clone())),
+                    }
+                    self.block(function, &all, depth + 1);
+                }
+            }
+            // A block with no value gives none: the analyser holds such
+            // a value to no place.
+            _ => self.unsupported(value.at, "this block as a value"),
+        }
+        true
     }
 
     /// An `if` or a `switch` of a graph (CTRL-13 to CTRL-15), written
@@ -2990,6 +3157,9 @@ impl Emitter<'_> {
                 let other_owned = alternative_statements(otherwise.as_deref());
                 let other_statements = other_owned.as_slice();
                 if may_return(then_statements) || may_return(other_statements) {
+                    if self.unrolled_return(*at) {
+                        return Branched::Ended;
+                    }
                     // A path that does not return goes on into the rest
                     // of the block: each branch's graph has it after
                     // its own statements.
@@ -3013,7 +3183,8 @@ impl Emitter<'_> {
                             tail: Tail::Returns,
                         },
                     ];
-                    let call = self.switched(function, condition, &branches, &result, *at, depth);
+                    let call =
+                        self.switched(function, condition, &branches, Some(&result), *at, depth);
                     self.line(depth, &format!("return {call}"));
                     return Branched::Ended;
                 }
@@ -3101,19 +3272,27 @@ impl Emitter<'_> {
                 ];
                 if self.connects(function, condition) {
                     // A `return` in a branch whose value a `let` or a
-                    // `var` is given leaves the graph, not the branch's
-                    // graph: not written here.
-                    if declared.is_some()
-                        && branch_statements
+                    // `var` is given, in its statements or in its value,
+                    // leaves the graph, not the branch's graph (CTRL-5:
+                    // "Return targets the enclosing HGL function").
+                    let returning = |value: Option<&Expr>| {
+                        value.is_some_and(|value| may_return(&[Stmt::Expr(value.clone())]))
+                    };
+                    if let Some(local) = declared
+                        && (branch_statements
                             .iter()
                             .flatten()
                             .any(|statements| may_return(statements))
+                            || returning(then_value)
+                            || other.is_some_and(|(_, value)| returning(value)))
                     {
-                        self.unsupported(
-                            *at,
-                            "a `return` in an `if` over a connection that gives a `let` or a `var` its value",
+                        return self.returned_value(
+                            function,
+                            (condition, local, *at),
+                            [Some((then_statements, then_value)), other],
+                            rest,
+                            depth,
                         );
-                        return Branched::Written;
                     }
                     let tail = |value: Option<&Expr>| match value {
                         Some(value) => Tail::Value(Box::new(value.clone())),
@@ -3135,7 +3314,8 @@ impl Emitter<'_> {
                             tail: other.map_or(Tail::Nothing, |(_, value)| tail(value)),
                         },
                     ];
-                    let call = self.switched(function, condition, &branches, &whole.ty, *at, depth);
+                    let call =
+                        self.switched(function, condition, &branches, Some(&whole.ty), *at, depth);
                     self.line(depth, &given(call));
                     if let Some(local) = declared {
                         self.bind(function, local);
@@ -3213,15 +3393,24 @@ impl Emitter<'_> {
                             all = continued(&all, rest);
                         }
                         self.statements(function, &all, depth + 1);
+                    } else if let (true, Some(target), Some(local)) =
+                        (ends && nested_return(statements), &target, declared)
+                    {
+                        // A branch with no value whose statements return
+                        // under a nested `if` or `switch`: the name is
+                        // given the absent value first, and what follows
+                        // comes after the statements, so that the nested
+                        // one has it as its other path. Nothing in the
+                        // branch reads the name it is the value of.
+                        if !always_returns(statements) {
+                            self.line(depth + 1, &format!("{target} = {absent}"));
+                            self.bind(function, local);
+                        }
+                        all = continued(statements, rest);
+                        self.statements(function, &all, depth + 1);
                     } else {
                         // A branch with no value: its statements, the
                         // absent value, and then what follows.
-                        if ends && nested_return(statements) {
-                            self.unsupported(
-                                *at,
-                                "a returning `if` or `switch` in a branch with no value of a `let`'s `if`",
-                            );
-                        }
                         self.statements(function, statements, depth + 1);
                         if !always_returns(statements) {
                             self.line(
@@ -3287,6 +3476,9 @@ impl Emitter<'_> {
                     .iter()
                     .any(|(_, statements)| may_return(statements))
                 {
+                    if self.unrolled_return(*at) {
+                        return Branched::Ended;
+                    }
                     let Some(result) = function
                         .signature
                         .and_then(|signature| signature.result.clone())
@@ -3305,7 +3497,8 @@ impl Emitter<'_> {
                             tail: Tail::Returns,
                         })
                         .collect();
-                    let call = self.switched(function, selector, &branches, &result, *at, depth);
+                    let call =
+                        self.switched(function, selector, &branches, Some(&result), *at, depth);
                     self.line(depth, &format!("return {call}"));
                     return Branched::Ended;
                 }
@@ -3316,8 +3509,168 @@ impl Emitter<'_> {
                 self.assigned_in_branches(function, selector, &branches, *at, depth);
                 Branched::Written
             }
+            // CTRL-15: "a `switch` over an ordinary value composes the
+            // one case selected": the selector is read where the graph
+            // is built, and each case is an `if` on it (`Emitter::switch`).
+            // A case with a returning `if` or `switch` in it has what
+            // follows the `switch` after its own statements, as a
+            // wiring-time `if`'s branch does.
+            Stmt::Switch {
+                selector,
+                cases,
+                default,
+                ..
+            } => {
+                let returns = cases.iter().any(|case| nested_return(&case.body))
+                    || default.as_deref().is_some_and(nested_return);
+                let ends = returns && !rest.is_empty();
+                let on = |statements: &[Stmt]| {
+                    if ends {
+                        continued(statements, rest)
+                    } else {
+                        statements.to_vec()
+                    }
+                };
+                let cases: Vec<Case> = cases
+                    .iter()
+                    .map(|case| Case {
+                        label: case.label.clone(),
+                        body: on(&case.body),
+                    })
+                    .collect();
+                let default = default.as_deref().map(on);
+                // What is bound after: what each case that reaches its
+                // end binds. One that matches no case fails (CTRL-6).
+                let before = self.bound.clone();
+                let mut joined: Option<Vec<usize>> = None;
+                let selected = format!("_selected_{depth}");
+                let written = self.expression(function, selector);
+                self.line(depth, &format!("{selected} = {written}"));
+                let bodies = cases
+                    .iter()
+                    .map(|case| Some(&case.body[..]))
+                    .chain([default.as_deref()]);
+                for (index, body) in bodies.enumerate() {
+                    self.bound = before.clone();
+                    if index < cases.len() {
+                        let label = self.expression(function, &cases[index].label);
+                        let word = if index == 0 { "if" } else { "elif" };
+                        self.line(depth, &format!("{word} {selected} == {label}:"));
+                    } else if !cases.is_empty() {
+                        self.line(depth, "else:");
+                    }
+                    let inner = if cases.is_empty() { depth } else { depth + 1 };
+                    match body {
+                        Some(body) => {
+                            self.block(function, body, inner);
+                            if !always_returns(body) {
+                                let bound = std::mem::take(&mut self.bound);
+                                joined = Some(match joined {
+                                    None => bound,
+                                    Some(mut joined) => {
+                                        joined.retain(|local| bound.contains(local));
+                                        joined
+                                    }
+                                });
+                            }
+                        }
+                        None => {
+                            self.natives = true;
+                            self.line(inner, &format!("_core.unmatched({selected})"));
+                        }
+                    }
+                }
+                self.bound = joined.unwrap_or(before);
+                if ends {
+                    Branched::Ended
+                } else {
+                    Branched::Written
+                }
+            }
             _ => Branched::No,
         }
+    }
+
+    /// Reports a `return` under a branch selected at runtime where it
+    /// stands in a loop unrolled where the graph is built, and says
+    /// whether it did. CTRL-14: such a `return` "makes the graph's
+    /// result that value while the branch is selected and the
+    /// continuation's otherwise", and the continuation of a pass is the
+    /// passes after it and what follows the loop, which this target does
+    /// not write as a branch's graph.
+    fn unrolled_return(&mut self, at: Location) -> bool {
+        if self.unrolling > 0 {
+            self.unsupported(
+                at,
+                "a `return` under a branch selected at runtime in a loop unrolled where the graph is built",
+            );
+        }
+        self.unrolling > 0
+    }
+
+    /// `let name = if condition { ... } else { ... }`, or a `var`, over
+    /// a connection, where a branch returns from the graph in its
+    /// statements or in its value. `given` is the condition, the name
+    /// and where the `if` is written; `branches` each branch's
+    /// statements and value, the second `None` where there is no
+    /// `else`.
+    ///
+    /// CTRL-14: "A `return value` in a branch of a temporal `if` makes
+    /// the graph's result that value while the branch is selected and
+    /// the continuation's otherwise". The name is the branch's: each
+    /// branch's graph has its statements, then the name given the
+    /// branch's value, and then what follows, `rest`, which returns.
+    /// The graph returns what `switch_` gives. A branch with no value
+    /// that can reach its end gives the name a connection that never
+    /// ticks (CTRL-13), which is not written here.
+    fn returned_value(
+        &mut self,
+        function: &Function,
+        (condition, local, at): (&Expr, usize, Location),
+        branches: [Option<(&[Stmt], Option<&Expr>)>; 2],
+        rest: &[Stmt],
+        depth: usize,
+    ) -> Branched {
+        if self.unrolled_return(at) {
+            return Branched::Ended;
+        }
+        let Some(result) = function
+            .signature
+            .and_then(|signature| signature.result.clone())
+        else {
+            self.unsupported(at, "a `return` in an `if` of a graph with no result");
+            return Branched::Ended;
+        };
+        let mut written = Vec::new();
+        for (key, branch) in ["True", "False"].into_iter().zip(branches) {
+            let (statements, value) = branch.unwrap_or((&[], None));
+            let statements = match value {
+                _ if always_returns(statements) => statements.to_vec(),
+                Some(value) => {
+                    let mut all = statements.to_vec();
+                    all.push(Stmt::Declare {
+                        local,
+                        value: Some(value.clone()),
+                    });
+                    continued(&all, rest)
+                }
+                None => {
+                    self.unsupported(
+                        at,
+                        "a `return` in an `if` over a connection that gives a `let` or a `var` its value, with a branch that has no value",
+                    );
+                    return Branched::Ended;
+                }
+            };
+            written.push(Branch {
+                key: key.to_string(),
+                statements,
+                tail: Tail::Returns,
+            });
+        }
+        let call = self.switched(function, condition, &written, Some(&result), at, depth);
+        self.line(depth, &format!("return {call}"));
+        Branched::Ended
     }
 
     /// An `if` or a `switch` over the connection `key` whose branches
@@ -3350,10 +3703,27 @@ impl Emitter<'_> {
             });
         }
         assigned.retain(|local| !declared.contains(local));
+        // CTRL-3: "An outputless if has no synthetic result; an omitted
+        // false branch performs no conditional work": branches that
+        // assign nothing are graphs with no output, and `switch_` gives
+        // nothing.
+        if assigned.is_empty() {
+            let branches: Vec<Branch> = branches
+                .iter()
+                .map(|(key, statements)| Branch {
+                    key: (*key).to_string(),
+                    statements: statements.to_vec(),
+                    tail: Tail::Outputless,
+                })
+                .collect();
+            let call = self.switched(function, key, &branches, None, at, depth);
+            self.line(depth, &call);
+            return;
+        }
         let [var] = assigned.as_slice() else {
             self.unsupported(
                 at,
-                "an `if` or a `switch` over a connection whose branches do not assign one `var`",
+                "an `if` or a `switch` over a connection whose branches assign more than one `var`",
             );
             return;
         };
@@ -3366,7 +3736,7 @@ impl Emitter<'_> {
                 tail: Tail::Local(*var),
             })
             .collect();
-        let call = self.switched(function, key, &branches, &result, at, depth);
+        let call = self.switched(function, key, &branches, Some(&result), at, depth);
         let target = self.place(function, *var);
         self.line(depth, &format!("{target} = {call}"));
         self.bind(function, *var);
@@ -3374,7 +3744,8 @@ impl Emitter<'_> {
 
     /// hgraph's `switch_` over the connection `key`, with a graph for
     /// each branch, written before the statement at `depth`. Gives the
-    /// call.
+    /// call. `result` is what each branch's graph gives, `None` for
+    /// branches with no output (CTRL-3).
     ///
     /// A child graph is given what it reads: every branch's graph takes
     /// the connections any branch reads that are bound outside it, by
@@ -3388,61 +3759,38 @@ impl Emitter<'_> {
         function: &Function,
         key: &Expr,
         branches: &[Branch],
-        result: &Type,
+        result: Option<&Type>,
         at: Location,
         depth: usize,
     ) -> String {
-        use hgl_analyser::hir::{Node, walk_statement_nodes};
+        use hgl_analyser::hir::walk_statement_nodes;
         self.hgraph = true;
         let number = self.switched;
         self.switched += 1;
         // What each branch's graph takes: every connection any branch
-        // names, read or assigned, at any depth, that has a value where
-        // the `switch_` is written (`Emitter::bound`), less the names a
-        // branch declares itself. One a branch does not need is
-        // harmless; one with no value yet is never given.
+        // names (`taken`).
         let mut read: Vec<usize> = Vec::new();
         let mut declared: Vec<usize> = Vec::new();
         for branch in branches {
-            let mut visit = |node: Node| match node {
-                Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
-                Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
-                Node::Statement(Stmt::Assign { local, .. }) => read.push(*local),
-                Node::Expression(Expr {
-                    kind: ExprKind::Local(local),
-                    ..
-                }) => read.push(*local),
-                _ => {}
-            };
+            let mut visit = |node| named_in(node, &mut read, &mut declared);
             walk_statement_nodes(&branch.statements, &mut visit);
             match &branch.tail {
                 Tail::Value(value) => value.walk_nodes(&mut visit),
                 // A branch that does not assign the `var` gives the
                 // binding it had before.
                 Tail::Local(var) => read.push(*var),
-                Tail::Nothing | Tail::Returns => {}
+                Tail::Nothing | Tail::Returns | Tail::Outputless => {}
             }
         }
-        read.retain(|local| {
-            !declared.contains(local)
-                && self.bound.contains(local)
-                && function.locals[*local].category == ValueCategory::Connection
+        let read = self.taken(function, read, &declared);
+        let annotation = result.map(|result| {
+            self.annotation(result, true, at)
+                .unwrap_or_else(|| "_py.object".to_string())
         });
-        read.sort_unstable();
-        read.dedup();
-        let annotation = self
-            .annotation(result, true, at)
-            .unwrap_or_else(|| "_py.object".to_string());
-        let parameters: Vec<String> = read
-            .iter()
-            .map(|&local| {
-                let declared = &function.locals[local];
-                let of = self
-                    .annotation(&declared.ty, true, at)
-                    .unwrap_or_else(|| "_py.object".to_string());
-                format!("{}: {of}", name(&declared.name))
-            })
-            .collect();
+        let returns = annotation
+            .as_ref()
+            .map_or(String::new(), |annotation| format!(" -> {annotation}"));
+        let parameters = self.parameters_of(function, &read, at);
         let mut cases = Vec::new();
         let outside = std::mem::replace(&mut self.bound, read.clone());
         for (position, branch) in branches.iter().enumerate() {
@@ -3453,8 +3801,9 @@ impl Emitter<'_> {
             self.line(depth, "@_hg.graph");
             self.line(
                 depth,
-                &format!("def {graph}({}) -> {annotation}:", parameters.join(", ")),
+                &format!("def {graph}({}){returns}:", parameters.join(", ")),
             );
+            self.renamed(function, &read, depth + 1);
             // What the branch gives is the last of its statements, so
             // that an `if` or a `switch` among them is lowered with it.
             let mut all = branch.statements.clone();
@@ -3471,13 +3820,20 @@ impl Emitter<'_> {
                     }),
                     at,
                 }),
-                Tail::Nothing | Tail::Returns => {}
+                Tail::Nothing | Tail::Returns | Tail::Outputless => {}
             }
             self.in_case += 1;
-            self.statements(function, &all, depth + 1);
+            let lines = self.statements(function, &all, depth + 1);
             self.in_case -= 1;
-            if matches!(branch.tail, Tail::Nothing) && !always_returns(&all) {
+            if let (Tail::Nothing, Some(annotation)) = (&branch.tail, &annotation)
+                && !always_returns(&all)
+            {
                 self.line(depth + 1, &format!("return _hg.nothing({annotation})"));
+            } else if lines == 0 {
+                // CTRL-3: "an omitted false branch performs no
+                // conditional work": a graph with nothing in it, as
+                // `switch_` needs a graph for each key it is given.
+                self.line(depth + 1, "pass");
             }
             cases.push(format!("{}: {graph}", branch.key));
         }
@@ -3486,9 +3842,57 @@ impl Emitter<'_> {
         let mut given = vec![key, format!("{{{}}}", cases.join(", "))];
         given.extend(read.iter().map(|&local| {
             let python = name(&function.locals[local].name);
-            format!("{python}={python}")
+            format!("{}={python}", taken_name(&python))
         }));
         format!("_hg.switch_({})", given.join(", "))
+    }
+
+    /// What a child graph takes of the graph it is written in, from
+    /// what its statements name, `read`, and declare, `declared`
+    /// ([`named_in`]): every connection named, read or assigned, at any
+    /// depth, that has a value where the child is written
+    /// (`Emitter::bound`), less the names the child declares itself.
+    /// One the child does not need is harmless; one with no value yet is
+    /// never given. A key that hgraph gives as a port is a connection
+    /// here (`Emitter::ported`).
+    fn taken(&self, function: &Function, mut read: Vec<usize>, declared: &[usize]) -> Vec<usize> {
+        read.retain(|local| {
+            !declared.contains(local)
+                && self.bound.contains(local)
+                && (function.locals[*local].category == ValueCategory::Connection
+                    || self.ported.contains(local))
+        });
+        read.sort_unstable();
+        read.dedup();
+        read
+    }
+
+    /// The parameters of a child graph that takes the connections
+    /// `taken`, each by its name, with its annotation.
+    fn parameters_of(&mut self, function: &Function, taken: &[usize], at: Location) -> Vec<String> {
+        taken
+            .iter()
+            .map(|&local| {
+                let declared = &function.locals[local];
+                let of = self
+                    .annotation(&declared.ty, true, at)
+                    .unwrap_or_else(|| "_py.object".to_string());
+                format!("{}: {of}", taken_name(&name(&declared.name)))
+            })
+            .collect()
+    }
+
+    /// The first lines of a child graph that takes the connections
+    /// `taken`: each one taken under a name of the target's own
+    /// ([`taken_name`]) is given its own name.
+    fn renamed(&mut self, function: &Function, taken: &[usize], depth: usize) {
+        for &local in taken {
+            let python = name(&function.locals[local].name);
+            let given = taken_name(&python);
+            if given != python {
+                self.line(depth, &format!("{python} = {given}"));
+            }
+        }
     }
 
     /// True where nothing else holds what `value` gives
@@ -3931,6 +4335,53 @@ impl Emitter<'_> {
                 };
                 self.line(depth, &format!("yield ({time}, {value})"));
             }
+            // CTRL-15: in a graph "The condition of a `while` is an
+            // ordinary `bool`, tested while the graph is built": Python's
+            // own loop, which composes its body on each pass.
+            Stmt::While {
+                condition: Some(condition),
+                body,
+                ..
+            } if function.mode == Mode::Graph => {
+                let condition = self.expression(function, condition);
+                self.line(depth, &format!("while {condition}:"));
+                let before = self.bound.clone();
+                self.unrolling += 1;
+                self.block(function, body, depth + 1);
+                self.unrolling -= 1;
+                self.bound = before;
+            }
+            // CTRL-15: a `for` of a graph over ordinary data "composes its
+            // body once for each element", and over a connection of
+            // `list<T, N>` "composes its body `N` times": Python's own
+            // loop, over the value or over hgraph's `TSL`, whose ports
+            // are its positions. Over a connection of `list<T>`,
+            // `set<T>`, or `dict<K, V>` "it makes one child for each
+            // member" (`Emitter::each`).
+            Stmt::For {
+                names,
+                sequence,
+                body,
+                at,
+            } if function.mode == Mode::Graph => {
+                let fixed = matches!(
+                    &sequence.ty,
+                    Type::List { size: Some(size), .. }
+                        if !matches!(size.value, ConstantValue::Unbounded)
+                );
+                if self.connects(function, sequence) && !fixed {
+                    self.each(function, names, sequence, body, *at, depth);
+                } else {
+                    let before = self.bound.clone();
+                    for &name in names.iter() {
+                        self.bind(function, name);
+                    }
+                    self.unrolling += 1;
+                    self.for_loop(function, (names, sequence), body, *at, depth);
+                    self.unrolling -= 1;
+                    self.bound = before;
+                }
+            }
             // CTRL-12: "`while condition { ... }` repeats its body while
             // the condition holds". The form with no condition is a
             // source's (SOURCE-4: "omitted condition is unbounded").
@@ -3999,7 +4450,10 @@ impl Emitter<'_> {
 
     /// CTRL-12: "`for item in items` runs its body for each element of
     /// a list, in index order, or of a set, and `for key, value in
-    /// entries` for each key and value of a dictionary."
+    /// entries` for each key and value of a dictionary." CTRL-8: "During
+    /// node evaluation, traversal uses current values ... Lists preserve
+    /// index order": in a hook a temporal input is read as its current
+    /// value (`port_value`), a list's a tuple in index order.
     ///
     /// Python's `for` reads what it loops over once, where the loop
     /// begins: a `var` the body assigns is not what is looped over.
@@ -4043,6 +4497,197 @@ impl Emitter<'_> {
             }
         }
         self.block(function, body, depth + 1);
+    }
+
+    /// A `for` of a graph over a connection of `list<T>`, `set<T>` or
+    /// `dict<K, V>`. CTRL-15: "it makes one child for each member
+    /// (CTRL-7): `item` is a connection of `T` for a list and an
+    /// ordinary `T`, the member itself, for a set; `key` is an ordinary
+    /// `K` and `value` a connection of `V` for a dictionary." CTRL-7:
+    /// "Update keeps the child; removal stops it; reinsertion creates
+    /// fresh state. Captured temporal connections are bound whole and
+    /// add no membership."
+    ///
+    /// The body is a graph of its own, `_each_N`, and hgraph's `map_`
+    /// runs one of it for each key of a `TSD` it is given, keeps it
+    /// while the key stays and stops it where the key is removed; a key
+    /// added again has a child that starts afresh. A dictionary's `TSD`
+    /// is given as it is, and each child has its value's port. A set's
+    /// `TSS` is the keys, `__keys__`. A list, which ticks whole here
+    /// (`list_annotation`), is made hgraph's `TSD` of its positions by
+    /// hgraph's `convert`: a position that changes ticks, one past the
+    /// list's end is removed. hgraph gives a child its key as a port,
+    /// `__key_arg__`, and so a key or a member is read only as the whole
+    /// argument of a temporal parameter (`key_read_as_value`), where a
+    /// port is what is taken. The connections the body reads from
+    /// outside it are given whole, `_hg.pass_through`.
+    fn each(
+        &mut self,
+        function: &Function,
+        names: &[usize],
+        sequence: &Expr,
+        body: &[Stmt],
+        at: Location,
+        depth: usize,
+    ) {
+        use hgl_analyser::hir::walk_statement_nodes;
+        // The key hgraph gives each child, and the member's own port.
+        let (key, member) = match (&sequence.ty, names) {
+            (Type::Set(_), [member]) => (Some(*member), None),
+            (Type::Dict { .. }, [key, value]) => (Some(*key), Some(*value)),
+            (Type::List { .. }, [item]) => (None, Some(*item)),
+            _ => {
+                self.unsupported(at, "this loop");
+                return;
+            }
+        };
+        if let Some(key) = key
+            && let Some(read) = self.key_read_as_value(key, body)
+        {
+            self.unsupported(
+                read,
+                "a loop's key or member read other than as the argument of a temporal parameter",
+            );
+            return;
+        }
+        self.hgraph = true;
+        let number = self.looped;
+        self.looped += 1;
+        // What the child takes of the graph it is written in, less the
+        // loop's own names.
+        let mut read: Vec<usize> = Vec::new();
+        let mut declared: Vec<usize> = names.to_vec();
+        walk_statement_nodes(body, &mut |node| named_in(node, &mut read, &mut declared));
+        let key = key.filter(|key| read.contains(key));
+        let taken = self.taken(function, read, &declared);
+        // The child's parameters: the key, where the body reads it, the
+        // member's port, and what it takes.
+        let mut parameters = Vec::new();
+        let mut own = Vec::new();
+        if let Some(key) = key {
+            // hgraph's key is a `TS` of a scalar.
+            let ty = &function.locals[key].ty;
+            if !publishes_whole(ty) || is_nullable(ty) {
+                self.unsupported(at, &format!("a loop's key or member of type `{ty}`"));
+            }
+            let of = self
+                .annotation(ty, true, at)
+                .unwrap_or_else(|| "_py.object".to_string());
+            parameters.push(format!("{}: {of}", name(&function.locals[key].name)));
+            own.push(key);
+        }
+        let mut multiplexed = None;
+        if let Some(member) = member {
+            let child = match &sequence.ty {
+                Type::Dict { value, .. } => self.child_annotation(&sequence.ty, value, at),
+                // An element of a list that ticks whole publishes whole.
+                Type::List { element, .. } if !is_nullable(element) => {
+                    self.annotation(element, true, at)
+                }
+                _ => {
+                    self.unsupported(at, &format!("a loop over `{}`", sequence.ty));
+                    None
+                }
+            };
+            let child = child.unwrap_or_else(|| "_py.object".to_string());
+            let python = taken_name(&name(&function.locals[member].name));
+            parameters.push(format!("{python}: {child}"));
+            own.push(member);
+            multiplexed = Some((python, child));
+        }
+        parameters.extend(self.parameters_of(function, &taken, at));
+        let graph = format!("_each_{number}");
+        self.line(depth, "@_hg.graph");
+        self.line(depth, &format!("def {graph}({}):", parameters.join(", ")));
+        self.renamed(function, &own[key.iter().len()..], depth + 1);
+        self.renamed(function, &taken, depth + 1);
+        own.extend(&taken);
+        // The child has its parameters bound, and its key is a port.
+        let outside = std::mem::replace(&mut self.bound, own);
+        let unrolling = std::mem::take(&mut self.unrolling);
+        let ported = self.ported.len();
+        self.ported.extend(key);
+        self.block(function, body, depth + 1);
+        self.ported.truncate(ported);
+        self.unrolling = unrolling;
+        self.bound = outside;
+        let over = self.expression(function, sequence);
+        let mut given = vec![graph];
+        match (&sequence.ty, multiplexed) {
+            (Type::Set(_), _) => given.push(format!("__keys__={over}")),
+            (Type::List { .. }, Some((member, child))) => given.push(format!(
+                "{member}=_hg.convert[_hg.TSD[_py.int, {child}]]({over})"
+            )),
+            (_, Some((member, _))) => given.push(format!("{member}={over}")),
+            (_, None) => {}
+        }
+        let key_arg = key.map_or(String::new(), |key| name(&function.locals[key].name));
+        given.push(format!("__key_arg__={}", string(&key_arg)));
+        given.extend(taken.iter().map(|&local| {
+            let python = name(&function.locals[local].name);
+            format!("{}=_hg.pass_through({python})", taken_name(&python))
+        }));
+        self.line(depth, &format!("_hg.map_({})", given.join(", ")));
+    }
+
+    /// Where `body`, the body of a loop that makes one child for each
+    /// member, reads `key`, the loop's key or member, other than as the
+    /// whole argument of a temporal parameter of a temporal function:
+    /// `None` where it reads it only so. hgraph's `map_` gives a child
+    /// its key as a port, and a port is what such a parameter takes; an
+    /// ordinary value given one is a constant of it (FN-3), which ticks
+    /// where the child starts, as the key's port does. Anywhere else the
+    /// key would be a value known where the child is built, which
+    /// hgraph does not give.
+    fn key_read_as_value(&self, key: usize, body: &[Stmt]) -> Option<Location> {
+        use hgl_analyser::hir::{Node, walk_statement_nodes};
+        let program = self.program;
+        let mut reads = Vec::new();
+        let mut given = Vec::new();
+        walk_statement_nodes(body, &mut |node| match node {
+            Node::Expression(Expr {
+                kind: ExprKind::Local(local),
+                at,
+                ..
+            }) if *local == key => reads.push(*at),
+            Node::Expression(Expr {
+                kind:
+                    ExprKind::Call {
+                        callee:
+                            Callee::Function {
+                                module,
+                                declaration,
+                                ..
+                            },
+                        arguments,
+                        ..
+                    },
+                ..
+            }) => {
+                let declared = &program.modules[*module];
+                let temporal =
+                    declared.declarations[*declaration].kind.role() == Some(Role::Temporal);
+                let Some(Detail::Callable(signature)) = declared.details.get(*declaration) else {
+                    return;
+                };
+                for argument in arguments {
+                    let taken = argument
+                        .parameter
+                        .and_then(|index| signature.parameters.get(index))
+                        .is_some_and(|parameter| {
+                            !parameter.constant && !parameter.var && parameter.pack.is_none()
+                        });
+                    if temporal
+                        && taken
+                        && matches!(argument.value.kind, ExprKind::Local(local) if local == key)
+                    {
+                        given.push(argument.value.at);
+                    }
+                }
+            }
+            _ => {}
+        });
+        reads.into_iter().find(|at| !given.contains(at))
     }
 
     /// CTRL-6: "Switch labels are typed source constants, compared by
@@ -4417,6 +5062,16 @@ impl Emitter<'_> {
                 let then = self.expression(function, then);
                 let otherwise = self.expression(function, otherwise);
                 format!("({then} if {condition} else {otherwise})")
+            }
+            // CTRL-10: "With no `else` it is as if its `else` were null".
+            ExprKind::If {
+                condition,
+                then,
+                otherwise: None,
+            } => {
+                let condition = self.expression(function, condition);
+                let then = self.expression(function, then);
+                format!("({then} if {condition} else None)")
             }
             ExprKind::Tuple(entries)
                 if function.mode == Mode::Graph && self.connects(function, value) =>
