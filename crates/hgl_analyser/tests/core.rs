@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use common::{Checked, check};
+use common::{Checked, check, locals};
 use hgl_analyser::hir::{Callee, ExprKind, Stmt, ValueCategory};
 use hgl_analyser::{DeclarationKind, Role};
 
@@ -63,24 +63,6 @@ fn the_core_supplied_is_every_file_of_the_pinned_core() {
         pinned.keys().collect::<Vec<_>>()
     );
     assert_eq!(supplied, pinned);
-}
-
-/// The locals of `name` of module `m` as `local: type`, parameters
-/// first.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index]
-        .as_ref()
-        .expect("it has a body")
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
 }
 
 /// NUM-3, NUM-9: "Division with `zero: .ieee` or `zero: .nan` returns

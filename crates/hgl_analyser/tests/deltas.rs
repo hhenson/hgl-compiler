@@ -5,32 +5,8 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{locals, module};
 use hgl_analyser::hir::{ExprKind, Stmt};
-
-/// Checks one file, `m.hgl`, of module `m`, with the core the compiler
-/// is built with. The `module` line is added, so the text given starts
-/// on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The locals of `name`, as `local: type`.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index]
-        .as_ref()
-        .expect("it has a body")
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
-}
 
 /// TYPE-16: "`delta<T>` is the ordinary value type of what a temporal
 /// value of T publishes in one cycle. The table gives it for each T.
