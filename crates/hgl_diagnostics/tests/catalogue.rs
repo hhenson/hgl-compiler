@@ -113,7 +113,19 @@ fn the_warning_codes_are_the_chapters_rows() {
     }
 }
 
-/// "The source and execution catalogs are disjoint."
+/// Codes the pinned chapter lists both as a source code and as an
+/// execution code, though it says "The source and execution catalogs are
+/// disjoint". Listed here, each is checked to be in both lists, so the
+/// list cannot outlive its reason. Each is a contradiction for the
+/// specification to settle, not this crate.
+///
+/// TIME-8: "A duration that is not admitted ... rejects where the
+/// compiler sees its value ... and elsewhere fails the call as the
+/// program runs. Proposed: both with the code
+/// `schedule.non_positive_duration`", and both catalogues have its row.
+const IN_BOTH: &[&str] = &["schedule.non_positive_duration"];
+
+/// "The source and execution catalogs are disjoint", but for `IN_BOTH`.
 #[test]
 fn no_execution_code_is_a_source_code() {
     let chapter = chapter();
@@ -131,6 +143,13 @@ fn no_execution_code_is_a_source_code() {
     assert_eq!(catalogue::EXECUTION_CODES, execution);
     for code in execution {
         assert!(catalogue::is_execution(&code));
-        assert_eq!(catalogue::category_of(&code), None, "{code}");
+        if IN_BOTH.contains(&code.as_str()) {
+            assert!(catalogue::category_of(&code).is_some(), "{code}");
+        } else {
+            assert_eq!(catalogue::category_of(&code), None, "{code}");
+        }
+    }
+    for code in IN_BOTH {
+        assert!(catalogue::is_execution(code), "{code}");
     }
 }

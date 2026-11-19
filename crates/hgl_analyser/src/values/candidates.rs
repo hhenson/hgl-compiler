@@ -952,7 +952,6 @@ fn specificity(left: &Type, right: &Type) -> Specific {
         }
         (Type::Nullable(left), Type::Nullable(right))
         | (Type::Set(left), Type::Set(right))
-        | (Type::Ref(left), Type::Ref(right))
         | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))

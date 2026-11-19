@@ -1,0 +1,9 @@
+module m
+const fn later(at: zoned_datetime, by: duration) -> zoned_datetime => at + by
+test zoned_datetimes_are_compared_by_core {
+    let first = @2026-10-25T01:30+01:00[Europe/London]
+    let second = @2026-10-25T01:30+00:00[Europe/London]
+    assert first != second
+    assert later(first, 1h) == second
+    assert first =={utc: true} @2026-10-25T00:30+00:00[UTC]
+}

@@ -1598,7 +1598,6 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             .for_each(|element| struct_applications(element, found)),
         Type::List { element, .. } => struct_applications(element, found),
         Type::Set(inner)
-        | Type::Ref(inner)
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)

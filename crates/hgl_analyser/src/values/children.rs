@@ -20,7 +20,7 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
-use super::fit::{not_null, nullable};
+use super::fit::{not_null, nullable, window_value};
 use super::{BOOL, Fact, Typer};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId};
 use crate::syntax::tokens;
@@ -258,10 +258,26 @@ impl Typer<'_> {
         if named {
             return value;
         }
+        // FN-16: "A `ref` parameter and its children, `xs[i]` and
+        // `quote.bid`, are endpoints, not values ... A read of the value
+        // ... of one rejects". EXPR-7: "A structural projection of a
+        // `ref` parameter selects its child and reads no payload": what
+        // is read here is the child's value.
+        if let Some(input) = self
+            .input_of(&value)
+            .filter(|&input| self.is_reference(input))
+            && self.child_of(&value).is_some()
+        {
+            let written = node.text().to_string();
+            self.ref_read(input, Some(&written), false, value.at);
+            return value;
+        }
+        // TYPE-11: a window's value, "read in a hook ... is a `list<V>` of
+        // the values held, oldest first", a child's among them.
         match self.child_of(&value) {
             None => value,
             Some(Child::Runtime) => {
-                let (ty, at) = (value.ty.clone(), value.at);
+                let (ty, at) = (window_value(&value.ty), value.at);
                 Expr {
                     kind: ExprKind::CheckedChild {
                         read: Box::new(value),
@@ -273,7 +289,10 @@ impl Typer<'_> {
             }
             Some(Child::Named(path)) => {
                 self.admit_child(path, node, value.at);
-                value
+                Expr {
+                    ty: window_value(&value.ty),
+                    ..value
+                }
             }
         }
     }
@@ -389,21 +408,48 @@ impl Typer<'_> {
             return (ExprKind::Unread, ty);
         };
         self.child_in_start(at, &child);
-        // TIME-9: "`all_valid` takes only a collection; another endpoint
-        // is rejected (`endpoint.argument`)".
+        // TIME-9: "`all_valid` takes only a collection or a window;
+        // another endpoint is rejected (`endpoint.argument`)".
         if operation == EndpointOperation::AllValid
             && !collection(&child.ty)
-            && !matches!(child.ty, Type::Parameter { .. } | Type::Unknown)
+            && !matches!(
+                child.ty,
+                Type::RollingWindow { .. } | Type::Parameter { .. } | Type::Unknown
+            )
         {
             self.diagnostics.emit(
                 error(
                     Category::Phase,
                     codes::ENDPOINT_ARGUMENT,
                     child.at,
-                    format!("`all_valid` takes a collection, and `{}` is none", child.ty),
+                    format!(
+                        "`all_valid` takes a collection or a window, and `{}` is neither",
+                        child.ty
+                    ),
                     "TIME-9",
                 )
-                .with_note("a collection is a list, a tuple, a struct or a dictionary"),
+                .with_note(
+                    "a collection is a list, a tuple, a struct or a dictionary; a window is a \
+                     `rolling_window`",
+                ),
+            );
+        }
+        // FN-16: a child of a `ref` parameter is an endpoint, and "the
+        // endpoint operations take them (TIME-9), `delta_value` aside".
+        let reference = self
+            .input_of(&child)
+            .filter(|&input| self.is_reference(input));
+        if operation == EndpointOperation::DeltaValue
+            && let Some(input) = reference
+        {
+            let written = super::endpoint_argument(given).text().to_string();
+            self.ref_read(input, Some(&written), true, child.at);
+            return (
+                ExprKind::ChildEndpoint {
+                    operation,
+                    child: Box::new(child),
+                },
+                Type::Unknown,
             );
         }
         // TIME-1: "a read of a child's value, or of its `delta_value`,
@@ -417,10 +463,10 @@ impl Typer<'_> {
         }
         let ty = match operation {
             // END-3: "`delta_value(x)` returns what `x` published this
-            // cycle, a `delta<T>` for an endpoint of T". TYPE-16: "`ref<V>`,
-            // `signal`: None".
+            // cycle, a `delta<T>` for an endpoint of T". TYPE-16:
+            // "`signal`: None".
             EndpointOperation::DeltaValue => {
-                if matches!(not_null(Some(&child.ty)), Some(Type::Ref(_) | Type::Signal)) {
+                if matches!(not_null(Some(&child.ty)), Some(Type::Signal)) {
                     self.diagnostics.emit(
                         error(
                             Category::Shape,
@@ -429,10 +475,7 @@ impl Typer<'_> {
                             format!("`{}` has no delta", child.ty),
                             "TYPE-16",
                         )
-                        .with_note(
-                            "a `ref` designates an endpoint and a `signal` has no payload: \
-                             neither publishes a value of its own",
-                        ),
+                        .with_note("a `signal` has no payload, and publishes no value of its own"),
                     );
                     Type::Unknown
                 } else {

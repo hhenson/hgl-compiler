@@ -454,7 +454,10 @@ impl<'a> Typer<'a> {
                 } else {
                     value
                 };
-                if !traced && holds_trace(&value.ty) {
+                // FN-12: a window's connection given to a value
+                // function's `list<V>` in composition (`lifted_window`).
+                let lifted = self.lifted_window(&slot.ty, slot.listed, &value, takes);
+                if lifted || (!traced && holds_trace(&value.ty)) {
                     value
                 } else {
                     let place = format!("the {} `{}`", takes.noun(), slot.name);

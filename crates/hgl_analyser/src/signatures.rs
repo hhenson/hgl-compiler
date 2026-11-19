@@ -5,7 +5,9 @@
 //! * a generic value parameter's default is of the parameter's type
 //!   (GEN-13, GEN-2);
 //! * an option's name is one kind across the candidates of an operator
-//!   (GEN-6).
+//!   (GEN-6);
+//! * a `var` parameter is one of a value function or a value candidate
+//!   (FN-15), and a `ref` mark one of a node (FN-16).
 
 use std::collections::HashMap;
 
@@ -15,7 +17,7 @@ use hgl_source::FileId;
 
 use crate::constant::{Constants, Fault, Scope};
 use crate::declared::names_parameter;
-use crate::program::{Binding, DeclarationKind, Program, Role};
+use crate::program::{Binding, Declaration, DeclarationKind, Phase, Program, Role};
 use crate::syntax::{child, has_token};
 use crate::types::{Detail, GenericKind, NamedKind, Type};
 use crate::values::generic_default;
@@ -27,6 +29,100 @@ pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
     generic_defaults(program, diagnostics);
     option_kinds(program, diagnostics);
     var_parameters(program, diagnostics);
+    ref_marks(program, diagnostics);
+}
+
+/// FN-16: "A node (FN-2, NATIVE-3) may mark a temporal parameter `ref`,
+/// `ref low: f64`, and its result, `-> ref f64` ... A value function, a
+/// graph, and an operator mark none, and a mark there rejects: an
+/// operator gives the parameters every candidate takes, and a candidate
+/// that is a node marks its own ... Proposed: ... a mark on what is no
+/// node with `ref.position`." Each mark is reported at its `ref`.
+///
+/// A native temporal declaration, which has no body, is a node or a
+/// graph by the implementation that completes it (NATIVE-3: "`{}`
+/// denotes a graph; `{ when; }` denotes a node"), and takes the mark.
+fn ref_marks(program: &Program, diagnostics: &mut Diagnostics) {
+    for module in &program.modules {
+        for (index, declaration) in module.declarations.iter().enumerate() {
+            let marks = ref_tokens(&declaration.syntax);
+            if marks.is_empty() {
+                continue;
+            }
+            let phase = module.phases.get(index).copied().flatten();
+            let what = match declaration.kind {
+                DeclarationKind::Operator => Some("an operator"),
+                DeclarationKind::Function(Role::Value)
+                | DeclarationKind::NativeFunction(Role::Value)
+                | DeclarationKind::NativeImplementation(Role::Value)
+                | DeclarationKind::NativeCandidateImplementation(Role::Value) => {
+                    Some("a value function")
+                }
+                kind if matches!(kind.candidate(), Some((Role::Value, _))) => {
+                    Some("a value candidate of an operator")
+                }
+                DeclarationKind::Function(Role::Temporal)
+                | DeclarationKind::Implementation(Role::Temporal, _) => {
+                    (phase == Some(Phase::Graph)).then_some("a graph")
+                }
+                DeclarationKind::NativeImplementation(Role::Temporal)
+                | DeclarationKind::NativeCandidateImplementation(Role::Temporal) => {
+                    (!native_node(declaration)).then_some("a graph")
+                }
+                _ => None,
+            };
+            let Some(what) = what else {
+                continue;
+            };
+            let file = module.files[declaration.file].file;
+            for mark in marks {
+                diagnostics.emit(
+                    error(
+                        Category::FunctionKind,
+                        codes::REF_POSITION,
+                        Location::new(file, mark.span()),
+                        format!(
+                            "`{}` is {what}, and only a node marks a parameter or its result `ref`",
+                            declaration.name
+                        ),
+                        "FN-16",
+                    )
+                    .with_note(
+                        "a node holds `state`, `cache`, `inject`, `start`, `when` or `stop`; \
+                         a graph gives a connection to a `ref` parameter as it is",
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Each `ref` written before a parameter of `declaration` or before its
+/// result type, in the order written (FN-16).
+fn ref_tokens(declaration: &hgl_parser::SyntaxNode) -> Vec<hgl_parser::SyntaxToken> {
+    let result = crate::syntax::child(declaration, hgl_parser::SyntaxKind::ReturnType);
+    crate::read::parameters(declaration)
+        .iter()
+        .chain(result.iter())
+        .filter_map(|node| {
+            crate::syntax::tokens(node).find(|token| token.kind() == hgl_parser::SyntaxKind::KwRef)
+        })
+        .collect()
+}
+
+/// NATIVE-3: true where a native temporal implementation part is a node,
+/// "`{ when; }` denotes a node", and not a graph, "`{}` denotes a
+/// graph".
+fn native_node(declaration: &Declaration) -> bool {
+    crate::syntax::child(
+        &declaration.syntax,
+        hgl_parser::SyntaxKind::NativeContractBody,
+    )
+    .into_iter()
+    .flat_map(|body| body.children())
+    .filter(|hook| hook.kind() == hgl_parser::SyntaxKind::NativeHook)
+    .filter_map(|hook| hook.first_token())
+    .any(|keyword| keyword.kind() == hgl_parser::SyntaxKind::KwWhen)
 }
 
 /// FN-15: "A value function, a `const fn` or a native one, may mark a

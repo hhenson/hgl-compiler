@@ -1,0 +1,13 @@
+module m
+fn seen(ref xs: list<i64, 3>, idx: i64) -> bool {
+    when {
+        if valid(xs[idx]) { return true }
+        return all_valid(xs)
+    }
+}
+fn keyed(key: str, prices: dict<str, i64>) -> ref i64 {
+    when modified(key) { return prices[key] }
+}
+fn deep(idx: i64, ref xs: list<i64, 3>) -> ref i64 {
+    when { return xs[idx] }
+}

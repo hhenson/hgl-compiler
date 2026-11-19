@@ -1,0 +1,8 @@
+module m
+struct Quote { bid: i64 }
+struct Maybe {
+    quote: atomic<Quote>?
+}
+fn maybe(value: Maybe) -> i64 {
+    when { return 1 }
+}

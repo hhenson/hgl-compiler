@@ -291,6 +291,26 @@ impl<'a> Function<'a> {
             })
     }
 
+    /// True when `local` is a temporal input of the node being written
+    /// that is marked `ref` (FN-16): an endpoint whose value is not
+    /// read, hgraph's `REF` input.
+    fn is_reference(&self, local: usize) -> bool {
+        let declared = &self.locals[local];
+        declared.kind == LocalKind::Parameter
+            && self.signature.is_some_and(|signature| {
+                signature.parameters.iter().any(|parameter| {
+                    parameter.name == declared.name && !parameter.constant && parameter.reference
+                })
+            })
+    }
+
+    /// True when `local` is an endpoint the node writes as hgraph's `REF`:
+    /// a `ref` parameter, or `out` of a `ref` result (FN-16).
+    fn designates(&self, local: usize) -> bool {
+        self.is_reference(local)
+            || (self.is_out(local) && self.signature.is_some_and(|signature| signature.reference))
+    }
+
     /// True when `local` is the node's `inject out` (TIME-7).
     fn is_out(&self, local: usize) -> bool {
         let declared = &self.locals[local];
@@ -1287,6 +1307,19 @@ impl<'a> Emitter<'a> {
             }
             // A compound assignment's value is already the symbol with
             // the target as its left operand.
+            // FN-16, proposed: "`out = items[idx]` designates as `return
+            // items[idx]` does": the output is given the reference, where
+            // it holds another (`_core.designate`).
+            Stmt::Assign {
+                local,
+                value: assigned,
+                ..
+            } if function.is_out(*local) && designates(assigned) => {
+                if let Some(reference) = self.designation(function, assigned) {
+                    self.natives = true;
+                    self.line(depth, &format!("_core.designate(_output, {reference})"));
+                }
+            }
             Stmt::Assign {
                 local,
                 value: assigned,
@@ -1391,6 +1424,25 @@ impl<'a> Emitter<'a> {
                 let given = self.returned("None");
                 self.line(depth, &format!("return {given}"));
             }
+            // FN-16: "a `return` to a `ref` result designates" the
+            // endpoint it names, and TIME-10: "A designation published
+            // again unchanged is no tick" (`_core.designation`). Core's
+            // END-10: "A publication of the designation it holds is no
+            // tick: unlike a value's (END-2, END-5), it leaves the endpoint
+            // unmodified and notifies no subscriber."
+            Stmt::Return {
+                value: Some(returned),
+                ..
+            } if designates(returned) => match self.designation(function, returned) {
+                Some(reference) => {
+                    self.natives = true;
+                    self.line(
+                        depth,
+                        &format!("return _core.designation(_output, {reference})"),
+                    );
+                }
+                None => self.line(depth, "return"),
+            },
             Stmt::Return {
                 value: Some(returned),
                 ..
@@ -1655,4 +1707,59 @@ fn at_of(statement: &Stmt, locals: &[Local]) -> Location {
         Stmt::Expr(value) => value.at,
         Stmt::Declare { local, .. } => locals[*local].at,
     }
+}
+
+/// True where `value` is a designation, what a `return` to a `ref` result
+/// or `out =` of one is given (FN-16): the endpoint of a temporal input
+/// of the node, or of a child of one, which the analyser reads as such
+/// only there.
+fn designates(value: &Expr) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::EndpointOf(_) | ExprKind::ChildEndpointOf(_)
+    )
+}
+
+/// How a node designates a temporal input that is no `ref` parameter
+/// (FN-16: "A parameter that is not `ref` may be designated too"): whole,
+/// or by a position of it, a fixed list. hgraph makes a reference only
+/// from a `REF` input, so the node is given the input a second time as a
+/// hidden `REF` input of that shape, `_ref_name` (`node`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Designated {
+    /// `return value`
+    Whole,
+    /// `return items[idx]`, of a `list<T, N>`.
+    Position,
+}
+
+/// What `value`, a designation (`designates`), designates of a temporal
+/// input of `function` that is no `ref` parameter: the input, and how.
+/// `None` for a `ref` parameter's, and for a child of another shape.
+fn designated(function: &Function, value: &Expr) -> Option<(usize, Designated)> {
+    match &value.kind {
+        ExprKind::EndpointOf(local)
+            if function.is_input(*local) && !function.is_reference(*local) =>
+        {
+            Some((*local, Designated::Whole))
+        }
+        ExprKind::ChildEndpointOf(child) => match &child.kind {
+            ExprKind::Index { base, .. } => match (&base.kind, &base.ty) {
+                (ExprKind::Local(local), Type::List { size: Some(_), .. })
+                    if function.is_input(*local) && !function.is_reference(*local) =>
+                {
+                    Some((*local, Designated::Position))
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The name of the hidden `REF` input a node designates `input` through
+/// (`Designated`). Every name the target makes up starts with `_`.
+fn designated_name(input: &Local) -> String {
+    format!("_ref_{}", name(&input.name))
 }

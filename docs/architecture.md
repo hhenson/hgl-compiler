@@ -304,9 +304,10 @@ What the pass checks as it reads:
 | --- | --- | --- |
 | A name in a type position | UNIT-10, GEN-2, GEN-13 | Names a struct, an enum, a native type or a generic parameter that is a type. A function, operator, local, generic value parameter, or a type pack where one type is needed, is rejected |
 | A generic type's arguments | GEN-2, GEN-10 | As many as it declares, within its pack's cardinality. An argument that names a type pack counts for what the pack may hold, and is rejected only when no such length fits. A parent and a constructor are no different |
-| An ordinary value type | TYPE-12, FN-1, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a value function's parameters and result, a generic value parameter and a property domain hold no `rolling`, `ref`, `atomic` or `signal`, at any depth |
+| An ordinary value type | TYPE-12, FN-1, grammar `value_type` | A set's element, a dictionary's key, a window's value, an atomic or result payload, a `const` parameter, a value function's parameters and result, a generic value parameter and a property domain hold no `rolling`, `atomic` or `signal`, at any depth. `ref` is no type: the parser rejects `ref<T>` |
+| `ref` | FN-16, TYPE-12 | A mode of a node's temporal parameter, `ref low: f64`, and of its result, `-> ref f64`, recorded as `Parameter::reference` and `Signature::reference`; the type is the T after it. A value function, a value candidate, a graph, an operator and a native implementation part that is a graph take none (`ref.position`) |
 | `signal` | TYPE-12 | The whole type of a temporal function's input, or of each input of a positional pack. Not a local's annotation or an anonymous function's parameter |
-| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal function's input, where `ref<f64>?`, `rolling_window<f64, 5>?`, `atomic<Quote>?` and `signal?` are inputs that may be omitted, and of a struct field, which is then optional. In a result, a local's annotation or a part of another type they are rejected. A set's element and a dictionary's key take no `?` |
+| `T?` | TYPE-14, TYPE-15 | What `?` is applied to is an ordinary value type throughout, but on the whole type of a temporal function's input, where `rolling_window<f64, 5>?`, `atomic<Quote>?` and `signal?` are inputs that may be omitted, and of a struct field, which is then optional. In a result, a local's annotation or a part of another type they are rejected. A set's element and a dictionary's key take no `?` |
 | `atomic<S>` | TYPE-9 | `Type::atomic` forms it: S itself where S is no composite, a scalar, an enum, a native type, a `result`, an `error`, a delta that is a type of its own, or a nullable of one; `Type::Atomic` for a tuple, a struct, a list, a dictionary, a set, a nullable of one, and a type not yet known. It is formed where the type is written and again where a generic parameter is replaced, and an `atomic<T>` given a value of a type that is its own atomic says what `T` is |
 | A list's size | TYPE-10 | A count that is not negative, or `unbounded` |
 | A window's sizes | TYPE-11 | Each a tick count or a duration, both of one kind, in bounds; a constant of a module and a duration and an `i64` multiplied, in either order, are followed to their value, and a constant of another type is of the wrong kind. A minimum equal to the maximum is the window with none written |
@@ -746,16 +747,24 @@ nothing is reported of it. A connection given to a `const` parameter is
 `generic.argument_constant`, and one that is a tuple's index
 `tuple.index`.
 
-A connection given to a function's parameter, or returned by the graph,
-may cross a reference (`references`): a `T` is given to a `ref<T>`
-input, which designates it (TYPE-12), and a `ref<T>` to an input of
-`T`, which follows it (TIME-10); any connection is given to a `signal`.
-A generic parameter is inferred from such a connection with its
-references removed, but where the pattern is `ref<T>` (GEN-11). What a
-follower observes is `Type::followed`: the type with every reference
-and a `?` that marks omission removed (TYPE-14, `Type::omission_removed`).
-The hgraph target writes a follower's input by the same two methods, so
-the stages cannot disagree on it.
+A connection is given to a function's parameter, and returned by the
+graph, as the type it is: a `ref` parameter of T takes a connection of
+T, which it designates, and a `ref` result is a connection of T to
+whoever reads it (FN-16); any connection is given to a `signal`
+(`signals`). A generic parameter is inferred from the connection's
+type, at a `ref` parameter as at any other (GEN-11). A `?` that marks
+an input that may be omitted is no part of either (TYPE-14,
+`Type::omission_removed`); the hgraph target writes a lifted input by
+the same method, so the stages cannot disagree on it.
+
+In a node's hooks a `ref` parameter, a child of one, and `out` of a
+`ref` result are endpoints: the endpoint operations take them, and a
+read of the value or the `delta_value` of one is `ref.read` (FN-16). A
+`return` to a `ref` result, and `out =` of one, names a temporal input
+of the node, `ref` or not, or a child of one, and is read as the
+designation it is, `ExprKind::EndpointOf` or `ExprKind::ChildEndpointOf`
+of the result's type: no payload is read and nothing needs admitting.
+A value there is `type.mismatch`.
 
 An `if` in a graph is read as a value function's is, and then told
 apart by what its condition is (CTRL-1, CTRL-13; owner's decisions of
@@ -1610,7 +1619,7 @@ only where the program reaches it, at core's source.
 | `quote.bid` of a temporal `Quote`, in a graph and in a hook | `quote["bid"]`, the field's port taken by name, so a field may be named `value`; in a hook `(quote["bid"].value if quote["bid"].valid else _core.unset_read())`, and `quote` read whole `Quote(bid=(...), ask=(...))` of each field so read: a required part that has not published fails with `value.unset_read`, and an optional one is `None` (hhenson/hgl_spec#126, an interim reading); `out` as `_output` |
 | A temporal `struct Empty {}`, and a branch's ordinary `fixed()` of a composite in a graph | `_hg.TS[Empty]`: hgraph's bundle with no field never ticks; a publication, whole or its delta, is `_core.only_value(value, Empty)`, and `delta_value(e)` the empty `_core.struct_delta()`. `_hg.const(_core.bundled(fixed(), ...), tp=_hg.TSB[...])`: a constant told its time-series type |
 | A temporal `atomic<Quote>`, and `quote.bid` of it (TYPE-9) | `_hg.TS[Quote]`; in a graph `_hg.getattr_[_hg.SCALAR: _py.int](quote, "bid")`, told the field's type, and in a hook `quote.value.bid` |
-| A temporal `ref<i64>` (TYPE-12, TIME-10) | `_hg.REF[_hg.TS[_py.int]]`: in a hook its value is a reference, which a node returns to re-point what follows it. A graph passes an `i64` to it, and it to an `i64` input, as they are: hgraph binds one to the other. A lifted input given it is a `_hg.TS[_py.int]`, which follows the target |
+| `ref low: i64`, `-> ref i64` (FN-16, TIME-10) | `_hg.REF[_hg.TS[_py.int]]` for each, and `_hg.TS_OUT[_hg.REF[...]]` for the node's `_output`. A graph gives a connection of `i64` to the parameter, and the result to an `i64` input, as they are: hgraph binds one to the other, and a lifted input given the result is a `_hg.TS[_py.int]`, which follows its target. `valid`, `modified`, `last_modified` and activity are the `REF`'s own. `return low` is `low.value`, the reference it holds. `return value` of an input that is no `ref` parameter, and `return items[idx]` of a fixed list's position, read a hidden `REF` input the node is given beside it, `_ref_value: _hg.REF[...]` or `_ref_items: _hg.TSL[_hg.REF[...], _hg.Size[3]]`, through a graph of the function's name that gives it the input twice: hgraph makes a reference only from a `REF` input. A reference the result holds already is not published again, `_core.designation(_output, reference)`, nor assigned again by `out =`, `_core.designate`, where hgraph would tick for it (TIME-10, END-10). A child of a `ref` parameter, `all_valid` of one, and a designation of another child are reported |
 | A `signal` input (TYPE-12) | `_hg.SIGNAL`, bound to any output, read only by `tick.valid` and `tick.modified` |
 | A temporal `T?` input left out (UNIT-8) | `_hg.nothing(tp=...)` of the input's type, an output that never ticks; for a `signal?` one of `_hg.TS[_py.bool]` |
 | `delta<Quote>(bid: 1)`, `change.bid` (TYPE-16) | `_core.struct_delta(bid=1)`, `_core.changed(change, "bid")`: hgraph's delta of a bundle, a `dict` of each field that changed, a null property left out |
@@ -1968,9 +1977,13 @@ The check compares the runner's full discovery and execution lists and prints
 the outcomes and counts for each suite. A case can be reported as not run
 only for its source-located hgraph target diagnostic listed in
 [`unsupported_cases.toml`](../crates/hgl_hgraph/ci/unsupported_cases.toml).
-An assertion or source failure, an unavailable host, a new gap, or a listed
-case that passes or disappears fails the check. Remove a listed gap when its
-case starts passing. The backend owns this list alongside its target tests.
+A rejection case can fail only by not being rejected, and only where it is
+listed under the file's `[rejections]`, by `suite::file::declaration` and a
+reason that names the rule not yet built; the analyser's and the driver's
+corpus tests read the same list. An assertion or source failure, an
+unavailable host, a new gap, or a listed case that passes, is rejected or
+disappears fails the check. Remove a listed gap when its case starts
+passing. The backend owns this list alongside its target tests.
 
 ## Finding source files
 

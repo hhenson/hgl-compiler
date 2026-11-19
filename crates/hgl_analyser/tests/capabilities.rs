@@ -179,8 +179,8 @@ fn a_capability_type_is_a_value_functions_parameter() {
 /// name and an ordinary value type, written as a struct's typed fields
 /// are. `value.property` reads one as an ordinary value." Two of one
 /// name reject, as two fields of a struct do (TYPE-4). TYPE-12: "An
-/// ordinary value type is written with no `rolling_window`, `ref`, `atomic`,
-/// or `signal` at any depth".
+/// ordinary value type is written with no `rolling_window`, `atomic`, or
+/// `signal` at any depth".
 #[test]
 fn a_native_types_properties_are_ordinary_values() {
     let checked = check(&[(
@@ -192,7 +192,7 @@ fn a_native_types_properties_are_ordinary_values() {
             "    label: str?\n",
             "    time: duration\n",
             "    size: f64\n",
-            "    feed: ref<f64>\n",
+            "    feed: rolling_window<f64, 5>\n",
             "}\n",
             "native type Opaque\n",
             "const fn read(handle: Handle, opaque: Opaque) -> i64 {\n",
@@ -212,7 +212,7 @@ fn a_native_types_properties_are_ordinary_values() {
         checked.summary(),
         [
             "m.hgl:6:5 type/field.duplicate NATIVE-6",
-            "m.hgl:7:11 type/type.not_ordinary TYPE-12",
+            "m.hgl:7:11 type/type.not_ordinary NATIVE-6",
             "m.hgl:13:26 name/member.unknown NATIVE-6",
             "m.hgl:14:26 name/member.unknown NATIVE-6",
             "m.hgl:15:5 name/binding.immutable NATIVE-6",

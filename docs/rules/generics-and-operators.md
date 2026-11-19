@@ -125,9 +125,8 @@ transpiler: planned
 
 analyser: partial
 
-- In a graph, a connection given to a function's parameter: a pattern with no `ref` in it binds its generic parameters from the connection's type with each reference removed, at any depth, and a `ref<T>` pattern binds T to the type under the reference, or to the connection's type where it is none
-- A stated resolution and a requested output keep their references
-- Left: an operator's call; a requested output's nested variables; a structural projection that keeps a declared `ref`
+- In a graph, a connection given to a function's parameter binds its generic parameters from the connection's type, at a `ref` parameter as at any other, and a `ref` result is a connection of its type (FN-16): no type holds a reference, and inference removes none
+- Left: an operator's call; a requested output's nested variables
 
 ## GEN-12
 
@@ -135,7 +134,8 @@ analyser: partial
 
 - Among the candidates a named call admits in a value function, each of the operator's parameters is compared with the other candidate's part for part: a concrete type or a structure over a bare variable in the same place; a candidate as specific everywhere and more in one place outranks
 - A candidate's generics are bound in declared parameter order
-- Left: a repeated variable counting once; reference qualification; temporal bodies
+- A `ref` mark adds no priority: candidates are compared by their types, which hold none (FN-16)
+- Left: a repeated variable counting once; temporal bodies
 
 ## GEN-13
 

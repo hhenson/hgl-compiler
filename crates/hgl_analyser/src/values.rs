@@ -102,6 +102,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         generics: Vec::new(),
         parameters: Vec::new(),
         result: None,
+        reference: false,
     };
     // UNIT-13: the value each constant is written with, read as a value
     // of the constant's type with no parameter in scope. Every module's

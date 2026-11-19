@@ -295,6 +295,13 @@ impl<'a> Typer<'a> {
     /// result type is the type expected of it.
     fn returned(&mut self, node: &SyntaxNode) -> Expr {
         let result = self.signature.result.clone();
+        // FN-16: a `return` to a `ref` result designates what it names.
+        if let Some(result) = &result
+            && self.signature.reference
+            && self.hook.is_some()
+        {
+            return self.designation(node, result);
+        }
         // TIME-7: "A runtime return publishes to its result."
         if let Some(result) = &result
             && (self.hook.is_some() || self.generating)
@@ -453,6 +460,9 @@ impl<'a> Typer<'a> {
             };
         }
         let value = match operator {
+            // FN-16, proposed: "`out = items[idx]` designates as `return
+            // items[idx]` does".
+            None if is_out && self.signature.reference => self.designation(&value, &target),
             // TIME-7: an assignment to `out` publishes to the result.
             None if is_out => self.published(&value, &target, "the node's result"),
             None => {

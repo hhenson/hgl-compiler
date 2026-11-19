@@ -478,7 +478,7 @@ impl<'a> Typer<'a> {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = as_given(self.expression(node, Some(read_as)));
-                    let says = self.inferred_from(pattern, &value, takes);
+                    let says = self.inferred_from(pattern, listed, &value, takes);
                     learn(self, &says, &mut found);
                     self.take_back(mark, false);
                 }
@@ -486,7 +486,7 @@ impl<'a> Typer<'a> {
             }
             let reported = self.diagnostics.len();
             let value = as_given(self.expression(node, Some(read_as)));
-            let says = self.inferred_from(pattern, &value, takes);
+            let says = self.inferred_from(pattern, listed, &value, takes);
             learn(self, &says, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
@@ -609,6 +609,12 @@ impl<'a> Typer<'a> {
                         parameter: Some(index),
                         value,
                     },
+                    Some(value) if self.lifted_window(&slot.ty, slot.listed, &value, takes) => {
+                        hir::Argument {
+                            parameter: Some(index),
+                            value,
+                        }
+                    }
                     Some(value) => {
                         let place = format!("the {} `{}`", takes.noun(), slot.name);
                         let value = if takes == Takes::Parameters {
@@ -777,7 +783,6 @@ pub(super) fn infer(
             }
         }
         (Type::Set(pattern), Type::Set(actual))
-        | (Type::Ref(pattern), Type::Ref(actual))
         | (Type::Endpoint(pattern), Type::Endpoint(actual))
         | (Type::Atomic(pattern), Type::Atomic(actual))
         | (Type::Delta(pattern), Type::Delta(actual))

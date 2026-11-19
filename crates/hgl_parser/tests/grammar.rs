@@ -219,7 +219,7 @@ native type Clock {
 
 native const fn valid<T>(input: endpoint<T>) -> bool
 
-native fn node(value: i64) -> i64 {
+native fn node(ref value: i64) -> ref i64 {
     inject out
     start;
     when;
@@ -246,7 +246,7 @@ fn body(
     c: set<str>,
     d: dict<str, f64>,
     e: rolling_window<f64, 5m, 3>,
-    f: ref<f64>,
+    ref f: f64,
     g: signal,
     h: atomic<Quote<f64>>,
     i: result<f64, error>,
