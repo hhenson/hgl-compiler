@@ -1106,6 +1106,49 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
 
 // ---- The review of #218 ----
 
+/// GEN-3: a `requires` "may use type/category membership, equalities,
+/// the membership of a constant in a set of constants": of two generic
+/// value parameters too, `N == M` and `N in {M, 5}`, each told by the one
+/// comparison. "under negation/disjunction it only tests
+/// already-resolved data": a type equality has the same three answers as
+/// a constant's: `!(T == FBox<2.0>)` is not told of an `FBox<X>` while
+/// `X` is not given (where it is, see
+/// `a_requires_is_told_where_a_passed_on_parameter_is_given`).
+#[test]
+fn a_requires_compares_two_options_and_a_type_in_three_answers() {
+    let shared = concat!(
+        "enum Mode { fast, slow }\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+        "const fn same_size<const N: i64, const M: i64>(v: i64) -> i64 requires N == M => v\n",
+        "const fn modes<const A: Mode, const B: Mode>(v: i64) -> i64 requires A == B => v\n",
+        "const fn within<const N: i64, const M: i64>(v: i64) -> i64 requires N in {M, 5} => v\n",
+        "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
+        "const fn outer<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => same_size<1, 1>(1) + modes<.fast, .fast>(1)\n\
+             const fn b() -> i64 => within<5, 2>(1) + within<2, 2>(1)\n\
+             const fn c() -> i64 => outer(FBox<1.0>(v: 1)) + not_two(FBox<1.0>(v: 1))\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => same_size<1, 2>(1)\n\
+             const fn b() -> i64 => modes<.fast, .slow>(1)\n\
+             const fn c() -> i64 => within<1, 2>(1)\n\
+             const fn e() -> i64 => not_two(FBox<2.0>(v: 1))\n"
+        ),
+        &[
+            "9 requires.unmet",
+            "10 requires.unmet",
+            "11 requires.unmet",
+            "12 requires.unmet",
+        ],
+    );
+}
+
 /// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
 /// value, not `==`: `-0.0` and `0.0` are different constants: different
 /// type arguments, different instances." "`requires X == 0.0` is the

@@ -12,7 +12,7 @@ use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
 use super::{REQUIRING, Typer};
-use crate::declared::{names_parameter, substitute_within};
+use crate::declared::{names_parameter, same_type, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program, Role};
 use crate::read::is_type;
@@ -1239,30 +1239,53 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
             let within = tokens(node).any(|token| token.text() == "in");
             // A generic parameter of the candidate: the condition is of
             // the type it stands for. `T == i64`, `T in {i64, f64}`.
+            // Each is told as a constant's equality is, in three answers
+            // ([`same_type`]): `FBox<X>` is not known to be `FBox<2.0>`
+            // while `X` is not given.
             if let Some(ty) = option(left).and_then(|name| (of.type_of)(&name)) {
                 return if has_token(node, SyntaxKind::EqEq) {
-                    Some((of.written)(right)? == ty)
+                    same_type(&(of.written)(right)?, &ty)
                 } else if within && right.kind() == SyntaxKind::ConstraintSet {
-                    let mut found = false;
+                    let mut found = Some(false);
                     for member in right.children() {
-                        found |= (of.written)(&member)? == ty;
+                        match same_type(&(of.written)(&member)?, &ty) {
+                            Some(true) => return Some(true),
+                            Some(false) => {}
+                            None => found = None,
+                        }
                     }
-                    Some(found)
+                    found
                 } else {
                     None
                 };
             }
+            // What an operand that is a constant comes to as a value of
+            // the option `name`'s type: the value another option has at
+            // the call where it names one (GEN-3: "equalities, the
+            // membership of a constant in a set of constants", of two
+            // options too: `N == M`, `N in {M, 5}`), and otherwise the
+            // constant it is.
+            let operand = |operand: &SyntaxNode, name: &str| -> Option<ConstantValue> {
+                option(operand)
+                    .and_then(|other| (of.value_of)(&other))
+                    .or_else(|| (of.constant)(operand, name))
+            };
             if has_token(node, SyntaxKind::EqEq) {
-                let (name, constant) = match (option(left), option(right)) {
-                    (Some(name), None) => (name, right),
+                // The option is the operand that has a value at the call:
+                // the left where both do.
+                let valued = |operand: &SyntaxNode| {
+                    option(operand).filter(|name| (of.value_of)(name).is_some())
+                };
+                let (name, constant) = match (valued(left), valued(right)) {
+                    (Some(name), _) => (name, right),
                     (None, Some(name)) => (name, left),
-                    _ => return None,
+                    (None, None) => return None,
                 };
                 // The language's `==` (`ConstantValue::equals`): "`requires
                 // X == 0.0` is the language's `==`: it holds for `-0.0`"
                 // (hhenson/hgl_spec#139, UNIT-13). Where the value is not
                 // known, whether it holds is not either.
-                (of.value_of)(&name)?.equals(&(of.constant)(constant, &name)?)
+                (of.value_of)(&name)?.equals(&operand(constant, &name)?)
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
@@ -1274,7 +1297,7 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                 // not where it is known to be none.
                 let mut found = Some(false);
                 for member in right.children() {
-                    match (of.constant)(&member, &name).and_then(|member| value.equals(&member)) {
+                    match operand(&member, &name).and_then(|member| value.equals(&member)) {
                         Some(true) => return Some(true),
                         Some(false) => {}
                         None => found = None,
