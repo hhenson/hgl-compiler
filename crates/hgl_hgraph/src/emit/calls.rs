@@ -183,6 +183,21 @@ impl<'a> Emitter<'a> {
                         written
                     }
                 };
+                let value = if parameter.reference
+                    && function.mode == Mode::Graph
+                    && !self.connects(function, &argument.value)
+                {
+                    self.designated_constant(
+                        callee,
+                        generics,
+                        index,
+                        parameter,
+                        &argument.value,
+                        value,
+                    )
+                } else {
+                    value
+                };
                 let value = self.held_value(kept[index], value);
                 Some(format!("{}={value}", name(&parameter.name)))
             })
@@ -200,6 +215,53 @@ impl<'a> Emitter<'a> {
             }
         }
         written.join(", ")
+    }
+
+    /// `written`, the ordinary value `value` a graph gives the `ref`
+    /// parameter `index` of `callee`, with `generics`, wired as a
+    /// constant connection. FN-3: "An ordinary value of type T is
+    /// accepted where composition expects a connection of T, and is
+    /// wired as a constant, one publication when the graph starts", and
+    /// FN-16: "A connection of T is given to a `ref` parameter", which
+    /// designates it. hgraph would wire the value as a constant of its
+    /// `REF`, which takes no value. The connection is of the parameter's
+    /// type, as the instance the call names has it: a nullable scalar's
+    /// is a `TS` of it or `None`, as a nullable place's is.
+    fn designated_constant(
+        &mut self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+        index: usize,
+        parameter: &Parameter,
+        value: &Expr,
+        written: String,
+    ) -> String {
+        let ty = self
+            .instance_signature(callee, generics)
+            .and_then(|signature| signature.parameters.get(index))
+            .map_or(&parameter.ty, |parameter| &parameter.ty)
+            .clone();
+        match &ty {
+            Type::Nullable(inner) if whole_scalar(inner) => {
+                let Some(scalar) = self.annotation(inner, false, value.at) else {
+                    return "None".to_string();
+                };
+                self.natives = true;
+                self.hgraph = true;
+                format!("_hg.const(_core.published({written}), _hg.TS[{scalar} | None])")
+            }
+            ty if is_nullable(ty) => {
+                self.unsupported(
+                    value.at,
+                    "a constant given to a nullable `ref` parameter of this type",
+                );
+                "None".to_string()
+            }
+            ty => {
+                self.hgraph = true;
+                self.constant_connection(ty, value.at, written)
+            }
+        }
     }
 
     /// What a call of the function `callee`, with `generics`, binds

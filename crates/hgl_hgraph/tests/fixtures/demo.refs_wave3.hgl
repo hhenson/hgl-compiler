@@ -208,3 +208,56 @@ test invalidating_a_ref_result_designates_nothing {
     assert eval(last_followed(flag: [true, false, true], x: [1, _, 3])) == [1, _, 3]
     assert eval(last_checked(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
 }
+
+# FN-3: "An ordinary value of type T is accepted where composition
+# expects a connection of T, and is wired as a constant, one publication
+# when the graph starts: a literal, a constant (UNIT-13), a `const`
+# parameter, or an all-scalar call (FN-6)." FN-16: "A connection of T is
+# given to a `ref` parameter": a `ref` parameter given one designates the
+# constant's connection.
+const seven: i64 = 7
+
+struct Pair {
+    left: i64
+    right: i64
+}
+
+const pair: Pair = Pair(left: 1, right: 2)
+
+fn nullable_designations(ref target: i64?) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+fn any_designations<T>(ref target: T) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+const fn sum(left: i64, right: i64) -> i64 => left + right
+
+fn of_literal(probe: i64) -> i64 => designations(5)
+fn of_constant(probe: i64) -> i64 => designations(seven)
+fn of_configuration(probe: i64, const c: i64) -> i64 => designations(c)
+fn of_scalar_call(probe: i64) -> i64 => designations(sum(2, 3))
+fn of_null(probe: i64) -> i64 => nullable_designations(null)
+fn of_nullable(probe: i64) -> i64 => nullable_designations(4)
+fn of_struct(probe: i64) -> i64 => any_designations(pair)
+fn constant_followed(once: bool) -> i64 => follow(pass_on(once, 7))
+
+test a_ref_parameter_given_a_constant_designates_its_connection {
+    assert eval(of_literal(probe: [1, 2])) == [1, _]
+    assert eval(of_constant(probe: [1, 2])) == [1, _]
+    assert eval(of_configuration(probe: [1, 2], c: 4)) == [1, _]
+    assert eval(of_scalar_call(probe: [1, 2])) == [1, _]
+    assert eval(of_null(probe: [1, 2])) == [1, _]
+    assert eval(of_nullable(probe: [1, 2])) == [1, _]
+    assert eval(of_struct(probe: [1, 2])) == [1, _]
+    assert eval(constant_followed(once: [true, true])) == [7, _]
+}

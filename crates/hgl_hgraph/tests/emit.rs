@@ -5542,7 +5542,8 @@ const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
 /// handlers where no active input of its own woke it. No validity is the
 /// whole node's, so a re-binding to an endpoint that is not valid is
 /// followed too: each handler asks its own. What an evaluation writes is
-/// published as it ends, an invalidation among it.
+/// published as it ends, an invalidation among it. A constant given to a
+/// `ref` parameter is a constant connection.
 #[test]
 fn a_designation_follows_a_re_binding_upstream() {
     let emitted = emit_clean(&[REFS_WAVE3]);
@@ -5577,6 +5578,11 @@ fn a_designation_follows_a_re_binding_upstream() {
         // END-4: `invalidate(out)` of a `ref` result leaves it designating
         // nothing, which the node publishes as it ends.
         "        _designation.invalidate()\n    return _designation.published()\n".to_string(),
+        // FN-3: an ordinary value given to a `ref` parameter is wired as a
+        // constant connection of its type, which it designates.
+        "    return designations(target=_hg.const(5))\n".to_string(),
+        "    return nullable_designations(target=_hg.const(_core.published(None), _hg.TS[_py.int | None]))\n"
+            .to_string(),
     ]);
 }
 
