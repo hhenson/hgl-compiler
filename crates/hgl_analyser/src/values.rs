@@ -13620,17 +13620,7 @@ struct Branch {
 }
 
 /// The value of a `switch` label, for telling two alike (CTRL-6).
-#[derive(Clone, PartialEq)]
-enum Label {
-    /// An integer.
-    Int(i64),
-    /// `true` or `false`.
-    Bool(bool),
-    /// A string.
-    Str(String),
-    /// A member of the selector's enum, by its position.
-    Member(usize),
-}
+use hir::LabelValue as Label;
 
 // ---- Control flow in a value function ----
 
@@ -14315,7 +14305,8 @@ impl<'a> Typer<'a> {
                             self.loop_rule(),
                         ));
                     }
-                    if let Some(value) = self.label_value(&label) {
+                    let value = self.label_value(&label);
+                    if let Some(value) = value.clone() {
                         match seen.iter().find(|(other, _)| *other == value) {
                             Some((_, first)) => self.diagnostics.emit(
                                 error(
@@ -14337,7 +14328,7 @@ impl<'a> Typer<'a> {
                     let body = inside.map(|statement| self.statement(&statement)).collect();
                     self.present.truncate(frame);
                     ends.push((self.assigned.clone(), self.returned));
-                    cases.push(hir::Case { label, body });
+                    cases.push(hir::Case { label, value, body });
                 }
                 SyntaxKind::SwitchDefault => {
                     self.assigned = restored(&before, self.locals.len(), false);

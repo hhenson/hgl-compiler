@@ -3914,6 +3914,7 @@ impl Emitter<'_> {
                     .iter()
                     .map(|case| Case {
                         label: case.label.clone(),
+                        value: case.value.clone(),
                         body: on(&case.body),
                     })
                     .collect();
@@ -3970,13 +3971,6 @@ impl Emitter<'_> {
         }
     }
 
-    /// Reports a `return` under a branch selected at runtime where it
-    /// stands in a loop unrolled where the graph is built, and says
-    /// whether it did. CTRL-14: such a `return` "makes the graph's
-    /// result that value while the branch is selected and the
-    /// continuation's otherwise", and the continuation of a pass is the
-    /// passes after it and what follows the loop, which this target does
-    /// not write as a branch's graph.
     /// What a `return` written now gives: the result of the innermost
     /// branch graph of a `switch_` that encloses it, or the graph's.
     fn current_result(&self, function: &Function) -> Option<Type> {
@@ -4028,61 +4022,33 @@ impl Emitter<'_> {
         }
     }
 
-    /// The case among `labels` whose value an earlier one has, where the
-    /// values are known here: a literal, a member of an enum, a constant
-    /// of a module that comes to one, and an integer under a minus.
-    /// CTRL-6: "Duplicate values reject". The analyser rejects those it
-    /// can tell apart; a label that is a generic value parameter has the
-    /// value of an instance's call (GEN-13), which only an instance has.
-    fn repeated_label<'e>(&self, labels: impl Iterator<Item = &'e Expr>) -> Option<Location> {
-        let mut seen: Vec<String> = Vec::new();
-        for label in labels {
-            let Some(value) = self.label_text(label, 0) else {
+    /// The case among `cases` whose label has the value of an earlier
+    /// one's. CTRL-6: "Duplicate values reject". The analyser rejects
+    /// those it can tell apart, and gives each case the value it
+    /// resolved its label to (`Case::value`), which is taken here as it
+    /// is: the two stages do not decide it twice. A label it could not
+    /// resolve, a generic value parameter, is in an instance the literal
+    /// or the member the call gives it (GEN-13), which is read as it is.
+    fn repeated_label(cases: &[Case]) -> Option<Location> {
+        use hgl_analyser::hir::LabelValue;
+        let mut seen: Vec<LabelValue> = Vec::new();
+        for case in cases {
+            let value = case.value.clone().or_else(|| match &case.label.kind {
+                ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
+                ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
+                ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
+                ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
+                _ => None,
+            });
+            let Some(value) = value else {
                 continue;
             };
             if seen.contains(&value) {
-                return Some(label.at);
+                return Some(case.label.at);
             }
             seen.push(value);
         }
         None
-    }
-
-    /// The value of `label` as text that no other value has, `depth`
-    /// constants in; `None` where it is not known here.
-    fn label_text(&self, label: &Expr, depth: usize) -> Option<String> {
-        // `-1`: a minus over an integer literal, as written or as the
-        // call it stands for.
-        let negated = |operand: &Expr| match operand.kind {
-            ExprKind::Literal(Value::Int(value)) => Some(format!("i{}", value.checked_neg()?)),
-            _ => None,
-        };
-        match &label.kind {
-            ExprKind::Literal(Value::Int(value)) => Some(format!("i{value}")),
-            ExprKind::Literal(Value::Bool(value)) => Some(format!("b{value}")),
-            ExprKind::Literal(Value::Str(value)) => Some(format!("s{value}")),
-            ExprKind::EnumMember { member, .. } => Some(format!("m{member}")),
-            ExprKind::Constant {
-                module,
-                declaration,
-            } if depth < 64 => {
-                let value = self.program.modules[*module]
-                    .constants
-                    .get(*declaration)?
-                    .as_ref()?;
-                self.label_text(value, depth + 1)
-            }
-            ExprKind::Unary {
-                operator: UnaryOperator::Negate,
-                operand,
-            } => negated(operand),
-            ExprKind::Call {
-                arguments,
-                form: hgl_analyser::hir::Form::Unary(UnaryOperator::Negate),
-                ..
-            } if arguments.len() == 1 => negated(&arguments[0].value),
-            _ => None,
-        }
     }
 
     /// Reports a `switch` two of whose labels have one value (see
@@ -4090,7 +4056,7 @@ impl Emitter<'_> {
     /// `switch_` would keep the last of them, and Python's `if` the
     /// first.
     fn labels_repeat(&mut self, cases: &[Case]) -> bool {
-        match self.repeated_label(cases.iter().map(|case| &case.label)) {
+        match Self::repeated_label(cases) {
             Some(at) => {
                 self.unsupported(
                     at,
@@ -4102,6 +4068,13 @@ impl Emitter<'_> {
         }
     }
 
+    /// Reports a `return` under a branch selected at runtime where it
+    /// stands in a loop unrolled where the graph is built, and says
+    /// whether it did. CTRL-14: such a `return` "makes the graph's
+    /// result that value while the branch is selected and the
+    /// continuation's otherwise", and the continuation of a pass is the
+    /// passes after it and what follows the loop, which this target does
+    /// not write as a branch's graph.
     fn unrolled_return(&mut self, at: Location) -> bool {
         if self.unrolling > 0 {
             self.unsupported(

@@ -127,3 +127,31 @@ fn read_back(flag: bool, a: i64, b: i64) -> i64 {
 test a_var_assigned_and_read_in_a_returned_branch {
     assert eval(read_back(flag: [true, false], a: [1, 2], b: [10, 20])) == [11, 2]
 }
+
+# CTRL-6: labels are "compared by resolved value". A negation that
+# selects a candidate of the program's own is no minus: its value is
+# the candidate's, and this `switch` has two labels.
+impl const fn neg_(value: i64, const shifted: bool) -> i64
+    requires shifted == true => 7
+
+const fn negated(route: i64) -> i64 {
+    switch route {
+        case -{shifted: true} 1: return 1
+        case -1: return 2
+        default: return 0
+    }
+}
+
+fn negated_in_a_graph(route: i64, a: i64) -> i64 {
+    switch route {
+        case -{shifted: true} 1: return a
+        case -1: return a * 2
+        default: return a * 3
+    }
+}
+
+test a_negation_of_another_candidate_is_its_own_label {
+    assert negated(7) == 1
+    assert negated(-1) == 2
+    assert eval(negated_in_a_graph(route: [7, -1, 0], a: [1, 2, 3])) == [1, 4, 9]
+}
