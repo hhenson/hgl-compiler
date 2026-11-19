@@ -62,7 +62,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a call that leaves out a parameter with a default is written with the default in its place, for a value function and for a `const` parameter of a temporal one
-- A temporal input written `T?` and left out is bound to hgraph's `nothing` of its type, never valid; a `signal?` to one of a `bool`
+- A temporal input written `T?` and left out is bound to hgraph's `nothing` of its type, never valid; a `signal?` to one of a `bool`; a `ref` parameter to a `nothing` of its `REF`, which designates nothing and is never valid or modified (FN-16)
 - Left: a temporal input's default, wired as a constant
 
 ## UNIT-9
