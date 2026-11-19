@@ -6,8 +6,9 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::Span;
 
+use super::Typer;
 use super::evals::{holds_trace, publications};
-use super::{Inferred, Places, Typer, fixed, placed};
+use super::inference::{Inferred, Places, fixed, placed};
 use crate::declared::{is_optional, substitute_within};
 use crate::hir::{self, EndpointOperation, ExprKind};
 use crate::program::DeclarationKind;

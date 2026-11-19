@@ -8,10 +8,10 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
+use super::inference::{bare_parameter, infer, placed};
 use super::requirements::{Condition, holds};
 use super::{
-    Typer, accepts_float, arithmetic, bare_parameter, infer, is_integer_literal, negated, not_null,
-    placed, takes_its_type, whole,
+    Typer, accepts_float, arithmetic, is_integer_literal, negated, not_null, takes_its_type, whole,
 };
 use crate::constant::Fault;
 use crate::declared::{names_parameter, substitute_within};
