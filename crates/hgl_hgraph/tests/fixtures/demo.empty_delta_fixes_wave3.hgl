@@ -59,6 +59,11 @@ fn relay_members(members: set<i64>) -> set<i64> {
     when { return delta_value(members) }
 }
 
+# Whether the set's delta names nothing added and nothing removed.
+fn unchanged_members(members: set<i64>) -> bool {
+    when { return delta_value(members) == delta<set<i64>>() }
+}
+
 # A struct and a tuple that hold a set: each reader publishes what the set
 # holds where it is modified.
 struct Bag {
@@ -78,6 +83,41 @@ fn pair_members(pair: tuple<i64, set<i64>>) -> i64 {
         if valid(pair[1]) && modified(pair[1]) { return member_total(pair[1]) }
         return -1
     }
+}
+
+# ---- 1. A trace's cell written whole, given again ----
+#
+# TST-5: "Each cell is one cycle's publication, written as a `return` is
+# (TIME-7) ... a T, published whole". TIME-7: "A value published whole,
+# the same again or empty, is no delta, and ticks as any publication
+# does". A cell given again as it was is published whole again: it ticks,
+# and leaves the value as it was.
+test a_whole_cell_given_again_ticks_and_keeps_the_value {
+    assert eval(members_read(members: [[], [], [1, 2], [1, 2], []])) == [0, 0, 23, 23, 0]
+    assert eval(book_read(book: [[], [], ["a": 1, "b": 2], ["a": 1, "b": 2], []])) == [0, 0, 23, 23, 0]
+    assert eval(readings_read(readings: [[], [], [1, 2], [1, 2], []])) == [0, 0, 23, 23, 0]
+    # After a delta that made the value what the cell writes.
+    assert eval(members_read(members: [delta<set<i64>>(added: [1]), [1]])) == [11, 11]
+    assert eval(book_read(book: [delta<dict<str, i64>>(updated: ["a": 1]), ["a": 1]])) == [11, 11]
+    assert eval(readings_read(readings: [delta<list<i64>>(updated: [0: 1]), [1]])) == [11, 11]
+    # The set's delta then names nothing added and nothing removed.
+    assert eval(unchanged_members(members: [[1, 2], [1, 2], []])) == [false, true, false]
+}
+
+# A `const fn` given the trace reads each cell as its delta (TST-16: "A T
+# published whole is held as its delta too"): a set's that changes
+# nothing names nothing added and nothing removed.
+const fn unchanged(cells: list<tuple<datetime, delta<set<i64>>>>) -> list<bool> {
+    var found: list<bool> = []
+    for cell in cells { append(found, cell[1] == delta<set<i64>>()) }
+    return found
+}
+
+test a_whole_cell_given_again_is_held_as_a_delta_that_names_nothing {
+    var seen = eval(relay_members(members: [[1, 2]]))
+    assert unchanged(seen) == [false]
+    seen = [[1, 2], [1, 2], [2]]
+    assert unchanged(seen) == [false, true, false]
 }
 
 # ---- 2. A source's set, as a node's ----

@@ -992,7 +992,7 @@ def list_replaced(port, value):
     return _whole_list(value, port)
 
 
-def list_applied(port, delta):
+def list_applied(port, delta, whole=False):
     """What a node publishes to its unsized list at `port`, of elements
     of any type, for `delta`, the list's delta (TYPE-16), as hgraph's
     unbounded `TSL` takes it: a `TSLDelta` of the positions updated and
@@ -1026,7 +1026,12 @@ def list_applied(port, delta):
     delta changes nothing, and is no tick". Proposed there: a delta whose
     every entry is an ignored removal names no change. hgraph's `TSL`
     does not tick for either, valid or not: where the list is not valid it
-    is made to (`_ticked`)."""
+    is made to (`_ticked`).
+
+    `whole` where `delta` is what publishes a whole list, a trace's cell
+    written whole (`Whole`): "A value published whole, the same again or
+    empty, is no delta, and ticks as any publication does" (TIME-7), so
+    one that changes nothing is made to tick, valid or not."""
     held = _held_size(port)
     changes = updated(delta)
     gone = removed(delta)
@@ -1049,7 +1054,7 @@ def list_applied(port, delta):
         raise HglError(
             f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
-    if size == held and not changes and not port.valid:
+    if size == held and not changes and (whole or not port.valid):
         _ticked(port)
     return _TSLDelta(changes, removed=tuple(position for position in gone if position < size), size_modified=size)
 
@@ -1662,8 +1667,11 @@ def whole_delta(value, keys, fixed=False, size=0, shape=None):
     if isinstance(value, (set, frozenset)):
         added, removed = frozenset(value - keys), frozenset(keys - value)
         members = added | removed
+        # A set given its members again changed none: its delta names
+        # nothing added and nothing removed. A plain `frozenset` would be
+        # a whole set, and an empty one would empty it (`_whole_sets`).
         if not members:
-            return frozenset()
+            return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
         return _set_delta(added=added, removed=removed, tp=type(next(iter(members))))
     if isinstance(value, dict):
         made = {key: _REMOVE for key in keys if key not in value}
@@ -1846,6 +1854,28 @@ def unpublished(delta):
     return None if delta is _Null else delta
 
 
+class Whole:
+    """A trace's cell written whole, as a replay publishes it (the
+    language's TST-5: "Each cell is one cycle's publication, written as a
+    `return` is (TIME-7) ... a T, published whole"; TST-9: "a T whole,
+    which replaces what the input held"). `published` is what hgraph is
+    given for it: a set's members, and for any other value the delta that
+    replaces what the input held (`whole_delta`).
+
+    TIME-7, as the specification's `main` has it (hhenson/hgl_spec#124):
+    "A value published whole, the same again or empty, is no delta, and
+    ticks as any publication does". A cell is given to the replay as a
+    `delta<T>` (core's `replay`), and one that changes nothing would be a
+    delta that names no change, which ticks only where it makes the value
+    valid: this marks it, and the replay publishes it as a whole value
+    (`resume`)."""
+
+    __slots__ = ("published",)
+
+    def __init__(self, published):
+        self.published = published
+
+
 class Source:
     """A source between two evaluations of its node (SOURCE-1).
 
@@ -1890,6 +1920,20 @@ def resume(source, now, scheduler, port, shape=None, entries=None):
     def publish(value):
         if port is None or value is None:
             return
+        if isinstance(value, Whole):
+            # A trace's cell written whole ticks as any publication does
+            # (`Whole`): an unsized list's that changes nothing is made to
+            # (`list_applied`), and a dictionary's that is empty and
+            # removes no key is cleared, as a node's is (`dict_replaced`).
+            # A set's is its members (`_whole_sets`), and a struct's or a
+            # tuple's publishes each part.
+            value = value.published
+            if shape == "list":
+                _entries_written(port, list_applied(port, value, whole=True), entries)
+                return
+            dictionary = entries == "entries" or (isinstance(entries, tuple) and entries[0] == "entries")
+            if dictionary and isinstance(value, dict) and not value:
+                port.clear()
         _entries_written(port, published_into(port, value, shape), entries)
 
     if source.pending is not None:
