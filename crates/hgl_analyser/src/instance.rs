@@ -33,7 +33,7 @@ use hgl_diagnostics::Location;
 use crate::declared::substitute_within;
 use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
 use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Signature, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
 /// it stands for at one call.
@@ -131,6 +131,10 @@ impl Program {
             Type::Nullable(inner) if !matches!(value, ConstantValue::Null) => inner.as_ref(),
             other => other,
         };
+        // A constant under `any`, an element of a `list<any>`, says its
+        // own type: a member its enum, and a list's or a tuple's
+        // elements are each an `any` in turn.
+        let any = matches!(of, Type::Scalar(Scalar::Any));
         let element = |value: &ConstantValue, ty: &Type| -> Option<Expr> {
             Some(Expr {
                 kind: self.constant(value, ty, at)?,
@@ -142,13 +146,17 @@ impl Program {
             // TYPE-7: a member is known by its name, and the enum is
             // the parameter's type.
             ConstantValue::Member(named) => {
-                let Type::Named {
-                    module,
-                    declaration,
-                    ..
-                } = of
-                else {
-                    return None;
+                let (module, declaration) = match of {
+                    Type::Named {
+                        module,
+                        declaration,
+                        ..
+                    } => (module, declaration),
+                    _ if any => {
+                        let (module, declaration) = &named.of.as_ref()?.declared;
+                        (module, declaration)
+                    }
+                    _ => return None,
                 };
                 let Some(Detail::Enum(read)) = self.modules.get(*module)?.details.get(*declaration)
                 else {
@@ -165,8 +173,10 @@ impl Program {
                 })
             }
             ConstantValue::List(values) => {
-                let Type::List { element: of, .. } = of else {
-                    return None;
+                let of = match of {
+                    Type::List { element, .. } => element.as_ref(),
+                    _ if any => of,
+                    _ => return None,
                 };
                 values
                     .iter()
@@ -175,8 +185,14 @@ impl Program {
                     .map(ExprKind::Sequence)
             }
             ConstantValue::Tuple(values) => {
-                let Type::Tuple(elements) = of else {
-                    return None;
+                let anys;
+                let elements = match of {
+                    Type::Tuple(elements) => elements,
+                    _ if any => {
+                        anys = vec![of.clone(); values.len()];
+                        &anys
+                    }
+                    _ => return None,
                 };
                 if elements.len() != values.len() {
                     return None;

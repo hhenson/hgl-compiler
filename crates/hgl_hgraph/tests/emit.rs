@@ -5521,3 +5521,29 @@ fn a_constant_argument_is_written_by_its_value() {
     }
     assert_eq!(python.matches("def _inst_scaled__").count(), 2, "{python}");
 }
+
+/// GEN-13: a constant given a `list<any>` is written whole, however
+/// deep: a nested list, a tuple and a member each say their own type.
+#[test]
+fn a_constant_under_any_is_written_whole() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "enum Mode { fast, slow }\n",
+            "const fn values<const X: list<any>>() -> list<any> => X\n",
+            "const fn a() -> list<any> => values<[[1]]>()\n",
+            "const fn c() -> list<any> => values<[Mode.slow]>()\n",
+            "const fn d() -> list<any> => values<[(1, \"a\")]>()\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "    return _core.copied([[1]])\n",
+        "    return _core.copied([Mode[\"slow\"]])\n",
+        "    return _core.copied([(1, \"a\",)])\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+}
