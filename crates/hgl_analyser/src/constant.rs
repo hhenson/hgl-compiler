@@ -4,8 +4,8 @@
 //! `5m`, `N + 1`. To check them (TYPE-10, TYPE-11) their values are
 //! needed before any expression has a type. This module works out the
 //! ones that need no types: integer and duration literals, a minus before
-//! one, `+`, `-` and `*` between two, parentheses, and the name of a
-//! generic parameter.
+//! one, `+`, `-` and `*` between two, a duration times an integer,
+//! parentheses, and the name of a generic parameter.
 //!
 //! Everything else is [`ConstantValue::Unevaluated`]: a call, a name
 //! that is no generic parameter, an operation that overflows. Nothing is
@@ -171,6 +171,11 @@ fn binary(
         }
         (SyntaxKind::Minus, ConstantValue::Duration(left), ConstantValue::Duration(right)) => {
             left.checked_sub(right).map(ConstantValue::Duration)
+        }
+        // Core's `mul_(lhs: duration, rhs: i64) -> duration`: a window
+        // of `5m * 2` is one of ten minutes (TYPE-11).
+        (SyntaxKind::Star, ConstantValue::Duration(left), ConstantValue::Int(right)) => {
+            left.checked_mul(right).map(ConstantValue::Duration)
         }
         _ => None,
     };

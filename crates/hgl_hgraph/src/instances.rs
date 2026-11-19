@@ -131,7 +131,8 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
             Callee::Function {
                 module,
                 declaration,
-                ..
+                generics,
+                requirements,
             },
         arguments,
         ..
@@ -143,16 +144,43 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
+    // A generic target's parameters as this call takes them (GEN-2):
+    // a window's type is read from its parameter.
+    let instance = if generics.is_empty() {
+        None
+    } else {
+        program.instance(*module, *declaration, generics, requirements)
+    };
+    let parameters = instance
+        .as_ref()
+        .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
-            let parameter = signature.parameters.get(argument.parameter?)?;
-            Some((parameter.name.clone(), trace_payload(&argument.value.ty)?))
+            let parameter = parameters.get(argument.parameter?)?;
+            let payload = trace_payload(&argument.value.ty)?;
+            // TYPE-16: a window's delta is "V: the value that arrived",
+            // so a trace of one is a trace of V: the window is the
+            // parameter's, and the call's own type for the result.
+            let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
+            Some((
+                parameter.name.clone(),
+                if windowed {
+                    parameter.ty.clone()
+                } else {
+                    payload
+                },
+            ))
         })
         .collect();
+    let windowed = matches!(call.ty, Type::RollingWindow { .. });
     Some(Wiring {
         inputs,
-        result: trace_payload(eval),
+        result: if windowed {
+            Some(call.ty.clone())
+        } else {
+            trace_payload(eval)
+        },
     })
 }
 

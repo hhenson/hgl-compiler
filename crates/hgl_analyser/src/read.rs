@@ -1685,7 +1685,10 @@ impl Reader<'_> {
         let wrong = match &size.value {
             ConstantValue::Int(_) => return Some(SizeKind::Ticks),
             ConstantValue::Duration(_) => return Some(SizeKind::Time),
-            ConstantValue::Unevaluated => return Some(SizeKind::Unknown),
+            ConstantValue::Unevaluated => match self.constant_of_another_type(node) {
+                Some(wrong) => wrong,
+                None => return Some(SizeKind::Unknown),
+            },
             ConstantValue::Parameter { name, at } => match self.value_type(*at) {
                 Some(Type::Scalar(Scalar::I64)) => return Some(SizeKind::Ticks),
                 Some(Type::Scalar(Scalar::Duration)) => return Some(SizeKind::Time),
@@ -1706,6 +1709,38 @@ impl Reader<'_> {
             "TYPE-11",
         ));
         None
+    }
+
+    /// What is wrong with the size `node`, of a window, where it names
+    /// a constant of a module (UNIT-13) whose type is neither `i64` nor
+    /// `duration`: `F` of `const F: f64 = 1.5`. `None` for anything
+    /// else, a constant of either type among them, whose value another
+    /// pass may find.
+    fn constant_of_another_type(&self, node: &SyntaxNode) -> Option<String> {
+        if node.kind() != SyntaxKind::NameExpr {
+            return None;
+        }
+        let name = used_name(node)?;
+        let Some(Binding::Declarations {
+            module,
+            declarations,
+        }) = self.bindings.get(&(self.file, name.span().start))
+        else {
+            return None;
+        };
+        // A slice pattern: exactly one declaration.
+        let [declaration] = declarations[..] else {
+            return None;
+        };
+        let declared = &self.program.modules[*module].declarations[declaration];
+        if declared.kind != DeclarationKind::Constant {
+            return None;
+        }
+        // A type of the program's own is a struct or an enum, and
+        // neither is `i64` or `duration`, so the type's text says.
+        let ty = text_of(&type_child(&declared.syntax)?);
+        (!matches!(ty.as_str(), "i64" | "duration"))
+            .then(|| format!("`{}` is a constant of type `{ty}`", name.text()))
     }
 
     // ---- Named types ----
