@@ -103,6 +103,7 @@ transpiler: done
 - Each capture sees its own call's failures, two of one call each
 - A failed keyed child stays live for its key, and a capture in a keyed child is that child's
 - A retained error propagated by `?` keeps its first provenance
+- A node's write to `out` and a source's publication made before the failure in its pass stand
 
 ## ERR-9
 

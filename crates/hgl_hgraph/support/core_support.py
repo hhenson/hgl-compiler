@@ -1251,13 +1251,15 @@ def only_value(published, struct):
     return published if isinstance(published, struct) else struct()
 
 
-def unset_read():
+def unset_read(message="a part that has not published is read"):
     """The read of a part of a temporal struct or tuple that has not
-    published, where a value of it is needed: it fails, with the code
-    the language catalogues, `value.unset_read` ("Executed operation
-    requires an unset ordinary payload"), and no value is made up. The
-    compiler reads an optional part that has not published as null."""
-    raise HglError("a part that has not published is read", code="value.unset_read")
+    published, where a value of it is needed, or of a node's `out` before
+    it holds a value (the language's TIME-7), which `message` says: it
+    fails, with the code the language catalogues, `value.unset_read`
+    ("Executed operation requires an unset ordinary payload"), and no
+    value is made up. The compiler reads an optional part that has not
+    published as null."""
+    raise HglError(message, code="value.unset_read")
 
 
 def bundled(value, shape=None, port=None):
@@ -1398,9 +1400,10 @@ class Source:
         self.previous = None
 
 
-def resume(source, now, scheduler):
-    """Resumes a source in the evaluation at `now`: what it publishes
-    there, in a tuple of one, or `None` where it publishes nothing.
+def resume(source, now, scheduler, port, shape=None):
+    """Resumes a source in the evaluation at `now`, and publishes what it
+    is due there through `port`, its node's output (`None` for a source
+    with no result), as `published_into` has it for `shape`.
 
     SOURCE-2: "A duration is relative to current evaluation time; a
     datetime is absolute. Negative duration fails. Resolve duration
@@ -1410,17 +1413,26 @@ def resume(source, now, scheduler):
     current target publishes now; a future target retains its payload
     and suspends. On wake it publishes and resumes after yield."
     SOURCE-4: "A bare return or body completion finishes the source."
-    """
-    published = None
+
+    Each publication is made before the statements after its `yield`
+    run: where they fail, it stands (ERR-8: "Capture ends the failed pass
+    without rollback ... Earlier writes remain visible"). A payload that
+    is `None` publishes nothing, as a node that returns `None` does."""
+
+    def publish(value):
+        if port is not None and value is not None:
+            port.value = published_into(port, value, shape)
+
     if source.pending is not None:
         if source.target != now:
-            return None
-        published, source.pending = source.pending, None
+            return
+        (due,), source.pending = source.pending, None
+        publish(due)
     while True:
         try:
             time, value = next(source.body)
         except StopIteration:
-            return published
+            return
         if isinstance(time, _datetime.timedelta):
             if time < _datetime.timedelta(0):
                 raise HglError(
@@ -1438,12 +1450,12 @@ def resume(source, now, scheduler):
         if target < now:
             continue
         if target == now:
-            published = (value,)
+            publish(value)
             continue
         source.pending = (value,)
         source.target = target
         scheduler.schedule(target)
-        return published
+        return
 
 
 class Wake:
