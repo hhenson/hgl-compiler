@@ -1069,6 +1069,7 @@ impl Structs<'_> {
         Some(InheritedDefaults {
             owner: id,
             field: later.name.clone(),
+            ty: later.ty.clone(),
             defaults: [default(earlier)?, default(later)?],
         })
     }

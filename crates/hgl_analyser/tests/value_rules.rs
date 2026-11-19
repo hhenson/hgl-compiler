@@ -110,8 +110,11 @@ fn a_chained_comparison_is_typed_as_written() {
 /// is one default; so is a generic value parameter given the number
 /// the other parent writes, and an enum member written in full or as
 /// `.member`, and `1` where an `f64` is wanted is `1.0` (EXPR-5).
-/// `1 + 1` is not `2` before folding, and `[]` is not `[1]`. A struct
-/// that writes the field itself chooses.
+/// `[]` is not `[1]`. A struct that writes the field itself chooses.
+///
+/// Only two constant values of the field's type are judged: `1 + 1`
+/// against `2`, and a call against a call, are not, and nothing is
+/// reported of them.
 #[test]
 fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
     let checked = check(&[
@@ -162,8 +165,7 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
                 "struct Changed : Passed<i64>, One {}\n",
                 "abstract struct Mid : ByName {}\n",
                 "struct Diamond : Mid, ByName {}\n",
-                // A generic value parameter given to a callee: `limit<N>()`
-                // is `limit<3>()` where the path gives `N` 3.
+                // A call is no constant value: neither pair is judged.
                 "const fn limit<const N: i64>() -> i64 => N\n",
                 "abstract struct Limited<const N: i64> : Base { size = limit<N>() }\n",
                 "abstract struct Capped : Base { size = limit<3>() }\n",
@@ -175,26 +177,24 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:10:22 local:type/default.conflict UNIT-9",
             "m.hgl:14:27 local:type/default.conflict UNIT-9",
             "m.hgl:19:16 local:type/default.conflict UNIT-9",
             "m.hgl:34:31 local:type/default.conflict UNIT-9",
-            "m.hgl:41:32 local:type/default.conflict UNIT-9",
         ]
     );
     assert_eq!(
         checked.findings[0].message,
-        "`Folded` has `size` from two parents with different defaults, and gives it none of \
-         its own: write `size = ...` in `Folded`"
+        "`Differ` has `size` from two parents with different defaults, and gives it none of \
+         its own: write `size = ...` in `Differ`"
     );
 }
 
 /// UNIT-9: "Compare inherited defaults by bound expression and
 /// canonical type after substitution". A generic value parameter that
-/// is a `bool`, a `str` or an `f64` is the literal its path gives it,
-/// and a constant a callee is given is one value however it is written:
-/// `mark<1.0>()` is `mark<1.00>()`. A minus before a number is the
-/// negative number: `Counts<-3>` gives `size = N` what `size = -3` is.
+/// is a `bool`, a `str` or an `f64` is the literal its path gives it. A
+/// minus before a number is the negative number: `Counts<-3>` gives
+/// `size = N` what `size = -3` is. A call, `mark<1.0>()` against
+/// `mark<2.0>()` among them, is no constant value and is not judged.
 #[test]
 fn literal_constants_in_defaults_are_compared_by_value() {
     let checked = module(concat!(
@@ -234,7 +234,6 @@ fn literal_constants_in_defaults_are_compared_by_value() {
         [
             "m.hgl:5:31 local:type/default.conflict UNIT-9",
             "m.hgl:11:35 local:type/default.conflict UNIT-9",
-            "m.hgl:18:24 local:type/default.conflict UNIT-9",
             "m.hgl:22:34 local:type/default.conflict UNIT-9",
             "m.hgl:29:39 local:type/default.conflict UNIT-9",
         ]
@@ -290,12 +289,45 @@ fn constants_in_defaults_are_compared_by_value_however_written() {
         checked.summary(),
         [
             "m.hgl:5:40 local:type/default.conflict UNIT-9",
-            "m.hgl:15:25 local:type/default.conflict UNIT-9",
             "m.hgl:19:36 local:type/default.conflict UNIT-9",
             "m.hgl:22:35 local:type/default.conflict UNIT-9",
             "m.hgl:29:40 local:type/default.conflict UNIT-9",
             "m.hgl:33:34 local:type/default.conflict UNIT-9",
         ]
+    );
+}
+
+/// UNIT-9 rejects only what it can tell: two defaults that are each a
+/// constant value of the field's type as the struct has it, its
+/// parents' generic arguments in place, and that are two values. A
+/// default of a field whose type names a generic parameter is read with
+/// no type expected; once the arguments are in place it is typed
+/// against the field's type, so `x: T = 1` under `A<f64>` is `1.0`
+/// (EXPR-5). Two defaults that are not both constant values, `1 + 2`
+/// among them, a generic value parameter of the struct below left as
+/// one, a date or time literal, and a field whose type is not concrete
+/// are not judged.
+#[test]
+fn only_two_constant_values_of_the_fields_type_are_judged() {
+    let checked = module(concat!(
+        "abstract struct A<T> { x: T = 1 }\n",
+        "abstract struct One { x: f64 = 1.0 }\n",
+        "abstract struct Two { x: f64 = 2.0 }\n",
+        "struct Widened : A<f64>, One {}\n",
+        "struct WidenedClash : A<f64>, Two {}\n",
+        "abstract struct Counted { size: i64 }\n",
+        "abstract struct Counts<const N: i64> : Counted { size = N }\n",
+        "abstract struct Summed : Counted { size = 1 + 2 }\n",
+        "abstract struct Four : Counted { size = 4 }\n",
+        "struct Unjudged : Summed, Four {}\n",
+        "abstract struct Below<const K: i64> : Counts<K>, Four {}\n",
+        "abstract struct Day { on: date = @2026-01-01 }\n",
+        "abstract struct Other { on: date = @2026-01-02 }\n",
+        "struct Dated : Day, Other {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:6:31 local:type/default.conflict UNIT-9"]
     );
 }
 
