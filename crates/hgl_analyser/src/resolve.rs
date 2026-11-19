@@ -31,6 +31,7 @@ use crate::program::{
     Binding, Decision, DeclarationKind, ImportKind, LocalKind, Module, NameUse, PreludeName,
     Program,
 };
+use crate::syntax::child;
 use crate::{INJECTABLES, RESULT_FORMS, codes, error};
 
 /// Resolves the names of every module, filling in [`Module::uses`] and
@@ -124,11 +125,6 @@ struct Resolver<'a> {
 }
 
 // ---- Reading the tree ----
-
-/// The first child node of `node` of kind `kind`.
-fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
-    node.children().find(|child| child.kind() == kind)
-}
 
 /// The identifier tokens directly inside `node`, in order.
 fn identifiers(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {

@@ -17,6 +17,7 @@ use hgl_source::FileId;
 
 use crate::constant::is_least_magnitude;
 use crate::program::{DeclarationKind, Program, Role};
+use crate::syntax::{child, tokens};
 use crate::{codes, error};
 
 /// Checks every declaration of the program.
@@ -126,18 +127,6 @@ fn integer_range(root: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics)
             );
         }
     }
-}
-
-/// The tokens directly inside `node`, without whitespace and comments.
-fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
-    node.children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .filter(|token| !token.kind().is_trivia())
-}
-
-/// The first child node of `node` of kind `kind`.
-fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
-    node.children().find(|child| child.kind() == kind)
 }
 
 /// FN-8: "Packs have no defaults, cannot be const, and follow all fixed

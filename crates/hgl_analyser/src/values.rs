@@ -52,7 +52,8 @@ use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Phase, Program, Role,
     StoreStatement,
 };
-use crate::read::{child, default_of, has_token, is_type, parameters, tokens};
+use crate::read::{default_of, is_type, parameters};
+use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
     NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type,
@@ -1453,11 +1454,8 @@ impl<'a> Typer<'a> {
     /// or not: the language's selector (TIME-9), and no call of a
     /// declaration a module or a local binds under that name.
     fn scheduled_alone(&self, header: &SyntaxNode) -> bool {
+        let header = &ungrouped(header.clone());
         match header.kind() {
-            SyntaxKind::ParenExpr => header
-                .children()
-                .next()
-                .is_some_and(|inner| self.scheduled_alone(&inner)),
             SyntaxKind::CallExpr => header
                 .children()
                 .next()
@@ -1478,8 +1476,8 @@ impl<'a> Typer<'a> {
     /// declaration binds is a call of that declaration, and no selector
     /// (TIME-9).
     fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
+        let header = &ungrouped(header.clone());
         match header.kind() {
-            SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
             SyntaxKind::BinaryExpr
                 if tokens(header).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
             {
@@ -4845,11 +4843,8 @@ impl<'a> Typer<'a> {
     /// True when the expression at `node` is one that gives a trace:
     /// an `eval`, or a local one is bound to, in parentheses or not.
     fn gives_trace(&self, node: &SyntaxNode) -> bool {
+        let node = &ungrouped(node.clone());
         match node.kind() {
-            SyntaxKind::ParenExpr => node
-                .children()
-                .next()
-                .is_some_and(|inner| self.gives_trace(&inner)),
             SyntaxKind::EvalExpr | SyntaxKind::RunExpr => true,
             SyntaxKind::NameExpr => self
                 .local_of(node)
@@ -12947,9 +12942,10 @@ impl Written {
 /// True when the callee `node` is an anonymous function, in
 /// parentheses or not, or a call of one, or of what such a call gives.
 fn calls_anonymous(node: &SyntaxNode) -> bool {
+    let node = &ungrouped(node.clone());
     match node.kind() {
         SyntaxKind::FnExpr => true,
-        SyntaxKind::ParenExpr | SyntaxKind::CallExpr => node
+        SyntaxKind::CallExpr => node
             .children()
             .next()
             .is_some_and(|inner| calls_anonymous(&inner)),
@@ -13964,11 +13960,8 @@ fn widens_an_entry(value: &Expr) -> bool {
 /// is a `list<f64>` or a `set<i64>` where a candidate takes one. A block
 /// is, when its value is; an `if`, when a branch is (CTRL-10).
 fn typed_by_place(node: &SyntaxNode) -> bool {
+    let node = &ungrouped(node.clone());
     match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| typed_by_place(&inner)),
         SyntaxKind::SequenceExpr | SyntaxKind::TupleExpr => true,
         // An integer literal that is a block's value is an `f64` where
         // one is expected (EXPR-5), as the block's place says.
@@ -13986,9 +13979,10 @@ fn typed_by_place(node: &SyntaxNode) -> bool {
 /// True when an expression is an integer literal as it is written,
 /// under a minus or in parentheses or not.
 fn is_integer_written(node: &SyntaxNode) -> bool {
+    let node = &ungrouped(node.clone());
     match node.kind() {
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::Int),
-        SyntaxKind::ParenExpr | SyntaxKind::UnaryExpr => node
+        SyntaxKind::UnaryExpr => node
             .children()
             .next()
             .is_some_and(|inner| is_integer_written(&inner)),
@@ -14057,6 +14051,8 @@ impl<'a> Typer<'a> {
     /// value is dropped: a statement, or the last expression of a
     /// function that declares no result (FN-7).
     fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
+        // "Parentheses select grouping" (EXPR-1).
+        let node = &ungrouped(node.clone());
         // SOURCE-4: a block or an `if` whose value is used is a value
         // expression, and a `yield` inside it is reported.
         let valued = used && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
@@ -14064,11 +14060,6 @@ impl<'a> Typer<'a> {
         let read = match node.kind() {
             SyntaxKind::Block => self.block(node, expected, used),
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
-            SyntaxKind::ParenExpr if node.children().next().is_some() => {
-                // "Parentheses select grouping" (EXPR-1).
-                let inner = node.children().next().expect("checked above");
-                self.flow(&inner, expected, used)
-            }
             _ => {
                 let value = self.expression(node, expected);
                 let ty = value.ty.clone();
@@ -14828,6 +14819,7 @@ fn value_of_branch(branch: &SyntaxNode) -> Option<SyntaxNode> {
 /// `.member`, as the value of a block, of a branch of the `if` of an
 /// `else if`, or in parentheses.
 fn branch_takes_its_type(branch: &SyntaxNode) -> bool {
+    let branch = &ungrouped(branch.clone());
     match branch.kind() {
         SyntaxKind::Block => {
             value_of_branch(branch).is_some_and(|value| branch_takes_its_type(&value))
@@ -14837,10 +14829,6 @@ fn branch_takes_its_type(branch: &SyntaxNode) -> bool {
             .children()
             .skip(1)
             .any(|inner| branch_takes_its_type(&inner)),
-        SyntaxKind::ParenExpr => branch
-            .children()
-            .next()
-            .is_some_and(|inner| branch_takes_its_type(&inner)),
         _ => takes_its_type(branch),
     }
 }
@@ -14848,16 +14836,13 @@ fn branch_takes_its_type(branch: &SyntaxNode) -> bool {
 /// True when a branch's value, found as [`branch_takes_its_type`] finds
 /// it, is `null`.
 fn branch_is_null(branch: &SyntaxNode) -> bool {
+    let branch = &ungrouped(branch.clone());
     match branch.kind() {
         SyntaxKind::Block => value_of_branch(branch).is_some_and(|value| branch_is_null(&value)),
         SyntaxKind::IfExpr => branch
             .children()
             .skip(1)
             .any(|inner| branch_is_null(&inner)),
-        SyntaxKind::ParenExpr => branch
-            .children()
-            .next()
-            .is_some_and(|inner| branch_is_null(&inner)),
         _ => is_null(branch),
     }
 }
@@ -15273,30 +15258,12 @@ fn one_by_position(call: &SyntaxNode) -> Option<SyntaxNode> {
     (label.is_none() && arguments.next().is_none()).then_some(argument)
 }
 
-/// What `node` is with the parentheses around it taken off. EXPR-1:
-/// "parentheses group", so `((a))` is `a`.
-fn ungrouped(mut node: SyntaxNode) -> SyntaxNode {
-    while node.kind() == SyntaxKind::ParenExpr {
-        match node.children().next() {
-            Some(inner) => node = inner,
-            None => break,
-        }
-    }
-    node
-}
-
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as
 /// every check reads it: EXPR-1, "Parentheses select grouping", so
 /// `valid((quote.bid))` names what `valid(quote.bid)` does, and grouping
 /// never changes what an argument is, its admission or its guard.
 fn endpoint_argument(node: &SyntaxNode) -> SyntaxNode {
-    let mut named = node.clone();
-    while named.kind() == SyntaxKind::ParenExpr
-        && let Some(inner) = named.children().next()
-    {
-        named = inner;
-    }
-    named
+    ungrouped(node.clone())
 }
 
 /// The arguments of the endpoint operation whose list is `list`, each
@@ -15712,23 +15679,13 @@ fn arithmetic(value: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
 
 /// True when an expression is `.member`, in parentheses or not.
 fn is_implied_member(node: &SyntaxNode) -> bool {
-    match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| is_implied_member(&inner)),
-        SyntaxKind::ImpliedMember => true,
-        _ => false,
-    }
+    ungrouped(node.clone()).kind() == SyntaxKind::ImpliedMember
 }
 
 /// True for the literal `null`, in parentheses or not.
 fn written_null(node: &SyntaxNode) -> bool {
+    let node = &ungrouped(node.clone());
     match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| written_null(&inner)),
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
         _ => false,
     }
@@ -15739,11 +15696,8 @@ fn written_null(node: &SyntaxNode) -> bool {
 /// whose "type arguments come from the complete `result<T,E>` its place
 /// expects" (ERR-2), in parentheses or not.
 fn takes_its_type(node: &SyntaxNode) -> bool {
+    let node = &ungrouped(node.clone());
     match node.kind() {
-        SyntaxKind::ParenExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| takes_its_type(&inner)),
         SyntaxKind::ImpliedMember => true,
         SyntaxKind::Literal => tokens(node).any(|token| token.kind() == SyntaxKind::KwNull),
         // ERR-13: the callee `ok` or `err` is the constructor, whatever
@@ -15831,19 +15785,6 @@ fn not_null(expected: Option<&Type>) -> Option<&Type> {
     match expected {
         Some(Type::Nullable(inner)) => not_null(Some(inner)),
         other => other,
-    }
-}
-
-/// The identifier a name expression uses: of `module.name`, the name.
-fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
-    let identifiers = |node: &SyntaxNode| {
-        tokens(node)
-            .filter(|token| token.kind() == SyntaxKind::Ident)
-            .collect::<Vec<_>>()
-    };
-    match child(node, SyntaxKind::QualifiedName) {
-        Some(qualified) => identifiers(&qualified).into_iter().nth(1),
-        None => identifiers(node).into_iter().next(),
     }
 }
 

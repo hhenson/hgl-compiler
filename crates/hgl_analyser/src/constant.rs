@@ -14,21 +14,15 @@
 //! with types, reads them again and reports what is wrong with them.
 
 use hgl_lexer::literal::{MAX_INTEGER_MAGNITUDE, decode_duration, decode_integer};
-use hgl_parser::{SyntaxKind, SyntaxNode, SyntaxToken};
+use hgl_parser::{SyntaxKind, SyntaxNode};
 
+use crate::syntax::tokens;
 use crate::types::ConstantValue;
 
 /// How deep an expression is folded. A size is a few tokens; one nested
 /// deeper than this is left unevaluated, so that folding keeps little on
 /// the call stack whatever it is given.
 const DEPTH: u32 = 32;
-
-/// The tokens directly inside `node`, without whitespace and comments.
-fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
-    node.children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .filter(|token| !token.kind().is_trivia())
-}
 
 /// What the constant expression `node` comes to.
 ///

@@ -33,6 +33,7 @@ use crate::constant::fold;
 use crate::program::{
     Binding, Declaration, DeclarationKind, LocalKind, Module, OperatorRef, Program, Role,
 };
+use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, Field, GenericKind, GenericParameter,
     Member, NamedKind, NativeType, Pack, Parameter, Scalar, Signature, StructType, Type,
@@ -415,26 +416,9 @@ pub(crate) fn is_type(kind: SyntaxKind) -> bool {
     )
 }
 
-/// The first child node of `node` of kind `kind`.
-pub(crate) fn child(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxNode> {
-    node.children().find(|child| child.kind() == kind)
-}
-
 /// The first child node of `node` that is a type.
 pub(crate) fn type_child(node: &SyntaxNode) -> Option<SyntaxNode> {
     node.children().find(|child| is_type(child.kind()))
-}
-
-/// The tokens directly inside `node`, without whitespace and comments.
-pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
-    node.children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .filter(|token| !token.kind().is_trivia())
-}
-
-/// True when a token of `kind` is directly inside `node`.
-pub(crate) fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
-    tokens(node).any(|token| token.kind() == kind)
 }
 
 /// The identifiers directly inside `node` before its `:`.
@@ -443,21 +427,6 @@ fn names_before_colon(node: &SyntaxNode) -> Vec<SyntaxToken> {
         .take_while(|token| token.kind() != SyntaxKind::Colon)
         .filter(|token| token.kind() == SyntaxKind::Ident)
         .collect()
-}
-
-/// The name a node uses: of `alias::name` the one after the `::`,
-/// otherwise its first identifier. That is the token the resolver
-/// recorded the use at.
-fn used_name(node: &SyntaxNode) -> Option<SyntaxToken> {
-    let identifiers = |node: &SyntaxNode| {
-        tokens(node)
-            .filter(|token| token.kind() == SyntaxKind::Ident)
-            .collect::<Vec<_>>()
-    };
-    match child(node, SyntaxKind::QualifiedName) {
-        Some(qualified) => identifiers(&qualified).into_iter().nth(1),
-        None => identifiers(node).into_iter().next(),
-    }
 }
 
 /// What a name in a constant expression stands for, `bound` being what
@@ -558,7 +527,7 @@ pub(crate) fn constant_value(
     // What a name of the expression stands for: another constant, of
     // this module or one it imports from.
     let name = |used: &SyntaxNode| {
-        let Some(name) = used_name(used) else {
+        let Some(name) = name_token(used) else {
             return ConstantValue::Unevaluated;
         };
         let binding = unit
@@ -1069,7 +1038,7 @@ impl Reader<'_> {
         if !compared {
             return false;
         }
-        let Some(name) = used_name(node) else {
+        let Some(name) = name_token(node) else {
             return false;
         };
         let Some(Binding::Local {
@@ -1740,7 +1709,7 @@ impl Reader<'_> {
         if node.kind() != SyntaxKind::NameExpr {
             return None;
         }
-        let name = used_name(node)?;
+        let name = name_token(node)?;
         let Some(Binding::Declarations {
             module,
             declarations,
@@ -1768,7 +1737,7 @@ impl Reader<'_> {
     /// `Quote`, `pc::Curve`, `Box<i64>`, or a generic parameter.
     fn named(&mut self, node: &SyntaxNode, position: Position) -> Type {
         let list = child(node, SyntaxKind::GenericArgs);
-        let name = used_name(node);
+        let name = name_token(node);
         let binding = name
             .as_ref()
             .and_then(|name| self.bindings.get(&(self.file, name.span().start)).copied());
@@ -2107,7 +2076,7 @@ impl Reader<'_> {
         {
             return None;
         }
-        let name = used_name(argument)?;
+        let name = name_token(argument)?;
         let &binding = self.bindings.get(&(self.file, name.span().start))?;
         let Binding::Local {
             at,
@@ -2327,7 +2296,7 @@ impl Reader<'_> {
         {
             return None;
         }
-        let name = used_name(node)?;
+        let name = name_token(node)?;
         let &binding = self.bindings.get(&(self.file, name.span().start))?;
         let value = match binding {
             Binding::Local {
@@ -2397,7 +2366,7 @@ impl Reader<'_> {
         // A closure: a function written in place, which may use what is
         // in scope around it; here, `self`.
         let name = |used: &SyntaxNode| {
-            let Some(name) = used_name(used) else {
+            let Some(name) = name_token(used) else {
                 return ConstantValue::Unevaluated;
             };
             let bound = self.bindings.get(&(self.file, name.span().start)).copied();
@@ -2418,7 +2387,7 @@ impl Reader<'_> {
             .descendants()
             .filter(|used| used.kind() == SyntaxKind::NameExpr)
             .filter_map(|used| {
-                let name = used_name(&used)?;
+                let name = name_token(&used)?;
                 match self.bindings.get(&(self.file, name.span().start)) {
                     Some(Binding::Local {
                         at,
@@ -2624,7 +2593,7 @@ impl Reader<'_> {
     /// True when the name `node` uses is bound to a function or an
     /// operator, and to no type.
     fn names_callable(&self, node: &SyntaxNode) -> bool {
-        let Some(name) = used_name(node) else {
+        let Some(name) = name_token(node) else {
             return false;
         };
         let Some(Binding::Declarations {
@@ -2707,7 +2676,7 @@ impl Reader<'_> {
 fn used_start(node: &SyntaxNode) -> Option<u32> {
     match child(node, SyntaxKind::QualifiedName) {
         Some(qualified) => Some(qualified.span().start),
-        None => used_name(node).map(|name| name.span().start),
+        None => name_token(node).map(|name| name.span().start),
     }
 }
 
