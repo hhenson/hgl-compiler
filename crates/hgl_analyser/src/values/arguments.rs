@@ -88,8 +88,24 @@ impl<'a> Typer<'a> {
                     && self.is_the_languages(&name)
                 {
                     let read = self.endpoint(operation, &name, &list);
-                    self.endpoint_generics(&name, generics, &read.0);
+                    if operation == EndpointOperation::Scheduled {
+                        self.scheduled_generics(node, &name);
+                    } else {
+                        self.endpoint_generics(&name, generics, &read.0);
+                    }
                     return read;
+                }
+                // So is `scheduled<T>()` where no hook stands: it is
+                // judged as `scheduled()` is there (`call_read`), and
+                // takes no generic argument.
+                if self.hook.is_none()
+                    && EndpointOperation::language_form(name.text())
+                        == Some(EndpointOperation::Scheduled)
+                    && self.is_the_languages(&name)
+                {
+                    self.scheduled_outside_hooks(self.at(node));
+                    self.scheduled_generics(node, &name);
+                    return self.unread_call(&list);
                 }
                 match (generics, self.declarations(&name)) {
                     (Some(generics), Some(found)) => {

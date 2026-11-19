@@ -7,7 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::Typer;
-use crate::hir::{Expr, ExprKind, LocalId};
+use crate::hir::{EndpointOperation, Expr, ExprKind, LocalId};
 use crate::program::{DeclarationKind, LocalKind};
 use crate::read::is_type;
 use crate::syntax::{child, name_token, tokens};
@@ -83,7 +83,8 @@ impl<'a> Typer<'a> {
     }
 
     /// The body of the anonymous function `function`, read where it is
-    /// written in a node, for what it reads there.
+    /// written, for what it reads of a node's inputs there and for its
+    /// selectors.
     ///
     /// FN-14: "An anonymous function's scope is the scope around it
     /// plus its parameters ... its body uses only parameters, generic
@@ -98,13 +99,22 @@ impl<'a> Typer<'a> {
     /// function is written is proved wherever it is called in that
     /// evaluation.
     ///
+    /// So is `scheduled()` in it, wherever the function is written:
+    /// TIME-9, "A node that injects neither rejects it
+    /// (`inject.no_scheduler`), and so do `start` and `stop`
+    /// (`scheduled.lifecycle`)", and FN-9, "A value function injects
+    /// none" (`scheduled.outside_node`). What the selector reports of
+    /// itself, where it stands and what it is given, does not depend on
+    /// the function's parameters, and stands.
+    ///
     /// The function's parameters and result take their types from its
     /// accepting form (FN-7), which is not read, and so do its `return`
     /// and its `?` (CTRL-5, ERR-5). A parameter is of the type written
     /// for it, or of none known. What the body declares, assigns or
     /// proves is taken back, and of what the walk reports only the
-    /// reads of the node's inputs stand: the rest would depend on those
-    /// types, and is not judged here.
+    /// reads of the node's inputs and the selectors' own reports stand:
+    /// the rest would depend on those types, and is not judged here. A
+    /// `return` in the function, read as the node's would be, is one.
     pub(super) fn anonymous_reads(&mut self, function: &SyntaxNode) {
         /// The reports of a read of a node's input where nothing admits
         /// it (TIME-1, TIME-4, TIME-5).
@@ -114,9 +124,25 @@ impl<'a> Typer<'a> {
             codes::STATE_INPUT_READ,
             codes::local::CACHE_INPUT_READ,
         ];
-        if !(self.hook.is_some() || self.initializing || self.caching) {
+        /// What `scheduled()` reports of itself: where it stands (TIME-9,
+        /// FN-9), and that it is given no argument and no generic
+        /// argument.
+        const OWN: [&str; 5] = [
+            codes::INJECT_NO_SCHEDULER,
+            codes::SCHEDULED_LIFECYCLE,
+            codes::local::SCHEDULED_OUTSIDE_NODE,
+            codes::ARGUMENT_UNEXPECTED,
+            codes::GENERIC_ARGUMENT_COUNT,
+        ];
+        let selectors = self.selectors_in(function);
+        // A read of a node's input stands only where a node's hook or
+        // initializer is read; elsewhere the walk is for the selectors.
+        if !(self.hook.is_some() || self.initializing || self.caching) && selectors.is_empty() {
             return;
         }
+        // CTRL-14: what the walk returns is the function's, not the
+        // graph's, and leaves the graph's result as it was.
+        let must_return = self.must_return;
         let mark = self.mark();
         let parameters = child(function, SyntaxKind::ParamList)
             .into_iter()
@@ -143,15 +169,64 @@ impl<'a> Typer<'a> {
         if let Some(body) = body {
             self.flow(&body, Some(&Type::Unknown), false);
         }
-        let reads: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
+        // A report of a selector's own, written within one.
+        let own = |code: &str, at: &Location| {
+            OWN.contains(&code)
+                && selectors.iter().any(|selector| {
+                    selector.file == at.file
+                        && selector.span.start <= at.span.start
+                        && at.span.end <= selector.span.end
+                })
+        };
+        let kept: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
             .iter()
-            .filter(|diagnostic| READS.contains(&diagnostic.code.as_str()))
+            .filter(|diagnostic| {
+                let code = diagnostic.code.as_str();
+                READS.contains(&code) || own(code, &diagnostic.primary)
+            })
             .cloned()
             .collect();
         self.take_back(mark, false);
-        for diagnostic in reads {
+        self.must_return = must_return;
+        for diagnostic in kept {
             self.diagnostics.emit(diagnostic);
         }
+    }
+
+    /// Where the anonymous function `function` calls the language's
+    /// `scheduled()` (TIME-9), each call from its name to its `)`: with
+    /// generic arguments or without, and through a name that nothing
+    /// binds, as the selector is read (`call_read`). A name a module or
+    /// a local binds is that one's.
+    fn selectors_in(&self, function: &SyntaxNode) -> Vec<Location> {
+        function
+            .descendants()
+            .filter_map(|call| {
+                let name = match call.kind() {
+                    SyntaxKind::CallExpr => call
+                        .children()
+                        .next()
+                        .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                        .and_then(|callee| name_token(&callee)),
+                    SyntaxKind::TypedConstructor => name_token(&call),
+                    // GEN-14: a form that reads two ways is a call only
+                    // where the resolver decided so.
+                    SyntaxKind::UndecidedConstructor => {
+                        let at = self.at(&call);
+                        self.module
+                            .decisions
+                            .iter()
+                            .any(|decision| decision.at == at && decision.constructor == Some(true))
+                            .then(|| name_token(&call))
+                            .flatten()
+                    }
+                    _ => None,
+                }?;
+                let selector = EndpointOperation::language_form(name.text())
+                    == Some(EndpointOperation::Scheduled);
+                (selector && self.is_the_languages(&name)).then(|| self.at(&call))
+            })
+            .collect()
     }
 
     /// How the capability named at `node` is retained where it stands,
