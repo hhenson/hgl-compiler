@@ -173,6 +173,10 @@ fn a_window_is_all_valid_and_its_value_a_list() {
         "fn scalar(reading: f64) -> bool {\n",
         "    when { return all_valid(reading) }\n",
         "}\n",
+        // A generic helper's `T` is the window's V.
+        "const fn count<T>(values: list<T>) -> i64 => 0\n",
+        "fn counted(reading: i64) -> i64 => count(collect(reading))\n",
+        "fn counted_by_name(reading: i64) -> i64 => count(values: collect(reading))\n",
     ));
     assert_eq!(
         checked.summary(),

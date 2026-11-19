@@ -78,20 +78,56 @@ impl<'a> Typer<'a> {
         self.fit(value, expected, what)
     }
 
-    /// The type `value` says the generic parameters of the place it is
-    /// given to stand for. GEN-11: "No type holds
-    /// a reference (TYPE-12), so argument inference removes none: a
-    /// generic binds from the type of the connection it is given, at a
-    /// `ref` parameter as at any other (FN-16)." A connection given to a
-    /// function's parameter in composition says it with the `?` that
-    /// marks omission removed, which is no part of what it is given
-    /// (TYPE-14).
-    pub(super) fn inferred_from(&self, value: &Expr, takes: Takes) -> Type {
-        if takes == Takes::Parameters && self.composes(value) {
-            value.ty.omission_removed().clone()
-        } else {
-            value.ty.clone()
+    /// The type `value` says the generic parameters of `pattern`, the
+    /// place it is given to, stand for; `listed` is true for a parameter
+    /// of a value function. GEN-11: "No type holds a reference
+    /// (TYPE-12), so argument inference removes none: a generic binds
+    /// from the type of the connection it is given, at a `ref` parameter
+    /// as at any other (FN-16)." A connection given to a function's
+    /// parameter in composition says it with the `?` that marks omission
+    /// removed, which is no part of what it is given (TYPE-14), and a
+    /// window's given to a value function's `list<V>` as the list it
+    /// holds (`lifted_window`).
+    pub(super) fn inferred_from(
+        &self,
+        pattern: &Type,
+        listed: bool,
+        value: &Expr,
+        takes: Takes,
+    ) -> Type {
+        if takes != Takes::Parameters || !self.composes(value) {
+            return value.ty.clone();
         }
+        let given = value.ty.omission_removed();
+        if listed
+            && matches!(pattern, Type::List { size: None, .. })
+            && matches!(given, Type::RollingWindow { .. })
+        {
+            return window_value(given);
+        }
+        given.clone()
+    }
+
+    /// True where `value`, given to a parameter of type `ty`, is a
+    /// window's connection given in composition to a value function's
+    /// `list<V>` (`listed`), which the function is lifted over. FN-12: "A
+    /// window is passed only where it is `all_valid` ... That value, read
+    /// in a hook or given to a lifted helper (FN-12), is a `list<V>` of
+    /// the values held" (TYPE-11).
+    pub(super) fn lifted_window(
+        &self,
+        ty: &Type,
+        listed: bool,
+        value: &Expr,
+        takes: Takes,
+    ) -> bool {
+        let given = value.ty.omission_removed();
+        takes == Takes::Parameters
+            && listed
+            && self.composes(value)
+            && matches!(given, Type::RollingWindow { .. })
+            && matches!(ty, Type::List { size: None, .. })
+            && self.admits(ty, &window_value(given))
     }
 
     /// Reports a value of type `ty` in a place that expects `expected`
