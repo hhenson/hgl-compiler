@@ -58,8 +58,7 @@ impl Emitter<'_> {
                 {
                     let ty = function.port_type(value);
                     if matches!(ty, Type::RollingWindow { .. }) {
-                        let window = ty.clone();
-                        return self.window_value(&window, &port, value.at);
+                        return self.window_value(&port);
                     }
                     let read = self.port_value(ty, &port, value.at);
                     if function.is_out(*local) {
@@ -115,7 +114,19 @@ impl Emitter<'_> {
                 // designation changed, and its `last_modified` when it
                 // last did, which are the `REF`'s own.
                 if function.designates(inputs[0]) {
+                    // `out` of a `ref` result in a `when`: what it
+                    // designates is the provider's `Designation`'s, which
+                    // writes it as the evaluation ends.
+                    let kept = function.designating() && function.is_out(inputs[0]);
                     return match operation {
+                        EndpointOperation::Invalidate if kept => {
+                            "_designation.invalidate()".to_string()
+                        }
+                        EndpointOperation::Valid if kept => "_designation.valid".to_string(),
+                        EndpointOperation::Modified if kept => "_designation.modified".to_string(),
+                        EndpointOperation::LastModified if kept => {
+                            "_designation.last_modified".to_string()
+                        }
                         EndpointOperation::Valid => format!("{input}.valid"),
                         EndpointOperation::Modified => format!("{input}.modified"),
                         EndpointOperation::LastModified => {
@@ -135,18 +146,13 @@ impl Emitter<'_> {
                     };
                 }
                 // The endpoint of what holds a window, itself or within
-                // (`windows_in`): an input's readiness is asked of its
-                // parameter (`window_inputs`), and `out`'s here.
-                // hgraph's `TSW` keeps what it holds when it is
-                // invalidated, where END-4 has "Invalidation clears
-                // validity, modification, payload, and delta".
-                if !windows_in(self.program, &endpoint.ty).is_empty() {
-                    if endpoint.kind == LocalKind::Inject {
-                        self.readable_window(&endpoint.ty, value.at);
-                    }
-                    if matches!(operation, EndpointOperation::Invalidate) {
-                        self.unsupported(value.at, "the invalidation of a window");
-                    }
+                // (`windows_in`). hgraph's `TSW` keeps what it holds
+                // when it is invalidated, where END-4 has "Invalidation
+                // clears validity, modification, payload, and delta".
+                if !windows_in(self.program, &endpoint.ty).is_empty()
+                    && matches!(operation, EndpointOperation::Invalidate)
+                {
+                    self.unsupported(value.at, "the invalidation of a window");
                 }
                 match operation {
                     // TIME-9, END-7: "`valid` of a collection is true where any
@@ -452,8 +458,8 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && self.reads_child(function, value) =>
             {
-                // TYPE-11: a window child's value is read as a `list<V>`,
-                // which the child's port is not.
+                // TYPE-11: a window child's value is read as a `list<V>`
+                // (`window_value`), which the child's port is not.
                 let window_child = match &value.kind {
                     ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
                         .is_some_and(|field| matches!(field.ty, Type::RollingWindow { .. })),
@@ -468,11 +474,8 @@ impl Emitter<'_> {
                     },
                     _ => false,
                 };
-                if window_child {
-                    self.unsupported(value.at, "a window's value inside another value");
-                    return "None".to_string();
-                }
                 match self.child_port(function, value) {
+                    Some(port) if window_child => self.window_value(&port),
                     Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
                         self.unsupported(value.at, "this read of a child");
@@ -1040,34 +1043,29 @@ impl Emitter<'_> {
         }
     }
 
-    /// The reference `value` designates, a designation (`designates`)
-    /// given to a `ref` result by a `return` or `out =` (FN-16). Of a
-    /// `ref` parameter it is the reference its `REF` input holds, its
-    /// `value`; of a temporal input that is no `ref` parameter, and of a
-    /// position of a fixed list that is one, it is the reference the
-    /// hidden `REF` input the node is given beside it holds
-    /// (`Designated`). `None`, reported, for one not written yet.
+    /// What `value` designates, a designation (`designates`) given to a
+    /// `ref` result by a `return` or `out =` (FN-16), as the provider's
+    /// `Designation` is told it: the name of the hidden `REF` input the
+    /// node is given for the input it names (`Designated`), and the
+    /// index of a fixed list's position where it names one. `None`,
+    /// reported, for one not written yet.
     pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<String> {
-        if let ExprKind::EndpointOf(local) = value.kind
-            && function.is_reference(local)
-        {
-            return Some(format!("{}.value", endpoint_name(&function.locals[local])));
-        }
+        let port = |emitter: &Self, local: usize| {
+            emitter
+                .designated
+                .iter()
+                .find(|(designated, _)| *designated == local)
+                .map(|(_, port)| string(port))
+        };
         match (designated(function, value), &value.kind) {
-            (Some((local, Designated::Whole)), _) => Some(format!(
-                "{}.value",
-                designated_name(&function.locals[local])
-            )),
+            (Some((local, Designated::Whole)), _) => port(self, local),
             (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
                 let ExprKind::Index { index, .. } = &child.kind else {
                     return None;
                 };
+                let port = port(self, local)?;
                 let index = self.expression(function, index);
-                self.natives = true;
-                Some(format!(
-                    "_core.position_of({}, {index}).value",
-                    designated_name(&function.locals[local])
-                ))
+                Some(format!("{port}, {index}"))
             }
             _ => {
                 // hgraph gives a `REF` input of a list no reference of
@@ -1360,7 +1358,23 @@ impl Emitter<'_> {
             self.unsupported(at, "this read of a child");
             return "None".to_string();
         };
-        let value = self.part_value(&read.ty, "_port", at);
+        // A window's value is read as the `list<V>` it holds, and fails
+        // where the window is not all valid (TYPE-11, `window_value`).
+        // ERR-14 gives the `err` of a child that is not valid, and does
+        // not say what a window that is valid and not all valid gives
+        // where the place takes a `result`.
+        let value = if matches!(read.ty, Type::RollingWindow { .. }) {
+            if result {
+                self.unsupported(
+                    at,
+                    "a window's value read where its place takes a `result` (ERR-14)",
+                );
+                return "None".to_string();
+            }
+            self.window_value("_port")
+        } else {
+            self.part_value(&read.ty, "_port", at)
+        };
         let of = if result {
             "checked_child_result"
         } else {
@@ -1406,18 +1420,14 @@ impl Emitter<'_> {
         }
     }
 
-    /// The value of a window input or `out`, `port`, of the window type
-    /// `window`, read in a hook. TYPE-11: "That value, read in a hook ...
-    /// is a `list<V>` of the values held, oldest first", and core's END-9:
-    /// "The read gives a `list<V>` of the values held", as hgraph's `TSW`
-    /// holds them (`_core.window_values`). Only a window whose readiness
-    /// this target writes is read (`readable_window`): one of ticks whose
-    /// minimum is one, all valid at its first value; where a read must
-    /// fail before it is all valid (END-9), it is reported.
-    fn window_value(&mut self, window: &Type, port: &str, at: Location) -> String {
-        if !self.readable_window(window, at) {
-            return "None".to_string();
-        }
+    /// The value of a window, an input, `out` or a child of either, read
+    /// in a hook through its endpoint `port`. TYPE-11: "That value, read
+    /// in a hook ... is a `list<V>` of the values held, oldest first, and
+    /// the read before `all_valid` fails with `value.unset_read`", as
+    /// core's END-9 has it. hgraph's `TSW` holds them, and reads them
+    /// before it is all valid too: the provider's `window_values` fails
+    /// that read.
+    pub(super) fn window_value(&mut self, port: &str) -> String {
         self.natives = true;
         format!("_core.window_values({port})")
     }

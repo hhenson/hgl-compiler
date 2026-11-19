@@ -362,10 +362,11 @@ transpiler: partial
 transpiler: partial
 
 - hgraph: `invalidate(out)` clears the output; one that holds an unsized list empties each list first (`_core.invalidated`), since hgraph's `TSL` keeps its positions, which the next delta read would name removed
+- `invalidate(out)` of a `ref` result (FN-16, proposed: `out` of one takes the endpoint operations) leaves it designating nothing: hgraph's empty reference, which unbinds a reader, then the invalidation, so a `ref` parameter given it is not valid, and modified; the last action of the evaluation decides (`_core.Designation`)
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
-- Left: invalidation across unsupported structural shapes
+- Left: invalidation across unsupported structural shapes; an ordinary input bound to a `ref` result that comes to designate nothing, or what is not valid, is not woken, as hgraph has it
 
 ## END-5
 
@@ -421,8 +422,9 @@ analyser: partial
 
 transpiler: partial
 
-- hgraph: a window of ticks whose minimum is one is valid and all valid at its first value, its `TSW`'s own, and read in a hook as the `list<V>` it holds, oldest first
-- Left, reported: the readiness of a window whose minimum is more than one tick or a duration, all valid at its minimum or at a span of it, and its value's read failing before (`value.unset_read`); a window given to a lifted helper
+- hgraph: a window is valid at its first value and all valid at its minimum, a count of ticks or its arrivals' span, the `TSW`'s own, with a minimum of zero written as the maximum; a value leaves a window of a duration as the next arrives, and its exit is no tick
+- Its value is read in a hook, and given to a lifted helper where it is all valid, as the `list<V>` it holds, oldest first, and fails before with `value.unset_read` (`_core.window_values`); core's window cases pass
+- Left, reported: a window of a value that is no scalar or enum (TYPE-11), and invalidating one (END-4)
 
 ## END-10
 
@@ -432,7 +434,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included, and the node is not woken by that endpoint's ticks; a designation the result holds already is not published again
+- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included (the provider's `Designation`, through an active `REF` input), and the node is not woken by that endpoint's ticks; a designation the result held before the evaluation is not published again, after any number of writes
 - Proposed, and as hgraph has it: `modified`, `valid` and `last_modified` of a `ref` parameter ask of its designation
 - Left, reported: what FN-16's entry lists
 

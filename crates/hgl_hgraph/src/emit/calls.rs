@@ -183,6 +183,21 @@ impl<'a> Emitter<'a> {
                         written
                     }
                 };
+                let value = if parameter.reference
+                    && function.mode == Mode::Graph
+                    && !self.connects(function, &argument.value)
+                {
+                    self.designated_constant(
+                        callee,
+                        generics,
+                        index,
+                        parameter,
+                        &argument.value,
+                        value,
+                    )
+                } else {
+                    value
+                };
                 let value = self.held_value(kept[index], value);
                 Some(format!("{}={value}", name(&parameter.name)))
             })
@@ -200,6 +215,53 @@ impl<'a> Emitter<'a> {
             }
         }
         written.join(", ")
+    }
+
+    /// `written`, the ordinary value `value` a graph gives the `ref`
+    /// parameter `index` of `callee`, with `generics`, wired as a
+    /// constant connection. FN-3: "An ordinary value of type T is
+    /// accepted where composition expects a connection of T, and is
+    /// wired as a constant, one publication when the graph starts", and
+    /// FN-16: "A connection of T is given to a `ref` parameter", which
+    /// designates it. hgraph would wire the value as a constant of its
+    /// `REF`, which takes no value. The connection is of the parameter's
+    /// type, as the instance the call names has it: a nullable scalar's
+    /// is a `TS` of it or `None`, as a nullable place's is.
+    fn designated_constant(
+        &mut self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+        index: usize,
+        parameter: &Parameter,
+        value: &Expr,
+        written: String,
+    ) -> String {
+        let ty = self
+            .instance_signature(callee, generics)
+            .and_then(|signature| signature.parameters.get(index))
+            .map_or(&parameter.ty, |parameter| &parameter.ty)
+            .clone();
+        match &ty {
+            Type::Nullable(inner) if whole_scalar(inner) => {
+                let Some(scalar) = self.annotation(inner, false, value.at) else {
+                    return "None".to_string();
+                };
+                self.natives = true;
+                self.hgraph = true;
+                format!("_hg.const(_core.published({written}), _hg.TS[{scalar} | None])")
+            }
+            ty if is_nullable(ty) => {
+                self.unsupported(
+                    value.at,
+                    "a constant given to a nullable `ref` parameter of this type",
+                );
+                "None".to_string()
+            }
+            ty => {
+                self.hgraph = true;
+                self.constant_connection(ty, value.at, written)
+            }
+        }
     }
 
     /// What a call of the function `callee`, with `generics`, binds
@@ -230,14 +292,18 @@ impl<'a> Emitter<'a> {
             .instance_signature(callee, generics)
             .and_then(|signature| signature.parameters.get(index))
             .map_or(&parameter.ty, |parameter| &parameter.ty);
-        Some(self.never_valid(ty, parameter.at))
+        Some(self.never_valid(ty, parameter.reference, parameter.at))
     }
 
     /// What a temporal input of `ty` left out is bound to (UNIT-8: "an
     /// omitted temporal input is never valid"): hgraph's `nothing`, an
     /// output of the input's type that never ticks. A `signal` is bound
-    /// to one of a `bool`, as it may be bound to any output.
-    fn never_valid(&mut self, ty: &Type, at: Location) -> String {
+    /// to one of a `bool`, as it may be bound to any output. A `ref`
+    /// parameter, where `reference`, is bound to a reference output that
+    /// never ticks, which designates nothing: its `REF` is never valid,
+    /// where one bound to an output of the type would hold a reference
+    /// to it.
+    fn never_valid(&mut self, ty: &Type, reference: bool, at: Location) -> String {
         let annotation = match ty.omission_removed() {
             Type::Signal => Some("_hg.TS[_py.bool]".to_string()),
             _ => self.annotation(ty, true, at),
@@ -246,6 +312,9 @@ impl<'a> Emitter<'a> {
             return "None".to_string();
         };
         self.hgraph = true;
+        if reference {
+            return format!("_hg.nothing(tp={})", designating(&annotation));
+        }
         format!("_hg.nothing(tp={annotation})")
     }
 
@@ -494,6 +563,32 @@ impl<'a> Emitter<'a> {
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let python = name(&parameter.name);
             match bound.get(index).and_then(Option::as_ref) {
+                // FN-12: "A window is passed only where it is `all_valid`:
+                // its value is not read before (TYPE-11)", and TYPE-11:
+                // "That value ... given to a lifted helper (FN-12), is a
+                // `list<V>` of the values held, oldest first". Core's
+                // lifting table: a window that is not all valid is "No
+                // invocation". The node requires it valid, as hgraph's
+                // `valid=` does, and invokes the helper where it is all
+                // valid. FN-11 binds a parameter's default or null where
+                // its input is not valid, and does not say what a window
+                // that is valid and not all valid binds: that is
+                // reported.
+                Some(Bound::Input(ty)) if matches!(ty, Type::RollingWindow { .. }) => {
+                    inputs += 1;
+                    let annotation = self.annotation_or_object(ty, true, at);
+                    parameters.push(format!("{python}: {annotation}"));
+                    if parameter.has_default || matches!(parameter.ty, Type::Nullable(_)) {
+                        self.unsupported(
+                            at,
+                            "a window given to a lifted helper's parameter that has a default (FN-11)",
+                        );
+                    }
+                    let read = self.window_value(&python);
+                    passed.push(format!("{python}={read}"));
+                    admitted.push(format!("{python}.all_valid"));
+                    required.push(python);
+                }
                 Some(Bound::Input(ty)) => {
                     inputs += 1;
                     let annotation = self.annotation_or_object(ty, true, at);
@@ -635,17 +730,6 @@ impl<'a> Emitter<'a> {
                 self.unsupported(argument.value.at, "an argument of a pack in a lifted call");
                 continue;
             };
-            // FN-12: "A window is passed only where it is `all_valid`",
-            // as the `list<V>` it holds (TYPE-11): not written yet.
-            if input(self, &argument.value)
-                .is_some_and(|ty| matches!(ty.omission_removed(), Type::RollingWindow { .. }))
-            {
-                self.unsupported(
-                    argument.value.at,
-                    "a window given to a lifted helper (FN-12)",
-                );
-                continue;
-            }
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
                 // target": a lifted function given a `ref` result takes

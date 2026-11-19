@@ -157,7 +157,7 @@ transpiler: partial
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
 - `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4)
-- A window's `valid` and `all_valid` are the `TSW`'s, for a window of ticks whose minimum is one
+- A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
 - Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
 - `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
 
@@ -170,6 +170,6 @@ analyser: done
 transpiler: partial
 
 - hgraph: a `ref` parameter, a `REF` input, ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `ref` result, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
-- A designation published again unchanged is no tick: a node does not publish the reference its result holds (`_core.designation`, `_core.designate`)
+- A designation published again unchanged is no tick: a node publishes its result where it designates what it did not before the evaluation, so writes that end where they began are none (`_core.Designation`)
 - Proposed, and as hgraph has it: a `ref` parameter's `valid` is true where it designates something, `modified` where its designation changed, and `last_modified` is when it last did, each the `REF`'s own
 - Left: a route kept to a removed child

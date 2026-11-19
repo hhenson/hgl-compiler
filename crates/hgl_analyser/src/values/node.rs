@@ -135,6 +135,11 @@ impl<'a> Typer<'a> {
         let time = self.expression(&time, None);
         let result = self.signature.result.clone();
         let value = match &result {
+            // TIME-7: "A `ref` result takes no value", and a source has
+            // no temporal parameters (SOURCE-1), so a `yield` to one
+            // names no endpoint: "A value that names no endpoint rejects
+            // there (`type.mismatch`)" (FN-16).
+            Some(result) if self.signature.reference => self.designation(&value, result),
             Some(result) => self.published(&value, result, "the source's result"),
             // A source with no result has nothing for a value to be:
             // it is read for what it reports itself.

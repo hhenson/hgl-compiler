@@ -126,6 +126,8 @@ transpiler: partial
 - hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
 - A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
 - A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
+- A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds
+- Left, reported: a window given to a parameter with a default, which FN-11 does not say what binds where the window is valid and not all valid
 - Left, reported: a window given to a lifted helper
 
 ## FN-13
@@ -180,13 +182,15 @@ analyser: partial
 - The mark is recorded on the parameter and on the signature, and is no part of the type (`Parameter::reference`, `Signature::reference`): a caller, a graph among them, gives a `ref` parameter a connection of its type, and a `ref` result is a connection of its type
 - A mark on a value function, a value candidate, a graph, an operator, or a native implementation part that is a graph (`{}`) is `ref.position`, a code whose row is proposed; a node, a temporal candidate that is one, and a native temporal declaration with no body take it
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, a code whose row is proposed; an atomic projection, an iteration, a comparison and a call that reads one among them
-- A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`
+- A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
 
 transpiler: partial
 
 - hgraph: a `ref` parameter and a `ref` result are hgraph's `REF` of the type, bound to and by connections of it as they are; `valid`, `modified`, `last_modified` and activity are the `REF`'s own
-- `return low` of a `ref` parameter is the reference it holds; `return value` of an input that is no `ref` parameter, and `return items[idx]` of a fixed list's position, read a hidden `REF` input the node is given beside it through a graph of the function's name; `out =` designates alike
+- The provider's `Designation` keeps what the result designates: `return low` of a `ref` parameter, `return value` of an input that is no `ref` parameter, and `return items[idx]` of a fixed list's position designate that endpoint, read through a `REF` input, a hidden one beside it, given by a graph of the function's name, where the input is no `ref` parameter or may be passive, and one for each position of a fixed list, which the graph, taking the list as a `REF`, gives each position: hgraph binds that wherever the list comes from, a `ref` result or a graph's `if` among them; `out =` designates alike
+- A re-binding upstream of the endpoint the result designates is followed, and the node is not woken for it: the hidden `REF` input is active, the node returns before its handlers where no active input of its own, its scheduler or its alarm woke it, and no validity is the whole node's
 - A reference the result holds already is not published again (TIME-10, END-10)
+- An ordinary value a graph gives a `ref` parameter, a literal, a constant, a `const` parameter or an all-scalar call, is wired as a constant connection of the parameter's type, which it designates (FN-3)
 - A struct's connection given to a `ref` parameter of a struct it inherits from, and a `ref` result given where one is expected, are narrowed as any connection is (TYPE-3); an eval of a `ref` result records what it designates
-- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node; a `ref` result of a source
+- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node

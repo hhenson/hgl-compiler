@@ -3733,9 +3733,10 @@ fn a_window_is_hgraphs_tsw() {
         format!("_output: _hg.TSW_OUT[_py.float, _hg.WindowSize[3], _hg.WindowSize[1]] = None) -> {ticks}:"),
         "    if ((not _output.valid) and ".to_string(),
         "    _output.value = price.value\n".to_string(),
+        // TYPE-11: "a minimum of `0s` being read as Max".
         concat!(
         "-> _hg.TSW[_py.float, _hg.WindowSize[_dt.timedelta(microseconds=5000000)], ",
-        "_hg.WindowSize[_dt.timedelta(microseconds=0)]]:"
+        "_hg.WindowSize[_dt.timedelta(microseconds=5000000)]]:"
         )
         .to_string(),
         "-> _hg.TSW[_py.float, _hg.WindowSize[1]]:".to_string(),
@@ -3777,15 +3778,12 @@ fn a_window_is_hgraphs_tsw() {
     ]);
 }
 
-/// What this target does not write of a window is reported. Core's END-9
-/// gives a window's readiness, which this target writes only for a
-/// window of ticks whose minimum is one, ready at its first value: an
-/// input or `out` read otherwise, and an eval's record of such a window,
-/// are reported. So are the invalidation of a window, which hgraph's
-/// `TSW` survives with what it holds, and a window of a value that is no
-/// scalar or enum, and a window given to a lifted helper as a `list<V>`
-/// (FN-12). A window whose minimum is one is read in a hook as the
-/// `list<V>` it holds, oldest first (TYPE-11).
+/// What this target does not write of a window is reported: the
+/// invalidation of a window, which hgraph's `TSW` survives with what it
+/// holds, and a window of a value that is no scalar or enum. Core's END-9
+/// gives every window's readiness, of ticks and of a duration, which is
+/// written: an input or `out` read at any minimum, a window given to a
+/// lifted helper as a `list<V>` (FN-12), and an eval's record of a window.
 #[test]
 fn a_window_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3800,32 +3798,19 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         reported,
         [
-            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
-            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
             "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
             "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
             "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
-            "m.hgl:39:39 target.unsupported: the hgraph target does not write a window given to a lifted helper (FN-12) yet",
         ]
     );
-    // The record of `recent`'s window is core's, which reads it.
-    let blocked = emitted.blocked("recorded").expect("the test is blocked");
-    assert!(
-        blocked.ends_with(
-            "the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s>` yet"
-        ),
-        "{blocked}"
-    );
+    // The record of `recent`'s window is core's, which is written.
+    assert_eq!(emitted.blocked("recorded"), None);
 }
 
 /// TYPE-9: a window inside a struct, a tuple, a list or a dictionary is
-/// a child of its own, and a value that holds one is read as the window
-/// is (`windows_in`). A node reads it only where each window it holds
-/// has a minimum of one tick (FN-12, `readable_window`): an input's or
-/// `out`'s readiness is reported otherwise. What a window holds is not
-/// read, whole or as a part of the value that holds it, and `out` that
-/// holds one is not invalidated.
+/// a child of its own, read as its `list<V>` where it is admitted
+/// (TYPE-11, TIME-1). A value that holds one is not read whole, and `out`
+/// that holds one is not invalidated.
 #[test]
 fn a_window_within_a_value_is_reported_where_it_is_read() {
     let emitted = emit(&[fixture!(
@@ -3835,19 +3820,11 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
     assert_eq!(
         emitted.reported,
         [
-            // The readiness of a field's window, of a list's element of
-            // a duration, of a dictionary's value, and of `out`'s field.
-            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
-            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
-            // A struct read whole, bound whole, its window field, a
-            // dictionary of windows bound whole, a tuple's window.
+            // A struct read whole, bound whole, and a dictionary of
+            // windows bound whole.
             "m.hgl:27:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:31:20 target.unsupported: the hgraph target does not write a window's value inside another value yet",
-            "m.hgl:37:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             "m.hgl:43:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
-            "m.hgl:49:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             // `out` that holds a window, invalidated.
             "m.hgl:55:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
         ]
@@ -3879,6 +3856,93 @@ fn a_window_a_target_cannot_carry_is_reported() {
             "m.hgl:38:9 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
             "m.hgl:45:34 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
             "m.hgl:50:12 target.unsupported: the hgraph target does not write a window that one evaluation may publish to more than once yet",
+        ]
+    );
+}
+
+/// TYPE-11 and core's END-9: a window is valid "once it holds a value,
+/// fewer than its minimum included", and all valid "where it holds at
+/// least its minimum": hgraph's `TSW`'s own `valid` and `all_valid`, of
+/// ticks and of a duration's span, "a minimum of `0s` being read as Max".
+/// Its value, "read in a hook or given to a lifted helper (FN-12), is a
+/// `list<V>` of the values held, oldest first, and the read before
+/// `all_valid` fails with `value.unset_read`" (`_core.window_values`): an
+/// input's, `out`'s, a child's read where it is admitted and one checked
+/// when it runs (TIME-1), and in `stop`. FN-12: "A window is passed only
+/// where it is `all_valid`": a lifted helper is invoked only there. The
+/// fixture's tests run on hgraph with the others.
+#[test]
+fn a_windows_readiness_and_its_list_are_written() {
+    let emitted = emit_clean(&[fixture!("demo.windows_wave3.hgl")]);
+    let python = emitted.module("demo.windows_wave3");
+    let ticks = "_hg.TSW[_py.int, _hg.WindowSize[3], _hg.WindowSize[2]]";
+    let seconds = |count: i64| {
+        format!(
+            "_hg.WindowSize[_dt.timedelta(microseconds={})]",
+            count * 1_000_000
+        )
+    };
+    python.assert_writes(&[
+        format!("def readings(reading: _hg.TS[_py.int]) -> {ticks}:"),
+        "    return _py.tuple([held.valid, held.all_valid])\n".to_string(),
+        // A read whole, under ordinary validity and under `all_valid`.
+        "    return _core.list_replaced(_output, _core.window_values(held))\n".to_string(),
+        "    if held.all_valid:\n        return _core.list_replaced(_output, _core.window_values(held))\n"
+            .to_string(),
+        "        for value in _core.window_values(held):\n".to_string(),
+        "_core.eq__T_T(lhs=_core.window_values(held), rhs=[1, 2])".to_string(),
+        "_core.item(_core.window_values(held), 0)".to_string(),
+        // FN-12: lifted where it is all valid, one window and two.
+        format!(
+            "(values: {ticks}) -> _hg.TS[_py.int]:\n    if not (values.all_valid):\n        return\n    return total(values=_core.window_values(values))\n"
+        ),
+        "    if not (first.all_valid and second.all_valid):\n        return\n    return longer(first=_core.window_values(first), second=_core.window_values(second))\n"
+            .to_string(),
+        // `out`, `stop`, and a child: a field, a position, and one read
+        // when it runs.
+        "total(values=_core.window_values(_output))".to_string(),
+        "    if held.valid:\n        _state.last = total(values=_core.window_values(held))\n".to_string(),
+        "_core.window_values(book[\"prices\"])".to_string(),
+        "_core.window_values(_core.position_of(both, 0))".to_string(),
+        "_core.checked_child(_core.position_of(both, at.value), lambda _port: _core.window_values(_port))"
+            .to_string(),
+        "_core.window_values(_core.entry_port(prices, \"a\"))".to_string(),
+        "_core.checked_child(_core.entry_port(prices, key.value), lambda _port: _core.window_values(_port))"
+            .to_string(),
+        "_core.checked_child(_core.position_of(rows, at.value)[\"prices\"], lambda _port: _core.window_values(_port))"
+            .to_string(),
+        // A duration, and a minimum of `0s` written as the maximum.
+        format!("-> _hg.TSW[_py.float, {}, {}]:", seconds(3), seconds(2)),
+        format!(
+            "def collect_from_zero(price: _hg.TS[_py.float]) -> _hg.TSW[_py.float, {}, {}]:",
+            seconds(3),
+            seconds(3)
+        ),
+        format!(
+            "def collect_whole(price: _hg.TS[_py.float]) -> _hg.TSW[_py.float, {}]:",
+            seconds(3)
+        ),
+    ]);
+}
+
+/// Where the pinned rules do not say what a window's read gives, it is
+/// reported. FN-11 binds a lifted parameter's default where its input is
+/// not valid, and FN-12 passes a window only where it is all valid: what
+/// a window that is valid and not all valid binds to a parameter with a
+/// default is not said. ERR-14 gives `err` for a child that is not valid
+/// where the place takes a `result`, and not for a window child that is
+/// valid and not all valid.
+#[test]
+fn a_window_read_the_rules_do_not_settle_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_window_read_the_rules_do_not_settle_is_reported",
+        "m.hgl"
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:10:38 target.unsupported: the hgraph target does not write a window given to a lifted helper's parameter that has a default (FN-11) yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a window's value read where its place takes a `result` (ERR-14) yet",
         ]
     );
 }
@@ -5427,10 +5491,13 @@ const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 /// A `ref` parameter and a `ref` result are hgraph's `REF` of their type,
 /// and a `signal` its `SIGNAL`. A node returns a `ref` parameter's value,
 /// the reference it holds, to re-point what follows it, and publishes no
-/// reference its result holds already (END-10). An input that is no `ref`
-/// parameter, and a fixed list's position of one, is designated through a
-/// hidden `REF` input that a graph of the function's name gives it the
-/// input twice. A graph passes a `ref` result on as it is, and hgraph
+/// reference its result holds already (END-10): the provider's
+/// `Designation` keeps what it designates. An input that is no `ref`
+/// parameter, is designated through a hidden `REF` input that a graph of
+/// the function's name gives it the input twice, and a fixed list's
+/// position through one for each position, which the graph, taking the
+/// list as a `REF`, gives each position: each is active, and the node
+/// returns before its handlers where no input of its own woke it. A graph passes a `ref` result on as it is, and hgraph
 /// binds an ordinary input, a lifted node's among them, to what it
 /// designates. A generic input is written for the connection's type. A
 /// `signal?` left out is bound to an output that never ticks (UNIT-8), by
@@ -5444,22 +5511,33 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
     python.assert_writes(&[
         format!(
             "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}, \
-             _output: _hg.TS_OUT[{reference}] = None) -> {reference}:"
+             _output: _hg.TS_OUT[{reference}] = None, _state: _hg.STATE = None) -> {reference}:"
         ),
-        "        return _core.designation(_output, left.value)\n".to_string(),
-        "    if (target.valid and target.modified):\n        return _core.designation(_output, target.value)\n"
+        "    _designation = _core.Designation(_output, _state, {\"left\": left, \"right\": right})\n"
+            .to_string(),
+        "        return _designation.returned(\"left\")\n".to_string(),
+        "        if (target.valid and target.modified):\n            return _designation.returned(\"target\")\n"
             .to_string(),
         format!("def checked(target: {reference}) -> _hg.TS[_py.bool]:\n    if target.modified:\n        return target.valid\n"),
-        "@_hg.compute_node(active=(\"idx\",), valid=(\"idx\", \"items\"))\n\
-         def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
-         _ref_items: _hg.TSL[_hg.REF[_hg.TS[_py.int]], _hg.Size[3]], "
+        format!(
+            "@_hg.compute_node(active=(\"idx\", \"_ref0_items\", \"_ref1_items\", \"_ref2_items\"), valid=())\n\
+             def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
+             _ref0_items: {reference}, _ref1_items: {reference}, _ref2_items: {reference}, "
+        ),
+        "    _designation = _core.Designation(_output, _state, \
+         {\"_ref_items\": (_ref0_items, _ref1_items, _ref2_items,)})\n\
+         \x20   if not (idx.modified or idx.invalidated):\n\
+         \x20       return _designation.published()\n"
             .to_string(),
-        "        return _core.designation(_output, _core.position_of(_ref_items, idx.value).value)\n"
+        "        return _designation.returned(\"_ref_items\", idx.value)\n".to_string(),
+        format!(
+            "def route(idx: _hg.TS[_py.int], items: _hg.REF[_hg.TSL[_hg.TS[_py.int], _hg.Size[3]]]) \
+             -> {reference}:\n    return _node_route(idx=idx, items=items, _ref0_items=items[0], \
+             _ref1_items=items[1], _ref2_items=items[2])\n"
+        ),
+        "        _designation.designate(\"_ref_items\", idx.value)\n    return _designation.published()\n"
             .to_string(),
-        "    return _node_route(idx=idx, items=items, _ref_items=items)\n".to_string(),
-        "        _core.designate(_output, _core.position_of(_ref_items, idx.value).value)\n"
-            .to_string(),
-        "        return _core.designation(_output, _ref_value.value)\n".to_string(),
+        "        return _designation.returned(\"_ref_value\")\n".to_string(),
         "    return _node_hold(flag=flag, value=value, _ref_value=value)\n".to_string(),
         "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:"
             .to_string(),
@@ -5527,6 +5605,68 @@ fn what_a_ref_cannot_be_given_yet_is_reported() {
             "m.hgl:12:19 target.unsupported: the hgraph target does not write a child of a `ref` parameter designated yet",
         ]
     );
+}
+
+/// FN-16: "The result designates the logical endpoint that path names:
+/// its readers follow what that endpoint is bound to, a later re-binding
+/// upstream included, and the node is not woken for it." TIME-10: "A
+/// reference ticks where its designation changes".
+const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
+
+/// A `ref` parameter a node may not be woken by is given to it a second
+/// time, as a hidden `REF` input that is active, as an input that is no
+/// `ref` parameter is: the provider's `Designation` follows a re-binding
+/// of the one the result designates, and the node returns before its
+/// handlers where no active input of its own woke it. No validity is the
+/// whole node's, so a re-binding to an endpoint that is not valid is
+/// followed too: each handler asks its own. What an evaluation writes is
+/// published as it ends, an invalidation among it. A constant given to a
+/// `ref` parameter is a constant connection, and one left out designates
+/// nothing.
+#[test]
+fn a_designation_follows_a_re_binding_upstream() {
+    let emitted = emit_clean(&[REFS_WAVE3]);
+    let python = emitted.module("demo.refs_wave3");
+    let reference = "_hg.REF[_hg.TS[_py.int]]";
+    python.assert_writes(&[
+        format!(
+            "@_hg.compute_node(active=(\"once\", \"_ref_target\"), valid=())\n\
+             def _node_pass_on(once: _hg.TS[_py.bool], target: {reference}, \
+             _ref_target: {reference}, "
+        ),
+        "    _designation = _core.Designation(_output, _state, {\"_ref_target\": _ref_target})\n\
+         \x20   if not (once.modified or once.invalidated):\n\
+         \x20       return _designation.published()\n\
+         \x20   if once.valid and target.valid and once.modified:\n\
+         \x20       return _designation.returned(\"_ref_target\")\n\
+         \x20   return _designation.published()\n"
+            .to_string(),
+        "    return _node_pass_on(once=once, target=target, _ref_target=target)\n".to_string(),
+        // An input whose activity the body changes is asked whether it is
+        // active.
+        "    if not (((once.modified or once.invalidated) and once.active) or \
+         ((data.modified or data.invalidated) and data.active) or "
+            .to_string(),
+        // TIME-10: "A designation published again unchanged is no tick":
+        // the writes of an evaluation are kept, and what the node returns
+        // is compared with what the result held before it.
+        "        _designation.designate(\"_ref_a\")\n\
+         \x20       _designation.designate(\"_ref_b\")\n\
+         \x20   return _designation.published()\n"
+            .to_string(),
+        // END-4: `invalidate(out)` of a `ref` result leaves it designating
+        // nothing, which the node publishes as it ends.
+        "        _designation.invalidate()\n    return _designation.published()\n".to_string(),
+        // FN-3: an ordinary value given to a `ref` parameter is wired as a
+        // constant connection of its type, which it designates.
+        "    return designations(target=_hg.const(5))\n".to_string(),
+        "    return nullable_designations(target=_hg.const(_core.published(None), _hg.TS[_py.int | None]))\n"
+            .to_string(),
+        // UNIT-8: "an omitted temporal input is never valid": a `ref`
+        // parameter left out is bound to a reference that never ticks.
+        "    return optional_valid(probe=probe, x=_hg.nothing(tp=_hg.REF[_hg.TS[_py.int | None]]))\n"
+            .to_string(),
+    ]);
 }
 
 /// Two zoned datetimes compared (TYPE-2, OPS-2), a duration moving a
