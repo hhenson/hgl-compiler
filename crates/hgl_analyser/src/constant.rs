@@ -1333,14 +1333,16 @@ fn binary(
         .find_map(|token| binary_operator(token.kind()))
         .ok_or(Fault::NotConstant)?;
     // GEN-5: "where a candidate that gives the requested output takes
-    // every integer literal as an `i64`, none is widened". `+`, `-` and
-    // `*` of two `i64` give an `i64`, so where an `f64` is requested
-    // their literals are widened; `/` of two gives an `f64` already
-    // (NUM-1), and its literals are not.
+    // every integer literal as an `i64`, none is widened". `+`, `-`,
+    // `*`, `//` and `%` of two `i64` give an `i64`, so where an `f64` is
+    // requested their literals are widened; `/` of two gives an `f64`
+    // already (NUM-1), and its literals are not.
     let hint = match operator {
-        BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply => {
-            numeric_hint(expected)
-        }
+        BinaryOperator::Add
+        | BinaryOperator::Subtract
+        | BinaryOperator::Multiply
+        | BinaryOperator::FloorDivide
+        | BinaryOperator::Modulo => numeric_hint(expected),
         _ => None,
     };
     let mut left = value(&left, hint, scope, depth + 1)?;
@@ -1360,6 +1362,8 @@ fn binary(
             | BinaryOperator::Subtract
             | BinaryOperator::Multiply
             | BinaryOperator::Divide
+            | BinaryOperator::FloorDivide
+            | BinaryOperator::Modulo
     );
     if arithmetic && left.open == Open::Integer && right.ty == float {
         left = widened(left);
@@ -1453,12 +1457,20 @@ fn binary_type(
         // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
         // f64".
         (
-            BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
+            BinaryOperator::Add
+            | BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::FloorDivide
+            | BinaryOperator::Modulo,
             Some(Scalar::I64 | Scalar::F64),
             Some(Scalar::F64),
         )
         | (
-            BinaryOperator::Add | BinaryOperator::Subtract | BinaryOperator::Multiply,
+            BinaryOperator::Add
+            | BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::FloorDivide
+            | BinaryOperator::Modulo,
             Some(Scalar::F64),
             Some(Scalar::I64),
         ) => Scalar::F64,
@@ -1626,11 +1638,31 @@ pub(crate) fn combined(
         (Op::Divide, V::Int(left), V::Int(right)) => float(divided(*left, *right)),
         // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
         // f64": the `i64` as the `f64` nearest it.
-        (Op::Add | Op::Subtract | Op::Multiply | Op::Divide, V::Int(whole), V::Float(_)) => {
+        (
+            Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::FloorDivide | Op::Modulo,
+            V::Int(whole),
+            V::Float(_),
+        ) => {
             return combined(operator, &V::Float(*whole as f64), right);
         }
-        (Op::Add | Op::Subtract | Op::Multiply | Op::Divide, V::Float(_), V::Int(whole)) => {
+        (
+            Op::Add | Op::Subtract | Op::Multiply | Op::Divide | Op::FloorDivide | Op::Modulo,
+            V::Float(_),
+            V::Int(whole),
+        ) => {
             return combined(operator, left, &V::Float(*whole as f64));
+        }
+        // NUM-1: `//` and `%` of finite `f64` operands round toward
+        // negative infinity and take the divisor's sign. One of an
+        // infinity, or by a zero, is IEEE's, and not worked out here.
+        (Op::FloorDivide | Op::Modulo, V::Float(left), V::Float(right))
+            if left.is_finite() && right.is_finite() && *right != 0.0 =>
+        {
+            let (quotient, remainder) = floored(*left, *right);
+            float(match operator {
+                Op::FloorDivide => quotient,
+                _ => remainder,
+            })
         }
         (Op::Add, V::Float(left), V::Float(right)) => float(left + right),
         (Op::Subtract, V::Float(left), V::Float(right)) => float(left - right),
@@ -1719,6 +1751,35 @@ fn divided(left: i64, right: i64) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let magnitude = whole as f64 * 2f64.powi(-scale);
     if negative { -magnitude } else { magnitude }
+}
+
+/// The floored quotient and the remainder of two finite `f64`, the
+/// divisor not zero: the remainder has the divisor's sign (NUM-1). It
+/// is worked out as the hgraph provider's Python works it out, from the
+/// IEEE remainder (`%` of Rust's `f64`), so a constant has the value its
+/// expression has when the program runs.
+fn floored(left: f64, right: f64) -> (f64, f64) {
+    let mut remainder = left % right;
+    let mut quotient = (left - remainder) / right;
+    if remainder != 0.0 {
+        if (right < 0.0) != (remainder < 0.0) {
+            remainder += right;
+            quotient -= 1.0;
+        }
+    } else {
+        remainder = 0.0_f64.copysign(right);
+    }
+    let floor = if quotient != 0.0 {
+        let floor = quotient.floor();
+        if quotient - floor > 0.5 {
+            floor + 1.0
+        } else {
+            floor
+        }
+    } else {
+        0.0_f64.copysign(left / right)
+    };
+    (floor, remainder)
 }
 
 /// An `f64` result as a constant: a NaN is none (NUM-5).
@@ -2307,6 +2368,22 @@ mod tests {
         assert_eq!(from_instant(instant(&leap).unwrap()), leap);
         let first = datetime(0, 0);
         assert_eq!(from_instant(instant(&first).unwrap()), first);
+    }
+
+    /// NUM-1: `//` and `%` of `f64` round toward negative infinity and
+    /// take the divisor's sign, as Python's do: `-7.0 // 2.0` is `-4.0`
+    /// and `-7.0 % 2.0` is `1.0`.
+    #[test]
+    fn float_division_floors() {
+        assert_eq!(floored(-7.0, 2.0), (-4.0, 1.0));
+        assert_eq!(floored(7.0, -2.0), (-4.0, -1.0));
+        assert_eq!(floored(7.5, 2.0), (3.0, 1.5));
+        assert_eq!(
+            floored(9_007_199_254_740_992.0, 1.0),
+            (9_007_199_254_740_992.0, 0.0)
+        );
+        let (quotient, remainder) = floored(-0.0, 1.0);
+        assert!(quotient == 0.0 && quotient.is_sign_negative() && remainder == 0.0);
     }
 
     /// NUM-2: "Mixed numeric comparison must not first round an i64

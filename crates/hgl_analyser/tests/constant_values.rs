@@ -757,6 +757,15 @@ fn integer_division_and_mixed_comparison_are_exact() {
         ),
         &[],
     );
+    // `//` and `%` of two `i64` give an `i64`: where an `f64` is
+    // expected their literals are `f64`s (GEN-5).
+    expect(
+        &format!(
+            "{shared}const fn d(x: FBox<9007199254740993 // 1>) -> FBox<9007199254740992.0> => x\n\
+                  const fn e(x: FBox<-7 % 2>) -> FBox<1.0> => x\n"
+        ),
+        &[],
+    );
     expect(
         &format!(
             "{shared}const fn a(x: FBox<9007199254740993 / 3>) -> FBox<3002399751580330.5> => x\n\
