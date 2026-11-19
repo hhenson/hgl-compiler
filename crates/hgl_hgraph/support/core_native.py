@@ -125,6 +125,13 @@ class HglError(Exception):
         self.add_note(_NOTE + _json.dumps(written))
 
 
+def _is_set_delta(value):
+    """Whether `value` is a set's delta as hgraph gives one: a
+    `frozenset` of its changes, with what it `added` and what it
+    `removed` (TYPE-16)."""
+    return isinstance(value, frozenset) and hasattr(value, "added") and hasattr(value, "removed")
+
+
 def _equal(lhs, rhs):
     """`lhs == rhs` for two values of one type, part by part.
 
@@ -134,7 +141,19 @@ def _equal(lhs, rhs):
     nor close to any value, including itself"), and whether two values
     are equal would turn on whether one was retained. Each part is
     compared here as its own type compares.
+
+    A set's delta is equal to another where what each added and what
+    each removed are (TYPE-16: "`delta<set<T>>` has `added` and
+    `removed`"). hgraph's own equality of two takes `Removed(1)` for
+    `1`, so a delta that removed a member would equal one that added it.
     """
+    if _is_set_delta(lhs) or _is_set_delta(rhs):
+        return (
+            _is_set_delta(lhs)
+            and _is_set_delta(rhs)
+            and frozenset(lhs.added) == frozenset(rhs.added)
+            and frozenset(lhs.removed) == frozenset(rhs.removed)
+        )
     if isinstance(lhs, (list, tuple)):
         return (
             isinstance(rhs, (list, tuple))

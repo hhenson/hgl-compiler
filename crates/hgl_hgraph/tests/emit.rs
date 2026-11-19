@@ -3277,6 +3277,32 @@ fn a_published_number_is_written_as_the_language_writes_it() {
     assert_eq!(values, ["1e21", "1e-5", "2.5"]);
 }
 
+/// TST-4 and TST-5: a trace's cell written as a `delta<T>` is compared
+/// with the delta its cycle published, by the language's equality: a
+/// set's delta in a struct's cell or a tuple's is equal to another where
+/// what each added and what each removed are (TYPE-16), and so is one a
+/// program compares with `==` (OPS-2). hgraph's own equality of two takes
+/// `Removed(1)` for `1`. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_set_delta_within_a_cell_is_compared_by_its_changes() {
+    let hgraph = on_hgraph("hgraph_cell_deltas");
+    let emitted = emit_clean(&[fixture!(
+        "a_set_delta_within_a_cell_is_compared_by_its_changes",
+        "demo.cell_deltas.hgl"
+    )]);
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = hgraph.run(&emitted, &all);
+    assert_eq!(
+        outcomes(&emitted, &all, &ran),
+        [
+            "a_set_delta_in_a_struct_cell_is_compared_by_its_changes passed",
+            "a_set_delta_in_a_tuple_cell_is_compared_by_its_changes passed",
+            "two_set_deltas_are_equal_by_their_changes passed",
+        ]
+    );
+}
+
 /// END-4 and TIME-3: a transition to invalid wakes an active node, but no
 /// publication occurred. Explicit modification guards are checked at evaluation.
 const NOTIFIED: (&str, &str) = fixture!("demo.notified.hgl");
