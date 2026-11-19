@@ -98,3 +98,97 @@ test a_window_of_one_tick_is_ready_at_its_first_value {
     assert eval(arrived_at(prices: [_, 1, _, 2], probe: [true, true, true, true])) ==
         [null, t + 1us, t + 1us, t + 3us]
 }
+
+# TYPE-9: a window as a struct's field, a fixed list's element, a
+# dictionary's value and a tuple's position, each a child of its own. Each
+# has a minimum of one tick, so it is ready at its first value; TIME-9:
+# "`valid` of a collection is true where any element, field or entry is
+# valid", and `all_valid` "where every one is". TYPE-16: a struct's delta
+# has a property for each field, the window's "V: the value that arrived".
+struct Book {
+    prices: rolling_window<f64, 3, 1>
+    last: f64
+}
+
+fn booked(price: f64) -> Book {
+    when {
+        if price < 0.0 { return delta<Book>(last: price) }
+        return delta<Book>(prices: price, last: price)
+    }
+}
+
+fn priced(price: f64) -> Book {
+    inject out
+    when { out = delta<Book>(prices: price) }
+}
+
+fn book_valid(book: Book, probe: bool) -> bool {
+    when valid([]) { return valid(book) }
+}
+
+fn book_all_valid(book: Book, probe: bool) -> bool {
+    when valid([]) { return all_valid(book) }
+}
+
+# A field that is no window is read in a hook; the window's change is its
+# delta's property.
+fn book_last(book: Book) -> f64 {
+    when { return book.last }
+}
+
+fn book_change(book: Book) -> f64? {
+    when { return delta_value(book).prices }
+}
+
+fn slots(slot: i64, price: f64) -> list<rolling_window<f64, 2, 1>, 2> {
+    when { return delta<list<rolling_window<f64, 2, 1>, 2>>(updated: [slot: price]) }
+}
+
+fn some_slot(both: list<rolling_window<f64, 2, 1>, 2>, probe: bool) -> bool {
+    when valid([]) { return valid(both) && !all_valid(both) }
+}
+
+fn keyed(key: str, price: f64) -> dict<str, rolling_window<f64, 2, 1>> {
+    when { return delta<dict<str, rolling_window<f64, 2, 1>>>(updated: [key: price]) }
+}
+
+fn key_a_change(prices: dict<str, rolling_window<f64, 2, 1>>) -> f64? {
+    when { return get(delta_value(prices).updated, "a") }
+}
+
+fn paired(price: f64) -> tuple<rolling_window<f64, 2, 1>, f64> {
+    when { return (price, price + 1.0) }
+}
+
+fn pair_second(pair: tuple<rolling_window<f64, 2, 1>, f64>) -> f64 {
+    when { return pair[1] }
+}
+
+fn book_flow(price: f64, probe: bool) -> bool => book_valid(booked(price), probe)
+fn book_all_flow(price: f64, probe: bool) -> bool => book_all_valid(booked(price), probe)
+fn last_flow(price: f64) -> f64 => book_last(booked(price))
+fn change_flow(price: f64) -> f64? => book_change(booked(price))
+fn priced_flow(price: f64, probe: bool) -> bool => book_valid(priced(price), probe)
+fn slot_flow(slot: i64, price: f64, probe: bool) -> bool => some_slot(slots(slot, price), probe)
+fn key_flow(key: str, price: f64) -> f64? => key_a_change(keyed(key, price))
+fn pair_flow(price: f64) -> f64 => pair_second(paired(price))
+# A graph wires a field's window, and an element's, to a window input.
+fn field_flow(price: f64) -> f64 => arrived(booked(price).prices)
+fn element_flow(slot: i64, price: f64) -> f64 => arrived_two(slots(slot, price)[1])
+
+fn arrived_two(prices: rolling_window<f64, 2, 1>) -> f64 {
+    when { return delta_value(prices) }
+}
+
+test a_window_within_a_value_is_its_child {
+    assert eval(book_flow(price: [_, -1.0, 2.0], probe: [true, true, true])) == [false, true, true]
+    assert eval(book_all_flow(price: [-1.0, 2.0], probe: [true, true])) == [false, true]
+    assert eval(last_flow(price: [-1.0, 2.0])) == [-1.0, 2.0]
+    assert eval(change_flow(price: [-1.0, 2.0])) == [null, 2.0]
+    assert eval(priced_flow(price: [_, 1.0], probe: [true, true])) == [false, true]
+    assert eval(slot_flow(slot: [0, 1], price: [1.0, 2.0], probe: [true, true])) == [true, false]
+    assert eval(key_flow(key: ["a", "b", "a"], price: [1.0, 2.0, 3.0])) == [1.0, null, 3.0]
+    assert eval(pair_flow(price: [1.0, 2.0])) == [2.0, 3.0]
+    assert eval(field_flow(price: [1.0, -1.0, 2.0])) == [1.0, _, 2.0]
+    assert eval(element_flow(slot: [0, 1, 1], price: [1.0, 2.0, 3.0])) == [_, 2.0, 3.0]
+}

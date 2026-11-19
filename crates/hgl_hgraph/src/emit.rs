@@ -2028,8 +2028,9 @@ impl Emitter<'_> {
         Some(format!("_hg.TSW[{value}, {}]", sizes.join(", ")))
     }
 
-    /// True where a node may read `ty`, a window, as an input or as its
-    /// own `out`; otherwise reported at `at`.
+    /// True where a node may read `ty` as an input or as its own `out`
+    /// for each window it holds, itself or at any depth (`windows_in`);
+    /// otherwise reported at `at`.
     ///
     /// FN-12: "Fixed-size lists and windows retain their own
     /// shape/readiness contracts", and TYPE-11: "window publications
@@ -2039,24 +2040,28 @@ impl Emitter<'_> {
     /// duration as time passes with none arriving. Only a window of
     /// ticks whose minimum is one tick is the same under every reading:
     /// it is valid from the first value that arrives, and a value
-    /// leaves it only as another arrives, as hgraph's `TSW` has it.
+    /// leaves it only as another arrives, as hgraph's `TSW` has it. A
+    /// window inside a struct, a tuple, a list or a dictionary decides
+    /// that one's validity too (TIME-9).
     fn readable_window(&mut self, ty: &Type, at: Location) -> bool {
-        let Type::RollingWindow {
-            maximum, minimum, ..
-        } = ty
-        else {
-            return true;
-        };
-        // "Omitted minimum equals maximum."
-        let minimum = minimum.as_ref().unwrap_or(maximum);
-        if matches!(minimum.value, ConstantValue::Int(1)) {
-            return true;
+        for window in windows_in(self.program, ty) {
+            let Type::RollingWindow {
+                maximum, minimum, ..
+            } = &window
+            else {
+                continue;
+            };
+            // "Omitted minimum equals maximum."
+            let minimum = minimum.as_ref().unwrap_or(maximum);
+            if !matches!(minimum.value, ConstantValue::Int(1)) {
+                self.unsupported(
+                    at,
+                    &format!("the readiness of `{window}`, which core leaves undefined,"),
+                );
+                return false;
+            }
         }
-        self.unsupported(
-            at,
-            &format!("the readiness of `{ty}`, which core leaves undefined,"),
-        );
-        false
+        true
     }
 
     /// The annotation of the struct `ty`, declared at `(module,
@@ -2211,14 +2216,81 @@ impl Emitter<'_> {
         (parameters, result)
     }
 
-    /// Reports each window input of a node or a source whose readiness
-    /// is not known (`readable_window`): the node reads it, if only by
-    /// requiring it valid (TIME-3). A graph only wires one.
+    /// Reports each input of a node or a source that holds a window,
+    /// itself or within, whose readiness is not known
+    /// (`readable_window`): the node reads it, if only by requiring it
+    /// valid (TIME-3). A graph only wires one.
     fn window_inputs(&mut self, signature: &Signature) {
         for parameter in &signature.parameters {
             if !parameter.constant {
                 self.readable_window(&parameter.ty, parameter.at);
             }
+        }
+    }
+
+    /// Reports a node whose result holds a window (`windows_in`) and
+    /// that may publish to it more than once in one evaluation: hgraph's
+    /// `TSW` takes one value in a cycle and fails at a second, where
+    /// TIME-7 and END-5 have the last write be what is published.
+    ///
+    /// A `return` with a value ends the evaluation (FN-7), so returns
+    /// alone publish once. A write through `out`, to it or to a part of
+    /// it, may be followed by another: it is written only where it is
+    /// the node's one place that publishes, and stands in no loop.
+    fn window_published_once(&mut self, signature: &Signature, body: &Body) {
+        use hgl_analyser::hir::{Node, walk_statement_nodes};
+        let program = self.program;
+        if signature
+            .result
+            .as_ref()
+            .is_none_or(|result| windows_in(program, result).is_empty())
+        {
+            return;
+        }
+        let locals = &body.locals;
+        let out =
+            |local: usize| locals[local].kind == LocalKind::Inject && locals[local].name == "out";
+        // Each place in `statements` that publishes, and whether it is
+        // a write through `out`.
+        let writes = |statements: &[Stmt]| {
+            let mut found: Vec<(Location, bool)> = Vec::new();
+            walk_statement_nodes(statements, &mut |node| match node {
+                Node::Statement(Stmt::Assign { local, at, .. }) if out(*local) => {
+                    found.push((*at, true));
+                }
+                Node::Statement(Stmt::AssignPlace { place, at, .. }) => {
+                    let mut root = place;
+                    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } =
+                        &root.kind
+                    {
+                        root = base;
+                    }
+                    if matches!(root.kind, ExprKind::Local(local) if out(local)) {
+                        found.push((*at, true));
+                    }
+                }
+                Node::Statement(Stmt::Return {
+                    value: Some(_), at, ..
+                }) => found.push((*at, false)),
+                _ => {}
+            });
+            found
+        };
+        let all = writes(&body.statements);
+        let mut looped: Vec<Location> = Vec::new();
+        walk_statement_nodes(&body.statements, &mut |node| {
+            if let Node::Statement(Stmt::For { body, .. } | Stmt::While { body, .. }) = node {
+                looped.extend(writes(body).into_iter().map(|(at, _)| at));
+            }
+        });
+        let again = all
+            .iter()
+            .find(|(at, through_out)| *through_out && (all.len() > 1 || looped.contains(at)));
+        if let Some((at, _)) = again {
+            self.unsupported(
+                *at,
+                "a window that one evaluation may publish to more than once",
+            );
         }
     }
 
@@ -2256,6 +2328,7 @@ impl Emitter<'_> {
         };
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
         self.window_inputs(signature);
+        self.window_published_once(signature, body);
         // The `const` parameters, as written for the node: a `start`
         // and a `stop` are functions of their own to hgraph, and are
         // given the configuration they may read by naming it.
@@ -4160,6 +4233,7 @@ impl Emitter<'_> {
             }
         }
         let read = self.taken(function, read, &declared);
+        self.windows_given(function, &read, None, at);
         let annotation = result.map(|result| {
             self.annotation(result, true, at)
                 .unwrap_or_else(|| "_py.object".to_string())
@@ -4292,6 +4366,30 @@ impl Emitter<'_> {
         read.sort_unstable();
         read.dedup();
         read
+    }
+
+    /// Reports, at `at`, a window given to a child graph: one that a
+    /// connection `taken` holds, itself or within (`windows_in`), or
+    /// that the loop's sequence `over` holds. hgraph's `switch_` and
+    /// `map_` fail as the graph runs where a `TSW` is given to the
+    /// graph they make, alone or as the child of a bundle or a
+    /// dictionary, even as a reference to one.
+    fn windows_given(
+        &mut self,
+        function: &Function,
+        taken: &[usize],
+        over: Option<&Type>,
+        at: Location,
+    ) {
+        let program = self.program;
+        let given = taken
+            .iter()
+            .map(|&local| &function.locals[local].ty)
+            .chain(over)
+            .any(|ty| !windows_in(program, ty).is_empty());
+        if given {
+            self.unsupported(at, "a window given to the graph of a branch or of a loop");
+        }
     }
 
     /// The parameters of a child graph that takes the connections
@@ -5021,6 +5119,7 @@ impl Emitter<'_> {
         walk_statement_nodes(body, &mut |node| named_in(node, &mut read, &mut declared));
         let key = key.filter(|key| read.contains(key));
         let taken = self.taken(function, read, &declared);
+        self.windows_given(function, &taken, Some(&sequence.ty), at);
         // The child's parameters: the key, where the body reads it, the
         // member's port, and what it takes.
         let mut parameters = Vec::new();
@@ -5326,20 +5425,9 @@ impl Emitter<'_> {
             } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
                 let read = self.place(function, *local);
-                // TYPE-12: a window is no ordinary value, and core has
-                // no operation that reads what one holds: its values,
-                // or how many. Only its endpoint is read (TIME-9).
-                let window = matches!(function.locals[*local].ty, Type::RollingWindow { .. })
-                    && (Self::is_input(function, *local) || Self::is_out(function, *local));
                 // In a hook a temporal input is read through its
                 // payload: in a `when`, and in `stop` (TIME-5).
-                if window && matches!(function.mode, Mode::Node | Mode::Stop) {
-                    self.unsupported(
-                        value.at,
-                        "what a window holds, which no core operation reads,",
-                    );
-                    "None".to_string()
-                } else if matches!(function.mode, Mode::Node | Mode::Stop)
+                if matches!(function.mode, Mode::Node | Mode::Stop)
                     && Self::is_input(function, *local)
                 {
                     self.port_value(&function.locals[*local].ty, &read, value.at)
@@ -5394,12 +5482,13 @@ impl Emitter<'_> {
                 } else {
                     name(&endpoint.name)
                 };
-                // A window's endpoint: an input's readiness is asked of
-                // its parameter (`window_inputs`), and `out`'s here.
+                // The endpoint of what holds a window, itself or within
+                // (`windows_in`): an input's readiness is asked of its
+                // parameter (`window_inputs`), and `out`'s here.
                 // hgraph's `TSW` keeps what it holds when it is
                 // invalidated, where END-4 has "Invalidation clears
                 // validity, modification, payload, and delta".
-                if matches!(endpoint.ty, Type::RollingWindow { .. }) {
+                if !windows_in(self.program, &endpoint.ty).is_empty() {
                     if endpoint.kind == LocalKind::Inject {
                         self.readable_window(&endpoint.ty, value.at);
                     }
@@ -7595,6 +7684,14 @@ impl Emitter<'_> {
     /// names `_child{depth}` and `_key{depth}` are its own.
     fn port_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         match ty {
+            // TYPE-12: a window is no ordinary value, and core has no
+            // operation that reads what one holds: its values, or how
+            // many. Only its endpoint is read (TIME-9). So a value that
+            // holds one, a struct's or a list's, is not read whole.
+            Type::RollingWindow { .. } => {
+                self.unsupported(at, "what a window holds, which no core operation reads,");
+                return "None".to_string();
+            }
             // TYPE-9: "lists to child positions". An unsized list is a
             // whole tuple (`list_annotation`), and a list of the
             // program is a Python `list`, made of it.
@@ -9169,6 +9266,44 @@ fn publishes_whole(ty: &Type) -> bool {
         } => true,
         other => scalar(other).is_some(),
     }
+}
+
+/// Each window `ty` holds: itself, and one at any depth inside it, as a
+/// struct's field, a tuple's position, a list's element, a dictionary's
+/// value, or under a `?` (TYPE-9: temporalization maps each to a child).
+/// A struct's fields are those of its application (`field_types`).
+fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
+    /// How deep a type is looked into: a struct does not hold itself
+    /// but through an `atomic`, which holds no window (TYPE-12).
+    const DEPTH: usize = 32;
+    fn within(program: &Program, ty: &Type, depth: usize, found: &mut Vec<Type>) {
+        if depth > DEPTH {
+            return;
+        }
+        match ty {
+            Type::RollingWindow { .. } => found.push(ty.clone()),
+            Type::Nullable(inner) => within(program, inner, depth + 1, found),
+            Type::List { element, .. } => within(program, element, depth + 1, found),
+            Type::Dict { value, .. } => within(program, value, depth + 1, found),
+            Type::Tuple(elements) => {
+                for element in elements {
+                    within(program, element, depth + 1, found);
+                }
+            }
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                for field in program.field_types(ty).unwrap_or_default() {
+                    within(program, &field, depth + 1, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    within(program, ty, 0, &mut found);
+    found
 }
 
 /// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
