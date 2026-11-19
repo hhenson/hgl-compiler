@@ -985,16 +985,22 @@ def entry_port(port, key):
     return port[key] if key in port.keys() else _ABSENT_ENTRY
 
 
-def child_modified(port):
+def _child_valid(port, shape):
+    """Whether a child's endpoint is valid: hgraph's `valid`, or, where a
+    list is in the child, the language's by its `shape` (`valid_of`)."""
+    return port.valid if shape is None else valid_of(port, shape)
+
+
+def child_modified(port, shape=None):
     """`modified` of a child's endpoint (END-8): whether it published in
     this cycle, held to its being valid, as an input's is (END-4)."""
-    return port.valid and port.modified
+    return _child_valid(port, shape) and port.modified
 
 
-def child_last_modified(port):
+def child_last_modified(port, shape=None):
     """`last_modified` of a child's endpoint (END-8, END-6): null where it
     is not valid."""
-    return port.last_modified_time if port.valid else None
+    return port.last_modified_time if _child_valid(port, shape) else None
 
 
 def _unset(port):
@@ -1003,12 +1009,12 @@ def _unset(port):
     return HglError("the child read is not valid", code="value.unset_read")
 
 
-def child_delta(port):
+def child_delta(port, shape=None):
     """`delta_value` of a child's endpoint (END-8): what it published in
     this cycle. TIME-1: "a read of a child's value, or of its
     `delta_value`, requires that child's admission"; where that is
     checked when it runs, a child that is not valid fails it."""
-    if not port.valid:
+    if not _child_valid(port, shape):
         raise _unset(port)
     return port.delta_value
 

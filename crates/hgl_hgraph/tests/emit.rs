@@ -4984,7 +4984,10 @@ fn a_growing_list_is_an_unbounded_tsl() {
         "        _core.list_child(_output[\"items\"], 0).value = 8\n".to_string(),
         "    return _lift_6_digits(values=basket(owner=owner, command=command)[\"items\"])\n".to_string(),
         "_core.all_valid_of(held, (\"fields\", {\"owner\": None, \"items\": (\"list\", None)}))".to_string(),
-        "        return _core.published(_core.size_modified(_core.child_delta(held[\"items\"])))\n".to_string(),
+        "        return _core.published(_core.size_modified(_core.child_delta(held[\"items\"], (\"list\", None))))\n".to_string(),
+        // END-4, END-6: a list child's own `valid`, by its shape.
+        "_core.child_modified(held[\"items\"], (\"list\", None))".to_string(),
+        "_core.child_last_modified(held[\"items\"], (\"list\", None))".to_string(),
         // CTRL-15: a loop over the `TSL`.
         "    _core.discarded(_hg.map_(_each_0, item=edited(command=command), __key_arg__=\"\"))\n".to_string(),
         // A fixed list's `removed`, written and read.

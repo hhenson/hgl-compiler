@@ -246,10 +246,23 @@ fn item_count(held: Basket) -> i64? {
 
 fn counted(owner: str, command: i64) -> i64? => item_count(basket(owner, command))
 
+# END-4, END-6: a list child is modified, and has a time, only where it
+# is valid by the language's `valid`.
+fn items_ticked(probe: bool, held: Basket) -> list<bool, 2> {
+    when modified(probe) && valid([]) {
+        return [modified(held.items), last_modified(held.items) != null]
+    }
+}
+
+fn ticked(probe: bool, owner: str, command: i64) -> list<bool, 2> =>
+    items_ticked(probe, basket(owner, command))
+
 test a_growing_list_is_a_structs_field {
     assert eval(basket_digits(owner: ["a", _, _], command: [0, 1, 2])) == [0, 45, 6]
     assert eval(refilled_digits(owner: ["a", _, _], command: [5, 1, 0])) == [1, 8, 0]
     assert eval(counted(owner: ["a", _, _], command: [1, 2, 2])) == [2, 1, null]
+    assert eval(ticked(probe: [true, true], owner: ["a", _], command: [0, _])) ==
+        [[true, true], [false, true]]
 }
 
 # CTRL-15: a graph's `for` over a growing list has a child for each

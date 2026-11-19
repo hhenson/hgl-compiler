@@ -1075,6 +1075,14 @@ impl Emitter<'_> {
         }
     }
 
+    /// The argument a provider's function of a child's endpoint is given
+    /// after the port where a list is in the child, its `validity_shape`,
+    /// `, ("list", None)`: what its `valid` is read by. Empty where
+    /// hgraph's `valid` is the language's.
+    fn child_shape(&self, ty: &Type) -> String {
+        validity_shape(self.program, ty).map_or(String::new(), |shape| format!(", {shape}"))
+    }
+
     /// Reports `argument`, a property of a delta of a struct, a list or
     /// a dictionary that the program makes, where its value holds an
     /// unsized list's delta (TYPE-16): hgraph applies such a nested
@@ -1123,13 +1131,24 @@ impl Emitter<'_> {
         match operation {
             EndpointOperation::Valid => self.valid_test(&child.ty, &port),
             EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port),
-            EndpointOperation::Modified => format!("_core.child_modified({port})"),
+            // END-4, END-6: a child that is not valid is not modified and
+            // has no time it was last modified, nor a delta to read, by
+            // `valid` as the language has it where a list is in the child
+            // (`validity_shape`), whose shape the provider is given.
+            EndpointOperation::Modified => {
+                let shape = self.child_shape(&child.ty);
+                format!("_core.child_modified({port}{shape})")
+            }
             // END-8: a child's delta is read as a direct input's of its
             // type is (`language_delta`).
             EndpointOperation::DeltaValue => {
-                self.language_delta(&child.ty, format!("_core.child_delta({port})"), at)
+                let shape = self.child_shape(&child.ty);
+                self.language_delta(&child.ty, format!("_core.child_delta({port}{shape})"), at)
             }
-            EndpointOperation::LastModified => format!("_core.child_last_modified({port})"),
+            EndpointOperation::LastModified => {
+                let shape = self.child_shape(&child.ty);
+                format!("_core.child_last_modified({port}{shape})")
+            }
             other => {
                 self.unsupported(at, &format!("`{}` of a child", other.name()));
                 "None".to_string()
