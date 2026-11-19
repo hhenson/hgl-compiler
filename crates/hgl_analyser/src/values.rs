@@ -1380,10 +1380,23 @@ impl<'a> Typer<'a> {
         // Either holds for the whole header, whatever order its
         // conjuncts are written in, and for the body.
         if hook == Hook::When {
+            // TIME-3: "A header that is `scheduled()` alone is the
+            // exception: it requires no input to be valid, as one that
+            // writes `valid([])` does". `modified([])` alone has no such
+            // exception, and the default stands.
+            let alone = header
+                .as_ref()
+                .is_some_and(|header| self.scheduled_alone(header));
             let admitted = header
                 .as_ref()
                 .and_then(|header| self.admission(header))
-                .unwrap_or_else(|| self.temporal_inputs());
+                .unwrap_or_else(|| {
+                    if alone {
+                        Vec::new()
+                    } else {
+                        self.temporal_inputs()
+                    }
+                });
             self.present.extend(admitted.into_iter().map(Fact::Valid));
         }
         let reported = self.diagnostics.len();
@@ -1441,6 +1454,25 @@ impl<'a> Typer<'a> {
             None => true,
             Some(Binding::Declarations { module, .. }) => Some(*module) == self.program.core(),
             Some(Binding::Local { .. }) => false,
+        }
+    }
+
+    /// True when a `when` header is `scheduled()` alone, in parentheses
+    /// or not: the language's selector (TIME-9), and no call of a
+    /// declaration a module or a local binds under that name.
+    fn scheduled_alone(&self, header: &SyntaxNode) -> bool {
+        match header.kind() {
+            SyntaxKind::ParenExpr => header
+                .children()
+                .next()
+                .is_some_and(|inner| self.scheduled_alone(&inner)),
+            SyntaxKind::CallExpr => header
+                .children()
+                .next()
+                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
+                .and_then(|callee| name_token(&callee))
+                .is_some_and(|name| name.text() == "scheduled" && self.is_the_languages(&name)),
+            _ => false,
         }
     }
 
