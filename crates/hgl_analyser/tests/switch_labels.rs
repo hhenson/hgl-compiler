@@ -165,3 +165,32 @@ fn a_label_is_a_compile_time_constant() {
         ]
     );
 }
+
+/// UNIT-13: "The constant has that one value wherever it is read". A
+/// constant named many times over, each doubling the one before, is
+/// read once each: checking it takes no time to speak of.
+#[test]
+fn a_constant_named_many_times_is_read_once() {
+    let mut text = String::from("const C0: i64 = 1\n");
+    for level in 1..=40 {
+        text.push_str(&format!(
+            "const C{level}: i64 = C{} + C{}\n",
+            level - 1,
+            level - 1
+        ));
+    }
+    text.push_str(concat!(
+        "const fn deep(route: i64) -> i64 {\n",
+        "    switch route {\n",
+        "        case C40: return 1\n",
+        "        case 1099511627776: return 2\n",
+        "        default: return 0\n",
+        "    }\n",
+        "}\n",
+    ));
+    let checked = module(&text);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:46:14 type/switch.duplicate_label CTRL-6"]
+    );
+}

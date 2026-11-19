@@ -542,6 +542,10 @@ struct Typer<'a> {
     /// The values of the module constants this function's constants
     /// have named (UNIT-13).
     constant_values: crate::read::ConstantValues,
+    /// The value each module constant comes to as a `switch` label,
+    /// once read ([`Typer::constant_label`]): a constant named twice is
+    /// read once.
+    constant_labels: std::cell::RefCell<HashMap<(usize, usize), Option<Label>>>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -606,6 +610,7 @@ impl<'a> Typer<'a> {
             identities: HashMap::new(),
             candidates: HashMap::new(),
             constant_values: Default::default(),
+            constant_labels: Default::default(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -14212,6 +14217,9 @@ impl Typer<'_> {
     /// itself is rejected elsewhere (`constant.cycle`), and is followed
     /// no further than [`CONSTANT_LABEL_DEPTH`] constants.
     fn constant_label(&self, module: usize, declaration: usize, depth: usize) -> Option<Label> {
+        if let Some(known) = self.constant_labels.borrow().get(&(module, declaration)) {
+            return known.clone();
+        }
         if depth >= CONSTANT_LABEL_DEPTH {
             return None;
         }
@@ -14222,7 +14230,15 @@ impl Typer<'_> {
             .constants
             .get(declaration)?
             .as_ref()?;
-        self.label_within(value, depth + 1)
+        let found = self.label_within(value, depth + 1);
+        // Kept whatever it came to, so that a constant named twice, as
+        // both operands of `+` are, is read once. One cut short by the
+        // depth is then not known as a label, which no deeper reading
+        // makes wrong.
+        self.constant_labels
+            .borrow_mut()
+            .insert((module, declaration), found.clone());
+        found
     }
 }
 
