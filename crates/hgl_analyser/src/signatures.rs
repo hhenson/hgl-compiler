@@ -62,7 +62,7 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
                 if !parameter.var {
                     continue;
                 }
-                let Some(var) = crate::read::tokens(node)
+                let Some(var) = crate::syntax::tokens(node)
                     .find(|token| token.kind() == hgl_parser::SyntaxKind::KwVar)
                 else {
                     continue;
