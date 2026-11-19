@@ -313,6 +313,9 @@ pub mod codes {
     pub const DELTA_ARGUMENT_NAME: &str = "delta.argument_name";
     /// A delta's constructor given one property twice (TYPE-16).
     pub const DELTA_DUPLICATE_ARGUMENT: &str = "delta.duplicate_argument";
+    /// A constant delta that names one member, key or position both as
+    /// added or updated and as removed (TYPE-16).
+    pub const DELTA_OVERLAP: &str = "delta.overlap";
     /// `signal` somewhere other than the whole type of an input
     /// (TYPE-12).
     pub const SIGNAL_POSITION: &str = "signal.position";
