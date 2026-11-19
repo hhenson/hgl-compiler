@@ -8440,6 +8440,9 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
         "    return paired(a=a, b=b)[\"_0\"]".to_string(),
         "    return nested(bid=bid, size=size)[\"_0\"][\"bid\"]".to_string(),
+        "    return paired(a=a, b=b)[_core.position(second_slot())]".to_string(),
+        "        _output[_core.position(_core.sub__i64_i64(lhs=1, rhs=1))].value = value.value"
+            .to_string(),
         format!("    return {pair}.from_ts(_0=a, _1=b)"),
         format!("_lift_2_total(pair={pair}.from_ts(_0=a, _1=\"y\"))"),
         // TYPE-3, TYPE-4: a generic struct.

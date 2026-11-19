@@ -5529,12 +5529,9 @@ impl Emitter<'_> {
                 // field of its position (`tuple_annotation`), under a
                 // constant index (EXPR-3).
                 if matches!(base.ty, Type::Tuple(_)) {
-                    let Some(at) = constant_position(index) else {
-                        self.unsupported(value.at, "a tuple's position that is not a constant");
-                        return "None".to_string();
-                    };
                     let base = self.expression(function, base);
-                    return format!("{base}[{}]", string(&position(at)));
+                    let key = self.position_key(function, index);
+                    return format!("{base}[{key}]");
                 }
                 let base = self.expression(function, base);
                 let index = self.expression(function, index);
@@ -6127,7 +6124,7 @@ impl Emitter<'_> {
                 ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
                     .map(|field| string(&name(&field.name))),
                 ExprKind::Index { base, index } => match &base.ty {
-                    Type::Tuple(_) => constant_position(index).map(|at| string(&position(at))),
+                    Type::Tuple(_) => Some(self.position_key(function, index)),
                     // A fixed list's position, by a constant inside it,
                     // or by an index the provider holds to it: "An index
                     // outside a list fails where it is evaluated".
@@ -7269,6 +7266,23 @@ impl Emitter<'_> {
             })
             .collect();
         format!("{class}({})", fields.join(", "))
+    }
+
+    /// The name of the field of the tuple position that `index` names
+    /// (`tuple_annotation`), as Python text: `"_0"` for a literal, and
+    /// for another constant, `pair[1 - 1]` or a constant of a module, the
+    /// provider's `_core.position(index)`, of the index as it is
+    /// evaluated. EXPR-7: "A tuple's index is a constant within its
+    /// length", which the analyser has held it to.
+    fn position_key(&mut self, function: &Function, index: &Expr) -> String {
+        match constant_position(index) {
+            Some(at) => string(&position(at)),
+            None => {
+                self.natives = true;
+                let index = self.expression(function, index);
+                format!("_core.position({index})")
+            }
+        }
     }
 
     /// `value`, a tuple of `entries` written in a graph where one entry

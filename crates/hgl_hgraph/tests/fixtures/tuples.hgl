@@ -104,7 +104,11 @@ fn snap_pair_of(bid: i64, n: i64) -> tuple<atomic<Quote>, i64> => snap_pair(snap
 const fn total(pair: tuple<i64, str>) -> i64 => pair[0] + 1
 const fn swapped(pair: tuple<i64, str>) -> tuple<str, i64> => (pair[1], pair[0])
 
+const second_slot: i64 = 1
+
 fn first_of_pair(a: i64, b: str) -> i64 => paired(a, b)[0]
+fn first_by_sum(a: i64, b: str) -> i64 => paired(a, b)[1 - 1]
+fn second_by_constant(a: i64, b: str) -> str => paired(a, b)[second_slot]
 fn second_of_pair(a: i64, b: str) -> str => paired(a, b)[1]
 fn read_first(a: i64, b: str) -> i64 => first_of(paired(a, b))
 fn summed(a: i64, b: i64) -> i64 => whole_sum(two(a, b))
@@ -133,6 +137,8 @@ test a_tuple_ticks_by_its_positions {
     assert eval(set_one(first: [true, false], value: [3, 4])) == [(3, null), (null, 4)]
     assert eval(first_of_pair(a: [1, _, 3], b: ["x", "y", _])) == [1, 1, 3]
     assert eval(second_of_pair(a: [1, _], b: ["x", "y"])) == ["x", "y"]
+    assert eval(first_by_sum(a: [1, _, 3], b: ["x", "y", _])) == [1, 1, 3]
+    assert eval(second_by_constant(a: [1, _], b: ["x", "y"])) == ["x", "y"]
     assert eval(read_first(a: [1, 2], b: ["x", _])) == [1, 2]
     assert eval(summed(a: [3, _, 4], b: [4, 5, _])) == [7, 8, 9]
     assert eval(valid_once(
@@ -343,6 +349,15 @@ fn pair_out(value: i64) -> tuple<i64, i64> {
     }
 }
 
+# A position named by a constant that is no literal is its port too: the
+# other position does not tick.
+fn second_out(first: bool, value: i64) -> tuple<i64, i64> {
+    inject out
+    when {
+        if first { out[1 - 1] = value } else { out[second_slot] = value }
+    }
+}
+
 fn leveled(price: i64) -> Level {
     inject out
     when {
@@ -411,6 +426,8 @@ test a_part_of_out_is_assigned_through_its_port {
     assert eval(raised_twice(bid: [1, 3])) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 6)]
     assert eval(reordered_ask(bid: [1, _, 2], size: [_, 3, _])) == [_, 30, 2]
     assert eval(pair_first(value: [1, 2])) == [2, 4]
+    assert eval(second_out(first: [true, false, false], value: [1, 2, 3])) ==
+        [(1, null), (null, 2), (null, 3)]
     assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
     assert eval(snapped_ask(bid: [1, 2])) == [6, 7]
     assert eval(listed_second(value: [1, 2])) == [2, 3]

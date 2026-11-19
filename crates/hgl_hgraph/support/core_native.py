@@ -749,6 +749,13 @@ def _bundled(value, shape):
     return tuple(_bundled(element, shape[0]) for element in value)
 
 
+def position(index):
+    """The field of a temporal tuple's position `index`, `_0`, `_1`
+    (the language's TYPE-9: tuples map "to child fields"), for an index
+    that is a constant other than a literal, `pair[1 - 1]`."""
+    return f"_{index}"
+
+
 def positions(delta, shape):
     """hgraph's delta of a temporal value that holds a tuple, as the
     program reads it (the language's TYPE-16: a tuple's delta is
