@@ -454,3 +454,159 @@ test an_invalidated_value_holds_no_key_or_member_after {
     assert eval(pages_check(step: [0, 9, 1])) == [11, -1, 0]
     assert eval(two_pages_check(step: [0, 9, 1])) == [11, -1, 0]
 }
+
+# ---- 5. A dictionary's entry delta that names no change ----
+#
+# TIME-7: "such a delta of one, `delta<Quote>()`, sets no child: it changes
+# no validity, and is never a tick", wherever the struct, the tuple or the
+# fixed list is: as a dictionary's value, in a struct in one, or in a
+# dictionary of dictionaries. A key the dictionary does not hold is not
+# added by one.
+struct Pair {
+    bid: i64
+    ask: i64
+}
+
+struct Outer {
+    inner: Pair
+    tag: i64
+}
+
+fn write_quotes(step: i64) -> dict<str, Pair> {
+    when {
+        if step == 0 { return delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)]) }
+        if step == 1 { return delta<dict<str, Pair>>(updated: ["a": delta<Pair>()]) }
+        return delta<dict<str, Pair>>(updated: ["b": delta<Pair>()])
+    }
+}
+
+const fn quote_total(quotes: dict<str, Pair>) -> i64 {
+    var total: i64 = 0
+    for key, quote in quotes { total += 100 + quote.bid }
+    return total
+}
+
+fn quotes_read(quotes: dict<str, Pair>) -> i64 {
+    when valid([]) {
+        if valid(quotes) && all_valid(quotes) { return quote_total(quotes) }
+        return -1
+    }
+}
+
+fn quotes_check(step: i64) -> i64 => quotes_read(write_quotes(step))
+
+fn quotes_woken(quotes: dict<str, Pair>) -> bool {
+    when valid([]) { return modified(quotes) }
+}
+
+fn outer_quotes(step: i64) -> dict<str, Outer> {
+    when {
+        if step == 0 { return delta<dict<str, Outer>>(updated: ["a": delta<Outer>(inner: delta<Pair>(bid: 1, ask: 2), tag: 1)]) }
+        return delta<dict<str, Outer>>(updated: ["a": delta<Outer>(inner: delta<Pair>())])
+    }
+}
+
+fn outer_woken(quotes: dict<str, Outer>) -> bool {
+    when valid([]) { return modified(quotes) }
+}
+
+fn outer_check(step: i64) -> bool => outer_woken(outer_quotes(step))
+
+fn pair_quotes(step: i64) -> dict<str, tuple<i64, i64>> {
+    when {
+        let first: delta<tuple<i64, i64>> = (1, 2)
+        let none: delta<tuple<i64, i64>> = (null, null)
+        if step == 0 { return delta<dict<str, tuple<i64, i64>>>(updated: ["a": first]) }
+        return delta<dict<str, tuple<i64, i64>>>(updated: ["a": none])
+    }
+}
+
+fn pair_quotes_woken(quotes: dict<str, tuple<i64, i64>>) -> bool {
+    when valid([]) { return modified(quotes) }
+}
+
+fn pair_quotes_check(step: i64) -> bool => pair_quotes_woken(pair_quotes(step))
+
+fn fixed_quotes(step: i64) -> dict<str, list<i64, 2>> {
+    when {
+        if step == 0 { return delta<dict<str, list<i64, 2>>>(updated: ["a": delta<list<i64, 2>>(updated: [0: 1])]) }
+        return delta<dict<str, list<i64, 2>>>(updated: ["a": delta<list<i64, 2>>()])
+    }
+}
+
+fn fixed_quotes_woken(quotes: dict<str, list<i64, 2>>) -> bool {
+    when valid([]) { return modified(quotes) }
+}
+
+fn fixed_quotes_check(step: i64) -> bool => fixed_quotes_woken(fixed_quotes(step))
+
+fn nested_quotes(step: i64) -> dict<str, dict<str, Pair>> {
+    when {
+        if step == 0 {
+            return delta<dict<str, dict<str, Pair>>>(updated: ["x": delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)])])
+        }
+        return delta<dict<str, dict<str, Pair>>>(updated: ["x": delta<dict<str, Pair>>(updated: ["a": delta<Pair>()])])
+    }
+}
+
+fn nested_quotes_woken(quotes: dict<str, dict<str, Pair>>) -> bool {
+    when valid([]) { return modified(quotes) }
+}
+
+fn nested_quotes_check(step: i64) -> bool => nested_quotes_woken(nested_quotes(step))
+
+struct Desk {
+    quotes: dict<str, Pair>
+    tag: i64
+}
+
+fn write_desk(step: i64) -> Desk {
+    when {
+        if step == 0 { return delta<Desk>(quotes: delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)])) }
+        return delta<Desk>(quotes: delta<dict<str, Pair>>(updated: ["a": delta<Pair>()]))
+    }
+}
+
+fn desk_woken(desk: Desk) -> bool {
+    when valid([]) { return modified(desk) }
+}
+
+fn desk_check(step: i64) -> bool => desk_woken(write_desk(step))
+
+fn yielded_quotes() -> dict<str, Pair> {
+    yield 1s: delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)])
+    yield 1s: delta<dict<str, Pair>>(updated: ["a": delta<Pair>()])
+    yield 1s: delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 3)])
+}
+
+fn yielded_quotes_check() -> i64 => quotes_read(yielded_quotes())
+
+test a_dictionarys_entry_delta_that_names_no_change_is_no_tick {
+    assert eval(quotes_check(step: [0, 1, 2])) == [101, _, _]
+    assert eval(outer_check(step: [0, 1])) == [true, _]
+    assert eval(pair_quotes_check(step: [0, 1])) == [true, _]
+    assert eval(fixed_quotes_check(step: [0, 1])) == [true, _]
+    assert eval(nested_quotes_check(step: [0, 1])) == [true, _]
+    assert eval(desk_check(step: [0, 1])) == [true, _]
+    assert eval(yielded_quotes_check(), RunConfig(length: 4s)) == [1s: 101, 3s: 103]
+    assert eval(quotes_woken(quotes: [
+        delta<dict<str, Pair>>(updated: ["a": delta<Pair>(bid: 1, ask: 2)]),
+        delta<dict<str, Pair>>(updated: ["a": delta<Pair>()]),
+        delta<dict<str, Pair>>(updated: ["b": delta<Pair>()]),
+    ])) == [true, _, _]
+}
+
+# Where the dictionary is not valid, such an entry adds no key, and the
+# delta names no change: it makes the dictionary valid and empty.
+fn first_empty_quote(step: i64) -> dict<str, Pair> {
+    when {
+        if step == 0 { return delta<dict<str, Pair>>(updated: ["a": delta<Pair>()]) }
+        return delta<dict<str, Pair>>(updated: ["b": delta<Pair>(bid: 2, ask: 3)])
+    }
+}
+
+fn first_empty_quote_check(step: i64) -> i64 => quotes_read(first_empty_quote(step))
+
+test an_entry_delta_that_names_no_change_adds_no_key {
+    assert eval(first_empty_quote_check(step: [0, 1])) == [0, 102]
+}

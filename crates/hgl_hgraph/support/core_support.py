@@ -692,26 +692,46 @@ def _names_nothing(change):
         return all(entry is None for entry in change)
     if _is_set_delta(change):
         return not change.added and not change.removed
-    return isinstance(change, dict) and not change
+    return isinstance(change, dict) and not change and size_modified(change) is None
+
+
+def _structured(shape):
+    """True where `shape` (`_entries_change`) is a struct's, a tuple's or
+    a fixed list's, which a delta that names no change never makes
+    valid: TIME-7, "A struct, a tuple and a `list<V, N>` are valid where a
+    child is (TIME-9)"."""
+    return isinstance(shape, tuple) and shape[0] != "entries"
 
 
 def _pruned(port, change, shape):
     """`change`, published to `port` of `shape` (`_entries_change`), less
-    what it names for a dictionary or a set within that is valid and that
-    the change leaves as it was.
+    each part of it that is no tick: what it names for a dictionary or a
+    set within that is valid and that the change leaves as it was, and a
+    struct's, a tuple's or a fixed list's delta that names no change. The
+    one place the provider holds such a delta to TIME-7, at every depth.
+    `port` is `None` for a part not held yet, a key the dictionary does
+    not hold, which is not valid.
 
     TIME-7, as the specification's `main` has it (hhenson/hgl_spec#124):
     a delta that names no change, published where the value is valid, "is
-    no tick"; proposed there, "a delta whose every entry is ignored, the
-    removal of a key, a member or a position that is not held (TYPE-16),
-    names no change". hgraph does not tick a `TSD` or a `TSS` for one,
-    but ticks what holds it, a `TSD`, a bundle or a `TSL`, where it is
-    given one for that child: so a child whose change names nothing is
-    left out of its holder's change. Where the child is not valid it is
-    kept, and made valid (`_validated`)."""
-    if change is None or shape is None or not port.valid:
+    no tick"; "A struct, a tuple and a `list<V, N>` are valid where a
+    child is (TIME-9), and such a delta of one, `delta<Quote>()`, sets no
+    child: it changes no validity, and is never a tick"; proposed there,
+    "a delta whose every entry is ignored, the removal of a key, a member
+    or a position that is not held (TYPE-16), names no change". hgraph
+    does not tick a `TSD` or a `TSS` for one, but ticks what holds it, a
+    `TSD`, a bundle or a `TSL`, where it is given one for that child, and
+    a `TSD` for a key given a struct's delta that names nothing, held or
+    not: so a child whose change names nothing is left out of its
+    holder's change. A dictionary or a set that is not valid is kept, and
+    made valid (`_validated`); a key that a struct's delta naming nothing
+    would add is not added."""
+    if change is None or shape is None:
         return change
+    valid = port is not None and port.valid
     if shape == "entries":
+        if not valid:
+            return change
         if _is_set_delta(change):
             held = port.value
             if not change.added and all(member not in held for member in change.removed):
@@ -727,44 +747,48 @@ def _pruned(port, change, shape):
         return change
 
     def kept(child, entry, within):
-        """`entry` for `child` pruned, or `None` where it names nothing to
-        a child that is valid."""
+        """`entry` for `child` pruned, or `None` where it is no tick: it
+        names nothing to a child that is valid, or to a struct, a tuple or
+        a fixed list."""
         if entry is None or within is None or _removes(entry):
             return entry
         entry = _pruned(child, entry, within)
-        return None if _names_nothing(entry) and child.valid else entry
+        if not _names_nothing(entry):
+            return entry
+        if (child is not None and child.valid) or _structured(within):
+            return None
+        return entry
+
+    def child(key):
+        return None if port is None else port[key]
 
     if kind == "entries":
-        held = set(port.keys())
+        held = set(port.keys()) if valid else set()
         pruned = {}
         for key, entry in change.items():
             if _removes(entry):
                 if key in held:
                     pruned[key] = entry
                 continue
-            if key not in held:
-                pruned[key] = entry
-                continue
-            entry = kept(port[key], entry, part)
+            entry = kept(port[key] if key in held else None, entry, part)
             if entry is not None:
                 pruned[key] = entry
         return pruned
     if kind == "fields":
         pruned = {}
         for field, entry in change.items():
-            within = part.get(field)
-            entry = entry if within is None else kept(port[field], entry, within)
+            entry = kept(child(field), entry, part.get(field))
             if entry is not None:
                 pruned[field] = entry
         return pruned
     if kind == "positions":
         return tuple(
-            entry if within is None else kept(port[position(index)], entry, within)
+            kept(child(position(index)), entry, within)
             for index, (entry, within) in enumerate(zip(change, part))
         )
     pruned = {}
     for index, entry in change.items():
-        entry = kept(port[index], entry, part)
+        entry = kept(child(index), entry, part)
         if entry is not None:
             pruned[index] = entry
     return pruned
