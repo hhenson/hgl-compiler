@@ -170,7 +170,7 @@ def _deltas(cells):
                     keys.discard(held)
                 else:
                     keys.add(held)
-        elif _is_set_delta(published):
+        elif _core._is_set_delta(published):
             keys = (keys - set(published.removed)) | set(published.added)
         yield key, published
 
@@ -484,21 +484,9 @@ def _same_cell(left, right):
         left = left.delta
     if isinstance(right, _Published):
         right = right.delta
-    if _is_set_delta(left) or _is_set_delta(right):
-        # hgraph's own equality takes `Removed(1)` for `1`, so a delta
-        # that removed an element would equal one that added it. What
-        # each added and what each removed are compared instead.
-        return (
-            _is_set_delta(left)
-            and _is_set_delta(right)
-            and frozenset(left.added) == frozenset(right.added)
-            and frozenset(left.removed) == frozenset(right.removed)
-        )
-    return left == right
-
-
-def _is_set_delta(value):
-    return hasattr(value, "added") and hasattr(value, "removed")
+    # The language's equality, part by part: a set's delta is compared by
+    # what it added and removed wherever in the cell it is.
+    return _core._equal(left, right)
 
 
 # The name an error is marked with once an `assert raises` has refused it.
