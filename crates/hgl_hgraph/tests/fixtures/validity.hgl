@@ -375,3 +375,35 @@ test a_whole_cell_given_to_a_const_fn_is_its_delta {
     seen = [Quote(bid: 1, ask: 2)]
     assert first_bid(seen) == 1
 }
+
+# ---- What the fourth review of this lane found ----
+
+# TIME-1, ERR-14: an absent key's entry is a child that is not valid, and
+# its read where a `result` is expected is an `err` coded
+# `value.unset_read`.
+fn checked_entry(prices: dict<str, i64>, wanted: str) -> result<i64, error> {
+    when { return prices[wanted] }
+}
+
+fn entry_code(key: str, price: i64, wanted: str) -> str =>
+    code_of(checked_entry(priced(key, price), wanted))
+
+abstract struct Shape {
+    id: i64
+}
+
+struct Circle : Shape {
+    radius: i64
+}
+
+fn shaped(id: i64) -> Shape {
+    when { return delta<Shape>(id: id) }
+}
+
+test what_the_fourth_review_found {
+    assert eval(entry_code(key: ["A", _], price: [1, _], wanted: ["A", "B"])) ==
+        ["ok", "value.unset_read"]
+    # An eval that compares deltas alone needs no whole value of its
+    # result, an abstract struct's here.
+    assert eval(shaped(id: [1])) == [delta<Shape>(id: 1)]
+}

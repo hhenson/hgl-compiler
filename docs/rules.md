@@ -367,7 +367,7 @@ value types is the analyser's to check (TYPE-12, TYPE-14).
 | ERR-13 | parser | done | The result forms are calls of a name, and `?` a postfix suffix: `ok(value)`, `is_err(value)`, `capture(callable, args)`, `value?` |
 | ERR-13 | analyser | done | `ok`, `err`, `is_ok`, `is_err` and `capture` as the callee of a call are the forms, looked up nowhere; no declaration, import alias, parameter or local takes one of the five names (`name.duplicate`) |
 | ERR-14 | analyser | done | A child read checked when it runs (`CheckedChild`) where the place expects `result<T, error>`, T the child's type, is of that result (EXPR-5); elsewhere it is the T |
-| ERR-14 | transpiler | partial | hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code. Left: a dictionary's key that is absent fails with `value.missing_key` in either place, as ERR-6 has a dictionary's brackets |
+| ERR-14 | transpiler | partial | hgraph: `ok` of the child's value, or `err` of an `error` coded `value.unset_read` where the child is not valid (`_core.checked_child_result`); elsewhere the read fails with that code.; a dictionary's entry whose key is absent is a child that is not valid (TIME-1), and is read as one |
 
 ## Tests and eval
 

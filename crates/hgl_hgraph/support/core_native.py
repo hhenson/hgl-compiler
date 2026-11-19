@@ -789,15 +789,6 @@ def entry_port(port, key):
     return port[key] if key in port.keys() else _ABSENT_ENTRY
 
 
-def entry_child(port, key):
-    """The child of a dictionary's input for `key`, read where its key
-    is known only when it runs. An absent key fails as a dictionary's
-    brackets do (ERR-6: "absence fails"), with `value.missing_key`."""
-    if key not in port.keys():
-        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-    return port[key]
-
-
 def child_modified(port):
     """`modified` of a child's endpoint (END-8): whether it published in
     this cycle, held to its being valid, as an input's is (END-4)."""

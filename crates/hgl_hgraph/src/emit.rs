@@ -5581,7 +5581,7 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && self.reads_child(function, value) =>
             {
-                match self.child_port(function, value, true) {
+                match self.child_port(function, value) {
                     Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
                         self.unsupported(value.at, "this read of a child");
@@ -7658,35 +7658,35 @@ impl Emitter<'_> {
     /// (TIME-1), as hgraph has it: its own child of the input's,
     /// `parts[1]` as `_core.position_of(parts, 1)`, `quote.bid` as
     /// `quote["bid"]`, and a dictionary's entry as `_core.entry_port`,
-    /// one that is not valid where the key is absent; with `read`, the
-    /// entry of a key read when it runs, which fails where the key is
-    /// absent (ERR-6). `None` where hgraph has no child for it: an
-    /// element of an unsized list, which is a whole tuple here.
-    fn child_port(&mut self, function: &Function, child: &Expr, read: bool) -> Option<String> {
+    /// one that is not valid where the key is absent, named or read
+    /// alike. `None` where hgraph has no child for it: an element of an
+    /// unsized list, which is a whole tuple here.
+    fn child_port(&mut self, function: &Function, child: &Expr) -> Option<String> {
         match &child.kind {
             ExprKind::Local(local) if Self::is_input(function, *local) => {
                 Some(name(&function.locals[*local].name))
             }
             ExprKind::Field { base, member } => {
                 let field = field_of(self.program, &base.ty, *member)?;
-                let base = self.child_port(function, base, read)?;
+                let base = self.child_port(function, base)?;
                 Some(format!("{base}[{}]", string(&name(&field.name))))
             }
             // TYPE-9: a tuple's position is the field of its position
             // (`tuple_annotation`), under a constant index.
             ExprKind::Index { base, index } if matches!(base.ty, Type::Tuple(_)) => {
                 let key = self.position_key(function, index);
-                let base = self.child_port(function, base, read)?;
+                let base = self.child_port(function, base)?;
                 Some(format!("{base}[{key}]"))
             }
             ExprKind::Index { base, index } => {
                 let of = match &base.ty {
                     Type::List { size: Some(_), .. } => "position_of",
-                    Type::Dict { .. } if read => "entry_child",
+                    // An absent key's entry is a child that is not valid
+                    // (TIME-1), read or named alike.
                     Type::Dict { .. } => "entry_port",
                     _ => return None,
                 };
-                let base = self.child_port(function, base, read)?;
+                let base = self.child_port(function, base)?;
                 let index = self.expression(function, index);
                 self.natives = true;
                 Some(format!("_core.{of}({base}, {index})"))
@@ -7761,7 +7761,7 @@ impl Emitter<'_> {
             self.unsupported(at, "this endpoint read in `start` or `stop`");
             return "None".to_string();
         }
-        let Some(port) = self.child_port(function, child, false) else {
+        let Some(port) = self.child_port(function, child) else {
             self.unsupported(
                 at,
                 "an endpoint of an unsized list's element, a whole tuple here",
@@ -7814,7 +7814,7 @@ impl Emitter<'_> {
             };
             return format!("_core.{of}({port}, {index})");
         }
-        let Some(port) = self.child_port(function, read, true) else {
+        let Some(port) = self.child_port(function, read) else {
             self.unsupported(at, "this read of a child");
             return "None".to_string();
         };
@@ -8764,6 +8764,40 @@ impl Emitter<'_> {
         format!("_harness.evaluate({})", given.join(", "))
     }
 
+    /// True where this target reads a temporal value of `ty` whole from
+    /// its port (`port_value`): one that holds no window, which no core
+    /// operation reads (TYPE-12), and no abstract struct, whose value is
+    /// of a struct below it, nor a generic one whose arguments have no
+    /// text of their own.
+    fn whole_readable(&self, ty: &Type) -> bool {
+        match ty {
+            Type::RollingWindow { .. } => false,
+            Type::Nullable(inner) => self.whole_readable(inner),
+            Type::List { element, .. } => self.whole_readable(element),
+            Type::Dict { value, .. } => self.whole_readable(value),
+            Type::Tuple(elements) => elements.iter().all(|element| self.whole_readable(element)),
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                !inherited(self.program, *module, *declaration)
+                    && arguments
+                        .iter()
+                        .all(|argument| canonical_argument(self.program, argument).is_some())
+                    && self
+                        .program
+                        .field_types(ty)
+                        .unwrap_or_default()
+                        .iter()
+                        .all(|field| self.whole_readable(field))
+            }
+            _ => true,
+        }
+    }
+
     /// True where each part of a whole value of `ty`, an element, a
     /// field or an entry, publishes whole: a scalar, an enum or a
     /// nullable one. A list's element is not nullable: hgraph's whole
@@ -8798,6 +8832,13 @@ impl Emitter<'_> {
     /// its own: a list, a set, a dictionary and a struct. `None` for one
     /// whose delta is the value itself.
     fn held_reader(&mut self, ty: &Type, at: Location) -> Option<String> {
+        // A value this target does not read whole, an abstract struct's
+        // or one that holds a window, has no reader: an eval of it that
+        // compares deltas alone is written, and a cell written whole of
+        // it is reported where it is written (`trace`).
+        if !self.whole_readable(ty) {
+            return None;
+        }
         if !matches!(
             ty,
             Type::List { .. }
@@ -9044,7 +9085,7 @@ impl Emitter<'_> {
                     // field or a dictionary of dictionaries, would replace
                     // each part it holds in turn, which the harness does
                     // not follow yet.
-                    if !self.parts_publish_whole(&value.ty) {
+                    if !self.parts_publish_whole(&value.ty) || !self.whole_readable(&value.ty) {
                         self.unsupported(value.at, "a whole trace cell of composites");
                         return "None".to_string();
                     }
