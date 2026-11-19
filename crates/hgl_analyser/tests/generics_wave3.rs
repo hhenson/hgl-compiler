@@ -283,3 +283,70 @@ fn a_call_no_one_candidate_admits_in_an_instance_rejects() {
         checked.report
     );
 }
+
+/// ERR-9: "Required constant failures reject where specified ... Failure
+/// during argument evaluation precedes later admission checks." NUM-2:
+/// "An unrepresentable i64 result produces an HGL error". GEN-8: what a
+/// call gives a generic value parameter is a compile-time constant, and
+/// "Any other rejects". A generic argument that an instance works out,
+/// and whose evaluation fails there, an `i64` out of range or a division
+/// of two `i64` by zero, is rejected where the instance is made, as the
+/// same argument written in place is (`generic.argument_constant`): with
+/// no `requires` anywhere, through another instance, in a struct's
+/// construction, and before the callee's `requires`, which is then not
+/// told. Where it works out, nothing is reported.
+#[test]
+fn a_generic_argument_that_fails_in_an_instance_rejects() {
+    let checked = module(concat!(
+        "const fn times<const K: i64>(v: i64) -> i64 => v * K\n",
+        "const fn grows<const M: i64>(v: i64) -> i64 => times<(M * 4611686018427387904)>(v)\n",
+        "const fn divs<const M: i64>(v: i64) -> i64 => times<(10 // M)>(v)\n",
+        "const fn only_eight<const K: i64>(v: i64) -> i64 requires K == 8 => v * K\n",
+        "const fn grows_big<const M: i64>(v: i64) -> i64 => only_eight<(M * 4611686018427387904)>(v)\n",
+        "const fn grows_req<const M: i64>(v: i64) -> i64 => only_eight<(M * 2)>(v)\n",
+        "const fn relay<const N: i64>(v: i64) -> i64 => grows<N>(v)\n",
+        "struct Sized<const N: i64> { v: i64 }\n",
+        "const fn boxed<const M: i64>(v: i64) -> i64 {\n",
+        "    let held = Sized<(M * 4611686018427387904)>(v: v)\n",
+        "    return held.v\n",
+        "}\n",
+        "const fn a() -> i64 => grows<4>(1)\n",
+        "const fn b() -> i64 => grows<1>(1)\n",
+        "const fn c() -> i64 => divs<0>(1)\n",
+        "const fn d() -> i64 => divs<5>(1)\n",
+        "const fn e() -> i64 => grows_big<4>(1)\n",
+        "const fn f() -> i64 => grows_req<5>(1)\n",
+        "const fn g() -> i64 => grows_req<4>(1)\n",
+        "const fn h() -> i64 => relay<4>(1)\n",
+        "const fn k() -> i64 => boxed<4>(1)\n",
+        "const fn m() -> i64 => boxed<1>(1)\n",
+        "const fn n() -> i64 => times<(4 * 4611686018427387904)>(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:14:24 type/generic.argument_constant GEN-8",
+            "m.hgl:16:24 type/generic.argument_constant GEN-8",
+            "m.hgl:18:24 type/generic.argument_constant GEN-8",
+            "m.hgl:19:24 constraint/requires.unmet GEN-3",
+            "m.hgl:21:24 type/generic.argument_constant GEN-8",
+            "m.hgl:22:24 type/generic.argument_constant GEN-8",
+            "m.hgl:24:30 type/generic.argument_constant GEN-8",
+        ],
+        "{}",
+        checked.report
+    );
+    // The instance's report says what fails, and points at the argument
+    // in the generic body.
+    let grown = checked
+        .findings
+        .iter()
+        .find(|finding| finding.at == "m.hgl:14:24")
+        .expect("the instance's argument is reported");
+    assert!(
+        grown.message.contains("`K` of `times`"),
+        "{}",
+        grown.message
+    );
+    assert!(grown.message.contains("fails"), "{}", grown.message);
+}

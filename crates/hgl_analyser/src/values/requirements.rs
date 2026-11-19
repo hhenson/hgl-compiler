@@ -1125,6 +1125,9 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // gives every argument.
     let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
     let mut given: Vec<Made> = Vec::new();
+    // The declarations whose body gives a callee a generic argument it
+    // works out from its own generic parameters.
+    let mut computing: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     for (index, module) in program.modules.iter().enumerate() {
         for position in 0..module.declarations.len() {
             let mut made = Vec::new();
@@ -1155,6 +1158,16 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             }
             let declared = own((index, position));
             for call in made {
+                // ERR-9: a generic argument the body works out from its
+                // own parameters, `times<(M * 2)>`, may fail where an
+                // instance gives them: each is followed.
+                if call
+                    .generics
+                    .iter()
+                    .any(|argument| !computed(argument, &declared).is_empty())
+                {
+                    computing.insert((index, position));
+                }
                 if call.required.is_some() || passes_on(&call.generics, &declared) {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
@@ -1193,6 +1206,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 .filter(|&position| module.selects_per_instance(position))
                 .map(move |position| (index, position))
         })
+        .chain(computing)
         .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
@@ -1293,17 +1307,42 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         ),
                         _ => continue,
                     },
-                    None => (
-                        call.callee,
-                        call.generics
+                    None => {
+                        let generics: Vec<Argument> = call
+                            .generics
                             .iter()
                             .map(|argument| given_in(argument, &map, &declared))
-                            .collect(),
-                        call.answers
-                            .iter()
-                            .map(|answer| answered_in(answer, &map, &declared, &made.answers))
-                            .collect(),
-                    ),
+                            .collect();
+                        // ERR-9: "Failure during argument evaluation
+                        // precedes later admission checks."
+                        // One fault is reported once where an instance
+                        // is made, though both a type the body writes and
+                        // a construction give it (ERR-9: "Do not demand
+                        // cascaded diagnostics").
+                        if let Some(report) = argument_fails(program, call, &map, &declared) {
+                            for &root in &from {
+                                let mut report = report.clone();
+                                report.primary = root;
+                                let reported = diagnostics.as_slice().iter().any(|earlier| {
+                                    earlier.code == report.code
+                                        && earlier.primary == report.primary
+                                        && earlier.message == report.message
+                                });
+                                if !reported {
+                                    diagnostics.emit(report);
+                                }
+                            }
+                            continue;
+                        }
+                        (
+                            call.callee,
+                            generics,
+                            call.answers
+                                .iter()
+                                .map(|answer| answered_in(answer, &map, &declared, &made.answers))
+                                .collect(),
+                        )
+                    }
                 };
                 calls.push(Resolved {
                     callee,
@@ -1440,6 +1479,113 @@ struct Resolved {
     generics: Vec<Argument>,
     answers: Vec<hir::Answer>,
     at: Location,
+}
+
+/// The constants in `argument`, a generic argument a call in a generic
+/// body gives, that the body works out from its own generic parameters,
+/// declared at `declared`: `M * 2`, `-M`, `[M, 1]`, and one in a type,
+/// `list<i64, M + 1>`. A parameter passed on as it is, `M`, is none.
+fn computed(argument: &Argument, declared: &[Location]) -> Vec<Constant> {
+    let worked = |constant: &Constant| {
+        constant.value.names_one_of(declared)
+            && !matches!(constant.value, ConstantValue::Parameter { .. })
+    };
+    match argument {
+        Argument::Constant(constant) if worked(constant) => vec![constant.clone()],
+        Argument::Constant(_) => Vec::new(),
+        Argument::Type(ty) => {
+            // `any_part` takes a closure that cannot change what it
+            // captures: the constants found are kept in a `RefCell`.
+            let found = std::cell::RefCell::new(Vec::new());
+            ty.any_part(&|_| false, &|constant| {
+                if worked(constant) {
+                    found.borrow_mut().push(constant.clone());
+                }
+                false
+            });
+            found.into_inner()
+        }
+    }
+}
+
+/// The rejection of `call`, a call in a generic body, where a generic
+/// argument it works out from the body's parameters, with what an
+/// instance gives them, `map`, has no value: its evaluation fails, or
+/// this compiler does not work it out. Its primary place is the call in
+/// the body; the caller puts it where the instance is made.
+///
+/// ERR-9: "Required constant failures reject where specified." GEN-8:
+/// "The value a call gives a generic value parameter is a compile-time
+/// constant ... Any other rejects": the same argument written in place,
+/// `times<(4 * 4611686018427387904)>`, is `generic.argument_constant`.
+fn argument_fails(
+    program: &Program,
+    call: &Made,
+    map: &[(Location, &Argument)],
+    declared: &[Location],
+) -> Option<hgl_diagnostics::Diagnostic> {
+    let given = |at: Location| {
+        map.iter()
+            .find(|(own, _)| *own == at)
+            .and_then(|(_, argument)| match argument {
+                Argument::Constant(constant) => Some(constant.value.clone()),
+                Argument::Type(_) => None,
+            })
+    };
+    let (module, declaration) = call.callee;
+    let unit = program.modules.get(module)?;
+    let parameters: &[GenericParameter] = match unit.details.get(declaration)? {
+        Detail::Callable(signature) => &signature.generics,
+        Detail::Struct(read) => &read.generics,
+        _ => return None,
+    };
+    let callee = &unit.declarations[declaration].name;
+    for (index, argument) in call.generics.iter().enumerate() {
+        for constant in computed(argument, declared) {
+            if crate::constant::worked_out(&constant.value.substituted(&given)) {
+                continue;
+            }
+            let parameter = parameters.get(index).map_or_else(
+                || "a generic parameter".to_string(),
+                |generic| format!("`{}`", generic.name),
+            );
+            let why = if crate::constant::fails_when_given(&constant.value, &given) {
+                "fails when it is evaluated for this call: an operation in it is out of its \
+                 type's range, or divides by zero"
+            } else {
+                "is no compile-time constant for this call: this compiler does not work out its \
+                 value"
+            };
+            let what = match argument {
+                Argument::Constant(_) => format!(
+                    "{parameter} of `{callee}` is a generic value parameter, and what it is \
+                     given, `{}`, {why}",
+                    constant.text
+                ),
+                Argument::Type(ty) => format!(
+                    "{parameter} of `{callee}` is given `{ty}`, and `{}` in it {why}",
+                    constant.text
+                ),
+            };
+            return Some(
+                error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_CONSTANT,
+                    call.at,
+                    what,
+                    "GEN-8",
+                )
+                .with_related(
+                    call.at,
+                    format!(
+                        "`{callee}` is called here, with the generic arguments this call gives \
+                         the function it calls"
+                    ),
+                ),
+            );
+        }
+    }
+    None
 }
 
 /// Reports each call in `from` whose instances go past what is followed
