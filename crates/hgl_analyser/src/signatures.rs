@@ -12,11 +12,15 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_parser::HasSpan;
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
+use hgl_source::FileId;
 
-use crate::program::{Declaration, DeclarationKind, Phase, Program, Role};
+use crate::constant::{Constants, Fault, Scope};
+use crate::declared::names_parameter;
+use crate::program::{Binding, Declaration, DeclarationKind, Phase, Program, Role};
+use crate::syntax::{child, has_token};
 use crate::types::{Detail, GenericKind, NamedKind, Type};
-use crate::values::{Written, constant_fits, generic_default, written};
+use crate::values::generic_default;
 use crate::{codes, error};
 
 /// Checks the signature of every callable of the program.
@@ -199,10 +203,24 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
 
 /// GEN-13: "An explicit `const N: V` declares a value parameter of
 /// ordinary type V", and the default a callable gives it (GEN-2) is a
-/// V. A default is checked here as far as how it is written says what
-/// it is; one whose type names another generic parameter,
-/// `<T, const fallback: T = 2>`, is checked where a call resolves `T`.
+/// V. A default is read as a value of V (`crate::constant`); one whose
+/// type names another generic parameter, `<T, const fallback: T = 2>`,
+/// is checked where a call resolves `T`.
+///
+/// GEN-6: a candidate "states in `requires` the values of a generic
+/// value parameter it is for, by comparing it with constants". Each
+/// constant a `requires` compares a generic value parameter with is a
+/// value of that parameter's type too (EXPR-5): `requires mode == 1` of
+/// an enum's `mode` rejects.
 fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
+    let everywhere: HashMap<(FileId, u32), &Binding> = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.uses)
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    let binding = |file: FileId, offset: u32| everywhere.get(&(file, offset)).copied();
+    let constants = Constants::default();
     for module in &program.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
             // A function's, a candidate's and an operator's, and a
@@ -213,47 +231,99 @@ fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
                 _ => continue,
             };
             let file = module.files[declaration.file].file;
+            let scope = Scope {
+                program,
+                file,
+                binding: &binding,
+                parameter: &|_| None,
+                constants: &constants,
+            };
+            // What is wrong with the constant `node` as a value of `ty`,
+            // `place` named for the message.
+            let mut check = |node: &SyntaxNode, ty: &Type, place: &str| {
+                let at = Location::new(file, node.span());
+                let read = match crate::constant::typed(node, Some(ty), &scope) {
+                    Ok(read) => read,
+                    Err(fault) => {
+                        if let Some(report) = fault.report(at, place, ty) {
+                            diagnostics.emit(report);
+                        }
+                        return;
+                    }
+                };
+                match crate::constant::fit(read.clone(), Some(ty), program) {
+                    Err(Fault::Mismatch(_)) => diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        at,
+                        format!(
+                            "this is {}, and {place} is `{ty}`",
+                            crate::constant::described(&read)
+                        ),
+                        "GEN-13",
+                    )),
+                    Err(fault) => {
+                        if let Some(report) = fault.report(at, place, ty) {
+                            diagnostics.emit(report);
+                        }
+                    }
+                    Ok(_) => {}
+                }
+            };
             for generic in generics {
                 let GenericKind::Value(ty) = &generic.kind else {
                     continue;
                 };
+                if names_parameter(ty) {
+                    continue;
+                }
                 let Some(default) = generic_default(&declaration.syntax, generic) else {
                     continue;
                 };
-                if constant_fits(program, &default, ty) != Some(false) {
-                    continue;
-                }
-                let at = Location::new(file, default.span());
-                let Some(kind) = written(&default) else {
+                let place = format!("the generic value parameter `{}`", generic.name);
+                check(&default, ty, &place);
+            }
+            let condition = child(&declaration.syntax, SyntaxKind::RequiresClause)
+                .and_then(|clause| clause.children().next());
+            for relation in condition
+                .iter()
+                .flat_map(|condition| condition.descendants())
+                .filter(|node| node.kind() == SyntaxKind::ConstraintRelation)
+            {
+                let operands: Vec<SyntaxNode> = relation.children().collect();
+                let [left, right] = operands.as_slice() else {
                     continue;
                 };
-                // TYPE-7: `.member` "names a member of the enum type its
-                // position expects".
-                let of = match ty {
-                    Type::Nullable(inner) => inner.as_ref(),
-                    other => other,
+                // The generic value parameter a lone name is.
+                let option = |operand: &SyntaxNode| {
+                    (operand.kind() == SyntaxKind::NamedType)
+                        .then(|| operand.text().to_string())
+                        .and_then(|name| {
+                            generics.iter().find(|generic| {
+                                generic.name == name.trim()
+                                    && matches!(generic.kind, GenericKind::Value(_))
+                            })
+                        })
                 };
-                if let (Written::Member(name), Type::Named { .. }) = (&kind, of) {
-                    diagnostics.emit(error(
-                        Category::Name,
-                        codes::MEMBER_UNKNOWN,
-                        at,
-                        format!("`{ty}` has no member `{name}`"),
-                        "TYPE-7",
-                    ));
+                let (generic, compared) = match (option(left), option(right)) {
+                    (Some(generic), None) => (generic, right),
+                    (None, Some(generic)) => (generic, left),
+                    _ => continue,
+                };
+                let GenericKind::Value(ty) = &generic.kind else {
+                    continue;
+                };
+                if names_parameter(ty) {
                     continue;
                 }
-                diagnostics.emit(error(
-                    Category::Type,
-                    codes::TYPE_MISMATCH,
-                    at,
-                    format!(
-                        "this is {}, and the generic value parameter `{}` is `{ty}`",
-                        kind.described(),
-                        generic.name
-                    ),
-                    "GEN-13",
-                ));
+                let place = format!("`{}`", generic.name);
+                if compared.kind() == SyntaxKind::ConstraintSet {
+                    for member in compared.children() {
+                        check(&member, ty, &place);
+                    }
+                } else if has_token(&relation, SyntaxKind::EqEq) {
+                    check(compared, ty, &place);
+                }
             }
         }
     }

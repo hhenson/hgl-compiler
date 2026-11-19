@@ -104,9 +104,10 @@ analyser: partial
 
 - A constant has the type it is written with, an ordinary value type, and its expression is read as a value of it with no parameter in scope
 - It is read by its name wherever a value is, and is a constant expression (FN-1) and a compile-time constant (GEN-8)
-- Where a size or a generic value argument needs its value, an `i64` or a `duration` written with literals, other constants and `+`, `-`, `*` is followed to it
+- Where its value is needed, a size, a generic value argument, a `requires` operand, a default, a `switch` label, a delta's key, a tuple's index, an enum's number, it is followed to it by the one reader (`constant`), through the constants it names, in its expression and its type, each worked out once as a value of its own type: an `i64` constant is no `f64` (EXPR-5)
+- One computed by a call is held by its name, the same as itself and known beside no other
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: the value of any other constant where one is needed; a struct's field default counts for a construction that gives the field
+- Left: the value of a constant computed by a `const fn`; a struct's field default counts for a construction that gives the field
 
 transpiler: done
 

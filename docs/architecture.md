@@ -233,7 +233,7 @@ It is built in passes:
 | Written types | What each written type means; each declaration's signature or fields; what a type may be made of | UNIT-4, UNIT-8, TYPE-10, TYPE-11, TYPE-12, TYPE-14, GEN-2, GEN-13 | done |
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
-| Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6 | in part: a default that names something is not checked |
+| Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default, and each constant its `requires` compares one with, is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6, GEN-3 | done |
 | Documentation | The keys of a documentation comment's `Args:` and `Type Args:` sections, against the declaration's parameters and generic parameters; nothing recorded | SDOC-3, SDOC-6 | in part: `Requires:` and `Properties:` keys are not checked |
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: see "Value expressions" below |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | FN-2 done: each temporal body is classified a graph or a node, and a node's body is held to its shape. What each admits: see "Temporal bodies" below |
@@ -292,8 +292,8 @@ Every type the source writes is read into one form, `Type`. Two types
 are the same type when their `Type` values are equal. A struct, enum or
 native type is known by the module and declaration that declare it
 (UNIT-4), whichever import or alias names it, and by its generic
-arguments: a constant among them by its value, or as it is written
-while this pass holds no value for it. What is read of each
+arguments: a constant among them by its value (`constant`), read as a
+value of the type of the parameter it is given to. What is read of each
 declaration is kept for the passes after: a callable's generic
 parameters, parameters and result; a struct's parents and members.
 `hgl check --modules` prints each signature as it was read.
@@ -314,11 +314,13 @@ What the pass checks as it reads:
 | A default | UNIT-8 | Any parameter but a pack may have one. A temporal input with one keeps its temporal type; whether the default can be wired as a constant of that type is for the pass that evaluates constants |
 | A cardinality | GEN-10 | `{n:m}` has m at least n |
 
-A size is a constant expression, and no expression has a type yet. The
-pass folds what needs none: integer and duration literals, a minus
-before one (LEX-7), `+`, `-` and `*` between two, parentheses, and the
-name of a generic parameter. Any other size is kept as written for the
-pass that evaluates constants.
+A size and a generic value argument are constant expressions, and no
+expression has a type yet. Each is read with `constant::read`, given the
+type its place expects: the type of a generic value parameter is read
+from how it is written (`constant::written_type`), a scalar, an enum, a
+generic parameter, or a nullable, list or tuple of those. An argument of
+another type than its parameter's is `type.mismatch`, and one that is no
+compile-time constant, or one not worked out, `generic.argument_constant`.
 
 A type the pass cannot know, because nothing binds its name or
 it has been reported, is `Unknown`. Nothing more is reported of it
@@ -378,9 +380,10 @@ parents, and a field that reaches a struct by two paths is listed once.
 A ladder of structs that each inherit from the two before it would
 otherwise double the list at every step.
 
-An enum's number is folded as a size is. One this pass cannot fold is
-not known, and neither are those numbered from it; the pass that
-evaluates constants reads them.
+An enum's members are numbered before the types are read, since a
+constant a type writes may name one (`Tagged<Mode(1)>`). Its number is
+read as an `i64` constant, a module's constant among them. One that is
+not worked out is not known, and neither are those numbered from it.
 
 2^63 is an integer only as the operand of a minus, the least `i64`
 (LEX-7). The lexer admits the literal; the analyser rejects it anywhere
@@ -821,12 +824,34 @@ its module. What is read of it:
 | Its type | `Detail::Constant` | The type it is written with, an ordinary value type (`type.not_ordinary`) |
 | Its expression | `Module::constants` | Read as a value of that type by a typer with no parameter, so it names no parameter and no local. A call of a temporal function is `call.role` |
 | A read of it | `ExprKind::Constant` | By its name, of its own module or one imported. It is a constant expression (FN-1), so a `const` parameter takes it, and a compile-time constant (GEN-8) |
-| Its value, where a type needs one | `read::constant_value` | A list's size, a generic value argument in angle brackets or by name, and a tuple's index that name a constant follow it to its value, through the constants it names in turn. Only an `i64` or a `duration` written with literals, constants and `+`, `-`, `*` is followed: it is all that folds with no types. A constant given as an operator's option (`Typer::constant_option`) is that value, or what its expression is written as where that is a literal or a `.member` |
+| Its value, where one is needed | `constant::read` | Every place that needs a constant's value reads it with the one reader of `constant`, given the type the place expects: a generic value argument, a `requires` operand, a generic value parameter's default, a parameter's default a candidate's condition reads, a `switch` label, a list's and a window's size, a delta's key, a tuple's index and an enum's number. A constant of a module is followed to its value, read as a value of its own type; the ones it names are worked out first, so a chain of any length is read once each and on no call stack. One whose value is not worked out, computed by a call, is held by its name (`ConstantValue::Named`) |
 | A cycle | `cycles::check` | Asked of the typed program, after the values pass. Each constant, function body, parameter default and struct's field defaults is a node of a graph, with an edge to each it reads: a constant named, the definition a call selected (the value one of a pair, FN-4; the candidate of an operator, by name or as a symbol, OPS-2), and the defaults of the parameters a call leaves out (UNIT-8). A constant in a cycle of that graph depends on itself (`constant.cycle`). `Expr::walk` visits every expression of a typed body. A constant named where the typed program keeps only its value, a size or a generic value argument, is an edge too, from the part the name is written in. The graph is of the whole program: an operator's candidates are found wherever they are declared (GEN-5), so a value may be worked out through a module that does not import the constant's |
 
-Not done: the value of a constant of any other type where a type needs
-one; the value of a `switch` label that is a constant, so two labels of
-one value are not seen as that. The cycle check counts every field
+A constant's value is a `ConstantValue`: the value the type of its
+place gives it, an integer, a float, a string's characters, a bool,
+`null`, a duration's count, a tenor's counts, a date, time or instant's
+parts, an enum member by its name, a list or a tuple; a generic value
+parameter, or a symbol over one, as written (`N + 1`), which is worked
+out where the parameter is given a value; `Unevaluated` for what is not
+worked out; `Unknown` for what was reported. The written text stays
+beside it (`Constant::text`), for messages, and nothing compares or keys
+by it. `ConstantValue::same` is the one comparison: equal as values of
+the type (`1.0` is `1.00`, `60s` is `1m`, two datetimes as instants, a
+zoned datetime as an instant and a zone), and `None` where either is not
+known, which is neither equal nor unequal. `ConstantValue::key` is the
+text a target keys an instance by, one for each value.
+
+| A caller | Asks | Where a value is not known |
+| --- | --- | --- |
+| A type's identity | `declared::agree`: known to be the same | Not the same; `Unknown` agrees with any (ERR-9) |
+| A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
+| `requires` | `holds`: `same` of the option's value and each operand | Not told: nothing reported |
+| A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
+| A `switch` label | CTRL-6 | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
+| A delta's key, a tuple's index | TYPE-16, EXPR-7 | No overlap, and the element's type not known |
+
+Not done: an operation the reader does not work out (one given
+configuration, a date moved by a tenor, a set's constant). The cycle check counts every field
 default of a struct a constant constructs, given or not, and does not
 follow the body of an anonymous function, which is not typed.
 
@@ -837,6 +862,14 @@ The body of each value function, `const fn`, is read into a typed form,
 its type, and a node wherever the source leaves a step unwritten, such
 as an `i64` taken as an `f64`. It names no target. It is what the stages
 after the analyser read; the syntax tree stays for the formatter.
+
+It is the module `values` (`crates/hgl_analyser/src/values.rs`): its
+`Typer` reads one body, and each part of what it reads is a module of
+`values/`: `statements`, `expressions`, `symbols`, `calls`,
+`arguments`, `inference`, `operators`, `candidates`, `requirements`,
+`call_checks`, `constants`, `lifting`, `control`, `members`, `deltas`,
+`fit`, `results`, `evals`, `node`, `endpoints`, `children` and
+`capabilities`.
 
 The pass is built form by form. So far it reads:
 
@@ -1533,7 +1566,7 @@ only where the program reaches it, at core's source.
 | `convert<T>(value)` (OPS-4) | The provider's function for the candidate, named with what it gives too, `_core.convert_i64_to_f64(value=count)`: core's candidates of `convert` take one type and give different ones. One that can fail takes `invalid` as division takes `zero`, `_core.convert_str_to_bool(value=text, invalid="error")`, and gives a `result` under `"error"` and the plain value under `"fail"` (OPS-8) |
 | `impl const fn` with a body, of core or of a program (GEN-4) | A function of its module, `_impl_` and then the operator and the candidate's parameter types: `_impl_add__f64_i64`. A candidate binds no name (UNIT-12), and an operator may have many |
 | `impl fn` with a body (GEN-4) | A node or a graph of its module, as a temporal function is, under the same kind of name: `_impl_join__i64_i64`. A call in a graph that selects it calls it, and is not lifted. Where a value candidate has the same parameter types (GEN-5), the value one is `_value_impl_join__i64_i64` |
-| A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64__identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13) |
+| A temporal function or a temporal candidate with generic parameters (GEN-2) | Written once for each set of generic arguments the program calls it with, in the declaration's module: `_inst_`, the name it would have, and the arguments, `_inst_identity_sum__f64` and `_inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity`. A call names the instance for its arguments. An operation the declaration requires is, in each instance, the call of the candidate that answers there (GEN-16): `_core.add__f64_f64` in the node for `f64`. A generic value read as a value is the constant the call gives, `by` as `3` in `_inst_scaled__3` (GEN-13). The arguments are keyed by value (`ConstantValue::key`), so one value is one instance however it is written: `scaled<1>` and `scaled<1.0>` of an `f64` are `_inst_scaled__1_0`, and the value is written `1.0` (hhenson/hgl-compiler#211). A member is keyed with its enum, `core::InvalidInputPolicy.identity` |
 | A value function or candidate with generic parameters (GEN-2, GEN-16) | One Python function, where one call says nothing of its body. Where it calls an operation it requires, hands a requirement on, reads a generic value, or calls an instance with its own generic parameters, one for each set of generic arguments it is called with, as a temporal one: `_inst_twice__i64` calls `_impl_join_i64_i64`. A value function, a node's hook, a constant and a lifted node call the instance for their arguments |
 | `operator` | Nothing: its candidates are the functions |
 | `enum Side { buy, sell = 5 }` (TYPE-7) | `Side = _enum.Enum("demo.orders::Side", [("buy", 0), ("sell", 5)])`, made by a call so that a member may have any name, a Python keyword among them. The class is named with its module's path: hgraph knows a Python enum by its class's name, so two modules' `Side`s would be one type to it, and core's `CmpResult` hgraph's own. hgraph takes it as a scalar: `_hg.TS[Side]`. A module's enums are written before its functions, whose annotations name them where they are defined |

@@ -104,9 +104,9 @@ pub use program::{
     ModuleFile, NameUse, OperatorRef, Phase, PreludeName, Program, Role, Test,
 };
 pub use types::{
-    Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumType, Field,
-    FieldRef, GenericKind, GenericParameter, Member, NamedKind, Pack, Parameter, Scalar, Signature,
-    StructType, TraceStyle, Type, WrittenType,
+    Argument, CallArguments, Constant, ConstantValue, Detail, EnumMember, EnumOf, EnumType, Field,
+    FieldRef, GenericKind, GenericParameter, Member, MemberOf, NamedKind, Pack, Parameter, Scalar,
+    Signature, StructType, TraceStyle, Type, WrittenType,
 };
 
 /// The diagnostic codes this stage reports.

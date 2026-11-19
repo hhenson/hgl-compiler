@@ -359,19 +359,12 @@ pub(crate) fn canonical_argument(program: &Program, argument: &GenericArgument) 
 }
 
 /// A constant inside a type as [`canonical`] text: what it comes to,
-/// however it was written. `None` for one whose value is not known as
-/// the module is written.
+/// however it was written, as the analyser keys it
+/// (`ConstantValue::key`): two constants it holds the same have one
+/// text. `None` for one whose value is not known as the module is
+/// written.
 fn canonical_constant(constant: &Constant) -> Option<String> {
-    Some(match &constant.value {
-        ConstantValue::Int(number) => number.to_string(),
-        ConstantValue::Duration(microseconds) => format!("{microseconds}us"),
-        ConstantValue::Unbounded => "unbounded".to_string(),
-        ConstantValue::Member(member) => format!(".{member}"),
-        // A literal of another kind is held as it is written, and
-        // compared without the spaces between its tokens.
-        ConstantValue::Other(_) => constant.unspaced(),
-        ConstantValue::Parameter { .. } | ConstantValue::Unevaluated => return None,
-    })
+    constant.value.key()
 }
 
 /// The name of a temporal tuple's field for the position `index`, in

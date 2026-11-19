@@ -31,9 +31,9 @@
 use hgl_diagnostics::Location;
 
 use crate::declared::substitute_within;
-use crate::hir::{Answer, Body, Callee, Expr, ExprKind, Value, walk_statements_mut};
+use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
 use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Signature, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Scalar, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
 /// it stands for at one call.
@@ -109,7 +109,9 @@ impl Program {
                     Argument::Constant(given) if declared == at => Some(given),
                     _ => None,
                 });
-                if let Some(kind) = given.and_then(|given| self.constant(given, &expression.ty)) {
+                let read = given
+                    .and_then(|given| self.constant(&given.value, &expression.ty, expression.at));
+                if let Some(kind) = read {
                     expression.kind = kind;
                 }
             }
@@ -118,22 +120,43 @@ impl Program {
         }
     }
 
-    /// A constant a generic value parameter is given, as the expression
-    /// that reads it: `None` for one whose value is not held.
-    fn constant(&self, constant: &Constant, ty: &Type) -> Option<ExprKind> {
-        match &constant.value {
-            ConstantValue::Int(value) => Some(ExprKind::Literal(Value::Int(*value))),
-            ConstantValue::Duration(value) => Some(ExprKind::Literal(Value::Duration(*value))),
+    /// A constant a generic value parameter is given, `value` of type
+    /// `ty`, as the expression that reads it, written at `at`: `None`
+    /// for one whose value is not held. A list and a tuple are each
+    /// element as its own expression.
+    fn constant(&self, value: &ConstantValue, ty: &Type, at: Location) -> Option<ExprKind> {
+        // TYPE-14: "`T?` denotes an ordinary value that is either a T or
+        // null": a value of it other than null is a T.
+        let of = match ty {
+            Type::Nullable(inner) if !matches!(value, ConstantValue::Null) => inner.as_ref(),
+            other => other,
+        };
+        // A constant under `any`, an element of a `list<any>`, says its
+        // own type: a member its enum, and a list's or a tuple's
+        // elements are each an `any` in turn.
+        let any = matches!(of, Type::Scalar(Scalar::Any));
+        let element = |value: &ConstantValue, ty: &Type| -> Option<Expr> {
+            Some(Expr {
+                kind: self.constant(value, ty, at)?,
+                ty: ty.clone(),
+                at,
+            })
+        };
+        match value {
             // TYPE-7: a member is known by its name, and the enum is
             // the parameter's type.
-            ConstantValue::Member(name) => {
-                let Type::Named {
-                    module,
-                    declaration,
-                    ..
-                } = ty
-                else {
-                    return None;
+            ConstantValue::Member(named) => {
+                let (module, declaration) = match of {
+                    Type::Named {
+                        module,
+                        declaration,
+                        ..
+                    } => (module, declaration),
+                    _ if any => {
+                        let (module, declaration) = &named.of.as_ref()?.declared;
+                        (module, declaration)
+                    }
+                    _ => return None,
                 };
                 let Some(Detail::Enum(read)) = self.modules.get(*module)?.details.get(*declaration)
                 else {
@@ -142,17 +165,47 @@ impl Program {
                 let member = read
                     .members
                     .iter()
-                    .position(|member| member.name == *name)?;
+                    .position(|member| member.name == named.name)?;
                 Some(ExprKind::EnumMember {
                     module: *module,
                     declaration: *declaration,
                     member,
                 })
             }
-            ConstantValue::Unbounded
-            | ConstantValue::Parameter { .. }
-            | ConstantValue::Other(_)
-            | ConstantValue::Unevaluated => None,
+            ConstantValue::List(values) => {
+                let of = match of {
+                    Type::List { element, .. } => element.as_ref(),
+                    _ if any => of,
+                    _ => return None,
+                };
+                values
+                    .iter()
+                    .map(|value| element(value, of))
+                    .collect::<Option<Vec<Expr>>>()
+                    .map(ExprKind::Sequence)
+            }
+            ConstantValue::Tuple(values) => {
+                let anys;
+                let elements = match of {
+                    Type::Tuple(elements) => elements,
+                    _ if any => {
+                        anys = vec![of.clone(); values.len()];
+                        &anys
+                    }
+                    _ => return None,
+                };
+                if elements.len() != values.len() {
+                    return None;
+                }
+                values
+                    .iter()
+                    .zip(elements)
+                    .map(|(value, of)| element(value, of))
+                    .collect::<Option<Vec<Expr>>>()
+                    .map(ExprKind::Tuple)
+            }
+            // A literal's value: an integer, a float, a string.
+            value => value.literal().map(ExprKind::Literal),
         }
     }
 }
@@ -227,20 +280,26 @@ fn place_answer(answer: &mut Answer, map: &Map, answers: &[Answer]) {
 }
 
 /// A generic argument with what `map` gives in place: a type with its
-/// parameters replaced, and a constant that is a generic value
-/// parameter replaced by the constant given for it.
+/// parameters replaced, a constant that is a generic value parameter
+/// replaced by the constant given for it, and one that holds such a
+/// parameter, `N + 1` or `[N]`, worked out with it.
 fn placed(argument: &Argument, map: &Map) -> Argument {
+    let given = |at: Location| {
+        map.iter().find_map(|(declared, given)| match given {
+            Argument::Constant(given) if *declared == at => Some(given),
+            _ => None,
+        })
+    };
     match argument {
         Argument::Type(ty) => Argument::Type(substitute_within(ty, map)),
         Argument::Constant(constant) => match &constant.value {
-            ConstantValue::Parameter { at, .. } => map
-                .iter()
-                .find_map(|(declared, given)| match given {
-                    Argument::Constant(_) if declared == at => Some((*given).clone()),
-                    _ => None,
-                })
+            ConstantValue::Parameter { at, .. } => given(*at)
+                .map(|given| Argument::Constant(given.clone()))
                 .unwrap_or_else(|| argument.clone()),
-            _ => argument.clone(),
+            value => Argument::Constant(Constant {
+                text: constant.text.clone(),
+                value: value.substituted(&|at| given(at).map(|given| given.value.clone())),
+            }),
         },
     }
 }

@@ -23,6 +23,7 @@ lexer: done
 analyser: partial
 
 - Each temporal scalar a type of its own
+- A temporal constant is the value it denotes: two `datetime`s are one where they are one UTC instant, and two `zoned_datetime`s where they are one instant in one zone (the owner's decision on hhenson/hgl-compiler#211); a `zoned_time` is its parts
 - Left: the domains of computed values
 
 transpiler: partial
@@ -139,9 +140,9 @@ transpiler: partial
 
 analyser: partial
 
-- A size is a count that is not negative; `unbounded`; size in identity; tuples distinct from lists
-- A size that names a constant of a module is that constant's value (UNIT-13)
-- Left: sizes computed from other constants; an unsized pattern accepting a fixed size
+- A size is a count that is not negative; `unbounded`; size in identity, by value; tuples distinct from lists
+- A size is read by the one reader (`constant`) as an `i64`: a constant of a module, and a constant expression of those, is its value (UNIT-13); a list constant of another length than its place's size is of another type
+- Left: an unsized pattern accepting a fixed size
 
 transpiler: partial
 
@@ -154,8 +155,8 @@ transpiler: partial
 
 analyser: partial
 
-- Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of literal sizes, generic value parameters, constants of a module, and `+`, `-`, `*` over them, a duration and an `i64` multiplied in either order among them; a size naming a constant of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
-- Left: a size computed by a call, by `/`, `//` or `%`, or from a generic parameter, whose kind and bounds are not checked
+- Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
+- Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked
 
 transpiler: partial
 
@@ -227,7 +228,7 @@ analyser: partial
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not
-- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants compared by value: `-1`, an enum's member, an `i64` widened to an `f64` key
+- A set's, a dictionary's or a list's delta that names one constant entry both as added or updated and as removed is `delta.overlap`, constants read by the one reader (`constant`) as values of the key's type and compared by value: `-1`, an enum's member however written, `60s` and `1m`, an integer literal as an `f64` key
 - A constant position of a list's delta that is negative or past a fixed list's bounds is `delta.index_bounds`; a negative `size_modified` is a count to reduce by
 - Left: a constructor written for a tuple's delta, which is not judged
 

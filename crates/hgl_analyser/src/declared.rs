@@ -19,19 +19,18 @@
 use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Diagnostics, Location};
-use hgl_lexer::literal::{decode_float, decode_string};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::constant::fold;
+use crate::constant::{Constants, Scope};
 use crate::program::{Declaration, DeclarationKind, Program};
 use crate::read::is_type;
 use crate::syntax::{child, has_token, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, FieldRef, GenericKind, Member,
-    StructType, Type,
+    Scalar, StructType, Type,
 };
 use crate::{codes, error};
 
@@ -39,19 +38,50 @@ use crate::{codes, error};
 /// and its own in that module's `declarations`.
 type Id = (usize, usize);
 
-/// Checks every struct and enum of the program, and fills in the
-/// [`Detail::Enum`] of each enum.
-pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
-    for module in &mut program.modules {
-        for (index, declaration) in module.declarations.iter().enumerate() {
-            if declaration.kind == DeclarationKind::Enum {
-                let file = module.files[declaration.file].file;
-                module.details[index] =
-                    Detail::Enum(enum_members(&declaration.syntax, file, diagnostics));
-            }
-        }
+/// Reads the members of every enum of the program, each with its
+/// number, into [`Module::details`]: a [`Detail::Enum`] for each enum,
+/// and [`Detail::Plain`] for every other declaration, which `read`
+/// fills in. A constant a type writes may name a member, so this comes
+/// before the types are read.
+///
+/// [`Module::details`]: crate::Module::details
+pub(crate) fn number_enums(program: &mut Program, diagnostics: &mut Diagnostics) {
+    let everywhere: HashMap<(FileId, u32), &crate::program::Binding> = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.uses)
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    let constants = Constants::default();
+    let mut details = Vec::with_capacity(program.modules.len());
+    for module in &program.modules {
+        let numbered: Vec<Detail> = module
+            .declarations
+            .iter()
+            .map(|declaration| {
+                if declaration.kind != DeclarationKind::Enum {
+                    return Detail::Plain;
+                }
+                let binding = |file: FileId, offset: u32| everywhere.get(&(file, offset)).copied();
+                let scope = Scope {
+                    program,
+                    file: module.files[declaration.file].file,
+                    binding: &binding,
+                    parameter: &|_| None,
+                    constants: &constants,
+                };
+                Detail::Enum(enum_members(&declaration.syntax, &scope, diagnostics))
+            })
+            .collect();
+        details.push(numbered);
     }
+    for (module, details) in program.modules.iter_mut().zip(details) {
+        module.details = details;
+    }
+}
 
+/// Checks every struct of the program.
+pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     let mut structs = Structs {
         program,
         diagnostics,
@@ -107,7 +137,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
 /// TYPE-7: "Unnumbered numbering starts at zero and increments the
 /// previous member; explicit numbers reset the next value. Values fit
 /// signed `i64`; duplicates and overflow reject."
-fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) -> EnumType {
+fn enum_members(node: &SyntaxNode, scope: &Scope, diagnostics: &mut Diagnostics) -> EnumType {
+    let file = scope.file;
     let mut members: Vec<EnumMember> = Vec::new();
     // The number of the member before: `None` when there is none yet,
     // `Some(None)` when it is not known.
@@ -139,19 +170,27 @@ fn enum_members(node: &SyntaxNode, file: FileId, diagnostics: &mut Diagnostics) 
             // `buy = 1`: the number written. LEX-7: "Enum numbering
             // admits the full signed minimum", which `fold` reads as a
             // minus before 2^63.
-            Some(number) => match fold(&number, &|_| ConstantValue::Unevaluated) {
-                ConstantValue::Int(value) => Some(value),
-                ConstantValue::Duration(_) => {
-                    not_an_integer(&number, file, "a duration", diagnostics);
-                    None
+            // `buy = BASE + 1`: a constant expression (TYPE-7: `enum_member
+            // = member_name, [ "=", const_expression ]`), read as an `i64`.
+            Some(number) => {
+                let integer = Type::Scalar(Scalar::I64);
+                match crate::constant::typed(&number, Some(&integer), scope) {
+                    Ok(read) => match (&read.value, read.ty()) {
+                        // One of another type than `i64`, a `const A:
+                        // i64? = 0` among them (TYPE-14: "It does not
+                        // make null an admitted value of unqualified T").
+                        (value, Some(ty)) if *ty != integer && *ty != Type::Unknown => {
+                            let what = crate::constant::kind_of(value, ty);
+                            not_an_integer(&number, file, &what, diagnostics);
+                            None
+                        }
+                        (ConstantValue::Int(value), _) => Some(*value),
+                        // A constant whose value is not worked out.
+                        _ => None,
+                    },
+                    Err(_) => None,
                 }
-                ConstantValue::Other(what) => {
-                    not_an_integer(&number, file, what, diagnostics);
-                    None
-                }
-                // An expression the pass that evaluates constants reads.
-                _ => None,
-            },
+            }
             None => match previous {
                 None => Some(0),
                 Some(None) => None,
@@ -359,14 +398,35 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
 fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
     // `Box::new` puts the substituted part where a `Box<Type>` points.
     let part = |inner: &Type| Box::new(substitute(inner, map));
+    // The constant given for the generic value parameter declared at
+    // `at`, where `map` gives one.
+    let given = |at: Location| {
+        map.iter().find_map(|(declared, argument)| match argument {
+            Argument::Constant(given) if *declared == at => Some(given),
+            _ => None,
+        })
+    };
     let constant = |constant: &Constant| match &constant.value {
-        ConstantValue::Parameter { at, .. } => map
-            .iter()
-            .find_map(|(declared, argument)| match argument {
-                Argument::Constant(given) if declared == at => Some(given.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| constant.clone()),
+        ConstantValue::Parameter { at, .. } => {
+            given(*at).cloned().unwrap_or_else(|| constant.clone())
+        }
+        // `N + 1`: worked out with what `N` is given; `[N]` and
+        // `Side(N)` hold it.
+        ConstantValue::Unary(..)
+        | ConstantValue::Binary(..)
+        | ConstantValue::List(_)
+        | ConstantValue::Tuple(_)
+        | ConstantValue::Constructed { .. } => {
+            let value = constant
+                .value
+                .substituted(&|at| given(at).map(|given| given.value.clone()));
+            // The constant is still written as it was (`N + 1`): only
+            // its value changes.
+            Constant {
+                text: constant.text.clone(),
+                value,
+            }
+        }
         _ => constant.clone(),
     };
     match ty {
@@ -1628,15 +1688,6 @@ struct Matching<'a> {
     open: bool,
 }
 
-/// True when a constant is one this pass cannot compare: it names a
-/// generic parameter, or is an expression not evaluated.
-fn is_open(constant: &Constant) -> bool {
-    matches!(
-        constant.value,
-        ConstantValue::Parameter { .. } | ConstantValue::Unevaluated
-    )
-}
-
 /// True when the argument a struct gives its parent, `applied`, may be
 /// the argument `given` that a type writes for that parent. `bound` is
 /// what has been found for the struct's parameters, and gains what
@@ -1837,78 +1888,33 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
 
 /// [`may_be`], for a constant.
 fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_>) -> bool {
-    if let ConstantValue::Parameter { at, .. } = &applied.value {
-        return found.open || bind(*at, Argument::Constant(given.clone()), found);
-    }
-    may_be_one(given, applied)
-}
-
-/// True when two constants may be one value.
-///
-/// One that names a generic parameter, or is an expression not
-/// evaluated, may be anything. Two literals whose values this pass does
-/// not hold are read through the parentheses and the minus around them
-/// (EXPR-1): `(true)` is `true`. Two floats are compared as the numbers
-/// they denote (LEX-20) and two strings as their contents (LEX-2), so
-/// `1.0` is `1.00`; a bool or `null` is as it is written; and two dates
-/// or times written differently may be one.
-fn may_be_one(left: &Constant, right: &Constant) -> bool {
-    if is_open(left) || is_open(right) || left == right {
-        return true;
-    }
-    let (ConstantValue::Other(kind), ConstantValue::Other(other_kind)) =
-        (&left.value, &right.value)
-    else {
-        // Two values this pass holds, or one it holds and one it does
-        // not: they differ.
-        return false;
-    };
-    if kind != other_kind {
-        return false;
-    }
-    let (negative, text) = bare_literal(&left.text);
-    let (other_negative, other_text) = bare_literal(&right.text);
-    match *kind {
-        // A literal the lexer has reported is not read here: it may be
-        // the other.
-        "a float" => match (decode_float(text), decode_float(other_text)) {
-            (Ok(value), Ok(other)) => {
-                let signed = |value: f64, negative: bool| if negative { -value } else { value };
-                signed(value, negative) == signed(other, other_negative)
-            }
-            _ => true,
-        },
-        "a string" => match (decode_string(text), decode_string(other_text)) {
-            (Ok(value), Ok(other)) => value == other,
-            _ => true,
-        },
-        "a date or time" => true,
-        // `true`, `false` and `null` are as they are written.
-        _ => negative == other_negative && text == other_text,
-    }
-}
-
-/// The literal inside a constant that is one literal in parentheses or
-/// under a minus, with whether an odd number of minuses stand before
-/// it: `-(1.0)` gives `1.0`, negative.
-fn bare_literal(text: &str) -> (bool, &str) {
-    let mut negative = false;
-    let mut rest = text.trim();
-    loop {
-        // `strip_prefix` gives what follows the prefix, or `None` when
-        // the text does not start with it.
-        if let Some(inner) = rest.strip_prefix('-') {
-            negative = !negative;
-            rest = inner.trim();
-        } else if let Some(inner) = rest
-            .strip_prefix('(')
-            .and_then(|inner| inner.strip_suffix(')'))
-        {
-            rest = inner.trim();
-        } else {
-            return (negative, rest);
+    match (&given.value, &applied.value) {
+        (_, ConstantValue::Parameter { at, .. }) => {
+            found.open || bind(*at, Argument::Constant(given.clone()), found)
         }
+        // `[N, 1]` against `[2, 1]`: each element, a parameter among
+        // them bound to what is given in its place.
+        (ConstantValue::List(givens), ConstantValue::List(applieds))
+        | (ConstantValue::Tuple(givens), ConstantValue::Tuple(applieds))
+            if givens.len() == applieds.len() =>
+        {
+            givens.iter().zip(applieds).all(|(given, applied)| {
+                let element = |value: &ConstantValue| Constant {
+                    text: value.key().unwrap_or_default(),
+                    value: value.clone(),
+                };
+                constant_may_be(&element(given), &element(applied), found)
+            })
+        }
+        _ => may_be_one(given, applied),
     }
+}
+
+/// True when two constants may be one value: neither is known to be
+/// another ([`ConstantValue::same`]). A generic parameter, an expression
+/// of one, and a constant whose value is not known may be anything.
+fn may_be_one(left: &Constant, right: &Constant) -> bool {
+    left.value.same(&right.value) != Some(false)
 }
 
 /// Records that the parameter declared at `at` stands for `argument`.
@@ -1984,11 +1990,33 @@ fn differs(parent: &Introduced, ty: &Type) -> bool {
     if matches!(parent.ty, Type::Unknown) || matches!(ty, Type::Unknown) {
         return false;
     }
-    !agree(&parent.ty, ty)
+    // A constant whose value is not known differs from nothing here: a
+    // field is in conflict only where its type is known to be another.
+    !agree_as(&parent.ty, ty, true)
 }
 
-/// True when two types are the same as far as each is known.
+/// True when two types are the same as far as each is known. A constant
+/// in one whose value is not known is the same as nothing
+/// ([`ConstantValue::same`]): a type that holds one is not known to be
+/// any type.
 pub(crate) fn agree(left: &Type, right: &Type) -> bool {
+    agree_as(left, right, false)
+}
+
+/// [`agree`], with `unknown` what two constants count as where whether
+/// they are one value is not known: false where the question is whether
+/// two types are known to be one, true where it is whether they are
+/// known to differ.
+fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
+    let agree = |left: &Type, right: &Type| agree_as(left, right, unknown);
+    // A constant not known agrees with any, as a type not known does:
+    // what is wrong with it has been reported, or it is still to be
+    // said (ERR-9).
+    let constants_agree = |left: &Constant, right: &Constant| {
+        matches!(left.value, ConstantValue::Unknown)
+            || matches!(right.value, ConstantValue::Unknown)
+            || left.value.same(&right.value).unwrap_or(unknown)
+    };
     // Two lists of types agree when they are as long as each other and
     // agree place by place.
     let all = |left: &[Type], right: &[Type]| {
@@ -2070,16 +2098,13 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
                 minimum: other_minimum,
             },
         ) => {
-            let minimums = match (minimum, other_minimum) {
-                (Some(minimum), Some(other_minimum)) => constants_agree(minimum, other_minimum),
-                // One written and one not: the same when the one
-                // written may yet come to the maximum.
-                (Some(written), None) | (None, Some(written)) => {
-                    matches!(written.value, ConstantValue::Unevaluated)
-                }
-                (None, None) => true,
-            };
-            constants_agree(maximum, other_maximum) && minimums && agree(value, other_value)
+            // TYPE-11: "Omitted minimum equals maximum." A window with
+            // none written has its maximum for one.
+            let minimum = minimum.as_ref().unwrap_or(maximum);
+            let other_minimum = other_minimum.as_ref().unwrap_or(other_maximum);
+            constants_agree(maximum, other_maximum)
+                && constants_agree(minimum, other_minimum)
+                && agree(value, other_value)
         }
         (
             Type::Result { value, error },
@@ -2090,20 +2115,4 @@ pub(crate) fn agree(left: &Type, right: &Type) -> bool {
         ) => agree(value, other_value) && agree(error, other_error),
         (left, right) => left == right,
     }
-}
-
-/// True when two constants are the same as far as each is known. One
-/// this pass has not evaluated, such as `N + 1` with an argument put in
-/// place of `N`, differs from nothing: the pass that evaluates constants
-/// compares it.
-fn constants_agree(left: &Constant, right: &Constant) -> bool {
-    // An expression not evaluated, and a literal whose value is not
-    // held: `1.0` and `1.00` are one float, written two ways.
-    let open = |constant: &Constant| {
-        matches!(
-            constant.value,
-            ConstantValue::Unevaluated | ConstantValue::Other(_)
-        )
-    };
-    open(left) || open(right) || left == right
 }

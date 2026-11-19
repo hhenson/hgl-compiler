@@ -1164,11 +1164,11 @@ fn a_generic_temporal_function_is_written_for_each_call() {
             "@_hg.graph\n",
             "def _inst_identity_sum__f64(lhs: _hg.TS[_py.float], rhs: _hg.TS[_py.float]) ",
             "-> _hg.TS[_py.float]:\n",
-            "    return _hgl_4core._inst__impl_add__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+            "    return _hgl_4core._inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity(lhs=lhs, rhs=rhs)\n",
         ),
         "def _inst_identity_sum__duration(",
         "def _inst_identity_sum__str(",
-        "    return _hgl_4core._inst__impl_sub__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+        "    return _hgl_4core._inst__impl_sub__T_T__f64_core__InvalidInputPolicy_identity(lhs=lhs, rhs=rhs)\n",
         // A node for each type, its required `add_` the candidate.
         concat!(
             "@_hg.compute_node\n",
@@ -1203,7 +1203,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
     core.assert_writes(&[
         concat!(
             "@_hg.compute_node(valid=())\n",
-            "def _inst__impl_add__T_T__f64__identity(lhs: _hg.TS[_py.float], ",
+            "def _inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity(lhs: _hg.TS[_py.float], ",
             "rhs: _hg.TS[_py.float], _output: _hg.TS_OUT[_py.float] = None) ",
             "-> _hg.TS[_py.float]:\n",
             "    if lhs.valid and rhs.valid:\n",
@@ -5659,4 +5659,69 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
         ]
     );
+}
+
+// ---- Constants by value (hhenson/hgl-compiler#211) ----
+
+/// The owner's decision on hhenson/hgl-compiler#211: two constants are
+/// the same where, read as values of the type their place gives them,
+/// they are equal, and "when writing transpiled code, we would write the
+/// code one way, i.e. f=1.0". EXPR-5: `1` where an `f64` is expected is
+/// `1.0`. So `FBox<1>` and `FBox<1.00>` are one class, and `scaled<1>`
+/// and `scaled<1.0>` one instance, which writes the value as `1.0`.
+#[test]
+fn a_constant_argument_is_written_by_its_value() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct FBox<const X: f64> { v: i64 }\n",
+            "const fn a() -> FBox<1> => FBox<1>(v: 1)\n",
+            "const fn b() -> FBox<1.00> => FBox<1.00>(v: 2)\n",
+            "fn scaled<const k: f64>(x: f64) -> f64 => x * k\n",
+            "fn uses(x: f64) -> f64 => scaled<1>(x) + scaled<1.0>(x) + scaled<2.5>(x)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    assert_eq!(
+        python.matches("_core.applied(FBox, \"1.0\")").count(),
+        2,
+        "{python}"
+    );
+    for expected in [
+        "_lift_2_add__f64_f64(lhs=_inst_scaled__1_0(x=x), rhs=_inst_scaled__1_0(x=x))",
+        "def _inst_scaled__1_0(x: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+        "    return _lift_0_mul__f64_f64(lhs=x, rhs=1.0)\n",
+        "def _inst_scaled__2_5(x: _hg.TS[_py.float]) -> _hg.TS[_py.float]:\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+    assert_eq!(python.matches("def _inst_scaled__").count(), 2, "{python}");
+}
+
+/// GEN-13: a constant given a `list<any>` is written whole, however
+/// deep: a nested list, a tuple and a member each say their own type.
+#[test]
+fn a_constant_under_any_is_written_whole() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "enum Mode { fast, slow }\n",
+            "const fn values<const X: list<any>>() -> list<any> => X\n",
+            "const fn a() -> list<any> => values<[[1]]>()\n",
+            "const fn c() -> list<any> => values<[Mode.slow]>()\n",
+            "const fn d() -> list<any> => values<[(1, \"a\")]>()\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "    return _core.copied([[1]])\n",
+        "    return _core.copied([Mode[\"slow\"]])\n",
+        "    return _core.copied([(1, \"a\",)])\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
 }

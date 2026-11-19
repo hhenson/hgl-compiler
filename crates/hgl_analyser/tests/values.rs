@@ -1054,8 +1054,8 @@ fn an_element_is_read_by_its_index_or_its_key() {
         "    let tail = pair[1]\n",
         "    let beyond = pair[2]\n",
         "    let moving = pair[a]\n",
-        // A constant need not be a literal: `1 - 1` is 0 and `-1 + 2` is
-        // 1. One this pass does not evaluate gives no type and no report.
+        // A constant need not be a literal: `1 - 1` is 0, `-1 + 2` is 1,
+        // and `2 // 2` is 1 (NUM-1).
         "    let folded = pair[1 - 1]\n",
         "    let signed = pair[(-1 + 2) * 1]\n",
         "    let outside = pair[1 + 1]\n",
@@ -1113,7 +1113,7 @@ fn an_element_is_read_by_its_index_or_its_key() {
             "folded: i64",
             "signed: str",
             "outside: _",
-            "divided: _",
+            "divided: str",
             "mixed: _",
             "real: _",
             "truth: _",
@@ -2617,7 +2617,7 @@ fn an_option_that_selects_is_a_generic_value_parameter() {
             };
             match generics.as_slice() {
                 [Argument::Constant(constant)] => match &constant.value {
-                    ConstantValue::Member(name) => Some(name.clone()),
+                    ConstantValue::Member(member) => Some(member.name.clone()),
                     _ => None,
                 },
                 _ => None,
