@@ -139,6 +139,8 @@ def _equal(lhs, rhs):
     if isinstance(lhs, dict):
         return (
             isinstance(rhs, dict)
+            # A list's delta also holds its `size_modified` (see `ListDelta`).
+            and size_modified(lhs) == size_modified(rhs)
             and lhs.keys() == rhs.keys()
             and all(_equal(value, rhs[key]) for key, value in lhs.items())
         )
@@ -505,6 +507,88 @@ def dict_delta(updated=None, removed=()):
     for key in removed:
         made[key] = _REMOVE
     return made
+
+
+class ListDelta(dict):
+    """A list's delta (the language's TYPE-16), as hgraph's delta of a
+    `TSL`: a `dict` of each position updated with its delta, and of each
+    removed with `REMOVE`. It also holds `size_modified`, "the new size
+    where the size changed, else null", which hgraph's `dict` has no
+    place for."""
+
+    size_modified = None
+
+    def __eq__(self, other):
+        # Two list deltas are one where their positions and their
+        # `size_modified` are; a plain `dict`'s is null.
+        return (
+            isinstance(other, dict)
+            and size_modified(self) == size_modified(other)
+            and dict.__eq__(self, other)
+        )
+
+    def __ne__(self, other):
+        return not self == other
+
+    __hash__ = None
+
+
+def list_delta(updated=None, removed=(), size_modified=None):
+    """A list's delta made from its properties (TYPE-16: "`updated`,
+    each changed position with its delta; `removed`, the positions that
+    lost their value ... and `size_modified`"). A property left out is
+    empty, or null for `size_modified`. What is updated is copied: the
+    program may go on changing the dictionary it was given in."""
+    made = ListDelta({} if updated is None else copied(updated))
+    for position in removed:
+        made[position] = _REMOVE
+    made.size_modified = size_modified
+    return made
+
+
+def size_modified(delta):
+    """The property `size_modified` of a list's delta (TYPE-16): the
+    new size, or null where the size did not change."""
+    return getattr(delta, "size_modified", None)
+
+
+def list_applied(output, delta):
+    """The whole list an unsized list publishes for `delta`, applied to
+    what it last published, `output`'s value (TYPE-16). "A delta written
+    with a smaller `size_modified` and no `removed` shrinks the list", and
+    one whose `removed` is the whole tail does too. This target writes an
+    unsized list as a whole tuple, which holds no position without a
+    value: a position removed short of the end, or one that growth leaves
+    with no value, is not written yet."""
+    held = list(output.value) if output.valid else []
+    gone = {position for position, change in delta.items() if _removes(change)}
+    size = size_modified(delta)
+    # TYPE-10: a size is "a count that is not negative". The catalogue
+    # has no execution code for one that is, so the failure has none,
+    # as an index outside a sequence has none (see `item`).
+    if size is not None and size < 0:
+        raise HglError(f"the size {size} of a list is negative: a size is a count that is not negative")
+    if size is None:
+        # Only a `removed` that is the whole tail shrinks the list.
+        size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
+    if any(position < size for position in gone):
+        raise NotImplementedError(
+            "the hgraph target does not write a position removed inside an unsized list yet"
+        )
+    made = held[:size]
+    for position in range(len(made), size):
+        if position not in delta:
+            raise NotImplementedError(
+                "the hgraph target does not write an unsized list grown with no value yet"
+            )
+        made.append(None)
+    for position, change in delta.items():
+        if not _removes(change):
+            if not 0 <= position < size:
+                raise HglError(f"the position {position} is outside a list of {size}")
+            # A whole tuple holds a null as `None`, not hgraph's `Null`.
+            made[position] = unpublished(change)
+    return tuple(made)
 
 
 def _removes(change):
