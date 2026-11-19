@@ -772,14 +772,29 @@ class _AbsentEntry:
 _ABSENT_ENTRY = _AbsentEntry()
 
 
+def _index(index, size):
+    """Fails where `index` is no position of a sequence of `size`
+    elements, a list's or a tuple's or a fixed list's port: "An index
+    outside a list fails where it is evaluated" (EXPR-3). Python's own
+    indexing would count a negative index back from the end."""
+    if not 0 <= index < size:
+        raise HglError(f"the index {index} is outside a sequence of {size}")
+
+
+def _key(dictionary, key):
+    """Fails where `dictionary` has no entry for `key`: a strict read
+    (ERR-6: "absence fails"), with the code `value.missing_key`."""
+    if key not in dictionary:
+        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
+
+
 def position_of(port, index):
     """The endpoint of a fixed list's element at `index`, hgraph's child
     of the list's input (TIME-1). "An index outside a list fails where it
     is evaluated" (EXPR-3). A position of an absent entry is absent."""
     if port is _ABSENT_ENTRY:
         return port
-    if not 0 <= index < len(port):
-        raise HglError(f"the index {index} is outside a sequence of {len(port)}")
+    _index(index, len(port))
     return port[index]
 
 
@@ -993,8 +1008,7 @@ def item(sequence, index):
     """`sequence[index]`: the element of a list or a tuple at an `i64`
     index (EXPR-7). An index outside it fails: Python's own would count
     a negative one back from the end."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    _index(index, len(sequence))
     return sequence[index]
 
 
@@ -1004,9 +1018,7 @@ def child(port, index):
     outside the list fails, as an element's does (EXPR-3: "An index
     outside a list fails where it is evaluated"); Python's own would
     count a negative one back from the end."""
-    size = len(port)
-    if not 0 <= index < size:
-        raise HglError(f"the index {index} is outside a sequence of {size}")
+    _index(index, len(port))
     return port[index]
 
 
@@ -1014,10 +1026,8 @@ def entry(dictionary, key):
     """`dictionary[key]`: the value a dictionary has for a key. The
     read is strict (ERR-6: "absence fails"), with the code
     `value.missing_key`."""
-    try:
-        return dictionary[key]
-    except KeyError:
-        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
+    _key(dictionary, key)
+    return dictionary[key]
 
 
 def published(value):
@@ -1367,6 +1377,40 @@ def copied(value):
     return value
 
 
+def _step(holder, kind, key):
+    """What one step of a place's way in leads to inside `holder`: the
+    field `key` of a struct (`"f"`), the entry `key` of a dictionary
+    (`"k"`), or the element at `key` of a list or a tuple (`"i"`). A key
+    the dictionary has not and an index outside the sequence fail."""
+    if kind == "f":
+        return getattr(holder, key)
+    if kind == "k":
+        _key(holder, key)
+    else:
+        _index(key, len(holder))
+    return holder[key]
+
+
+def _spliced(sequence, index, value):
+    """`sequence`, a list or a tuple, with the element at `index` another
+    value: a new sequence of its type, and `sequence` as it was."""
+    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+
+
+def _put(holder, kind, key, value):
+    """What `holder` is to be with the step `kind`, `key` (see `_step`)
+    holding `value`. A struct that is a value and a tuple are never
+    changed: a new one is made (`set_field`, `_spliced`). A list, a
+    dictionary and a struct that is no value are changed where they are,
+    and given back."""
+    if kind == "f":
+        return set_field(holder, key, value)
+    if type(holder) is tuple:
+        return _spliced(holder, key, value)
+    holder[key] = value
+    return holder
+
+
 def _changed(holder, steps, at, change):
     """What `holder` is to be once the value `steps[at:]` leads to inside
     it has been changed by `change`.
@@ -1382,25 +1426,9 @@ def _changed(holder, steps, at, change):
     if at == len(steps):
         return change(holder)
     kind, key = steps[at]
-    if kind == "f":
-        inner = getattr(holder, key)
-        changed = _changed(inner, steps, at + 1, change)
-        return holder if changed is inner else set_field(holder, key, changed)
-    if kind == "k":
-        if key not in holder:
-            raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-    else:
-        if not 0 <= key < len(holder):
-            raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-        if type(holder) is tuple:
-            inner = holder[key]
-            changed = _changed(inner, steps, at + 1, change)
-            return holder if changed is inner else holder[:key] + (changed,) + holder[key + 1 :]
-    inner = holder[key]
+    inner = _step(holder, kind, key)
     changed = _changed(inner, steps, at + 1, change)
-    if changed is not inner:
-        holder[key] = changed
-    return holder
+    return holder if changed is inner else _put(holder, kind, key, changed)
 
 
 def _read_in(holder, steps):
@@ -1408,16 +1436,7 @@ def _read_in(holder, steps):
     step that fails, an index outside a list or a key a dictionary has
     not, fails here, as it does where a place is read."""
     for kind, key in steps:
-        if kind == "f":
-            holder = getattr(holder, key)
-        elif kind == "k":
-            if key not in holder:
-                raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-            holder = holder[key]
-        else:
-            if not 0 <= key < len(holder):
-                raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-            holder = holder[key]
+        holder = _step(holder, kind, key)
     return holder
 
 
@@ -1445,17 +1464,11 @@ def set_at(root, steps, value, /):
     new = value()
 
     def assign(holder):
-        if kind == "f":
-            return set_field(holder, key, new)
-        if kind == "k":
-            holder[key] = new
-            return holder
-        if not 0 <= key < len(holder):
-            raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-        if type(holder) is tuple:
-            return holder[:key] + (new,) + holder[key + 1 :]
-        holder[key] = new
-        return holder
+        # The place assigned is not read: a key the dictionary has not is
+        # added, and only an index is checked.
+        if kind == "i":
+            _index(key, len(holder))
+        return _put(holder, kind, key, new)
 
     return _changed(root, steps[:-1], 0, assign)
 
@@ -1492,8 +1505,7 @@ def set_item(sequence, index, value, /):
     a `var`, a `state` or a `cache` holds itself (EXPR-3). The list is
     changed where it is, and keeps `value`. "An index outside a list
     fails where it is evaluated", and the list is then as it was."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    _index(index, len(sequence))
     sequence[index] = value
     return sequence
 
@@ -1541,9 +1553,8 @@ def with_item(sequence, index, value, /):
     place's own (EXPR-3): the sequence with one element another value.
     "An index outside a list fails where it is evaluated." `sequence`
     itself is as it was, for whatever else holds it."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
-    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+    _index(index, len(sequence))
+    return _spliced(sequence, index, value)
 
 
 def with_entry(dictionary, key, value, /):
