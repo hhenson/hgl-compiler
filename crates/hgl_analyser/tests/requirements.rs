@@ -7,38 +7,12 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, body, locals, module};
 use hgl_analyser::Detail;
-use hgl_analyser::hir::{Answer, Body, Callee, Expr, ExprKind, Stmt, ValueCategory};
+use hgl_analyser::hir::{Answer, Callee, Expr, ExprKind, Stmt, ValueCategory};
 
 /// No lines.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
-}
-
-/// The locals of `name` as `local: type`, parameters first.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    body(checked, name)
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
-}
 
 /// What each statement of `name` that holds a call calls: the name of
 /// the operator a requirement names, `candidate` for a candidate
