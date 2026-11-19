@@ -265,6 +265,15 @@ impl Emitter<'_> {
     /// TYPE-11 does. TYPE-16: a window's delta is "V: the value that
     /// arrived", and a tick of a `TSW` is one value added to it.
     ///
+    /// hgraph's `TSW` is valid at its first value and all valid at its
+    /// minimum, a count of values or the span of their arrival times, as
+    /// TYPE-11 and core's END-9 have it; a value leaves a window of a
+    /// duration only as another arrives, and its exit is no tick. TYPE-11:
+    /// "a minimum of `0s` being read as Max". hgraph 0.9.5's `TSW` reads
+    /// a minimum of zero as zero, all valid at its first value (its
+    /// `to_window` reads it as the maximum), so the maximum is written
+    /// for it.
+    ///
     /// hgraph's window holds values that are scalars to it, so V is a
     /// scalar or an enum here. A window of a nullable, of a struct and
     /// of a collection is reported, and so is a size not known as the
@@ -284,6 +293,11 @@ impl Emitter<'_> {
             return None;
         }
         let value = self.annotation(value, false, at)?;
+        // A minimum of `0s` is the maximum (TYPE-11).
+        let minimum = minimum.map(|minimum| match minimum.value {
+            ConstantValue::Duration(0) => maximum,
+            _ => minimum,
+        });
         let mut sizes = Vec::new();
         for size in std::iter::once(maximum).chain(minimum) {
             let written = match &size.value {
@@ -301,41 +315,6 @@ impl Emitter<'_> {
         }
         self.hgraph = true;
         Some(format!("_hg.TSW[{value}, {}]", sizes.join(", ")))
-    }
-
-    /// True where a node may read `ty` as an input or as its own `out`
-    /// for each window it holds, itself or at any depth (`windows_in`);
-    /// otherwise reported at `at`.
-    ///
-    /// FN-12: "Fixed-size lists and windows retain their own
-    /// shape/readiness contracts", and TYPE-11: "window publications
-    /// obey core's contract". Core has no such contract yet: it does
-    /// not say whether a window is valid before it holds its minimum,
-    /// how a duration is held, or whether a value leaves a window of a
-    /// duration as time passes with none arriving. Only a window of
-    /// ticks whose minimum is one tick is the same under every reading:
-    /// it is valid from the first value that arrives, and a value
-    /// leaves it only as another arrives, as hgraph's `TSW` has it. A
-    /// window inside a struct, a tuple, a list or a dictionary decides
-    /// that one's validity too (TIME-9).
-    pub(super) fn readable_window(&mut self, ty: &Type, at: Location) -> bool {
-        for window in windows_in(self.program, ty) {
-            let Type::RollingWindow {
-                maximum, minimum, ..
-            } = &window
-            else {
-                continue;
-            };
-            // "Omitted minimum equals maximum."
-            let minimum = minimum.as_ref().unwrap_or(maximum);
-            if !matches!(minimum.value, ConstantValue::Int(1)) {
-                // Core's END-9 has the readiness of the others, of a
-                // tick count and of a duration's span.
-                self.unsupported(at, &format!("the readiness END-9 gives `{window}`"));
-                return false;
-            }
-        }
-        true
     }
 
     /// The annotation of the struct `ty`, declared at `(module,
@@ -514,20 +493,6 @@ impl Emitter<'_> {
                 }
             });
         (parameters, result)
-    }
-
-    /// Reports each input of a node or a source that holds a window,
-    /// itself or within, whose readiness is not known
-    /// (`readable_window`): the node reads it, if only by requiring it
-    /// valid (TIME-3). A graph only wires one.
-    pub(super) fn window_inputs(&mut self, signature: &Signature) {
-        for parameter in &signature.parameters {
-            // A `ref` parameter is not read (FN-16), its readiness least
-            // of all.
-            if !parameter.constant && !parameter.reference {
-                self.readable_window(&parameter.ty, parameter.at);
-            }
-        }
     }
 
     /// Reports a node whose result holds a window (`windows_in`) and

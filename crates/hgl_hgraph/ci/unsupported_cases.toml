@@ -9,10 +9,6 @@
 "a wake asked for with a duration that may not be more than zero (TIME-8)" = [
     "conformance::a_zero_duration_asked_of_the_scheduler_fails",
 ]
-"the readiness END-9 gives `rolling_window<i64, 3, 2>`" = [
-    "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
-    "conformance::reading_a_window_before_it_is_all_valid_fails",
-]
 
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,
