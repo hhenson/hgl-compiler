@@ -1,17 +1,21 @@
 //! `docs/rules.md` against the pinned specification and this workspace.
 //!
-//! `docs/rules.md` lists every rule of the pinned specification and core
-//! with the stage that implements it. A table kept by hand drifts, so these
-//! tests read it and check what can be checked mechanically:
+//! `docs/rules.md` lists the chapter files under `docs/rules/`, which
+//! hold every rule of the pinned specification and core with the stage
+//! that implements it. A list kept by hand drifts, so these tests read it
+//! and check what can be checked mechanically:
 //!
-//! * every rule the pinned documents define has a row, and no row names a
-//!   rule they do not define, so raising the pin shows which rows to add;
-//! * every row names a known stage and state, and no row is repeated;
-//! * a row marked `done` or `partial` names a rule that its stage's code
-//!   cites;
-//! * the rows of one rule are together and a family's rules are in order.
+//! * every rule the pinned documents define has an entry, and no entry
+//!   names a rule they do not define, so raising the pin shows which
+//!   entries to add;
+//! * every entry names a known stage and state, and no entry is repeated;
+//! * an entry marked `done` or `partial` names a rule that its stage's
+//!   code cites;
+//! * the entries of one rule are together and a family's rules are in
+//!   order.
 //!
-//! They do not check that a `done` or `partial` row is true. The stage's
+//! An entry is a stage's line `stage: state` under the rule's `## RULE`
+//! heading. They do not check that a `done` or `partial` entry is true. The stage's
 //! own tests do that; this file only stops the table claiming a rule
 //! nothing mentions.
 
@@ -19,7 +23,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The stages a row may name, each with the crates that implement it.
+/// The stages an entry may name, each with the crates that implement it.
 ///
 /// A stage with no crate yet has an empty list. Marking one of its rows
 /// `done` or `partial` fails until its crates are added here.
@@ -36,10 +40,10 @@ const STAGES: [(&str, &[&str]); 10] = [
     ("docs", &[]),
 ];
 
-/// The states a row may have.
+/// The states an entry may have.
 const STATES: [&str; 4] = ["done", "partial", "planned", "unscheduled"];
 
-/// One row of a rule table in `docs/rules.md`.
+/// One stage's entry for a rule in a chapter file of `docs/rules/`.
 struct Row {
     /// The rule, for example `LEX-8`.
     rule: String,
@@ -47,8 +51,9 @@ struct Row {
     stage: String,
     /// `done`, `partial`, `planned` or `unscheduled`.
     state: String,
-    /// The row's line in the file, counted from 1, for failure messages.
-    line: usize,
+    /// Where the entry's `stage: state` line is, as `docs/rules/x.md
+    /// line N`, for failure messages.
+    at: String,
 }
 
 /// The workspace root.
@@ -148,25 +153,49 @@ fn rules_defined() -> BTreeSet<String> {
     defined
 }
 
-/// The rows of every rule table in `docs/rules.md`: the lines of the form
-/// `| RULE | stage | state | text |`.
+/// The entries of every chapter file, in the order `docs/rules.md`
+/// lists the chapters: under each `## RULE` heading, the lines of the
+/// form `stage: state`.
 fn rows() -> Vec<Row> {
-    let text = read(&root().join("docs/rules.md"));
+    let index = read(&root().join("docs/rules.md"));
+    // The chapters are the index's links `- [Title](rules/name.md)`.
+    let chapters: Vec<&str> = index
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("- [")?
+                .split_once("](")?
+                .1
+                .strip_suffix(')')
+        })
+        .filter(|link| link.starts_with("rules/"))
+        .collect();
+    assert!(!chapters.is_empty(), "docs/rules.md lists no chapter");
     let mut rows = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        // `| a | b |` splits into "", " a ", " b ", "": the cells are the
-        // pieces between the first and last.
-        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
-        if cells.len() == 6 && rule_parts(cells[1]).is_some() {
-            rows.push(Row {
-                rule: cells[1].to_owned(),
-                stage: cells[2].to_owned(),
-                state: cells[3].to_owned(),
-                line: index + 1,
-            });
+    for chapter in chapters {
+        let text = read(&root().join("docs").join(chapter));
+        let mut rule: Option<&str> = None;
+        for (index, line) in text.lines().enumerate() {
+            if let Some(heading) = line.strip_prefix("## ") {
+                rule = rule_parts(heading).map(|_| heading);
+                continue;
+            }
+            // `stage: state`, two words of lowercase letters.
+            let Some((stage, state)) = line.split_once(": ") else {
+                continue;
+            };
+            let word =
+                |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_lowercase());
+            if let Some(rule) = rule.filter(|_| word(stage) && word(state)) {
+                rows.push(Row {
+                    rule: rule.to_owned(),
+                    stage: stage.to_owned(),
+                    state: state.to_owned(),
+                    at: format!("docs/{chapter} line {}", index + 1),
+                });
+            }
         }
     }
-    assert!(!rows.is_empty(), "docs/rules.md has no rule row");
+    assert!(!rows.is_empty(), "docs/rules/ has no rule entry");
     rows
 }
 
@@ -180,7 +209,7 @@ fn the_table_lists_exactly_the_rules_the_pinned_documents_define() {
     let unknown: Vec<&String> = listed.difference(&defined).collect();
     assert!(
         missing.is_empty() && unknown.is_empty(),
-        "docs/rules.md and the pinned documents disagree.\n\
+        "docs/rules/ and the pinned documents disagree.\n\
          Defined but not listed: {missing:?}\n\
          Listed but not defined: {unknown:?}"
     );
@@ -190,7 +219,7 @@ fn the_table_lists_exactly_the_rules_the_pinned_documents_define() {
 fn every_row_names_a_known_stage_and_state_once() {
     let mut seen = BTreeSet::new();
     for row in rows() {
-        let at = format!("docs/rules.md line {}", row.line);
+        let at = &row.at;
         assert!(
             STAGES.iter().any(|(stage, _)| *stage == row.stage),
             "{at}: unknown stage `{}`",
@@ -204,7 +233,7 @@ fn every_row_names_a_known_stage_and_state_once() {
         // `insert` returns false when the set already held the value.
         assert!(
             seen.insert((row.rule.clone(), row.stage.clone())),
-            "{at}: a second row for {} in stage `{}`",
+            "{at}: a second entry for {} in stage `{}`",
             row.rule,
             row.stage
         );
@@ -226,9 +255,9 @@ fn a_done_or_partial_row_names_a_rule_its_stage_cites() {
             if row.stage == stage && (row.state == "done" || row.state == "partial") {
                 assert!(
                     cited.contains(&row.rule),
-                    "docs/rules.md line {}: {} is `{}` in stage `{stage}`, \
+                    "{}: {} is `{}` in stage `{stage}`, \
                      but no file under {crates:?} cites it",
-                    row.line,
+                    row.at,
                     row.rule,
                     row.state
                 );
@@ -251,17 +280,17 @@ fn the_rows_of_a_rule_are_together_and_a_family_is_in_order() {
             finished.insert(before.rule.clone());
             assert!(
                 !finished.contains(&row.rule),
-                "docs/rules.md line {}: the rows of {} are not together",
-                row.line,
+                "{}: the entries of {} are not together",
+                row.at,
                 row.rule
             );
             let (family_before, number_before) =
-                rule_parts(&before.rule).expect("a row holds a rule ID");
-            let (family, number) = rule_parts(&row.rule).expect("a row holds a rule ID");
+                rule_parts(&before.rule).expect("an entry holds a rule ID");
+            let (family, number) = rule_parts(&row.rule).expect("an entry holds a rule ID");
             assert!(
                 family_before != family || number_before < number,
-                "docs/rules.md line {}: {} follows {}",
-                row.line,
+                "{}: {} follows {}",
+                row.at,
                 row.rule,
                 before.rule
             );
