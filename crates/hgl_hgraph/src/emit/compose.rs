@@ -934,10 +934,7 @@ impl Emitter<'_> {
         }
         let read = self.taken(function, read, &declared);
         self.windows_given(function, &read, None, at);
-        let annotation = result.map(|result| {
-            self.annotation(result, true, at)
-                .unwrap_or_else(|| "_py.object".to_string())
-        });
+        let annotation = result.map(|result| self.annotation_or_object(result, true, at));
         let returns = annotation
             .as_ref()
             .map_or(String::new(), |annotation| format!(" -> {annotation}"));
@@ -956,8 +953,7 @@ impl Emitter<'_> {
                 let failing = self.unmatched_node(key, annotation.as_deref(), at);
                 let mut taken = vec![format!(
                     "key: {}",
-                    self.annotation(&key.ty, true, at)
-                        .unwrap_or_else(|| "_py.object".to_string())
+                    self.annotation_or_object(&key.ty, true, at)
                 )];
                 taken.extend(parameters.iter().cloned());
                 self.line(
@@ -1034,9 +1030,7 @@ impl Emitter<'_> {
     /// nothing.
     fn unmatched_node(&mut self, key: &Expr, annotation: Option<&str>, at: Location) -> String {
         self.natives = true;
-        let selector = self
-            .annotation(&key.ty, true, at)
-            .unwrap_or_else(|| "_py.object".to_string());
+        let selector = self.annotation_or_object(&key.ty, true, at);
         let (decorator, returns) = match annotation {
             Some(annotation) => ("compute_node", format!(" -> {annotation}")),
             None => ("sink_node", String::new()),
@@ -1099,9 +1093,7 @@ impl Emitter<'_> {
             .iter()
             .map(|&local| {
                 let declared = &function.locals[local];
-                let of = self
-                    .annotation(&declared.ty, true, at)
-                    .unwrap_or_else(|| "_py.object".to_string());
+                let of = self.annotation_or_object(&declared.ty, true, at);
                 format!("{}: {of}", taken_name(&name(&declared.name)))
             })
             .collect()
@@ -1243,9 +1235,7 @@ impl Emitter<'_> {
             if !whole_scalar(ty) {
                 self.unsupported(at, &format!("a loop's key or member of type `{ty}`"));
             }
-            let of = self
-                .annotation(ty, true, at)
-                .unwrap_or_else(|| "_py.object".to_string());
+            let of = self.annotation_or_object(ty, true, at);
             parameters.push(format!("{}: {of}", name(&function.locals[key].name)));
             own.push(key);
         }
