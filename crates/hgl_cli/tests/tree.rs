@@ -5,41 +5,22 @@
 //! sources are written by the tests when they run, each built round one
 //! of the specification's own illustrations.
 
+mod common;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .output()
-        .expect("the hgl binary runs")
-}
-
-/// The path of a file in `tests/fixtures`.
-fn fixture(name: &str) -> String {
-    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
-    path.display().to_string()
-}
+use common::{fixture, hgl, text, write};
 
 /// Writes `text` to a file of this test run and gives its path.
 fn scratch(name: &str, text: &str) -> String {
     // Cargo gives integration tests a scratch directory under `target/`.
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("tree");
-    fs::create_dir_all(&directory).unwrap();
-    let path = directory.join(name);
-    fs::write(&path, text).unwrap();
-    path.display().to_string()
-}
-
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
+    // The tests of this file share one, so none of them empties it.
+    write(
+        &Path::new(env!("CARGO_TARGET_TMPDIR")).join("tree"),
+        name,
+        text,
+    )
 }
 
 /// The kind named on each line of a printed tree, with its indentation:

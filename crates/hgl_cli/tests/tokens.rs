@@ -11,32 +11,12 @@
 //! its CRLF and CR copies when it runs, so it does not depend on how the
 //! fixtures were checked out.
 
+mod common;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .output()
-        .expect("the hgl binary runs")
-}
-
-/// The path of a file in `tests/fixtures`.
-fn fixture(name: &str) -> String {
-    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
-    path.display().to_string()
-}
-
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
-}
+use common::{fixture, hgl, text};
 
 #[test]
 fn accepted_source_prints_tokens_and_exits_zero() {
