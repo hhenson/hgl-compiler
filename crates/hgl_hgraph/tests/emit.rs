@@ -3644,8 +3644,10 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
 }
 
 /// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
-/// in `start` or `stop`; TIME-3 says what `modified([])` subscribes to,
-/// and not what it is as a bool. Each is reported.
+/// in `start` or `stop`, where it is reported. TIME-3: `modified([])`
+/// "Where it is a bool, in a body or under a negation or a disjunction,
+/// it is true in a cycle where no temporal input was modified", which
+/// this target does not write yet, and reports.
 #[test]
 fn scheduled_in_a_lifecycle_hook_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3657,7 +3659,7 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
         [
             "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` as a value yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` read as a bool yet",
         ]
     );
 }

@@ -49,7 +49,7 @@ transpiler: partial
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
-- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])`, and `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
+- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` read as a bool, in a body or under a negation or a disjunction, which TIME-3 has true in a cycle where no temporal input was modified, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4
 

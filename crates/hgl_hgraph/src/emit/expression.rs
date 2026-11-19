@@ -751,13 +751,17 @@ impl Emitter<'_> {
                     format!("{capture}.out")
                 }
             }
-            // TIME-3 says what `modified([])` selects in a header, and
-            // not what it is as a value: under `!`, say.
+            // TIME-3: "The empty selection `modified([])` subscribes to
+            // no input and selects a wake from the node's scheduler or
+            // alarm. Where it is a bool, in a body or under a negation
+            // or a disjunction, it is true in a cycle where no temporal
+            // input was modified." This target writes the selection in a
+            // header, and not that test yet.
             ExprKind::Endpoint {
                 operation: EndpointOperation::Modified,
                 inputs: Some(inputs),
             } if inputs.is_empty() => {
-                self.unsupported(value.at, "`modified([])` as a value");
+                self.unsupported(value.at, "`modified([])` read as a bool");
                 "None".to_string()
             }
             _ => {
