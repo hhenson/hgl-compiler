@@ -7058,8 +7058,9 @@ impl Emitter<'_> {
     /// `TSD`. So a composite's constant is told its time-series type, and
     /// is given as that type publishes a whole value (`bundle_of`): a
     /// struct's fields, a tuple's positions, a list's elements. A set and
-    /// a dictionary are given as they are, which a constant's one
-    /// publication takes whole: it has no earlier members or keys.
+    /// a dictionary of values that publish whole are given as they are,
+    /// which a constant's one publication takes whole: it has no earlier
+    /// members or keys. A dictionary of composites is reported.
     fn constant_connection(&mut self, ty: &Type, at: Location, written: String) -> String {
         let composite = matches!(
             ty,
@@ -7078,6 +7079,15 @@ impl Emitter<'_> {
             return "None".to_string();
         };
         let whole = match ty {
+            // A dictionary's composite value would be given its child's
+            // update, a struct's fields, which is not written here.
+            Type::Dict { value, .. } if !publishes_whole(value) => {
+                self.unsupported(
+                    at,
+                    "an ordinary dictionary of composites as a branch's connection",
+                );
+                return "None".to_string();
+            }
             Type::Set(_) | Type::Dict { .. } => written,
             _ => self.bundle_of(ty, at, written),
         };

@@ -8130,9 +8130,9 @@ fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
     assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
 }
 
-/// CTRL-13 and TYPE-9: an ordinary fixed list of structs in a branch of
-/// a graph's `if` would be a constant published whole, which is not
-/// written for a list of composite elements: reported.
+/// CTRL-13 and TYPE-9: an ordinary fixed list or dictionary of structs
+/// in a branch of a graph's `if` would be a constant published whole,
+/// which is not written for composite elements: reported.
 #[test]
 fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
     let emitted = emit(&[(
@@ -8148,6 +8148,26 @@ fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
             "const fn fixed() -> list<Quote, 1> => [Quote(bid: 0)]\n",
             "fn chosen(take: bool, bid: i64) -> list<Quote, 1> {\n",
             "    if take { return quoted(bid) }\n",
+            "    return fixed()\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    // A dictionary of structs as a branch's constant would be given each
+    // struct whole, where its `TSD`'s children take their fields.
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote {\n",
+            "    bid: i64\n",
+            "}\n",
+            "fn quoted(key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    when { return delta<dict<str, Quote>>(updated: [key: delta<Quote>(bid: bid)]) }\n",
+            "}\n",
+            "const fn fixed() -> dict<str, Quote> => [\"a\": Quote(bid: 0)]\n",
+            "fn chosen(take: bool, key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    if take { return quoted(key, bid) }\n",
             "    return fixed()\n",
             "}\n",
         ),
