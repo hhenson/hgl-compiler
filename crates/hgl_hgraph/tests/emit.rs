@@ -6064,6 +6064,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("graph_for.hgl", GRAPH_FOR));
+    files.push(("control_review.hgl", CONTROL_REVIEW));
     files.push(("captures.hgl", CAPTURES));
     files.push(("windows.hgl", WINDOWS));
     files.push(("scalars.hgl", SCALARS));
@@ -9234,4 +9235,170 @@ fn a_list_of_structs_converted_to_their_parent_is_reported() {
         ),
     )]);
     assert_eq!(emitted.reported, ["m.hgl:4:64 target.unsupported"]);
+}
+
+/// CTRL-6, CTRL-13, CTRL-14 and TYPE-14: a label that is a constant, a
+/// `T?` result of a graph's `if`, an ordinary null a graph returns, and
+/// a `var` read in a returned branch.
+const CONTROL_REVIEW: &str = include_str!("fixtures/control_review.hgl");
+
+/// TYPE-14: "a T is a value where a T? is expected": a branch's graph
+/// gives a connection of `T` as the provider's `nullable` of it, and an
+/// ordinary value, a null among them, as a constant of `T?`. CTRL-6:
+/// with no `default`, `switch_` is given a graph that fails as a node's
+/// `switch` does.
+#[test]
+fn a_nullable_branch_and_an_unmatched_selector_are_written() {
+    let emitted = emit(&[
+        ("control_review.hgl", CONTROL_REVIEW),
+        (
+            "m.hgl",
+            concat!(
+                "module m\n",
+                "fn routed(route: i64, a: i64) -> i64 {\n",
+                "    switch route {\n",
+                "        case 1: return a\n",
+                "    }\n",
+                "    return a\n",
+                "}\n",
+            ),
+        ),
+    ]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_control_review/__init__.py");
+    for expected in [
+        "        return _core.nullable(price, _py.int)\n",
+        "        return _hg.const(_core.published(None), _hg.TS[_py.int | None])\n",
+        "    return _hg.const(_core.published(t), _hg.TS[_py.int | None])\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+    let routed = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "    _core.unmatched(key.value)\n",
+        "def _case_0_1(key: _hg.TS[_py.int], a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+        "    return _hg.switch_(route, {1: _case_0_0, _hg.DEFAULT: _case_0_1}, a=a)\n",
+    ] {
+        assert!(routed.contains(expected), "{expected}\nnot in\n{routed}");
+    }
+}
+
+/// CTRL-14: "After the `if` the `var` is one connection: the branch's
+/// binding while that branch is selected". An `if` over a connection
+/// that gives a `let` or a `var` its value gives that one connection,
+/// and a `var` a branch assigns is reported, there and one level down.
+/// CTRL-6: "Duplicate values reject": an instance whose generic label
+/// has another label's value is reported.
+#[test]
+fn a_control_form_that_would_be_wrong_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn both(flag: bool, a: i64, b: i64) -> i64 {\n",
+            "    var chosen = a\n",
+            "    let taken = if flag {\n",
+            "        chosen = b\n",
+            "        a\n",
+            "    } else {\n",
+            "        a\n",
+            "    }\n",
+            "    return chosen + taken\n",
+            "}\n",
+            "fn both_var(flag: bool, a: i64, b: i64) -> i64 {\n",
+            "    var chosen = a\n",
+            "    var taken = if flag { chosen = b\n a } else { a }\n",
+            "    return chosen + taken\n",
+            "}\n",
+            "fn nested_let(outer: bool, flag: bool, a: i64, b: i64) -> i64 {\n",
+            "    var chosen = a\n",
+            "    if outer {\n",
+            "        let taken = if flag { chosen = b\n a } else { a }\n",
+            "    }\n",
+            "    return chosen\n",
+            "}\n",
+            "fn twice<const k: i64>(route: i64, a: i64) -> i64 {\n",
+            "    switch route {\n",
+            "        case k: return a * 10\n",
+            "        case 1: return a * 100\n",
+            "        default: return a\n",
+            "    }\n",
+            "}\n",
+            "fn at_one(route: i64, a: i64) -> i64 => twice<1>(route, a)\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:4:17 target.unsupported",
+            "m.hgl:14:17 target.unsupported",
+            "m.hgl:21:21 target.unsupported",
+            "m.hgl:29:14 target.unsupported",
+        ]
+    );
+}
+
+/// CTRL-6: "An unmatched selector uses default or fails": a `switch` of
+/// a graph over a connection fails as one in a node's hook does, with
+/// the provider's error. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn an_unmatched_selector_fails_alike_on_each_path() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_unmatched");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[(
+        "u.hgl",
+        concat!(
+            "module u\n",
+            "fn routed(route: i64, a: i64) -> i64 {\n",
+            "    switch route {\n",
+            "        case 1: return a\n",
+            "    }\n",
+            "    return a\n",
+            "}\n",
+            "fn counted(route: i64, a: i64) -> i64 {\n",
+            "    var chosen = a\n",
+            "    switch route {\n",
+            "        case 1: chosen = a * 2\n",
+            "    }\n",
+            "    return chosen\n",
+            "}\n",
+            "fn sink(value: i64) { when { } }\n",
+            "fn sunk(route: i64, a: i64) {\n",
+            "    switch route {\n",
+            "        case 1: sink(a)\n",
+            "    }\n",
+            "}\n",
+            "fn hooked(route: i64) -> i64 {\n",
+            "    when {\n",
+            "        switch route {\n",
+            "            case 1: return 1\n",
+            "        }\n",
+            "        return 0\n",
+            "    }\n",
+            "}\n",
+            "test in_a_graph { assert eval(routed(route: [1, 3], a: [1, 2])) == [1, 2] }\n",
+            "test in_an_assignment { assert eval(counted(route: [1, 3], a: [1, 2])) == [2, 2] }\n",
+            "test outputless { eval(sunk(route: [1, 3], a: [1, 2])) }\n",
+            "test in_a_hook { assert eval(hooked(route: [1, 3])) == [1, 0] }\n",
+            "test matched { assert eval(routed(route: [1, 1], a: [1, 2])) == [1, 2] }\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let messages: Vec<String> = ran
+        .iter()
+        .map(|ran| match ran {
+            Ran::Passed => "passed".to_string(),
+            Ran::Failed { message, .. } => message.clone(),
+            Ran::NotRun(reason) => format!("not run {reason}"),
+        })
+        .collect();
+    let expected = "HglError: no case of the `switch` has the value 3";
+    for message in &messages[..4] {
+        assert!(message.contains(expected), "{messages:?}");
+    }
+    assert_eq!(messages[4], "passed");
 }

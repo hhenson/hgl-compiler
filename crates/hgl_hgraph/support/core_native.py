@@ -61,6 +61,7 @@ from hgraph import (
     SCALAR as _SCALAR,
     TS as _TS,
     TSD as _TSD,
+    TS_OUT as _TS_OUT,
     TimeSeriesSchema as _TimeSeriesSchema,
     compute_node as _compute_node,
     sink_node as _sink_node,
@@ -2452,3 +2453,30 @@ def ge__i64_f64(lhs, rhs):
 
 def ge__f64_i64(lhs, rhs):
     return lhs >= rhs
+
+
+# What `nullable` has made: a node for each Python type of `T`.
+_NULLABLE = {}
+
+
+def nullable(port, scalar):
+    """A connection of `T` where one of `T?` is wanted, as hgraph's
+    `TS[T | None]` (the language's TYPE-14: "a T is a value where a T?
+    is expected"). hgraph's `switch_` takes branches of one type, and a
+    connection of `T` is its `TS[T]`. `port` is given as it is where it
+    is one of `T?` already; otherwise a node publishes each value it
+    publishes, and is invalid where it is (END-4). `scalar` is the
+    Python type of `T`."""
+    if port.output_type == _TS[scalar | None]:
+        return port
+    node = _NULLABLE.get(scalar)
+    if node is None:
+
+        @_compute_node(valid=())
+        def node(value: _TS[scalar], _output: _TS_OUT[scalar | None] = None) -> _TS[scalar | None]:
+            if value.valid:
+                return value.value
+            _output.invalidate()
+
+        _NULLABLE[scalar] = node
+    return node(value=port)

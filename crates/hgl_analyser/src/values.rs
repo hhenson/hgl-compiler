@@ -55,6 +55,43 @@ use crate::{RESULT_FORMS, codes, error, local_error, warning};
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    // UNIT-13: the value each constant is written with, read as a value
+    // of the constant's type with no parameter in scope. Every module's
+    // are read before any body, which may read one as a `switch` label
+    // does (CTRL-6: "compared by resolved value").
+    for index in 0..program.modules.len() {
+        let module = &program.modules[index];
+        let (bindings, written, calls) = tables(module);
+        let empty = Signature {
+            generics: Vec::new(),
+            parameters: Vec::new(),
+            result: None,
+        };
+        let constants: Vec<Option<Expr>> = module
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(position, declaration)| {
+                let Some(Detail::Constant(ty)) = module.details.get(position) else {
+                    return None;
+                };
+                Typer::new(
+                    program,
+                    module,
+                    declaration,
+                    &empty,
+                    Tables {
+                        bindings: &bindings,
+                        written: &written,
+                        calls: &calls,
+                    },
+                    diagnostics,
+                )
+                .constant(ty)
+            })
+            .collect();
+        program.modules[index].constants = constants;
+    }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         // What each name resolved to, by where it is used (UNIT-10).
@@ -331,38 +368,41 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
             };
             defaults.push(read);
         }
-        // UNIT-13: the value each constant is written with, read as a
-        // value of the constant's type with no parameter in scope.
-        let constants: Vec<Option<Expr>> = module
-            .declarations
-            .iter()
-            .enumerate()
-            .map(|(position, declaration)| {
-                let Some(Detail::Constant(ty)) = module.details.get(position) else {
-                    return None;
-                };
-                Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    &empty,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .constant(ty)
-            })
-            .collect();
-        program.modules[index].constants = constants;
         program.modules[index].bodies = bodies;
         program.modules[index].test_bodies = test_bodies;
         program.modules[index].run_body = run_body;
         program.modules[index].store_body = store_body;
         program.modules[index].defaults = defaults;
     }
+}
+
+/// What the earlier passes found of `module`, by where each is written:
+/// what each name resolved to, what each written type means, and the
+/// generic arguments each call writes ([`Tables`]).
+#[allow(clippy::type_complexity)]
+fn tables(
+    module: &Module,
+) -> (
+    HashMap<(FileId, u32), &Binding>,
+    HashMap<(FileId, u32), &Type>,
+    HashMap<(FileId, u32), &CallArguments>,
+) {
+    let bindings = module
+        .uses
+        .iter()
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    let written = module
+        .written
+        .iter()
+        .map(|written| ((written.at.file, written.at.span.start), &written.ty))
+        .collect();
+    let calls = module
+        .call_arguments
+        .iter()
+        .map(|call| ((call.at.file, call.at.span.start), call))
+        .collect();
+    (bindings, written, calls)
 }
 
 /// The call an eval or a run statement takes (TST-5, RUN-1).
@@ -506,6 +546,10 @@ struct Typer<'a> {
     /// The values of the module constants this function's constants
     /// have named (UNIT-13).
     constant_values: crate::read::ConstantValues,
+    /// The value each module constant comes to as a `switch` label,
+    /// once read ([`Typer::constant_label`]): a constant named twice is
+    /// read once.
+    constant_labels: std::cell::RefCell<HashMap<(usize, usize), Option<Label>>>,
     diagnostics: &'a mut Diagnostics,
 }
 
@@ -571,6 +615,7 @@ impl<'a> Typer<'a> {
             identities: HashMap::new(),
             candidates: HashMap::new(),
             constant_values: Default::default(),
+            constant_labels: Default::default(),
             diagnostics,
         };
         for parameter in &signature.parameters {
@@ -13740,17 +13785,7 @@ struct Branch {
 }
 
 /// The value of a `switch` label, for telling two alike (CTRL-6).
-#[derive(Clone, PartialEq)]
-enum Label {
-    /// An integer.
-    Int(i64),
-    /// `true` or `false`.
-    Bool(bool),
-    /// A string.
-    Str(String),
-    /// A member of the selector's enum, by its position.
-    Member(usize),
-}
+use hir::LabelValue as Label;
 
 // ---- Control flow in a value function ----
 
@@ -14405,12 +14440,12 @@ impl<'a> Typer<'a> {
             match part.kind() {
                 SyntaxKind::SwitchCase => {
                     let mut inside = part.children();
-                    let Some(label) = inside.next() else {
+                    let Some(written) = inside.next() else {
                         continue;
                     };
                     self.assigned = restored(&before, self.locals.len(), false);
                     self.returned = before_returned;
-                    let label = self.expression(&label, Some(&of));
+                    let label = self.expression(&written, Some(&of));
                     let label = self.fit(label, &of, "the selector");
                     // FN-3: "Where a constant is required, a `switch`
                     // label ... a connection rejects."
@@ -14422,8 +14457,27 @@ impl<'a> Typer<'a> {
                             "a `switch` label is a constant, and this is a connection".to_string(),
                             "FN-3",
                         ));
+                    } else if !self.is_compile_time(&written) {
+                        // UNIT-13: a constant is "a compile-time constant
+                        // where ... a `switch` label (CTRL-12) requires
+                        // one". CTRL-12: "Each label is a constant of
+                        // the selector's type". GEN-8 says what such a
+                        // constant is: "a literal, an enum member however
+                        // it is written (TYPE-7) ... a constant (UNIT-13),
+                        // a generic value parameter in scope, or a
+                        // constant expression of those".
+                        self.diagnostics.emit(local_error(
+                            Category::Type,
+                            codes::local::SWITCH_LABEL_CONSTANT,
+                            label.at,
+                            "a `switch` label is a compile-time constant, and this is known \
+                             only when the program runs"
+                                .to_string(),
+                            self.loop_rule(),
+                        ));
                     }
-                    if let Some(value) = label_of(&label) {
+                    let value = self.label_value(&label);
+                    if let Some(value) = value.clone() {
                         match seen.iter().find(|(other, _)| *other == value) {
                             Some((_, first)) => self.diagnostics.emit(
                                 error(
@@ -14445,7 +14499,7 @@ impl<'a> Typer<'a> {
                     let body = inside.map(|statement| self.statement(&statement)).collect();
                     self.present.truncate(frame);
                     ends.push((self.assigned.clone(), self.returned));
-                    cases.push(hir::Case { label, body });
+                    cases.push(hir::Case { label, value, body });
                 }
                 SyntaxKind::SwitchDefault => {
                     self.assigned = restored(&before, self.locals.len(), false);
@@ -14605,6 +14659,78 @@ fn widened_block(branch: &Expr) -> Option<Expr> {
         at: branch.at,
     })
 }
+
+impl Typer<'_> {
+    /// The value of a `switch` label, where this pass can tell it from
+    /// another's (CTRL-6: "Switch labels are typed source constants,
+    /// compared by resolved value"): a literal, a member of an enum, a
+    /// constant of a module that comes to one (UNIT-13: "The constant has
+    /// that one value wherever it is read"), and integers joined by
+    /// `+`, `-` and `*`. A generic value parameter's value is the call's,
+    /// and is not known here.
+    fn label_value(&self, label: &Expr) -> Option<Label> {
+        self.label_within(label, 0)
+    }
+
+    /// [`Typer::label_value`], `depth` constants into what a label
+    /// names.
+    fn label_within(&self, label: &Expr, depth: usize) -> Option<Label> {
+        if let Some(found) = label_of(label) {
+            return Some(found);
+        }
+        if let ExprKind::Constant {
+            module,
+            declaration,
+        } = label.kind
+        {
+            return self.constant_label(module, declaration, depth);
+        }
+        let constant = |module: usize, declaration: usize| match self.constant_label(
+            module,
+            declaration,
+            depth,
+        ) {
+            Some(Label::Int(value)) => Index::Known(value),
+            _ => Index::Unevaluated,
+        };
+        match constant_index(label, &constant) {
+            Index::Known(value) => Some(Label::Int(value)),
+            _ => None,
+        }
+    }
+
+    /// The value of the constant `declaration` of `module` as a label,
+    /// read `depth` constants in. A constant whose value depends on
+    /// itself is rejected elsewhere (`constant.cycle`), and is followed
+    /// no further than [`CONSTANT_LABEL_DEPTH`] constants.
+    fn constant_label(&self, module: usize, declaration: usize, depth: usize) -> Option<Label> {
+        if let Some(known) = self.constant_labels.borrow().get(&(module, declaration)) {
+            return known.clone();
+        }
+        if depth >= CONSTANT_LABEL_DEPTH {
+            return None;
+        }
+        let value = self
+            .program
+            .modules
+            .get(module)?
+            .constants
+            .get(declaration)?
+            .as_ref()?;
+        let found = self.label_within(value, depth + 1);
+        // Kept whatever it came to, so that a constant named twice, as
+        // both operands of `+` are, is read once. One cut short by the
+        // depth is then not known as a label, which no deeper reading
+        // makes wrong.
+        self.constant_labels
+            .borrow_mut()
+            .insert((module, declaration), found.clone());
+        found
+    }
+}
+
+/// How many constants naming one another a label is followed through.
+const CONSTANT_LABEL_DEPTH: usize = 64;
 
 /// The value of a label that is a constant this pass can tell from
 /// another: a literal, or a member of an enum.
