@@ -492,6 +492,82 @@ fn an_empty_selection_that_is_no_selector_leaves_the_node_awake() {
     );
 }
 
+/// What the first `when` of `name` requires valid, as the hook's record
+/// of its header (`hir::Header`) has it, by the inputs' names.
+fn required(checked: &common::Checked, name: &str) -> Vec<String> {
+    let body = body(checked, name);
+    body.statements
+        .iter()
+        .find_map(|statement| match statement {
+            Stmt::Hook {
+                header: Some(header),
+                ..
+            } => Some(
+                header
+                    .required
+                    .iter()
+                    .map(|local| body.locals[*local].name.clone())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .expect("the node has a `when`")
+}
+
+/// TIME-9: "`modified` and `valid` are selectors in a `when` header
+/// (TIME-3): there they are forms of the language, which set
+/// subscription and admission." Core's `valid` is that selector however
+/// it is named: `c::valid(a)`, with `use core as c`, admits `a` as
+/// `valid(a)` does, and no other input (TIME-4: "A payload read under
+/// manual admission must be dominated by a successful guard"). The
+/// body's reads are judged by the hook's record of its header, which
+/// the target follows: one decision.
+#[test]
+fn a_selector_named_through_an_alias_is_the_selector() {
+    let checked = module(concat!(
+        "use core as c\n",
+        "fn qualified(a: i64, b: i64) -> i64 {\n",
+        "    when c::valid(a) { return a + b }\n",
+        "}\n",
+        "fn plain(a: i64, b: i64) -> i64 {\n",
+        "    when valid(a) { return a + b }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:35 phase/payload.unguarded TIME-4",
+            "m.hgl:7:32 phase/payload.unguarded TIME-4",
+        ]
+    );
+    assert_eq!(required(&checked, "qualified"), ["a"]);
+    assert_eq!(required(&checked, "plain"), ["a"]);
+}
+
+/// TIME-3: "A selector sets subscription or admission when it stands
+/// alone in the header or appears as a top-level conjunct ... Omitting
+/// the validity selector requires all temporal inputs to be valid." A
+/// configured `&&{...}` is the call of the candidate of core's `and_`
+/// that its configuration selects (OPS-5, GEN-5), which need not be a
+/// conjunction: nothing under it is a top-level conjunct, and the
+/// default stands, as in a header with no selector. The body's reads
+/// are judged by the hook's record, which the target follows.
+#[test]
+fn a_selector_under_a_configured_operator_sets_nothing() {
+    let checked = module(concat!(
+        "impl const fn and_(lhs: bool, rhs: bool, strict: bool) -> bool => lhs && rhs\n",
+        "fn configured(a: i64, b: bool, d: i64) -> i64 {\n",
+        "    when valid(a) &&{strict: true} b { return a + d }\n",
+        "}\n",
+        "fn unselected(a: i64, b: bool, d: i64) -> i64 {\n",
+        "    when b { return a + d }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    assert_eq!(required(&checked, "configured"), ["a", "b", "d"]);
+    assert_eq!(required(&checked, "unselected"), ["a", "b", "d"]);
+}
+
 /// TIME-8: "A capability is used within the node that injects it and is
 /// not retained: it is not the value of a `state` or a `cache`, an entry
 /// of a tuple, list, set, dictionary, or struct, what a function
