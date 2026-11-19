@@ -1,0 +1,368 @@
+module demo.refs_wave3
+
+# FN-16: "A `return` to a `ref` result is given an expression that
+# names an endpoint: a temporal input of the node, `ref` or not, or a
+# child of one ... The result designates the logical endpoint that path
+# names: its readers follow what that endpoint is bound to, a later
+# re-binding upstream included, and the node is not woken for it."
+# Core's END-10: "its readers follow what that endpoint is bound to, and
+# the node is not woken by that endpoint's ticks."
+
+# Re-points its result where `use_b` ticks, and not where `a` or `b` is
+# re-bound upstream: both are passive.
+fn pick(use_b: bool, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(use_b) {
+        if use_b { return b }
+        return a
+    }
+}
+
+fn follow(value: i64) -> i64 {
+    when { return value }
+}
+
+# TIME-10: a `ref` parameter is modified where its designation changes.
+fn designations(ref target: i64) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+# A `ref` parameter, designated by a node its re-binding does not wake.
+fn pass_on(once: bool, ref target: i64) -> ref i64 {
+    when modified(once) { return target }
+}
+
+# An input that is no `ref` parameter, designated whole.
+fn hold(once: bool, value: i64) -> ref i64 {
+    when modified(once) { return value }
+}
+
+# A generic one.
+fn pass_on_any<T>(once: bool, ref target: T) -> ref T {
+    when modified(once) { return target }
+}
+
+# Passivates `data`, which then publishes where `a` is re-bound: the
+# node is not woken, so `when modified(data)` is not reached (TIME-3:
+# "Passivating an input removes it as a wake source").
+fn steady(once: bool, data: i64, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(once) {
+        passivate(data)
+        return a
+    }
+    when modified(data) { return b }
+}
+
+fn passed_on(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(pass_on(once, pick(use_b, a, b)))
+fn held(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(hold(once, pick(use_b, a, b)))
+fn passed_on_any(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(pass_on_any(once, pick(use_b, a, b)))
+# Two re-bindings, a node that designates either of two.
+fn picked_twice(outer: bool, use_b: bool, use_d: bool, a: i64, b: i64, c: i64, d: i64) -> i64 =>
+    follow(pick(outer, pick(use_b, a, b), pick(use_d, c, d)))
+fn passed_on_designations(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    designations(pass_on(once, pick(use_b, a, b)))
+fn steady_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
+    follow(steady(once, data, pick(use_b, a, b), other))
+
+# `use_b` picks `b` at the start, then `a` at the third cycle, where `a`
+# does not tick: a reader that follows the re-binding samples what `a`
+# holds, 2, and then has `a`'s 4 and not `b`'s 11. `once` ticks at the
+# start alone.
+test a_designation_follows_a_re_binding_upstream {
+    assert eval(passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(picked_twice(
+        outer: [false, _, _, true, _],
+        use_b: [true, _, false, _, _],
+        use_d: [false, _, _, _, true],
+        a:     [1, 2, _, _, _],
+        b:     [10, _, _, _, _],
+        c:     [100, _, _, _, _],
+        d:     [1000, _, _, _, _],
+    )) == [10, _, 2, 100, 1000]
+    # TIME-10: "A reference ticks where its designation changes": a
+    # reader of the result through a `ref` parameter is modified at the
+    # re-binding upstream.
+    assert eval(passed_on_designations(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [1, _, 2, _]
+    assert eval(steady_of(
+        once:  [true, _, _, _],
+        data:  [1, _, 5, _],
+        use_b: [true, _, false, _],
+        a:     [1, 2, _, 4],
+        b:     [10, _, _, 11],
+        other: [100, _, _, _],
+    )) == [10, _, 2, 4]
+}
+
+# TIME-10: "A designation published again unchanged is no tick, and
+# wakes no subscriber." Core's END-10: "A publication of the designation
+# it holds is no tick". What the result holds is what it held before the
+# evaluation: two writes that end where it began are none.
+fn designations_any(ref target: i64) -> i64 {
+    state seen: i64 = 0
+    when valid([]) {
+        seen += 1
+        return seen
+    }
+}
+
+fn written_twice(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        out = b
+    }
+}
+
+fn written_then_returned(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        return b
+    }
+}
+
+# Where `flag` is false the last write is `a`, which it did not hold.
+fn written_by_flag(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        if flag { out = b }
+    }
+}
+
+fn twice_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_twice(flag, a, b))
+fn returned_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_then_returned(flag, a, b))
+fn flagged_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_by_flag(flag, a, b))
+fn flagged_follow(flag: bool, a: i64, b: i64) -> i64 =>
+    follow(written_by_flag(flag, a, b))
+
+test two_writes_that_end_where_they_began_are_no_tick {
+    assert eval(twice_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
+    assert eval(returned_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
+    assert eval(flagged_designations(flag: [true, true, false, true], a: [1, _, _, _], b: [2, _, _, _])) ==
+        [1, _, 2, 3]
+    assert eval(flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _])) ==
+        [2, _, 1, 2]
+}
+
+# END-4: "Invalidation clears validity, modification, payload, and
+# delta ... Repeated invalidation while invalid is silent. Within a
+# producer evaluation the last action determines the state". FN-16,
+# proposed: "`out` of a `ref` result is as a `ref` parameter is: the
+# endpoint operations take it". `invalidate(out)` leaves the result
+# designating nothing: a reader is bound to nothing, and a `ref`
+# parameter given it is not valid, and modified.
+fn maybe(flag: bool, ref x: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag { return x }
+        invalidate(out)
+    }
+}
+
+fn last_action(flag: bool, ref x: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag {
+            invalidate(out)
+            out = x
+        } else {
+            out = x
+            invalidate(out)
+        }
+    }
+}
+
+fn checked_any(ref target: i64) -> bool {
+    when valid([]) { return valid(target) }
+}
+
+fn maybe_followed(flag: bool, x: i64) -> i64 => follow(maybe(flag, x))
+fn maybe_checked(flag: bool, x: i64) -> bool => checked_any(maybe(flag, x))
+fn maybe_designations(flag: bool, x: i64) -> i64 => designations_any(maybe(flag, x))
+fn last_followed(flag: bool, x: i64) -> i64 => follow(last_action(flag, x))
+fn last_checked(flag: bool, x: i64) -> bool => checked_any(last_action(flag, x))
+
+test invalidating_a_ref_result_designates_nothing {
+    # `x`'s 2 does not reach the reader, and the next designation
+    # samples it.
+    assert eval(maybe_followed(flag: [true, false, _, true], x: [1, _, 2, _])) == [1, _, _, 2]
+    assert eval(maybe_checked(flag: [true, false, false, true], x: [1, _, _, _])) ==
+        [true, false, _, true]
+    assert eval(maybe_designations(flag: [true, false, false, true], x: [1, _, _, _])) == [1, 2, _, 3]
+    assert eval(last_followed(flag: [true, false, true], x: [1, _, 3])) == [1, _, 3]
+    assert eval(last_checked(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
+}
+
+# FN-3: "An ordinary value of type T is accepted where composition
+# expects a connection of T, and is wired as a constant, one publication
+# when the graph starts: a literal, a constant (UNIT-13), a `const`
+# parameter, or an all-scalar call (FN-6)." FN-16: "A connection of T is
+# given to a `ref` parameter": a `ref` parameter given one designates the
+# constant's connection.
+const seven: i64 = 7
+
+struct Pair {
+    left: i64
+    right: i64
+}
+
+const pair: Pair = Pair(left: 1, right: 2)
+
+fn nullable_designations(ref target: i64?) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+fn any_designations<T>(ref target: T) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+const fn sum(left: i64, right: i64) -> i64 => left + right
+
+fn of_literal(probe: i64) -> i64 => designations(5)
+fn of_constant(probe: i64) -> i64 => designations(seven)
+fn of_configuration(probe: i64, const c: i64) -> i64 => designations(c)
+fn of_scalar_call(probe: i64) -> i64 => designations(sum(2, 3))
+fn of_null(probe: i64) -> i64 => nullable_designations(null)
+fn of_nullable(probe: i64) -> i64 => nullable_designations(4)
+fn of_struct(probe: i64) -> i64 => any_designations(pair)
+fn constant_followed(once: bool) -> i64 => follow(pass_on(once, 7))
+
+test a_ref_parameter_given_a_constant_designates_its_connection {
+    assert eval(of_literal(probe: [1, 2])) == [1, _]
+    assert eval(of_constant(probe: [1, 2])) == [1, _]
+    assert eval(of_configuration(probe: [1, 2], c: 4)) == [1, _]
+    assert eval(of_scalar_call(probe: [1, 2])) == [1, _]
+    assert eval(of_null(probe: [1, 2])) == [1, _]
+    assert eval(of_nullable(probe: [1, 2])) == [1, _]
+    assert eval(of_struct(probe: [1, 2])) == [1, _]
+    assert eval(constant_followed(once: [true, true])) == [7, _]
+}
+
+# UNIT-8: "A parameter whose type is written `T?` needs no default to be
+# omitted ... an omitted temporal input is never valid." A `ref`
+# parameter left out designates nothing, and is never modified.
+fn optional_valid(probe: bool, ref x: i64?) -> bool {
+    when modified(probe) && valid(probe) { return valid(x) }
+}
+
+fn optional_modified(probe: bool, ref x: i64?) -> bool {
+    when modified(probe) && valid(probe) { return modified(x) }
+}
+
+fn pass_optional(once: bool, ref x: i64?) -> ref i64? {
+    when modified(once) && valid(once) { return x }
+}
+
+fn checked_optional(ref target: i64?) -> bool {
+    when valid([]) { return valid(target) }
+}
+
+fn left_out_valid(probe: bool) -> bool => optional_valid(probe)
+fn left_out_modified(probe: bool) -> bool => optional_modified(probe)
+fn left_out_any_valid(probe: bool) -> bool => optional_valid_any<f64>(probe)
+fn left_out_passed(once: bool) -> bool => checked_optional(pass_optional(once))
+
+fn optional_valid_any<T>(probe: bool, ref x: T?) -> bool {
+    when modified(probe) && valid(probe) { return valid(x) }
+}
+
+test a_ref_parameter_left_out_is_never_valid {
+    assert eval(left_out_valid(probe: [true, true])) == [false, false]
+    assert eval(left_out_modified(probe: [true, true])) == [false, false]
+    assert eval(left_out_any_valid(probe: [true, true])) == [false, false]
+    # The result designates nothing: there is no designation to publish.
+    assert eval(left_out_passed(once: [true, true])) == [_, _]
+}
+
+# FN-16: a `return` designates "a child of one, `items[idx]`", whatever
+# the list is given as: the output of a node, a `ref` result, a graph's
+# `if`, or a graph's parameter given one; and its readers follow a
+# re-binding upstream of that child.
+fn pick_list(use_b: bool, ref a: list<i64, 2>, ref b: list<i64, 2>) -> ref list<i64, 2> {
+    when modified(use_b) {
+        if use_b { return b }
+        return a
+    }
+}
+
+fn set_one(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+fn route(idx: i64, items: list<i64, 2>) -> ref i64 {
+    when modified(idx) { return items[idx] }
+}
+
+fn chosen(flag: bool, a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> => if flag { a } else { b }
+
+fn routed_via(idx: i64, items: list<i64, 2>) -> i64 => follow(route(idx, items))
+
+fn routed_of_a_ref(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(route(idx, pick_list(use_b, set_one(0, a), set_one(0, b))))
+fn routed_of_an_if(idx: i64, flag: bool, a: i64, b: i64) -> i64 =>
+    follow(route(idx, chosen(flag, set_one(0, a), set_one(0, b))))
+fn routed_through_a_graph(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    routed_via(idx, pick_list(use_b, set_one(0, a), set_one(0, b)))
+fn routed_of_a_list(idx: i64, slot: i64, reading: i64) -> i64 => routed_via(idx, set_one(slot, reading))
+fn routed_designations(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    designations(route(idx, pick_list(use_b, set_one(0, a), set_one(0, b))))
+
+test a_designated_position_follows_a_re_binding_upstream {
+    assert eval(routed_of_a_ref(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_of_an_if(idx: [0, _, _, _], flag: [false, _, true, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_through_a_graph(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_of_a_list(idx: [1, _, 0], slot: [1, 0, _], reading: [5, 6, _])) == [5, _, 6]
+    assert eval(routed_designations(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [1, _, 2, _]
+}
+
+# FN-16, proposed: "`out` of a `ref` result is as a `ref` parameter is:
+# the endpoint operations take it", and TIME-10, proposed: "`valid(low)`
+# is true where it designates something ... `last_modified(low)` is when
+# its designation last changed". Read after a write in the evaluation,
+# they ask of what the result designates then, against what it held
+# before.
+fn stamped(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        let before = valid(out)
+        out = a
+        if valid(out) && modified(out) && last_modified(out) != null && !before { out = b }
+        if before && modified(out) { out = b }
+    }
+}
+
+fn stamped_follow(flag: bool, a: i64, b: i64) -> i64 => follow(stamped(flag, a, b))
+fn stamped_designations(flag: bool, a: i64, b: i64) -> i64 => designations(stamped(flag, a, b))
+
+test out_of_a_ref_result_is_read_as_it_designates {
+    assert eval(stamped_follow(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [10, _, 11]
+    assert eval(stamped_designations(flag: [true, true, _], a: [1, _, 3], b: [10, _, 11])) == [1, _, _]
+}
