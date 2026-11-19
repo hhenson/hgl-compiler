@@ -502,8 +502,15 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
         Type::Delta(inner) => Type::delta(substitute(inner, map)),
+        // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
+        // which the tuple's delta formed again would not.
         Type::Trace { cell, style } => Type::Trace {
-            cell: part(cell),
+            cell: match &**cell {
+                Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
+                    Box::new(Type::trace_cell(substitute(of, map)))
+                }
+                other => part(other),
+            },
             style: *style,
         },
         // TYPE-14: "either a T or null". A `T?` whose T is given a
