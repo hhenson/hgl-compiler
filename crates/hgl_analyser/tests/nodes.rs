@@ -568,6 +568,44 @@ fn scheduled_asks_the_scheduler_or_the_alarm_the_node_injects() {
     );
 }
 
+/// TIME-9: "`scheduled()` is the handler selector for a wake by the
+/// node's scheduler or alarm ... A node that injects neither rejects it
+/// (`inject.no_scheduler`)". SOURCE-1: a source is "a node" that
+/// injects "not `out`, `scheduler`, or `alarm`", and a node's `state`
+/// initializer is its own. FN-9: "A value function injects none", and
+/// TIME-9: it "has no output or schedule of its own"; a graph is no
+/// node either: "Constructed nodes own their own output and
+/// scheduler". The catalogue has no row for the selector in a value
+/// function or a graph, and the code is local.
+#[test]
+fn scheduled_is_a_selector_of_a_node_alone() {
+    let checked = module(concat!(
+        "fn in_source() -> bool {\n",
+        "    yield 1s: scheduled()\n",
+        "}\n",
+        "const fn in_value_function() -> bool => scheduled()\n",
+        "fn in_graph(value: i64) -> bool => scheduled()\n",
+        "fn in_initializer(value: i64) -> bool {\n",
+        "    state woken: bool = scheduled()\n",
+        "    when { return woken }\n",
+        "}\n",
+        // The control: a node's hook.
+        "fn in_node(value: i64) -> bool {\n",
+        "    when { return scheduled() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:15 injectable/inject.no_scheduler TIME-9",
+            "m.hgl:5:41 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:6:36 local:phase/scheduled.outside_node FN-9",
+            "m.hgl:8:25 injectable/inject.no_scheduler TIME-9",
+            "m.hgl:12:19 injectable/inject.no_scheduler TIME-9",
+        ]
+    );
+}
+
 /// EXPR-3: "The place's root is a `var`, a `state`, a `cache`, or, in a
 /// `when`, `out` (TIME-7)." TIME-7: "`out` is read in a `when` and in
 /// `stop`, and written only in a `when`". TIME-8: a capability is not
