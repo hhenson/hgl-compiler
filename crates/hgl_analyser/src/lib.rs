@@ -44,7 +44,9 @@
 //!   enum's numbering (TYPE-3, TYPE-4, TYPE-6, TYPE-7);
 //! * `signatures` checks each callable's signature with its types read:
 //!   a generic value parameter's default is of its type, and an option
-//!   is one kind across an operator's candidates (GEN-13, GEN-6).
+//!   is one kind across an operator's candidates (GEN-13, GEN-6);
+//! * `inherited` compares the defaults a struct has for one field from
+//!   two parents, once `values` has read them (UNIT-9).
 //!
 //! What an expression is, phases and constants are not checked yet.
 //!
@@ -73,6 +75,7 @@ mod declared;
 mod forms;
 pub mod hir;
 mod imports;
+mod inherited;
 mod instance;
 mod phases;
 mod program;
@@ -452,10 +455,19 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
+        /// A struct has a field from two parents with two different
+        /// defaults, and gives it none of its own (UNIT-9).
+        pub const DEFAULT_CONFLICT: &str = "default.conflict";
+        /// A source's `return` has a value (SOURCE-4).
+        pub const SOURCE_RETURN_VALUE: &str = "source.return_value";
+        /// A source's `yield` stands inside a block or an `if` whose
+        /// value is used (SOURCE-4).
+        pub const YIELD_IN_VALUE: &str = "yield.in_value";
+
         /// Every local code of this stage.
-        pub const ALL: [&str; 0] = [];
+        pub const ALL: [&str; 3] = [DEFAULT_CONFLICT, SOURCE_RETURN_VALUE, YIELD_IN_VALUE];
     }
 }
 
@@ -523,9 +535,11 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     phases::classify(&mut program);
     read::read(&mut program, diagnostics);
     phases::check(&program, diagnostics);
-    declared::check(&mut program, diagnostics);
+    let inherited = declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
+    // UNIT-9: asked once each default has been read.
+    inherited::check(&program, &inherited, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);

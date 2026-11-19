@@ -409,6 +409,11 @@ pub enum ExprKind {
     /// An `i64` taken as the `f64` of the same number, where an `f64`
     /// is wanted (EXPR-5, NUM-1). The source writes nothing for it.
     Widen(Box<Expr>),
+    /// `convert<list<B>>(values)`: a list of structs taken as a list of
+    /// an abstract struct `B` they inherit from. Core's OPS-6: "it
+    /// yields the same elements". The expression's type is the list
+    /// asked for; core declares no candidate for it.
+    ParentList(Box<Expr>),
     /// A call: `scale(value, factor: 2.0)`.
     Call {
         /// What is called.
@@ -906,6 +911,7 @@ impl Expr {
             }
             ExprKind::Unary { operand: inner, .. }
             | ExprKind::Widen(inner)
+            | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
             | ExprKind::Field { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }
@@ -999,6 +1005,7 @@ impl Expr {
             }
             ExprKind::Unary { operand: inner, .. }
             | ExprKind::Widen(inner)
+            | ExprKind::ParentList(inner)
             | ExprKind::EnumFrom { value: inner, .. }
             | ExprKind::Field { base: inner, .. }
             | ExprKind::Tagged { payload: inner, .. }

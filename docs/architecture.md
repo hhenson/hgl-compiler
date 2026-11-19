@@ -322,6 +322,7 @@ The declarations are then read against one another:
 | Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
 | A field of a struct and of a parent | TYPE-4 | The same type, and so the same optionality, the parent's generic arguments standing for its parameters |
 | A field two parents give | TYPE-4 | The same type. One field reached by two paths is one field |
+| A default two parents give | UNIT-9 | One default, or the struct writes the field itself. Each is compared as read, with the arguments of its path in place and its places and the spelling of its names left out: `1 + 1` is not `2`. Two that differ are the local `default.conflict`, at the later parent. Where one path gives a default and another none, the field has it, in either order |
 | A default of null | TYPE-4 | Only on an optional field: one whose type is written `T?`, `atomic<Node>?` included, or an `atomic<...>` of a nullable type, `atomic<T?>`. For `name = null` the type is the one the parent gives the field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
@@ -578,7 +579,8 @@ statement is read as value code, with three things of a source's own:
 | In a source | Read as | Rule |
 | --- | --- | --- |
 | `yield time: value` | `Stmt::Yield`: the value is of the result's type, and is not a capability. What the time may be is proposed, and is not judged | SOURCE-1, SOURCE-2 |
-| `return` with no value | Ends the source. One with a value is read and not judged: what it is there is proposed | SOURCE-4 |
+| `return` with no value | Ends the source. One with a value is the local `source.return_value` | SOURCE-4 |
+| A `yield` inside a block or an `if` whose value is used | The local `yield.in_value`: it stands inside a value expression | SOURCE-4 |
 | `while { }` with no condition | A loop with none | CTRL-15 |
 
 A temporal function called there is `call.role`, a `?`
@@ -1057,7 +1059,9 @@ convert<T, V, O>(value: V) -> O requires O in {T, result<T, error>}`.
 With the generic arguments a call writes in place (GEN-8), a candidate
 is admitted only when its result is one of those types, which tells
 `convert<f64>(count)` from `convert<str>(count)` where the arguments do
-not.
+not. `convert<list<B>>(values)` of a `list<A>`, `A` a struct that
+inherits from the abstract struct `B`, has no candidate in core (OPS-6):
+it is read as `ExprKind::ParentList`, of type `list<B>`, with no option.
 
 A candidate with generic parameters is admitted with each resolved from
 the call (GEN-2): from the type the place expects of the result, then
@@ -1183,8 +1187,7 @@ that needs it. An argument tried may hold a call that tries its own, so
 the readings are counted for the whole function: past a thousand a call
 that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
-candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
-analyser has no local code.
+candidate is `operator.no_candidate`, and a tie `operator.ambiguous`.
 A symbol selects as a call by name does: see "Symbols" above.
 
 The five names `ok`, `err`, `is_ok`, `is_err` and `capture` are
@@ -1343,8 +1346,11 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser's codes
-are all catalogued (`hgl_analyser::codes`), one of them a warning, and its
-tests check each diagnostic's category and code against the catalogue.
+are catalogued (`hgl_analyser::codes`), one of them a warning, but for
+three local ones in `codes::local` for rejections the catalogue has no
+row for: `default.conflict` (UNIT-9), `source.return_value` and
+`yield.in_value` (SOURCE-4). Its tests check each diagnostic's category
+and code against the catalogue, or that list.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.
