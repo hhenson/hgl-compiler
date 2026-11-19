@@ -980,6 +980,7 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
             "{shared}const fn f(x: LBox<[]>, y: Flag<(A.x == A.x)>, z: Flag<([A.x] != [A.x])>) -> i64 => 1\n\
              const fn g(x: Flag<(1 == 1.0)>, y: Flag<(A.x != .y)>) -> Flag<true> => x\n\
              const fn h<const M: A>(x: Flag<(M == .x)>) -> i64 => 1\n\
+             const fn m<const N: i64>(x: Flag<(N == 1.0)>, y: Flag<(N != null)>) -> i64 => 1\n\
              const fn i(x: Flag<([A.x] == [.x])>, y: Flag<((.y, 1) != (A.x, 1))>) -> Flag<true> => y\n\
              const fn j<const N: i64>(x: Flag<([N] == [1])>) -> Flag<([N] == [1])> => x\n\
              const fn k(x: Flag<true>, y: Flag<false>) -> Flag<false> => j<2>(y)\n\
@@ -1001,7 +1002,9 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
              const fn o(x: Flag<([.x] != [])>) -> i64 => 1\n\
              const fn p(x: Flag<([A.x] == [.z])>) -> i64 => 1\n\
              const fn q<const N: i64>(x: Flag<((N, 1) == (1, 1))>) -> Flag<((N, 1) == (1, 1))> => x\n\
-             const fn r(x: Flag<true>) -> Flag<true> => q<2>(x)\n"
+             const fn r(x: Flag<true>) -> Flag<true> => q<2>(x)\n\
+             const fn s<const N: i64>(x: Flag<(N == \"a\")>) -> i64 => 1\n\
+             const fn t<const M: A>(x: Flag<(M == B.x)>) -> i64 => 1\n"
         ),
         &[
             "7 type.mismatch",
@@ -1017,6 +1020,8 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
             "17 generic.argument_constant",
             "19 type.mismatch",
             "19 type.mismatch",
+            "20 generic.argument_constant",
+            "21 generic.argument_constant",
         ],
     );
 }

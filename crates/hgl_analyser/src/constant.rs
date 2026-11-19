@@ -1435,6 +1435,14 @@ fn binary(
             },
             (false, false) => {}
         }
+        // OPS-2: "`==` and `!=` compare two values of one type", and so
+        // of two whose types are known, a generic value parameter's
+        // among them: `N == "a"` with `const N: i64` is of none.
+        if let (Some(left), Some(right)) = (&left.ty, &right.ty)
+            && !one_scalar_type(left, right)
+        {
+            return Ok(Typed::unevaluated(boolean));
+        }
     }
     // An integer literal beside an `f64` in arithmetic is taken as the
     // `f64` it is nearest: core's mixed candidates make it one (NUM-1,
@@ -1496,6 +1504,29 @@ fn implied(read: Typed, other: &Typed, program: &Program) -> Option<Typed> {
     };
     let value = fit(read, Some(ty), program).ok()?;
     (!implies(&value)).then(|| Typed::of(value, Some(ty.clone())))
+}
+
+/// False where `left` and `right` are two scalar or named types that no
+/// one `==` takes: `i64` and `str`, two enums. An `i64` and an `f64`
+/// compare (OPS-2, "an `i64` with an `f64` included"), and a `T` with a
+/// `T?` (TYPE-14). A collection's elements are held to one type by
+/// `one_type`, as their values are known.
+fn one_scalar_type(left: &Type, right: &Type) -> bool {
+    let plain = |ty: &Type| match ty {
+        Type::Nullable(inner) => (**inner).clone(),
+        other => other.clone(),
+    };
+    let (left, right) = (plain(left), plain(right));
+    let numeric = |ty: &Type| matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64));
+    match (&left, &right) {
+        (Type::Scalar(_) | Type::Named { .. }, Type::Scalar(_) | Type::Named { .. }) => {
+            unknown(&left)
+                || unknown(&right)
+                || (numeric(&left) && numeric(&right))
+                || fits(&left, &right)
+        }
+        _ => true,
+    }
 }
 
 /// True where `read` is of a nullable type, `T?`.
