@@ -259,7 +259,7 @@ impl Emitter<'_> {
             );
         });
         let designations = self.designated_inputs(&function, body, &active, changes);
-        let hiding = designations.iter().any(|port| port.hidden.is_some());
+        let hiding = designations.iter().any(|port| !port.hidden.is_empty());
         // FN-16: "its readers follow what that endpoint is bound to, a
         // later re-binding upstream included, and the node is not woken
         // for it". A node that designates is evaluated where a hidden
@@ -280,13 +280,29 @@ impl Emitter<'_> {
         let python = node_name.as_str();
         // The function's own parameters, as the graph that stands for
         // a node with a hidden input takes them.
-        let declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
+        let mut declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
+        // A list whose positions the node designates is taken by the
+        // graph as a `REF` of it: hgraph gives the position of a
+        // connection that is a reference, a `ref` result's, as a `REF`
+        // that ticks where the list is re-bound (TIME-10), and the
+        // position of the list it dereferences to as one that does not.
+        for port in designations.iter().filter(|port| port.positions) {
+            let input = &body.locals[port.local].name;
+            let Some(index) = signature
+                .parameters
+                .iter()
+                .position(|parameter| &parameter.name == input)
+            else {
+                continue;
+            };
+            if let Some((head, annotation)) = declared[index].split_once(": ") {
+                declared[index] = format!("{head}: {}", designating(annotation));
+            }
+        }
         let designated_parameters: Vec<String> = designations
             .iter()
-            .filter_map(|port| {
-                let annotation = port.hidden.as_ref()?;
-                Some(format!("{}: {annotation}", port.name))
-            })
+            .flat_map(|port| &port.hidden)
+            .map(|hidden| format!("{}: {}", hidden.name, hidden.annotation))
             .collect();
         parameters.splice(
             signature.parameters.len()..signature.parameters.len(),
@@ -418,8 +434,8 @@ impl Emitter<'_> {
             subscribed.extend(
                 designations
                     .iter()
-                    .filter(|port| port.hidden.is_some())
-                    .map(|port| port.name.clone()),
+                    .flat_map(|port| &port.hidden)
+                    .map(|hidden| hidden.name.clone()),
             );
             if (named || active.len() != inputs.len()) && !handlers.is_empty() {
                 options.push(format!("active={}", tuple(&subscribed)));
@@ -478,7 +494,7 @@ impl Emitter<'_> {
             self.natives = true;
             let ports: Vec<String> = designations
                 .iter()
-                .map(|port| format!("{}: {}", string(&port.name), port.name))
+                .map(|port| format!("{}: {}", string(&port.name), port.read()))
                 .collect();
             self.line(
                 1,
@@ -638,8 +654,8 @@ impl Emitter<'_> {
             given.extend(
                 designations
                     .iter()
-                    .filter(|port| port.hidden.is_some())
-                    .map(|port| format!("{}={}", port.name, name(&body.locals[port.local].name))),
+                    .flat_map(|port| &port.hidden)
+                    .map(|hidden| format!("{}={}", hidden.name, hidden.given)),
             );
             self.line(0, "");
             self.line(0, "");
@@ -748,15 +764,33 @@ impl Emitter<'_> {
                 inputs.push(Port {
                     local,
                     name: name(&body.locals[local].name),
-                    hidden: None,
+                    hidden: Vec::new(),
+                    positions: false,
                 });
                 continue;
             }
             let ty = function.locals[local].ty.clone();
-            let annotation = match (how, &ty) {
-                (Designated::Whole, _) => self
-                    .annotation(&ty, true, at)
-                    .map(|annotation| designating(&annotation)),
+            let input = name(&body.locals[local].name);
+            let hidden = designated_name(&body.locals[local]);
+            let port = match (how, &ty) {
+                (Designated::Whole, _) => self.annotation(&ty, true, at).map(|annotation| Port {
+                    local,
+                    name: hidden.clone(),
+                    hidden: vec![Hidden {
+                        name: hidden.clone(),
+                        annotation: designating(&annotation),
+                        given: input.clone(),
+                    }],
+                    positions: false,
+                }),
+                // One hidden `REF` input for each position, which the
+                // graph gives the list's position: hgraph binds that
+                // wherever the list comes from, a reference among them
+                // (`_ref0_items` for `items[0]`). A `TSL` of `REF`s
+                // given the list whole is bound to the positions of a
+                // list's output only, and fails as the graph runs for one
+                // that is a reference ("TSOutput structural reference
+                // alternatives are not implemented yet").
                 (
                     Designated::Position,
                     Type::List {
@@ -765,8 +799,17 @@ impl Emitter<'_> {
                     },
                 ) => match &size.value {
                     ConstantValue::Int(count) if *count > 0 => {
-                        self.child_annotation(&ty, element, at).map(|child| {
-                            format!("_hg.TSL[{}, _hg.Size[{count}]]", designating(&child))
+                        self.child_annotation(&ty, element, at).map(|child| Port {
+                            local,
+                            name: hidden.clone(),
+                            hidden: (0..*count)
+                                .map(|position| Hidden {
+                                    name: format!("_ref{position}_{input}"),
+                                    annotation: designating(&child),
+                                    given: format!("{input}[{position}]"),
+                                })
+                                .collect(),
+                            positions: true,
                         })
                     }
                     _ => {
@@ -776,13 +819,7 @@ impl Emitter<'_> {
                 },
                 (Designated::Position, _) => None,
             };
-            if let Some(annotation) = annotation {
-                inputs.push(Port {
-                    local,
-                    name: designated_name(&body.locals[local]),
-                    hidden: Some(annotation),
-                });
-            }
+            inputs.extend(port);
         }
         inputs
     }
@@ -1204,10 +1241,40 @@ pub(super) fn yields(statements: &[Stmt]) -> bool {
 pub(super) struct Port {
     /// The input, among the node's locals.
     pub(super) local: usize,
-    /// The Python name of the `REF` input it is read through.
+    /// The name the provider is told it by: the input's own, a `ref`
+    /// parameter's whose `REF` is read, or the hidden input's.
     pub(super) name: String,
-    /// The annotation of that `REF` input where it is a hidden one the
-    /// node is given beside the input, and `None` where it is the input's
-    /// own.
-    pub(super) hidden: Option<String>,
+    /// The hidden `REF` inputs the node is given beside the input, none
+    /// where its own is read: one for the input whole, or one for each
+    /// position of a fixed list.
+    pub(super) hidden: Vec<Hidden>,
+    /// True where `hidden` has one for each position.
+    pub(super) positions: bool,
+}
+
+impl Port {
+    /// What the provider reads the input through: its `REF` input, or
+    /// the tuple of those of its positions.
+    fn read(&self) -> String {
+        if self.positions {
+            let inputs: Vec<&str> = self
+                .hidden
+                .iter()
+                .map(|hidden| hidden.name.as_str())
+                .collect();
+            format!("({},)", inputs.join(", "))
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+/// A hidden `REF` input a node is given for what it designates (`Port`).
+pub(super) struct Hidden {
+    /// Its Python name.
+    pub(super) name: String,
+    /// Its annotation, a `REF` of what it is given.
+    pub(super) annotation: String,
+    /// What the graph of the function's name gives it.
+    pub(super) given: String,
 }

@@ -5422,10 +5422,11 @@ const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 /// the reference it holds, to re-point what follows it, and publishes no
 /// reference its result holds already (END-10): the provider's
 /// `Designation` keeps what it designates. An input that is no `ref`
-/// parameter, and a fixed list's position of one, is designated through a
-/// hidden `REF` input that a graph of the function's name gives it the
-/// input twice, which is active: the node returns before its handlers
-/// where no input of its own woke it. A graph passes a `ref` result on as it is, and hgraph
+/// parameter, is designated through a hidden `REF` input that a graph of
+/// the function's name gives it the input twice, and a fixed list's
+/// position through one for each position, which the graph, taking the
+/// list as a `REF`, gives each position: each is active, and the node
+/// returns before its handlers where no input of its own woke it. A graph passes a `ref` result on as it is, and hgraph
 /// binds an ordinary input, a lifted node's among them, to what it
 /// designates. A generic input is written for the connection's type. A
 /// `signal?` left out is bound to an output that never ticks (UNIT-8), by
@@ -5447,16 +5448,22 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
         "        if (target.valid and target.modified):\n            return _designation.returned(\"target\")\n"
             .to_string(),
         format!("def checked(target: {reference}) -> _hg.TS[_py.bool]:\n    if target.modified:\n        return target.valid\n"),
-        "@_hg.compute_node(active=(\"idx\", \"_ref_items\"), valid=())\n\
-         def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
-         _ref_items: _hg.TSL[_hg.REF[_hg.TS[_py.int]], _hg.Size[3]], "
-            .to_string(),
-        "    _designation = _core.Designation(_output, _state, {\"_ref_items\": _ref_items})\n\
+        format!(
+            "@_hg.compute_node(active=(\"idx\", \"_ref0_items\", \"_ref1_items\", \"_ref2_items\"), valid=())\n\
+             def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
+             _ref0_items: {reference}, _ref1_items: {reference}, _ref2_items: {reference}, "
+        ),
+        "    _designation = _core.Designation(_output, _state, \
+         {\"_ref_items\": (_ref0_items, _ref1_items, _ref2_items,)})\n\
          \x20   if not (idx.modified or idx.invalidated):\n\
          \x20       return _designation.published()\n"
             .to_string(),
         "        return _designation.returned(\"_ref_items\", idx.value)\n".to_string(),
-        "    return _node_route(idx=idx, items=items, _ref_items=items)\n".to_string(),
+        format!(
+            "def route(idx: _hg.TS[_py.int], items: _hg.REF[_hg.TSL[_hg.TS[_py.int], _hg.Size[3]]]) \
+             -> {reference}:\n    return _node_route(idx=idx, items=items, _ref0_items=items[0], \
+             _ref1_items=items[1], _ref2_items=items[2])\n"
+        ),
         "        _designation.designate(\"_ref_items\", idx.value)\n    return _designation.published()\n"
             .to_string(),
         "        return _designation.returned(\"_ref_value\")\n".to_string(),

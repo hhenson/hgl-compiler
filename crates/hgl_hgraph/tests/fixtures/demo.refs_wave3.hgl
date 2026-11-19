@@ -297,3 +297,48 @@ test a_ref_parameter_left_out_is_never_valid {
     # The result designates nothing: there is no designation to publish.
     assert eval(left_out_passed(once: [true, true])) == [_, _]
 }
+
+# FN-16: a `return` designates "a child of one, `items[idx]`", whatever
+# the list is given as: the output of a node, a `ref` result, a graph's
+# `if`, or a graph's parameter given one; and its readers follow a
+# re-binding upstream of that child.
+fn pick_list(use_b: bool, ref a: list<i64, 2>, ref b: list<i64, 2>) -> ref list<i64, 2> {
+    when modified(use_b) {
+        if use_b { return b }
+        return a
+    }
+}
+
+fn set_one(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+fn route(idx: i64, items: list<i64, 2>) -> ref i64 {
+    when modified(idx) { return items[idx] }
+}
+
+fn chosen(flag: bool, a: list<i64, 2>, b: list<i64, 2>) -> list<i64, 2> => if flag { a } else { b }
+
+fn routed_via(idx: i64, items: list<i64, 2>) -> i64 => follow(route(idx, items))
+
+fn routed_of_a_ref(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(route(idx, pick_list(use_b, set_one(0, a), set_one(0, b))))
+fn routed_of_an_if(idx: i64, flag: bool, a: i64, b: i64) -> i64 =>
+    follow(route(idx, chosen(flag, set_one(0, a), set_one(0, b))))
+fn routed_through_a_graph(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    routed_via(idx, pick_list(use_b, set_one(0, a), set_one(0, b)))
+fn routed_of_a_list(idx: i64, slot: i64, reading: i64) -> i64 => routed_via(idx, set_one(slot, reading))
+fn routed_designations(idx: i64, use_b: bool, a: i64, b: i64) -> i64 =>
+    designations(route(idx, pick_list(use_b, set_one(0, a), set_one(0, b))))
+
+test a_designated_position_follows_a_re_binding_upstream {
+    assert eval(routed_of_a_ref(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_of_an_if(idx: [0, _, _, _], flag: [false, _, true, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_through_a_graph(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(routed_of_a_list(idx: [1, _, 0], slot: [1, 0, _], reading: [5, 6, _])) == [5, _, 6]
+    assert eval(routed_designations(idx: [0, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [1, _, 2, _]
+}
