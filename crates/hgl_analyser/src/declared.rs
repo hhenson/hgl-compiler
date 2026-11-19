@@ -501,10 +501,30 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         // TYPE-16: "In a generic declaration it stays as written until
         // T is known", and is then what the table gives for that T.
         Type::Delta(inner) => Type::delta(substitute(inner, map)),
-        Type::Trace { cell, style } => Type::Trace {
-            cell: part(cell),
-            style: *style,
-        },
+        // TST-5: a tuple's trace cell names its T (`Type::trace_cell`),
+        // which the tuple's delta formed again would not. A generic
+        // target's parameter that is a tuple naming a parameter,
+        // `tuple<T, T>`, has its own type as its cell while its
+        // arguments are found, and the tuple's cell once they are; so
+        // has an atomic one, whose cell is then the value it holds,
+        // which publishes whole (TYPE-9). A cell that names none is one
+        // already: an `atomic<tuple<A, B>>`'s is the tuple itself.
+        Type::Trace { cell, style } => {
+            let cell = match &**cell {
+                Type::Delta(of) if matches!(**of, Type::Tuple(_)) => {
+                    Type::trace_cell(substitute(of, map))
+                }
+                own if names_parameter(own) => match substitute(own, map) {
+                    of @ (Type::Tuple(_) | Type::Atomic(_)) => Type::trace_cell(of),
+                    other => other,
+                },
+                other => substitute(other, map),
+            };
+            Type::Trace {
+                cell: Box::new(cell),
+                style: *style,
+            }
+        }
         // TYPE-14: "either a T or null". A `T?` whose T is given a
         // nullable type is that type.
         Type::Nullable(inner) => match substitute(inner, map) {

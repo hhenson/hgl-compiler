@@ -169,6 +169,101 @@ fn an_anonymous_function_reads_where_it_is_written() {
     );
 }
 
+/// TIME-4, TIME-5 with FN-14: "An anonymous function's scope is the
+/// scope around it plus its parameters". The callee of a call is an
+/// expression like any other, read where it is written: an anonymous
+/// function chosen by an `if` or taken from a list reads the node's
+/// input under the admission there, as one called on the spot does.
+/// The temporal-model chapter's rejections: `return value + 1` under
+/// `valid([])` (TIME-4: "A payload read under manual admission must be
+/// dominated by a successful guard"), `start { last = value }` (TIME-5:
+/// "`start` reads no temporal input"), a `state`'s initializer (TIME-5:
+/// "State initializers cannot read current temporal inputs") and
+/// `stop { last = value }` (TIME-5: "each payload read is dominated by a
+/// guard").
+#[test]
+fn a_callee_is_read_where_it_is_written() {
+    let checked = module(concat!(
+        "fn chosen(value: i64, const c: bool) -> i64 {\n",
+        "    when valid([]) { return (if c { fn() => value + 1 } else { fn() => 0 })() }\n",
+        "}\n",
+        "fn indexed(value: i64) -> i64 {\n",
+        "    when valid([]) { return [fn() => value + 1][0]() }\n",
+        "}\n",
+        "fn started(value: i64) -> i64 {\n",
+        "    state last: i64 = 0\n",
+        "    start { last = (if true { fn() => value } else { fn() => 0 })() }\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn initialized(value: i64) -> i64 {\n",
+        "    state last: i64 = [fn() => value][0]()\n",
+        "    when { return last }\n",
+        "}\n",
+        "fn stopped(value: i64) -> i64 {\n",
+        "    state last: i64 = 0\n",
+        "    when { return value }\n",
+        "    stop { last = (if true { fn() => value } else { fn() => 0 })() }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:45 phase/payload.unguarded TIME-4",
+            "m.hgl:6:38 phase/payload.unguarded TIME-4",
+            "m.hgl:10:39 phase/input.lifecycle TIME-5",
+            "m.hgl:14:32 phase/state.input_read TIME-5",
+            "m.hgl:20:38 phase/payload.unguarded TIME-5",
+        ]
+    );
+}
+
+/// FN-7: "Anonymous functions obtain their parameter/result context
+/// from their accepting form; inference does not create a general
+/// callable value type." A value of a type is no function, and a call
+/// of one rejects (`type.mismatch`): what a value function returns, an
+/// element of a list, the value of an `if`, a sum and a local. The
+/// callee is read first, for what it reads (TIME-4: "A payload read
+/// under manual admission must be dominated by a successful guard").
+/// An anonymous function, a local bound to one, and what one returns
+/// are called.
+#[test]
+fn a_call_of_what_is_no_function_is_rejected() {
+    let checked = module(concat!(
+        "const fn plus_one(x: i64) -> i64 => x + 1\n",
+        "fn called_result(value: i64) -> i64 {\n",
+        "    when valid([]) { return plus_one(value)() }\n",
+        "}\n",
+        "fn called_element(value: i64) -> i64 {\n",
+        "    when valid([]) { return [value][0]() }\n",
+        "}\n",
+        "fn called_if(value: i64, const c: bool) -> i64 {\n",
+        "    when valid([]) { return (if c { value } else { 0 })() }\n",
+        "}\n",
+        "const fn called_literal() -> i64 => (1 + 2)()\n",
+        "const fn called_local(n: i64) -> i64 {\n",
+        "    let twice = n * 2\n",
+        "    return twice()\n",
+        "}\n",
+        "const fn called_functions(n: i64) -> i64 {\n",
+        "    let add = fn(x) => x + n\n",
+        "    return add(1) + (fn() => fn() => n)()()\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:29 type/type.mismatch FN-7",
+            "m.hgl:4:38 phase/payload.unguarded TIME-4",
+            "m.hgl:7:29 type/type.mismatch FN-7",
+            "m.hgl:7:30 phase/payload.unguarded TIME-4",
+            "m.hgl:10:29 type/type.mismatch FN-7",
+            "m.hgl:10:37 phase/payload.unguarded TIME-4",
+            "m.hgl:12:37 type/type.mismatch FN-7",
+            "m.hgl:15:12 type/type.mismatch FN-7",
+        ]
+    );
+}
+
 /// TIME-4 with FN-14: what proves an input valid where an anonymous
 /// function is written proves it in the function's body, and so does a
 /// guard in the body itself. An input's validity does not change within

@@ -510,9 +510,13 @@ pub mod codes {
         /// What is past that many is not told, and not taken to hold.
         /// Local: the language sets no limit.
         pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
+        /// `scheduled()` in a value function, a graph or a test, which is
+        /// no node and has no schedule of its own (FN-9, TIME-9). Local:
+        /// the catalogue's `inject.no_scheduler` names a node alone.
+        pub const SCHEDULED_OUTSIDE_NODE: &str = "scheduled.outside_node";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 7] = [
+        pub const ALL: [&str; 8] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
@@ -520,6 +524,7 @@ pub mod codes {
             SWITCH_LABEL_CONSTANT,
             CONSTANT_FAILURE,
             INSTANCE_LIMIT,
+            SCHEDULED_OUTSIDE_NODE,
         ];
     }
 }
