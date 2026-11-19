@@ -477,6 +477,11 @@ def list_applied(output, delta):
     held = list(output.value) if output.valid else []
     gone = {position for position, change in delta.items() if _removes(change)}
     size = size_modified(delta)
+    # TYPE-10: a size is "a count that is not negative". The catalogue
+    # has no execution code for one that is, so the failure has none,
+    # as an index outside a sequence has none (see `item`).
+    if size is not None and size < 0:
+        raise HglError(f"the size {size} of a list is negative: a size is a count that is not negative")
     if size is None:
         # Only a `removed` that is the whole tail shrinks the list.
         size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)

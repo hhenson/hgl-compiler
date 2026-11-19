@@ -7652,3 +7652,50 @@ fn collection_validity_and_a_lists_delta_are_written() {
         );
     }
 }
+
+/// TYPE-16: "A delta written with a smaller `size_modified` and no
+/// `removed` shrinks the list"; TYPE-10: a size is "a count that is not
+/// negative". A negative size given as the graph runs fails, before the
+/// list is cut; the catalogue has no execution code for it.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_negative_list_size_fails_as_the_graph_runs() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_negative_size");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[(
+        "sizes.hgl",
+        concat!(
+            "module sizes\n",
+            "fn resize(size: i64) -> list<i64> {\n",
+            "    when {\n",
+            "        if size == 3 { return [10, 20, 30] }\n",
+            "        return delta<list<i64>>(size_modified: size)\n",
+            "    }\n",
+            "}\n",
+            "const fn total(values: list<i64>) -> i64 {\n",
+            "    var sum: i64 = 0\n",
+            "    for value in values { sum += value }\n",
+            "    return sum\n",
+            "}\n",
+            "fn total_after(size: i64) -> i64 => total(resize(size))\n",
+            "test shrinks {\n",
+            "    assert eval(total_after(size: [3, 1])) == [60, 10]\n",
+            "}\n",
+            "test negative {\n",
+            "    assert eval(total_after(size: [3, -1])) == [60, 30]\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let tests = [emitted.test("shrinks").0, emitted.test("negative").0];
+    let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
+    assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
+    let Ran::Failed { message, .. } = &ran[1] else {
+        panic!("a negative size does not fail: {:?}", ran[1]);
+    };
+    assert!(
+        message.contains("HglError: the size -1 of a list is negative"),
+        "{message}"
+    );
+}
