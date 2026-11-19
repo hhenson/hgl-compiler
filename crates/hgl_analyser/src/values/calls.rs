@@ -125,7 +125,10 @@ impl<'a> Typer<'a> {
                         Category::Type,
                         codes::TYPE_MISMATCH,
                         self.at(&callee),
-                        format!("this is `{}`, which is no function, and is called", called.ty),
+                        format!(
+                            "this is `{}`, which is no function, and is called",
+                            called.ty
+                        ),
                         "FN-7",
                     )
                     .with_note(
