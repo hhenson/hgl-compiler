@@ -1336,6 +1336,7 @@ fn a_default_that_names_its_own_parameter_gives_no_value() {
         "struct Selfish<const X: i64 = X> { v: i64 }\n",
         "struct W2<const A: i64 = 1, const B: i64 = A> { v: i64 }\n",
         "const fn d<const N: i64 = 1, const M: i64 = N>(v: i64) -> IBox<M> => IBox<M>(v: v)\n",
+        "const fn rec<const N: i64, const M: i64 = N>(v: i64) -> i64 => rec<N>(v) + M\n",
     );
     expect(
         &format!(
@@ -1353,9 +1354,9 @@ fn a_default_that_names_its_own_parameter_gives_no_value() {
              const fn c() -> i64 {{\n    let one = d(1)\n    let x: IBox<2> = one\n    return 1\n}}\n"
         ),
         &[
-            "7 generic.unresolved",
-            "8 generic.argument_count",
-            "11 type.mismatch",
+            "8 generic.unresolved",
+            "9 generic.argument_count",
+            "12 type.mismatch",
         ],
     );
 }

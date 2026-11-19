@@ -960,12 +960,23 @@ fn defaulted_value(
     own: &[Location],
     found: &[Option<Argument>],
 ) -> Option<ConstantValue> {
-    let value = value.substituted(&|at| {
+    // What the call gives the parameter declared at `at`: none for the
+    // one whose default this is.
+    let given = |at: Location| -> Option<ConstantValue> {
         let other = own.iter().position(|own| *own == at)?;
         match found.get(other)? {
             Some(Argument::Constant(given)) if other != index => Some(given.value.clone()),
             _ => None,
         }
-    });
-    (!value.names_one_of(own)).then_some(value)
+    };
+    // The default is asked of what it names before what the call gives
+    // is put in its place: a call in the function's own body may give
+    // `N` its own `N`, `rec<N>(v)`, which is then no default left
+    // unresolved.
+    let unresolved: Vec<Location> = own
+        .iter()
+        .copied()
+        .filter(|at| given(*at).is_none())
+        .collect();
+    (!value.names_one_of(&unresolved)).then(|| value.substituted(&given))
 }
