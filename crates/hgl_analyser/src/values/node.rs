@@ -654,15 +654,17 @@ impl<'a> Typer<'a> {
         let mark = self.mark();
         let value = self.expression(node, Some(&whole));
         let clean = self.diagnostics.len() == mark.diagnostics;
+        // A delta, read as one whatever was expected of it:
+        // `delta_value(input)`, `delta<set<i64>>(added: [1])`.
+        let given_delta =
+            delta != whole && !self.admits(result, &value.ty) && self.admits(&delta, &value.ty);
         if clean {
             if open(&value.ty) {
                 return value;
             }
             // The result's own type: a complete value, and what an
-            // atomic input is read as. Or a delta, read as one whatever
-            // was expected of it: `delta_value(input)`.
-            if self.admits(result, &value.ty) || (delta != whole && self.admits(&delta, &value.ty))
-            {
+            // atomic input is read as. Or a delta.
+            if self.admits(result, &value.ty) || given_delta {
                 return value;
             }
         }
@@ -674,7 +676,10 @@ impl<'a> Typer<'a> {
             let mark = self.mark();
             let as_delta = self.expression(node, Some(&delta));
             let as_delta = self.fit(as_delta, &delta, what);
-            if self.diagnostics.len() == mark.diagnostics {
+            // A delta that is malformed has said so itself (TYPE-16:
+            // `delta.overlap`), and is a delta all the same: no complete
+            // value is asked of it.
+            if self.diagnostics.len() == mark.diagnostics || given_delta {
                 return as_delta;
             }
             self.take_back(mark, false);
