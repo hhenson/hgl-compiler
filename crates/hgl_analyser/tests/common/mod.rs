@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use hgl_analyser::hir::Body;
 use hgl_analyser::{ParsedFile, Program, analyse};
 use hgl_diagnostics::{Diagnostics, catalogue, render};
 use hgl_lexer::{lex, literal};
@@ -222,6 +223,34 @@ pub fn check_with(files: &[(&str, &str)], omit: impl Fn(&str, &str) -> Vec<Span>
         core_supplied: !own_core,
         rejected,
     }
+}
+
+/// Checks one file, `m.hgl`, of module `m`, with the core the compiler
+/// is built with. The `module` line is added, so the text given starts
+/// on line 2.
+pub fn module(text: &str) -> Checked {
+    check(&[("m.hgl", &format!("module m\n{text}"))])
+}
+
+/// The typed body of the function `name` of module `m`.
+pub fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
+    let module = checked.program.module("m").expect("module m exists");
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == name)
+        .expect("the declaration exists");
+    module.bodies[index].as_ref().expect("it has a body")
+}
+
+/// The locals of the function `name` of module `m` as `local: type`,
+/// parameters first; `_` for a type that is not known.
+pub fn locals(checked: &Checked, name: &str) -> Vec<String> {
+    body(checked, name)
+        .locals
+        .iter()
+        .map(|local| format!("{}: {}", local.name, local.ty))
+        .collect()
 }
 
 /// The span of the first occurrence of `needle` in `text`, up to the end

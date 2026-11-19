@@ -2,14 +2,8 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, module};
 use hgl_analyser::{Detail, Type};
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
 
 /// The type of the parameter `name` of the callable `function` of
 /// module `m`.

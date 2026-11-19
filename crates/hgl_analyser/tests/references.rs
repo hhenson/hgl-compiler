@@ -8,29 +8,12 @@
 
 mod common;
 
-use common::{Checked, check};
-use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, walk_statements};
+use common::{Checked, body, module};
+use hgl_analyser::hir::{Callee, Expr, ExprKind, walk_statements};
 use hgl_analyser::{Argument, Scalar, Type};
 
 /// No lines.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
-}
 
 /// Each call in the body of `name` that resolves generic parameters, as
 /// `callee<argument, ...>`, in the order the calls are met.
