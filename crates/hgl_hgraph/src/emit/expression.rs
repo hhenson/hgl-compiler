@@ -1386,26 +1386,14 @@ impl Emitter<'_> {
         match &value.kind {
             ExprKind::Local(local) => function.locals[*local].category == ValueCategory::Connection,
             ExprKind::Call {
-                callee:
-                    Callee::Function {
-                        module,
-                        declaration,
-                        ..
-                    }
-                    | Callee::Candidate {
-                        module,
-                        declaration,
-                        ..
-                    },
-                arguments,
-                ..
-            } => {
-                let declared = &self.program.modules[*module].declarations[*declaration];
+                callee, arguments, ..
+            } => callee.declaration().is_some_and(|(module, declaration)| {
+                let declared = &self.program.modules[module].declarations[declaration];
                 declared.kind.role() == Some(Role::Temporal)
                     || arguments
                         .iter()
                         .any(|argument| self.connects(function, &argument.value))
-            }
+            }),
             ExprKind::Widen(inner) => self.connects(function, inner),
             // A tuple is a connection where one of its entries is.
             ExprKind::Tuple(entries) => entries.iter().any(|entry| self.connects(function, entry)),
