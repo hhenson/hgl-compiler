@@ -40,6 +40,8 @@ test scalars_are_temporal_values {
     assert eval(pass_bool(value: [false, true])) == [false, true]
     assert eval(pass_i64(value: [0, -9223372036854775807 - 1])) == [0, -9223372036854775807 - 1]
     assert eval(pass_f64(value: [0.0, -0.0, 1.5])) == [0.0, -0.0, 1.5]
+    assert signed(-0.0) == "-0.0" && signed(0.0) == "0.0"
+    assert eval(passed_sign(value: [0.0, -0.0, 1.5])) == [signed(0.0), signed(-0.0), signed(1.5)]
     assert eval(pass_str(value: ["", "h\u{e9}"])) == ["", "h\u{e9}"]
     assert eval(pass_bytes(value: [convert<bytes>(""), convert<bytes>("h\u{e9}")])) ==
         [convert<bytes>(""), convert<bytes>("h\u{e9}")]
@@ -106,6 +108,18 @@ fn held<T>(watched: T, probe: bool) -> T? {
     }
 }
 
+# NUM-2: floating arithmetic "preserves IEEE special values, including
+# signed zero", and `-0.0 == 0.0` holds, so a trace compares the two
+# equal. OPS-6: their text differs, `-0.0` "after a `-` where its sign is
+# negative", so a trace of the text tells them apart.
+const fn signed(value: f64) -> str => convert<str>(value)
+const fn signed_held(value: f64?) -> str {
+    if value == null { return "null" }
+    return convert<str>(value)
+}
+fn passed_sign(value: f64) -> str => signed(pass_f64(value))
+fn held_sign(watched: f64, probe: bool) -> str => signed_held(held(watched, probe))
+
 # What either input waking the node sees of `watched`.
 fn observed<T>(watched: T, probe: bool) -> str {
     when valid([]) {
@@ -168,6 +182,8 @@ test a_publication_is_valid_and_retained {
     assert eval(held(watched: [_, false, _], probe: [true, true, true])) == [null, false, false]
     assert eval(held(watched: [_, 0, _], probe: [true, true, true])) == [null, 0, 0]
     assert eval(held(watched: [_, -0.0, _], probe: [true, true, true])) == [null, -0.0, -0.0]
+    assert eval(held_sign(watched: [_, -0.0, _], probe: [true, true, true])) ==
+        ["null", signed(-0.0), signed(-0.0)]
     assert eval(held(watched: [_, "", _], probe: [true, true, true])) == [null, "", ""]
     let empty = convert<bytes>("")
     assert eval(held(watched: [_, empty, _], probe: [true, true, true])) == [null, empty, empty]

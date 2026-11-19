@@ -108,3 +108,36 @@ fn a_windows_size_that_names_a_constant_of_another_type_is_the_wrong_kind() {
     // `T` is an `i64` computed by a call, which this pass does not
     // evaluate: its kind is not known, and nothing is reported of it.
 }
+
+/// Core's OPS-1: `*` of a "`duration` and `i64` ..., in either order",
+/// `mul_(lhs: duration, rhs: i64)` and `mul_(lhs: i64, rhs: duration)`.
+/// A size written either way is followed to its value (TYPE-11): its
+/// bounds are checked, and it is the window of that value in identity.
+#[test]
+fn a_duration_times_an_integer_is_followed_in_either_order() {
+    let checked = module(concat!(
+        "fn zero(a: rolling_window<f64, 5m * 0>, b: rolling_window<f64, 0 * 5m>) {}\n",
+        "fn over(a: rolling_window<f64, 1m, 1m * 2>, b: rolling_window<f64, 1m, 2 * 1m>) {}\n",
+        "fn same(a: rolling_window<f64, 5m * 2>, b: rolling_window<f64, 2 * 5m>, c: rolling_window<f64, 10m>) {}\n",
+        "fn ten(x: rolling_window<f64, 2 * 5m>) -> f64 { when { return 1.0 } }\n",
+        "fn ticks(x: rolling_window<f64, 3>) -> f64 => ten(x)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:32 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:2:64 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:3:36 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:3:72 type/rolling_window.size_bounds TYPE-11",
+            "m.hgl:6:51 type/type.mismatch EXPR-5",
+        ]
+    );
+    assert_eq!(
+        parameter(&checked, "same", "a"),
+        parameter(&checked, "same", "c")
+    );
+    assert_eq!(
+        parameter(&checked, "same", "b"),
+        parameter(&checked, "same", "c")
+    );
+}
