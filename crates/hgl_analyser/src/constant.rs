@@ -230,6 +230,15 @@ pub(crate) fn described(read: &Typed) -> String {
 
 /// A value of type `ty`, for a message: `an \`i64\``, `a \`str\``.
 pub(crate) fn described_type(ty: &Type) -> String {
+    // A list or a tuple whose elements' types are not known is told by
+    // its shape.
+    match ty {
+        Type::List { element, .. } if partly_unknown(element) => return "a list".to_string(),
+        Type::Tuple(elements) if elements.iter().any(partly_unknown) => {
+            return "a tuple".to_string();
+        }
+        _ => {}
+    }
     let text = ty.to_string();
     let vowel = matches!(ty, Type::Scalar(Scalar::I64 | Scalar::F64 | Scalar::Any));
     format!("{} `{text}`", if vowel { "an" } else { "a" })
@@ -259,7 +268,17 @@ pub(crate) fn kind_of(value: &ConstantValue, ty: &Type) -> String {
             ..
         } => "a member of an enum".to_string(),
         _ if matches!(value, ConstantValue::Null) => "null".to_string(),
-        other => format!("a `{other}`"),
+        other => described_type(other),
+    }
+}
+
+/// True for a type with a part not known: `list<_>`, `(i64, _)`.
+fn partly_unknown(ty: &Type) -> bool {
+    match ty {
+        Type::Unknown => true,
+        Type::List { element, .. } => partly_unknown(element),
+        Type::Tuple(elements) => elements.iter().any(partly_unknown),
+        _ => false,
     }
 }
 
@@ -367,6 +386,10 @@ pub(crate) fn fit(
                 .map(|(part, element)| fit(part, Some(element), program))
                 .collect::<Result<Vec<ConstantValue>, Fault>>()?;
             return Ok(ConstantValue::Tuple(values));
+        }
+        // A set's or a dictionary's constant is not read (`sequence`).
+        (ConstantValue::List(_), Type::Set(_) | Type::Dict { .. }) => {
+            return Ok(ConstantValue::Unevaluated);
         }
         _ => read,
     };
@@ -1162,7 +1185,9 @@ fn sequence(
             }
         });
     }
-    let ty = element.cloned().or_else(|| {
+    // A list whose elements' type is not known, `[]` or `[1, "a"]`, is
+    // still a list: no place of another shape holds it.
+    let element = element.cloned().or_else(|| {
         let first = types.first()?.clone()?;
         types
             .iter()
@@ -1173,8 +1198,8 @@ fn sequence(
         parts,
         ..Typed::of(
             ConstantValue::List(values),
-            ty.map(|element| Type::List {
-                element: Box::new(element),
+            Some(Type::List {
+                element: Box::new(element.unwrap_or(Type::Unknown)),
                 size: None,
             }),
         )
@@ -1205,16 +1230,19 @@ fn tuple(
         }
         values.push(fit(read, element, scope.program)?);
     }
+    // A tuple is one of its length whatever its elements' types.
     let ty = match elements {
-        Some(elements) => Some(Type::Tuple(elements.clone())),
-        None => types
-            .into_iter()
-            .collect::<Option<Vec<Type>>>()
-            .map(Type::Tuple),
+        Some(elements) => Type::Tuple(elements.clone()),
+        None => Type::Tuple(
+            types
+                .into_iter()
+                .map(|ty| ty.unwrap_or(Type::Unknown))
+                .collect(),
+        ),
     };
     Ok(Typed {
         parts,
-        ..Typed::of(ConstantValue::Tuple(values), ty)
+        ..Typed::of(ConstantValue::Tuple(values), Some(ty))
     })
 }
 
@@ -1575,16 +1603,7 @@ pub(crate) fn combined(
         }
         // OPS-2: "`==` and `!=` compare two values of one type"; two of
         // two types have no candidate, and are not worked out here.
-        (Op::Equal | Op::NotEqual, _, _)
-            if std::mem::discriminant(left) != std::mem::discriminant(right) =>
-        {
-            None
-        }
-        (Op::Equal | Op::NotEqual, V::Temporal(left), V::Temporal(right))
-            if temporal_type(left) != temporal_type(right) =>
-        {
-            None
-        }
+        (Op::Equal | Op::NotEqual, _, _) if !one_type(left, right) => None,
         (Op::Equal, _, _) => left.same(right).map(V::Bool),
         (Op::NotEqual, _, _) => left.same(right).map(|same| V::Bool(!same)),
         (Op::And, V::Bool(left), V::Bool(right)) => Some(V::Bool(*left && *right)),
@@ -1785,6 +1804,36 @@ fn floored(left: f64, right: f64) -> (f64, f64) {
 /// An `f64` result as a constant: a NaN is none (NUM-5).
 fn float(value: f64) -> Option<ConstantValue> {
     (!value.is_nan()).then_some(ConstantValue::Float(value))
+}
+
+/// False where `left` and `right` are known to be values of two types,
+/// which OPS-2 gives no `==`: `1` and `"a"`, two enums' members, a date
+/// and a time, lists of those. An `i64` and an `f64` compare (OPS-2,
+/// "an `i64` with an `f64` included").
+fn one_type(left: &ConstantValue, right: &ConstantValue) -> bool {
+    use ConstantValue as V;
+    match (left, right) {
+        (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => true,
+        (V::Temporal(left), V::Temporal(right)) => temporal_type(left) == temporal_type(right),
+        // TYPE-7: "Enum members are distinct typed constants"; one whose
+        // enum is not given it yet may be of either.
+        (V::Member(left), V::Member(right)) => match (&left.of, &right.of) {
+            (Some(left), Some(right)) => left.declared == right.declared,
+            _ => true,
+        },
+        (V::List(left), V::List(right)) => left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| one_type(left, right)),
+        (V::Tuple(left), V::Tuple(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| one_type(left, right))
+        }
+        _ => std::mem::discriminant(left) == std::mem::discriminant(right),
+    }
 }
 
 /// The order of two numbers, two durations, two strings or two bools

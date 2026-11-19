@@ -928,6 +928,44 @@ fn a_constructed_members_enum_and_a_named_lists_size_count() {
     );
 }
 
+/// A list or a tuple whose elements' types are not known keeps its
+/// shape: `[]` is no `i64` (EXPR-5). An equality of two types is no
+/// constant `false`: OPS-2, "`==` and `!=` compare two values of one
+/// type", and two enums' members are of two (TYPE-7).
+#[test]
+fn a_collections_shape_and_an_equalitys_operands_count() {
+    let shared = concat!(
+        "enum A { x }\n",
+        "enum B { x }\n",
+        "struct IBox<const X: i64> { v: i64 }\n",
+        "struct LBox<const X: list<i64>> { v: i64 }\n",
+        "struct Flag<const X: bool> { v: i64 }\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn f(x: LBox<[]>, y: Flag<(A.x == A.x)>, z: Flag<([A.x] != [A.x])>) -> i64 => 1\n\
+             const fn g(x: Flag<(1 == 1.0)>) -> i64 => 1\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn f(x: IBox<[]>) -> i64 => 1\n\
+             const fn g(x: IBox<[1, \"a\"]>) -> i64 => 1\n\
+             const fn h(x: IBox<(1, [])>) -> i64 => 1\n\
+             const fn i(x: Flag<(A.x == B.x)>) -> i64 => 1\n\
+             const fn j(x: Flag<([A.x] != [B.x])>) -> i64 => 1\n"
+        ),
+        &[
+            "7 type.mismatch",
+            "8 type.mismatch",
+            "9 type.mismatch",
+            "10 generic.argument_constant",
+            "11 generic.argument_constant",
+        ],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");
