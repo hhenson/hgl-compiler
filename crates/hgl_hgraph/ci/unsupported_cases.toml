@@ -14,7 +14,7 @@
 "`all_valid` of a value with an optional child (TIME-9)" = [
     "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
 ]
-"`modified([])` as a value" = [
+"`modified([])` read as a bool" = [
     "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
 ]
 "a wake asked for with a duration that may not be more than zero (TIME-8)" = [

@@ -248,6 +248,8 @@ test a_reference_ticks_on_a_changed_designation {
     assert eval(generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, _, 2, _]
     assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
+    # An eval of a `ref` result records what it designates.
+    assert eval(pick(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [1, 2, 10]
 }
 
 test a_ref_result_designates_what_its_return_names {
