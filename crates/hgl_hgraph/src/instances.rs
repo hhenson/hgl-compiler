@@ -111,27 +111,47 @@ pub(crate) fn trace_payload(trace: &Type) -> Option<Type> {
     let Type::Trace { cell, .. } = trace else {
         return None;
     };
-    Some(match cell.as_ref() {
+    Some(published_type(cell))
+}
+
+/// The type whose publication `cell` is the delta of: a delta that is
+/// a type of its own names it, a scalar is its own, and a tuple's delta
+/// is "`tuple<delta<A>?, delta<B>?>`" (TYPE-16), each position the delta
+/// of the tuple's under a `?`.
+fn published_type(cell: &Type) -> Type {
+    match cell {
         Type::Delta(payload) => payload.as_ref().clone(),
+        Type::Tuple(positions) => Type::Tuple(
+            positions
+                .iter()
+                .map(|position| match position {
+                    Type::Nullable(changed) => published_type(changed),
+                    other => published_type(other),
+                })
+                .collect(),
+        ),
         scalar => scalar.clone(),
-    })
+    }
 }
 
 /// What the run of the eval that takes `call` is wired with; `eval` is
 /// the eval's own type, a trace of what the target publishes. `None`
 /// where `call` is no call of a function.
 ///
-/// A trace's cell is the delta of what is published (the language's
-/// TST-5), so the type published is read back from it: a scalar is its
-/// own delta, and a set's and a nullable's delta name the type they
-/// are of.
+/// A target with no generic parameter says the type of each input and
+/// of its result: they are its own. A generic one's are read back from
+/// its traces, since a trace's cell is the delta of what is published
+/// (the language's TST-5): a scalar is its own delta, and a set's and a
+/// nullable's delta name the type they are of. A delta does not say
+/// that a part of it was an `atomic<V>`, whose delta is V.
 pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
     let ExprKind::Call {
         callee:
             Callee::Function {
                 module,
                 declaration,
-                ..
+                generics,
+                requirements,
             },
         arguments,
         ..
@@ -143,17 +163,46 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
+    // A generic target's parameters as this call takes them (GEN-2).
+    let instance = if generics.is_empty() {
+        None
+    } else {
+        program.instance(*module, *declaration, generics, requirements)
+    };
+    // Where the target's own types are known, its inputs and result are
+    // of them; otherwise they are read back from the traces.
+    let known = signature.generics.is_empty() || instance.is_some();
+    let parameters = instance
+        .as_ref()
+        .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
-            let parameter = signature.parameters.get(argument.parameter?)?;
-            Some((parameter.name.clone(), trace_payload(&argument.value.ty)?))
+            let parameter = parameters.get(argument.parameter?)?;
+            // Only an argument that is a trace is replayed.
+            let payload = trace_payload(&argument.value.ty)?;
+            // TYPE-16: a window's delta is "V: the value that arrived",
+            // so a trace of one is a trace of V: the window is the
+            // parameter's.
+            let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
+            Some((
+                parameter.name.clone(),
+                if known || windowed {
+                    parameter.ty.clone()
+                } else {
+                    payload
+                },
+            ))
         })
         .collect();
-    Some(Wiring {
-        inputs,
-        result: trace_payload(eval),
-    })
+    // The call's own type is the result as this call has it.
+    let windowed = matches!(call.ty, Type::RollingWindow { .. });
+    let result = match &signature.result {
+        None => None,
+        Some(_) if known || windowed => Some(call.ty.clone()),
+        Some(_) => trace_payload(eval),
+    };
+    Some(Wiring { inputs, result })
 }
 
 /// The type of what the entry of the run statement `run` publishes,

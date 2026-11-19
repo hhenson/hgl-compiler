@@ -3,13 +3,9 @@
 "the candidate `mul_(str, i64)`" = [
     "core_implementation::reverse_scaling",
 ]
-# A tuple as a temporal type, a `TSL` of its positions, is not written yet.
-"the type `tuple<i64, i64>`" = [
-    "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
-]
-# TYPE-16's proposed gap, positions between not valid: this target writes
-# `list<V>` as a whole tuple, which holds none. hgraph's unbounded `TSL`
-# would give it.
+# TYPE-16's gap, positions between not valid (agreed on hgl_spec#124):
+# this target writes `list<V>` as a whole tuple, which holds none.
+# hgraph's unbounded `TSL` gives it.
 "an endpoint of an unsized list's element, a whole tuple here" = [
     "conformance::an_entry_past_a_gap_leaves_the_positions_between_not_valid",
 ]

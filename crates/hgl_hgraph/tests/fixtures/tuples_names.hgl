@@ -1,0 +1,65 @@
+module demo.tuples_names
+
+# TYPE-3: "Structs are nominal". `Quote`, `Level` and `Box` have the
+# names of structs of `demo.tuples` and `demo.bundles`, with other
+# fields: each is a type of its own, as a bundle and as an atomic value,
+# and the modules are loaded together.
+struct Quote {
+    price: i64
+}
+
+struct Level {
+    depth: i64
+}
+
+struct Box<T> {
+    held: T
+}
+
+fn quoted(price: i64) -> Quote {
+    when { return Quote(price: price) }
+}
+
+fn price_of(quote: Quote) -> i64 {
+    when {
+        let whole = quote
+        return whole.price
+    }
+}
+
+fn snapped(price: i64) -> atomic<Quote> {
+    when { return Quote(price: price) }
+}
+
+fn snapped_price(quote: atomic<Quote>) -> i64 {
+    when { return quote.price }
+}
+
+fn leveled(depth: i64) -> Level {
+    when { return Level(depth: depth) }
+}
+
+fn depth_of(level: Level) -> i64 {
+    when all_valid(level) { return level.depth }
+}
+
+fn boxed(value: i64) -> Box<i64> {
+    when { return Box<i64>(held: value) }
+}
+
+fn held_of(box: Box<i64>) -> i64 {
+    when all_valid(box) { return box.held }
+}
+
+fn price_of_quoted(price: i64) -> i64 => price_of(quoted(price))
+fn price_of_snapped(price: i64) -> i64 => snapped_price(snapped(price))
+fn depth_of_leveled(depth: i64) -> i64 => depth_of(leveled(depth))
+fn held_of_boxed(value: i64) -> i64 => held_of(boxed(value))
+
+test a_struct_named_as_another_modules_is_its_own_type {
+    assert eval(price_of_quoted(price: [1, 2])) == [1, 2]
+    assert eval(price_of_snapped(price: [3, 4])) == [3, 4]
+    assert eval(depth_of_leveled(depth: [5, 6])) == [5, 6]
+    assert eval(held_of_boxed(value: [7, 8])) == [7, 8]
+    assert eval(quoted(price: [1, 2])) == [delta<Quote>(price: 1), delta<Quote>(price: 2)]
+}
