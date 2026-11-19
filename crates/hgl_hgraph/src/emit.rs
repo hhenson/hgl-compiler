@@ -330,7 +330,7 @@ impl<'a> Function<'a> {
 }
 
 /// A number with a fraction as a Python literal.
-fn float(value: f64) -> String {
+pub(super) fn float(value: f64) -> String {
     if value.is_nan() {
         "_py.float(\"nan\")".to_string()
     } else if value.is_infinite() {
@@ -1674,7 +1674,7 @@ impl<'a> Emitter<'a> {
 
     /// An expression as Python. One with no Python here yet is reported
     /// and written `None`.
-    fn expression(&mut self, function: &Function, value: &Expr) -> String {
+    pub(super) fn expression(&mut self, function: &Function, value: &Expr) -> String {
         // In a graph a value may be a connection, and Python's `and`,
         // `not` and `if` would act on the port: only a name, a literal,
         // a member of an enum, a constant, a call and a widening are
@@ -2786,7 +2786,7 @@ impl<'a> Emitter<'a> {
     /// is the input or a field of a temporal struct port, as hgraph
     /// names it: `quote`, `quote["bid"]`. `None` for anything else, an
     /// `atomic<V>`'s field among them, which is read from its value.
-    fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
+    pub(super) fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
             ExprKind::Local(local) if function.is_input(*local) || function.is_out(*local) => {
                 Some(endpoint_name(&function.locals[*local]))
@@ -2825,7 +2825,7 @@ impl<'a> Emitter<'a> {
     /// position's; a list's and a dictionary's children hold its
     /// elements; any other port holds its `value`. The read is at `at`,
     /// where what is not written yet is reported.
-    fn port_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
+    pub(super) fn port_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
         self.port_value_at(ty, port, 0, at)
     }
 
@@ -2937,7 +2937,7 @@ impl<'a> Emitter<'a> {
     /// null. A fixed list of required elements that publish whole is held
     /// to each of them (`all_valid`); any other part to its own `valid`,
     /// and a struct's, a tuple's or a list's parts each in turn.
-    fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
+    pub(super) fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
         self.part_value_at(ty, port, 0, at)
     }
 
@@ -2968,7 +2968,7 @@ impl<'a> Emitter<'a> {
     /// provider's `_core.position(index)`, of the index as it is
     /// evaluated. EXPR-7: "A tuple's index is a constant within its
     /// length", which the analyser has held it to.
-    fn position_key(&mut self, function: &Function, index: &Expr) -> String {
+    pub(super) fn position_key(&mut self, function: &Function, index: &Expr) -> String {
         match constant_position(index) {
             Some(at) => string(&position(at)),
             None => {
@@ -3049,7 +3049,7 @@ impl<'a> Emitter<'a> {
     /// True when `value`, written in a graph, is a connection: a
     /// temporal parameter or a local given one, what a temporal
     /// function gives, or what a lifted call gives (FN-6).
-    fn connects(&self, function: &Function, value: &Expr) -> bool {
+    pub(super) fn connects(&self, function: &Function, value: &Expr) -> bool {
         match &value.kind {
             ExprKind::Local(local) => function.locals[*local].category == ValueCategory::Connection,
             ExprKind::Call {
@@ -3323,7 +3323,7 @@ impl<'a> Emitter<'a> {
 /// The position a constant index names, `pair[1]`: EXPR-3 has a
 /// tuple's position "under a constant index". `None` for an index that
 /// is no literal integer.
-fn constant_position(index: &Expr) -> Option<usize> {
+pub(super) fn constant_position(index: &Expr) -> Option<usize> {
     match index.kind {
         ExprKind::Literal(Value::Int(at)) => usize::try_from(at).ok(),
         _ => None,
