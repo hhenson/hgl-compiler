@@ -1381,11 +1381,12 @@ fn binary(
     if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) {
         // TYPE-7: an implied member is of the enum its place expects:
         // `Mode.fast == .slow` compares two of `Mode`, as core's `==`
-        // is selected for them. Two implied members, or one beside no
+        // is selected for them, and `[Mode.fast] == [.slow]` two lists
+        // of them. Implied members on both sides, or one beside no
         // enum's value or naming no member of it, are of no type `==`
         // takes (OPS-2), and not worked out.
         let boolean = Some(Type::Scalar(Scalar::Bool));
-        match (left.open == Open::Member, right.open == Open::Member) {
+        match (implies(&left.value), implies(&right.value)) {
             (true, true) => return Ok(Typed::unevaluated(boolean)),
             (true, false) => match implied(left, &right, scope.program) {
                 Some(member) => left = member,
@@ -1447,17 +1448,26 @@ fn binary(
     })
 }
 
-/// The implied member `member` as one of the enum `other` is of.
+/// `read`, which holds an implied member, as a value of the type
+/// `other` is of: `.slow` as `Mode.slow`, `[.slow]` as `[Mode.slow]`.
 /// `Some` of it unchanged where `other`'s type is not known; `None`
-/// where that type is no enum, or the enum has no such member.
-fn implied(member: Typed, other: &Typed, program: &Program) -> Option<Typed> {
+/// where it is no value of that type, or still holds an implied member
+/// (`[.slow]` beside a `list<_>`).
+fn implied(read: Typed, other: &Typed, program: &Program) -> Option<Typed> {
     let Some(ty) = other.ty.as_ref().filter(|ty| !unknown(ty)) else {
-        return Some(member);
+        return Some(read);
     };
-    enum_place(ty)?;
-    match fit(member, Some(ty), program) {
-        Ok(value) => Some(Typed::of(value, Some(ty.clone()))),
-        Err(_) => None,
+    let value = fit(read, Some(ty), program).ok()?;
+    (!implies(&value)).then(|| Typed::of(value, Some(ty.clone())))
+}
+
+/// True where `value` is or holds an implied member, `.slow`, that is
+/// not yet given its enum.
+fn implies(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Member(member) => member.of.is_none(),
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().any(implies),
+        _ => false,
     }
 }
 

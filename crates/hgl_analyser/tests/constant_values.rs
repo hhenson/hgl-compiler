@@ -932,8 +932,8 @@ fn a_constructed_members_enum_and_a_named_lists_size_count() {
 /// shape: `[]` is no `i64` (EXPR-5). An equality of two types is no
 /// constant `false`: OPS-2, "`==` and `!=` compare two values of one
 /// type", and two enums' members are of two (TYPE-7). An implied
-/// member is of the enum of the value beside it, and is no member of
-/// none.
+/// member, alone or in a list or a tuple, is of the enum of the value
+/// beside it, and is no member of none.
 #[test]
 fn a_collections_shape_and_an_equalitys_operands_count() {
     let shared = concat!(
@@ -947,7 +947,8 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
         &format!(
             "{shared}const fn f(x: LBox<[]>, y: Flag<(A.x == A.x)>, z: Flag<([A.x] != [A.x])>) -> i64 => 1\n\
              const fn g(x: Flag<(1 == 1.0)>, y: Flag<(A.x != .y)>) -> Flag<true> => x\n\
-             const fn h<const M: A>(x: Flag<(M == .x)>) -> i64 => 1\n"
+             const fn h<const M: A>(x: Flag<(M == .x)>) -> i64 => 1\n\
+             const fn i(x: Flag<([A.x] == [.x])>, y: Flag<((.y, 1) != (A.x, 1))>) -> Flag<true> => y\n"
         ),
         &[],
     );
@@ -960,7 +961,10 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
              const fn j(x: Flag<([A.x] != [B.x])>) -> i64 => 1\n\
              const fn k(x: Flag<(.x == .x)>) -> i64 => 1\n\
              const fn l(x: Flag<(A.x == .z)>) -> i64 => 1\n\
-             const fn m(x: Flag<(.y != A.x)>) -> Flag<false> => x\n"
+             const fn m(x: Flag<(.y != A.x)>) -> Flag<false> => x\n\
+             const fn n(x: Flag<([.x] == [.x])>) -> i64 => 1\n\
+             const fn o(x: Flag<([.x] != [])>) -> i64 => 1\n\
+             const fn p(x: Flag<([A.x] == [.z])>) -> i64 => 1\n"
         ),
         &[
             "7 type.mismatch",
@@ -971,6 +975,9 @@ fn a_collections_shape_and_an_equalitys_operands_count() {
             "12 generic.argument_constant",
             "13 generic.argument_constant",
             "14 type.mismatch",
+            "15 generic.argument_constant",
+            "16 generic.argument_constant",
+            "17 generic.argument_constant",
         ],
     );
 }
