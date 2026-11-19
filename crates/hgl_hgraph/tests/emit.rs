@@ -1711,9 +1711,9 @@ fn a_form_not_written_yet_is_reported() {
             // function's own generic parameters.
             "struct Held<T> { value: T }\n",
             "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
-            // A tuple as a temporal input (TYPE-9).
-            "fn paired(pair: tuple<f64, f64>) -> f64 {\n",
-            "    when { return pair[0] }\n",
+            // An atomic tuple as a temporal input (TYPE-9).
+            "fn paired(pair: atomic<tuple<f64, f64>>) -> f64 {\n",
+            "    when { return 1.0 }\n",
             "}\n",
         ),
     )]);
@@ -1725,8 +1725,8 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
             // `chosen`, a graph with an `if` over a connection, is
-            // written (CTRL-13). The two of a struct, a tuple's, then
-            // what the test holds.
+            // written (CTRL-13). The two of a struct, an atomic
+            // tuple's, then what the test holds.
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
             "m.hgl:43:11 target.unsupported",
@@ -6042,6 +6042,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("tuples.hgl", TUPLES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -7460,23 +7461,24 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
     }
 }
 
-/// TYPE-9: a set field of a temporal struct is a `TSS`, which takes an
-/// update as members added. A whole struct published with such a field
-/// would not replace the set, so it is reported, and its delta is not.
+/// TYPE-9: a dictionary field of a temporal struct is a `TSD`, which
+/// takes an update as keys changed. A whole struct published with such a
+/// field would not remove the keys it has not, so it is reported, and
+/// its delta is not.
 #[test]
-fn a_whole_struct_with_a_set_field_is_not_published_yet() {
+fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "struct Tagged {\n",
-            "    tags: set<i64>\n",
+            "    tags: dict<str, i64>\n",
             "}\n",
-            "fn whole(tag: i64) -> Tagged {\n",
-            "    when { return Tagged(tags: [tag]) }\n",
+            "fn whole(tag: str) -> Tagged {\n",
+            "    when { return Tagged(tags: [tag: 1]) }\n",
             "}\n",
-            "fn changed(tag: i64) -> Tagged {\n",
-            "    when { return delta<Tagged>(tags: delta<set<i64>>(added: [tag])) }\n",
+            "fn changed(tag: str) -> Tagged {\n",
+            "    when { return delta<Tagged>(tags: delta<dict<str, i64>>(removed: [tag])) }\n",
             "}\n",
         ),
     )]);
@@ -7602,6 +7604,134 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:19:19 target.unsupported",
             "m.hgl:24:44 target.unsupported",
             "m.hgl:25:4 target.unsupported",
+        ]
+    );
+}
+
+/// TYPE-9: "Temporalization recursively maps tuples/structs to child
+/// fields". TYPE-10: "A tuple retains positional identity". TYPE-16: a
+/// tuple's delta is "`tuple<delta<A>?, delta<B>?>`". TYPE-3: a generic
+/// struct's application, and an abstract struct with the structs below
+/// it. TIME-7: `out` assigned by part.
+const TUPLES: &str = include_str!("fixtures/tuples.hgl");
+
+/// A tuple is hgraph's bundle with no name, a field for each position;
+/// a generic struct's bundle has the field types its arguments give; an
+/// abstract struct's has its own fields, and a connection of a struct
+/// below it is narrowed to them; a whole struct sets a struct field by
+/// its fields and a set field whole; a part of `out` is its own port.
+#[test]
+fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
+    let emitted = emit(&[("tuples.hgl", TUPLES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_tuples/__init__.py");
+    let pair = "_hg.TSB[\"_0\": _hg.TS[_py.int], \"_1\": _hg.TS[_py.str]]";
+    let shape = "_hg.TSB[_core.schema(Shape, {\"id\": _hg.TS[_py.int]})]";
+    for expected in [
+        // TYPE-9, TYPE-10, TYPE-16: a tuple.
+        format!("-> {pair}:\n    return _core.bundled((a.value, b.value,), (None, None,))"),
+        "    only_first = (value.value, None,)".to_string(),
+        "    return pair[\"_0\"].value".to_string(),
+        "    held = (pair[\"_0\"].value, pair[\"_1\"].value,)".to_string(),
+        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)".to_string(),
+        "_core.positions(parts.delta_value, (None, (None, None,),))".to_string(),
+        "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
+        "    return paired(a=a, b=b)[\"_0\"]".to_string(),
+        "    return nested(bid=bid, size=size)[\"_0\"][\"bid\"]".to_string(),
+        format!("    return {pair}.from_ts(_0=a, _1=b)"),
+        format!("_lift_2_total(pair={pair}.from_ts(_0=a, _1=\"y\"))"),
+        // TYPE-3, TYPE-4: a generic struct.
+        concat!(
+            "-> _hg.TSB[_core.schema(_core.applied(Box, \"i64\"), ",
+            "{\"value\": _hg.TS[_py.int]})]:"
+        )
+        .to_string(),
+        "    whole = _core.applied(Box, \"i64\")(value=held[\"value\"].value)".to_string(),
+        "{\"value\": {\"bid\": None, \"ask\": None}})".to_string(),
+        "-> _hg.TS[_core.applied(Box, \"i64\")]:".to_string(),
+        // TYPE-3: an abstract struct and the structs below it.
+        format!("def id_of(shape: {shape}) -> _hg.TS[_py.int]:"),
+        format!("    return _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
+        format!("    shape = _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
+        "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
+        // TIME-7: a whole struct with a struct field and a set field.
+        "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))".to_string(),
+        // TIME-7: `out` assigned by part, and read back.
+        "    _output[\"ask\"].value = _core.add__i64_i64(lhs=_output[\"bid\"].value, rhs=1)"
+            .to_string(),
+        "        _output[\"quote\"].value = _core.bundled(Quote(bid=bid.value, ask=bid.value))"
+            .to_string(),
+        "        _output[\"quote\"][\"ask\"].value = ".to_string(),
+        "    _output[\"_0\"].value = _core.mul__i64_i64(lhs=_output[\"_1\"].value, rhs=2)"
+            .to_string(),
+        "        _output[\"price\"].value = _core.published(None)".to_string(),
+        "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]] = None".to_string(),
+        "    _output[1].value = ".to_string(),
+        "    _output.value = {key.value: value.value}".to_string(),
+        "    _output.value = _core.with_field(_output.value, ask=".to_string(),
+        "    whole = Quote(bid=_output[\"bid\"].value, ask=_output[\"ask\"].value)".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// What this target does not write of a temporal tuple or struct is
+/// reported: an abstract struct read whole, in a hook and by a lifted
+/// helper, or as a node's configuration; the delta of a list of tuples;
+/// a place inside an entry of a dictionary `out`; and a composite value
+/// in a tuple of connections.
+#[test]
+fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "abstract struct Shape { id: i64 }\n",
+            "struct Circle : Shape { radius: i64 }\n",
+            "struct Quote { bid: i64 }\n",
+            "fn whole(shape: Shape) -> i64 {\n",
+            "    when {\n",
+            "        let held = shape\n",
+            "        return held.id\n",
+            "    }\n",
+            "}\n",
+            "const fn id_of(shape: Shape) -> i64 => shape.id\n",
+            "fn shaped(id: i64) -> Shape {\n",
+            "    when { return delta<Shape>(id: id) }\n",
+            "}\n",
+            "fn lifted(value: i64) -> i64 => id_of(shaped(value))\n",
+            "fn configured(const shape: Shape, value: i64) -> i64 {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn changes(pairs: list<tuple<i64, i64>, 2>) -> i64 {\n",
+            "    when {\n",
+            "        let change = delta_value(pairs)\n",
+            "        return 1\n",
+            "    }\n",
+            "}\n",
+            "fn keyed(key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    inject out\n",
+            "    when { out[key].bid = bid }\n",
+            "}\n",
+            "fn first(pair: tuple<i64, Quote>) -> i64 {\n",
+            "    when { return pair[0] }\n",
+            "}\n",
+            "fn made(a: i64) -> i64 => first((a, Quote(bid: 1)))\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:20 target.unsupported",
+            "m.hgl:15:33 target.unsupported",
+            "m.hgl:16:21 target.unsupported",
+            "m.hgl:21:22 target.unsupported",
+            "m.hgl:27:12 target.unsupported",
+            "m.hgl:32:37 target.unsupported",
         ]
     );
 }

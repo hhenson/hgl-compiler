@@ -1,0 +1,396 @@
+module demo.tuples
+
+# TYPE-9: "Temporalization recursively maps tuples/structs to child
+# fields". A tuple publishes to its positions; a whole value sets each.
+fn paired(a: i64, b: str) -> tuple<i64, str> {
+    when { return (a, b) }
+}
+
+# TYPE-16: a tuple's delta is "each position's delta, null where it did
+# not change": only the position that is not null is set.
+fn set_one(first: bool, value: i64) -> tuple<i64, i64> {
+    when {
+        let only_first: delta<tuple<i64, i64>> = (value, null)
+        let only_second: delta<tuple<i64, i64>> = (null, value)
+        if first { return only_first }
+        return only_second
+    }
+}
+
+# A temporal tuple read by a position and whole in a hook.
+fn first_of(pair: tuple<i64, str>) -> i64 {
+    when { return pair[0] }
+}
+
+fn two(a: i64, b: i64) -> tuple<i64, i64> {
+    when { return (a, b) }
+}
+
+fn whole_sum(pair: tuple<i64, i64>) -> i64 {
+    when {
+        let held = pair
+        return held[0] + held[1]
+    }
+}
+
+# TIME-9: a tuple is valid once one position is.
+fn is_valid(probe: bool, pair: tuple<i64, i64>) -> bool {
+    when modified(probe) && valid([]) { return valid(pair) }
+}
+
+# A tuple's delta read by position: null where the position is silent.
+fn first_changes(pair: tuple<i64, i64>) -> i64 {
+    when {
+        let first = delta_value(pair)[0]
+        if first == null { return -1 }
+        return first
+    }
+}
+
+# A nullable position published null by a whole value (TYPE-14).
+fn maybe_first(value: i64) -> tuple<i64?, str> {
+    when {
+        if value < 0 { return (null, "none") }
+        return (value, "some")
+    }
+}
+
+fn first_set(pair: tuple<i64?, str>) -> bool {
+    when { return pair[0] != null }
+}
+
+# A tuple of a struct and a tuple: each part a child of its own.
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+fn nested(bid: i64, size: i64) -> tuple<Quote, tuple<i64, i64>> {
+    when { return (Quote(bid: bid, ask: bid + 1), (size, size * 2)) }
+}
+
+fn nested_ask(parts: tuple<Quote, tuple<i64, i64>>) -> i64 {
+    when { return parts[0].ask + parts[1][1] }
+}
+
+fn nested_changes(parts: tuple<Quote, tuple<i64, i64>>) -> i64 {
+    when {
+        let inner = delta_value(parts)[1]
+        if inner == null { return -1 }
+        let second = inner[1]
+        if second == null { return -2 }
+        return second
+    }
+}
+
+# Value helpers lifted over a temporal tuple, taking and giving one (FN-6).
+const fn total(pair: tuple<i64, str>) -> i64 => pair[0] + 1
+const fn swapped(pair: tuple<i64, str>) -> tuple<str, i64> => (pair[1], pair[0])
+
+fn first_of_pair(a: i64, b: str) -> i64 => paired(a, b)[0]
+fn second_of_pair(a: i64, b: str) -> str => paired(a, b)[1]
+fn read_first(a: i64, b: str) -> i64 => first_of(paired(a, b))
+fn summed(a: i64, b: i64) -> i64 => whole_sum(two(a, b))
+fn valid_once(probe: bool, first: bool, value: i64) -> bool =>
+    is_valid(probe, set_one(first, value))
+fn changes_of(first: bool, value: i64) -> i64 => first_changes(set_one(first, value))
+fn first_set_of(value: i64) -> bool => first_set(maybe_first(value))
+fn nested_ask_of(bid: i64, size: i64) -> i64 => nested_ask(nested(bid, size))
+fn nested_bid_of(bid: i64, size: i64) -> i64 => nested(bid, size)[0].bid
+fn nested_changes_of(bid: i64, size: i64) -> i64 => nested_changes(nested(bid, size))
+fn total_of(a: i64, b: str) -> i64 => total(paired(a, b))
+fn swapped_second(a: i64, b: str) -> i64 => swapped(paired(a, b))[1]
+
+# A tuple of connections in a graph is the tuple's own connection; a
+# value in it is a constant one.
+fn made(a: i64, b: str) -> tuple<i64, str> => (a, b)
+fn made_first(a: i64, b: str) -> i64 => first_of((a, b))
+fn made_total(a: i64) -> i64 => total((a, "y"))
+fn kept_first(a: i64, b: str) -> i64 {
+    let pair = (a, b)
+    return pair[0]
+}
+
+test a_tuple_ticks_by_its_positions {
+    assert eval(paired(a: [1, 2], b: ["x", _])) == [(1, "x"), (2, "x")]
+    assert eval(set_one(first: [true, false], value: [3, 4])) == [(3, null), (null, 4)]
+    assert eval(first_of_pair(a: [1, _, 3], b: ["x", "y", _])) == [1, 1, 3]
+    assert eval(second_of_pair(a: [1, _], b: ["x", "y"])) == ["x", "y"]
+    assert eval(read_first(a: [1, 2], b: ["x", _])) == [1, 2]
+    assert eval(summed(a: [3, _, 4], b: [4, 5, _])) == [7, 8, 9]
+    assert eval(valid_once(
+        probe: [true, true, true],
+        first: [_, true, _],
+        value: [_, 3, _],
+    )) == [false, true, true]
+    assert eval(changes_of(first: [true, false, true], value: [3, 4, 5])) == [3, -1, 5]
+    assert eval(first_set_of(value: [1, -1, 2])) == [true, false, true]
+    assert eval(nested_ask_of(bid: [1, 2], size: [3, _])) == [8, 9]
+    assert eval(nested_bid_of(bid: [1, _, 2], size: [3, 4, _])) == [1, 1, 2]
+    assert eval(nested_changes_of(bid: [1, 2], size: [3, _])) == [6, 6]
+    assert eval(total_of(a: [1, 2], b: ["x", _])) == [2, 3]
+    assert eval(swapped_second(a: [1, 2], b: ["x", _])) == [1, 2]
+    assert eval(made(a: [1, _], b: ["x", "y"])) == [(1, "x"), (null, "y")]
+    assert eval(made_first(a: [1, _, 2], b: ["x", "y", _])) == [1, 1, 2]
+    assert eval(made_total(a: [1, 2])) == [2, 3]
+    assert eval(kept_first(a: [1, 2], b: ["x", _])) == [1, 2]
+}
+
+# TYPE-3, TYPE-4: a generic struct's fields have the types its arguments
+# give them, and each application is a type of its own.
+struct Box<T> {
+    value: T
+}
+
+fn boxed(value: i64) -> Box<i64> {
+    when { return Box<i64>(value: value) }
+}
+
+fn unboxed(held: Box<i64>) -> i64 {
+    when {
+        let whole = held
+        return whole.value + held.value
+    }
+}
+
+fn boxed_quote(bid: i64) -> Box<Quote> {
+    when { return Box<Quote>(value: Quote(bid: bid, ask: bid + 1)) }
+}
+
+fn boxed_ask(held: Box<Quote>) -> i64 {
+    when { return held.value.ask }
+}
+
+# TYPE-9: `atomic<V>` of a generic struct publishes the whole value.
+fn boxed_whole(value: i64) -> atomic<Box<i64>> {
+    when { return Box<i64>(value: value) }
+}
+
+fn boxed_whole_value(held: atomic<Box<i64>>) -> i64 {
+    when { return held.value }
+}
+
+fn boxed_sum(value: i64) -> i64 => unboxed(boxed(value))
+fn boxed_whole_of(value: i64) -> i64 => boxed_whole_value(boxed_whole(value))
+fn boxed_port(value: i64) -> i64 => boxed(value).value
+fn boxed_ask_of(bid: i64) -> i64 => boxed_ask(boxed_quote(bid))
+
+test a_generic_struct_ticks_by_its_fields {
+    assert eval(boxed_sum(value: [1, 2])) == [2, 4]
+    assert eval(boxed_port(value: [1, _, 3])) == [1, _, 3]
+    assert eval(boxed_ask_of(bid: [1, 5])) == [2, 6]
+    assert eval(boxed_whole_of(value: [4, 5])) == [4, 5]
+}
+
+# TYPE-3: a struct is a value where an abstract struct it inherits from
+# is expected. A temporal abstract struct has the fields it has itself.
+abstract struct Shape {
+    id: i64
+}
+
+struct Circle : Shape {
+    radius: i64
+}
+
+struct Square : Shape {
+    side: i64
+}
+
+# Each field set by its own handler: a field of the struct below that
+# ticks alone is no tick of the abstract struct's.
+fn circle(id: i64, radius: i64) -> Circle {
+    inject out
+    when modified(id) { out.id = id }
+    when modified(radius) { out.radius = radius }
+}
+
+fn square(id: i64) -> Shape {
+    when { return Square(id: id, side: 1) }
+}
+
+fn renamed(id: i64) -> Shape {
+    when { return delta<Shape>(id: id) }
+}
+
+fn id_of(shape: Shape) -> i64 {
+    when { return shape.id }
+}
+
+fn id_changes(shape: Shape) -> i64 {
+    when {
+        let id = delta_value(shape).id
+        if id == null { return -1 }
+        return id
+    }
+}
+
+fn as_shape(id: i64, radius: i64) -> Shape => circle(id, radius)
+fn circle_id(id: i64, radius: i64) -> i64 => id_of(circle(id, radius))
+fn shape_id(id: i64, radius: i64) -> i64 => as_shape(id, radius).id
+fn square_id(id: i64) -> i64 => id_of(square(id))
+fn renamed_id(id: i64) -> i64 => id_changes(renamed(id))
+fn circle_changes(id: i64, radius: i64) -> i64 => id_changes(circle(id, radius))
+fn kept_shape(id: i64, radius: i64) -> i64 {
+    let shape: Shape = circle(id, radius)
+    return id_of(shape)
+}
+
+test an_abstract_struct_ticks_by_its_own_fields {
+    assert eval(circle_id(id: [1, _, 2], radius: [5, 6, _])) == [1, _, 2]
+    assert eval(shape_id(id: [1, 2], radius: [5, _])) == [1, 2]
+    assert eval(square_id(id: [3, 4])) == [3, 4]
+    assert eval(renamed_id(id: [7, 8])) == [7, 8]
+    assert eval(circle_changes(id: [1, _, 2], radius: [5, 6, _])) == [1, _, 2]
+    assert eval(kept_shape(id: [1, _], radius: [5, 6])) == [1, _]
+}
+
+# TIME-7: a whole struct published sets each field, a struct field's by
+# its own fields and a set field's as the members it has now.
+struct Order {
+    quote: Quote
+    size: i64
+}
+
+struct Tagged {
+    tags: set<i64>
+    count: i64
+}
+
+fn ordered(bid: i64, size: i64) -> Order {
+    when { return Order(quote: Quote(bid: bid, ask: bid + 1), size: size) }
+}
+
+fn order_total(order: Order) -> i64 {
+    when {
+        let held = order
+        return held.quote.ask + held.size
+    }
+}
+
+fn tagged(tag: i64) -> Tagged {
+    when { return Tagged(tags: [tag], count: 1) }
+}
+
+fn order_total_of(bid: i64, size: i64) -> i64 => order_total(ordered(bid, size))
+fn order_ask_of(bid: i64, size: i64) -> i64 => ordered(bid, size).quote.ask
+fn tags_of(tag: i64) -> set<i64> => tagged(tag).tags
+
+test a_whole_struct_publishes_each_field {
+    assert eval(order_total_of(bid: [1, 2], size: [3, _])) == [5, 6]
+    assert eval(order_ask_of(bid: [1, _, 2], size: [3, 4, _])) == [2, 2, 3]
+    assert eval(tags_of(tag: [1, 2, 2])) == [
+        delta<set<i64>>(added: [1]),
+        delta<set<i64>>(added: [2], removed: [1]),
+    ]
+}
+
+# TIME-7: "`inject out` exposes that same result for reads, assignment,
+# and admitted piecewise mutation." A part of `out` is assigned through
+# its own port, and `out` read after holds it.
+struct Level {
+    price: i64?
+    count: i64
+}
+
+fn raised(bid: i64) -> Quote {
+    inject out
+    when {
+        out.bid = bid
+        out.ask = out.bid + 1
+    }
+}
+
+fn reordered(bid: i64, size: i64) -> Order {
+    inject out
+    when modified(bid) { out.quote = Quote(bid: bid, ask: bid) }
+    when modified(size) {
+        out.size = size
+        out.quote.ask = size * 10
+    }
+}
+
+fn pair_out(value: i64) -> tuple<i64, i64> {
+    inject out
+    when {
+        out[1] = value
+        out[0] = out[1] * 2
+    }
+}
+
+fn leveled(price: i64) -> Level {
+    inject out
+    when {
+        if price < 0 { out.price = null } else { out.price = price }
+        out.count = 1
+    }
+}
+
+# A fixed list's position is a port too, and a dictionary's entry is
+# published as that key's change.
+fn listed(value: i64) -> list<i64, 2> {
+    inject out
+    when {
+        out[0] = value
+        out[1] = out[0] + 1
+    }
+}
+
+fn slotted(slot: i64, value: i64) -> list<i64, 2> {
+    inject out
+    when { out[slot] = value }
+}
+
+fn keyed(key: str, value: i64) -> dict<str, i64> {
+    inject out
+    when { out[key] = value }
+}
+
+# A place inside a part that publishes whole: the part, changed there.
+fn snapped(bid: i64) -> atomic<Quote> {
+    inject out
+    when {
+        out = Quote(bid: bid, ask: bid)
+        out.ask = out.bid + 5
+    }
+}
+
+# `out` read back whole after its parts are assigned.
+fn raised_twice(bid: i64) -> Quote {
+    inject out
+    when {
+        out.bid = bid
+        out.ask = bid
+        let whole = out
+        out.ask = whole.bid + whole.ask
+    }
+}
+
+fn level_set(level: Level) -> bool {
+    when { return level.price != null }
+}
+
+fn raised_whole(bid: i64) -> i64 => width(raised(bid))
+fn reordered_ask(bid: i64, size: i64) -> i64 => reordered(bid, size).quote.ask
+fn pair_first(value: i64) -> i64 => pair_out(value)[0]
+fn level_set_of(price: i64) -> bool => level_set(leveled(price))
+fn snapped_ask(bid: i64) -> i64 => snapped(bid).ask
+fn listed_second(value: i64) -> i64 => listed(value)[1]
+fn slotted_first(slot: i64, value: i64) -> i64 => slotted(slot, value)[0]
+
+const fn width(quote: Quote) -> i64 => quote.ask - quote.bid + quote.ask
+
+test a_part_of_out_is_assigned_through_its_port {
+    assert eval(raised(bid: [1, 3])) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 4)]
+    assert eval(raised_whole(bid: [1, 3])) == [3, 5]
+    assert eval(raised_twice(bid: [1, 3])) == [delta<Quote>(bid: 1, ask: 2), delta<Quote>(bid: 3, ask: 6)]
+    assert eval(reordered_ask(bid: [1, _, 2], size: [_, 3, _])) == [_, 30, 2]
+    assert eval(pair_first(value: [1, 2])) == [2, 4]
+    assert eval(level_set_of(price: [1, -1, 2])) == [true, false, true]
+    assert eval(snapped_ask(bid: [1, 2])) == [6, 7]
+    assert eval(listed_second(value: [1, 2])) == [2, 3]
+    assert eval(slotted_first(slot: [0, 1, 0], value: [4, 5, 6])) == [4, _, 6]
+    assert eval(keyed(key: ["a", "b"], value: [1, 2])) == [
+        delta<dict<str, i64>>(updated: ["a": 1]),
+        delta<dict<str, i64>>(updated: ["b": 2]),
+    ]
+}
