@@ -5324,6 +5324,32 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
     ]);
 }
 
+/// TST-5: "Each cell is one cycle's publication, written as a `return`
+/// is (TIME-7) ... a T, published whole, or a `delta<T>` (TYPE-16) ...
+/// A list, a tuple, a struct and a dictionary are each written either
+/// way". A tuple's cell written whole and its delta.
+const TUPLE_CELLS: (&str, &str) = fixture!("demo.tuple_cells.hgl");
+
+/// A tuple's cell written whole is marked so, with how each position is
+/// published (`bundled`): an input publishes it whole, a null position
+/// as a published null (TST-9: "a T whole, which replaces what the
+/// input held"), and an expectation's is compared with the value the
+/// result holds, read from its port (`_hold`). A cell that is no T is
+/// the tuple's delta, as it was.
+#[test]
+fn a_tuple_cell_written_whole_is_published_whole() {
+    let emitted = emit_clean(&[TUPLE_CELLS]);
+    let python = emitted.module("demo.tuple_cells");
+    let whole = |cell: &str| format!("_harness.whole({cell}, shape=(None, None,))");
+    python.assert_writes(&[
+        format!("pair=[{}, {}]", whole("(1, 5,)"), whole("(2, None,)")),
+        format!("pair=[{}, (None, 3,)]", whole("(1, 2,)")),
+        "_hold=lambda _port: ".to_string(),
+        format!("[{}, {}]", whole("(1, 2,)"), whole("(7, 2,)")),
+        format!("[{}, (7, None,)]", whole("(1, 2,)")),
+    ]);
+}
+
 /// What this target does not write of a temporal tuple or struct is
 /// reported: an abstract struct read whole, in a hook and by a lifted
 /// helper, or as a node's configuration; the delta of a list of tuples;
@@ -5639,8 +5665,8 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 /// fixed list of no position, which hgraph 0.9.3's `TSL` cannot publish
 /// (TYPE-10, TIME-9); an assignment inside a child of a node's `out`
 /// (TIME-7); and a trace cell written whole whose parts are composites,
-/// or a list's that are nullable, or of a struct below the cell's (TST-5,
-/// TST-9).
+/// a struct's or a tuple's, or a list's that are nullable, or of a
+/// struct below the cell's (TST-5, TST-9).
 #[test]
 fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     let emitted = emit(&[fixture!(
@@ -5657,6 +5683,7 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
             "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of a list of nullables yet",
             "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
+            "m.hgl:35:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
         ]
     );
 }

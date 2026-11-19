@@ -519,6 +519,87 @@ fn a_const_fn_is_given_a_trace_as_the_list_of_its_publications() {
     assert_eq!(trace.ty.to_string(), "trace of i64");
 }
 
+/// TST-5: "Each cell is one cycle's publication, written as a `return`
+/// is (TIME-7) ... a T, published whole, or a `delta<T>` (TYPE-16),
+/// published as that change. A list, a tuple, a struct and a dictionary
+/// are each written either way". TIME-7: "a value that is a T is
+/// published whole ... A value that is no T and is a `delta<T>` is
+/// published as that change." So a tuple written in a cell is the whole
+/// tuple where it is a T: `(2, null)` of a `tuple<i64, i64?>` holds a
+/// published null, and `(1, [1, 2, 3])` a whole list. Where it is no T,
+/// `(null, 3)` of a `tuple<i64, i64>`, it is the tuple's delta. An
+/// expectation's cells are read the same. TST-16: a trace given to a
+/// `const fn` is "for a result type T a `list<tuple<datetime,
+/// delta<T>>>`".
+#[test]
+fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
+    let checked = module(concat!(
+        "fn second_null(pair: tuple<i64, i64?>) -> bool {\n",
+        "    when valid(pair[1]) { return pair[1] == null }\n",
+        "}\n",
+        "const fn digits(values: list<i64>) -> i64 => 0\n",
+        "fn second_digits(pair: tuple<i64, list<i64>>) -> i64 => digits(pair[1])\n",
+        "fn first_of(pair: tuple<i64, i64>) -> i64 => pair[0]\n",
+        "fn pair_out(command: i64) -> tuple<i64, list<i64>> {\n",
+        "    when { return (command, [1, 2, 3]) }\n",
+        "}\n",
+        "fn pair_of(command: i64) -> tuple<i64, i64?> {\n",
+        "    when { return (command, null) }\n",
+        "}\n",
+        "const fn pairs_seen(published: list<tuple<datetime, delta<tuple<i64, i64?>>>>) -> i64 => 0\n",
+        "test cells {\n",
+        "    assert eval(second_null(pair: [(1, 5), (2, null)])) == [false, true]\n",
+        "    assert eval(second_digits(pair: [(1, [1, 2, 3]), (2, [1])])) == [0, 0]\n",
+        "    assert eval(second_digits(pair: [\n",
+        "        (1, [1]),\n",
+        "        (null, delta<list<i64>>(size_modified: -1)),\n",
+        "    ])) == [0, 0]\n",
+        "    assert eval(first_of(pair: [(1, 2), (null, 3)])) == [1, _]\n",
+        "    assert eval(pair_out(command: [7])) == [(7, [1, 2, 3])]\n",
+        "    assert eval(pair_of(command: [7, 8])) == [(7, null), (null, 9)]\n",
+        "    let count = pairs_seen(eval(pair_of(command: [7])))\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    // The type of each cell that is a tuple, in the order written.
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let mut cells = Vec::new();
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |expression| {
+        if let ExprKind::Trace(written) = &expression.kind {
+            cells.extend(
+                written
+                    .iter()
+                    .filter_map(|cell| cell.value.as_ref())
+                    .map(|value| value.ty.to_string())
+                    .filter(|ty| ty.starts_with("tuple")),
+            );
+        }
+    });
+    assert_eq!(
+        cells,
+        [
+            // Whole, a null among them.
+            "tuple<i64, i64?>",
+            "tuple<i64, i64?>",
+            "tuple<i64, list<i64>>",
+            "tuple<i64, list<i64>>",
+            // Whole, then the delta.
+            "tuple<i64, list<i64>>",
+            "tuple<i64?, delta<list<i64>>?>",
+            "tuple<i64, i64>",
+            "tuple<i64?, i64?>",
+            // An expectation's: whole, and whole then the delta.
+            "tuple<i64, list<i64>>",
+            "tuple<i64, i64?>",
+            "tuple<i64?, delta<i64?>?>",
+        ]
+    );
+    assert_eq!(locals(&checked, "cells"), ["count: i64"]);
+}
+
 /// TST-3: a trace is "given to a `const fn` as an argument. It is not a
 /// temporal argument outside an eval, is stored in no field". TST-16:
 /// there it is "a `list<tuple<datetime, delta<T>>>`, one tuple for each
