@@ -9,7 +9,7 @@ use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
-use super::candidates::{Given, Key, Wanted};
+use super::candidates::{AtInstance, Given, Key, Wanted};
 use super::fit::{open, whole};
 use super::inference::{fixed, mentions, placed, unsaid};
 use super::operators::{Requested, from_place, unreadable};
@@ -1343,17 +1343,41 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     .zip(made.generics.iter().cloned())
                     .collect();
                 for call in selecting {
-                    let Some((chosen, _)) = typer.select_at_instance(call, None) else {
-                        continue;
-                    };
-                    let answers =
-                        typer.answers(chosen.module, chosen.declaration, &chosen.generics);
-                    calls.push(Resolved {
-                        callee: (chosen.module, chosen.declaration),
-                        generics: chosen.generics,
-                        answers,
-                        at: call.name,
-                    });
+                    match typer.select_at_instance(call, None) {
+                        AtInstance::Selected(chosen, _) => {
+                            let answers =
+                                typer.answers(chosen.module, chosen.declaration, &chosen.generics);
+                            calls.push(Resolved {
+                                callee: (chosen.module, chosen.declaration),
+                                generics: chosen.generics,
+                                answers,
+                                at: call.name,
+                            });
+                        }
+                        // GEN-5: "No match rejects; tied most-specific
+                        // candidates are ambiguous", at each call that
+                        // makes the instance.
+                        AtInstance::Rejected(report) => {
+                            let name = &program.modules[call.operator.module].declarations
+                                [call.operator.declaration]
+                                .name;
+                            for &root in &from {
+                                let mut report = report.clone();
+                                report.primary = root;
+                                let report = report.with_related(
+                                    call.name,
+                                    format!(
+                                        "`{name}` is called here, with the generic arguments \
+                                         this call gives the function it calls"
+                                    ),
+                                );
+                                if !typer.diagnostics.as_slice().contains(&report) {
+                                    typer.diagnostics.emit(report);
+                                }
+                            }
+                        }
+                        AtInstance::Untold => {}
+                    }
                 }
             }
             for Resolved {

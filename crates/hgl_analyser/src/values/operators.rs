@@ -3,10 +3,10 @@
 //! operator's value candidates (GEN-5, GEN-6, EXPR-2). Part of the typing
 //! pass ([`super`]); the candidate is selected in [`super::candidates`].
 
-use hgl_diagnostics::{Category, Location};
+use hgl_diagnostics::{Category, Diagnostic, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::candidates::{Given, Key, Wanted, typed_by_place};
+use super::candidates::{Chosen, Given, Key, Wanted, typed_by_place};
 use super::constants::generic_default;
 use super::fit::{not_null, open};
 use super::inference::{bare_parameter, fixed, infer, placed, unsaid};
@@ -361,77 +361,12 @@ impl<'a> Typer<'a> {
             if selected.len() > 1 && expected.is_some_and(open) {
                 return (self.unselected(given, Form::Named), Type::Unknown);
             }
-            let takes: Vec<String> = given
-                .iter()
-                .map(|given| {
-                    let value = if given.by_place {
-                        given.node.text().to_string().trim().to_string()
-                    } else {
-                        given.value.ty.to_string()
-                    };
-                    match &given.key {
-                        // An option is known by its name.
-                        Key::Name(name) if !public.parameters.iter().any(|p| p.name == *name) => {
-                            format!("`{name}: {value}`")
-                        }
-                        _ => format!("`{value}`"),
-                    }
-                })
-                .collect();
-            let takes = if takes.is_empty() {
-                "no argument".to_string()
-            } else {
-                takes.join(", ")
-            };
-            let diagnostic = if selected.is_empty() {
-                let message = if candidates.is_empty() {
-                    format!(
-                        "operator `{}` has no value candidate, and a value function selects \
-                         among those",
-                        name.text()
-                    )
-                } else {
-                    format!(
-                        "no value candidate of operator `{}` takes {takes}{}",
-                        name.text(),
-                        match (wanted.place, &wanted.among) {
-                            (Some(wanted), _) => format!(" and gives `{wanted}`"),
-                            // What the operator's requirement admits.
-                            (None, Some(among)) => {
-                                let among: Vec<String> =
-                                    among.iter().map(|ty| format!("`{ty}`")).collect();
-                                format!(" and gives {}", among.join(" or "))
-                            }
-                            (None, None) => String::new(),
-                        }
-                    )
-                };
-                error(
-                    Category::Operator,
-                    codes::OPERATOR_NO_CANDIDATE,
-                    at,
-                    message,
-                    "GEN-5",
-                )
-            } else {
-                let mut diagnostic = error(
-                    Category::Operator,
-                    codes::OPERATOR_AMBIGUOUS,
-                    at,
-                    format!(
-                        "{} value candidates of operator `{}` take {takes} equally",
-                        selected.len(),
-                        name.text()
-                    ),
-                    "GEN-5",
-                );
-                for chosen in &selected {
-                    let candidate =
-                        &program.modules[chosen.module].declarations[chosen.declaration];
-                    diagnostic = diagnostic.with_related(candidate.at, "this candidate");
-                }
-                diagnostic
-            };
+            let diagnostic = self.no_one_candidate(
+                (name.text(), at),
+                public,
+                (&given, &wanted),
+                (!candidates.is_empty(), &selected),
+            );
             self.diagnostics.emit(diagnostic);
             return (self.unselected(given, Form::Named), Type::Unknown);
         }
@@ -439,6 +374,92 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         };
         self.called(operator, chosen, given, (Form::Named, at))
+    }
+
+    /// The report of a call of an operator, named `name` and written at
+    /// `at`, that no candidate admits, or that more than one
+    /// most-specific candidate admits equally: GEN-5, "No match rejects;
+    /// tied most-specific candidates are ambiguous." `any` is whether the
+    /// operator has a candidate to select among, and `selected` the most
+    /// specific of those that admit the call.
+    pub(super) fn no_one_candidate(
+        &self,
+        (name, at): (&str, Location),
+        public: &Signature,
+        (given, wanted): (&[Given], &Wanted),
+        (any, selected): (bool, &[Chosen]),
+    ) -> Diagnostic {
+        let program = self.program;
+        let takes: Vec<String> = given
+            .iter()
+            .map(|given| {
+                let value = if given.by_place {
+                    given.node.text().to_string().trim().to_string()
+                } else {
+                    given.value.ty.to_string()
+                };
+                match &given.key {
+                    // An option is known by its name.
+                    Key::Name(name) if !public.parameters.iter().any(|p| p.name == *name) => {
+                        format!("`{name}: {value}`")
+                    }
+                    _ => format!("`{value}`"),
+                }
+            })
+            .collect();
+        let takes = if takes.is_empty() {
+            "no argument".to_string()
+        } else {
+            takes.join(", ")
+        };
+        if selected.is_empty() {
+            let message = if !any {
+                format!(
+                    "operator `{}` has no value candidate, and a value function selects \
+                     among those",
+                    name
+                )
+            } else {
+                format!(
+                    "no value candidate of operator `{}` takes {takes}{}",
+                    name,
+                    match (wanted.place, &wanted.among) {
+                        (Some(wanted), _) => format!(" and gives `{wanted}`"),
+                        // What the operator's requirement admits.
+                        (None, Some(among)) => {
+                            let among: Vec<String> =
+                                among.iter().map(|ty| format!("`{ty}`")).collect();
+                            format!(" and gives {}", among.join(" or "))
+                        }
+                        (None, None) => String::new(),
+                    }
+                )
+            };
+            error(
+                Category::Operator,
+                codes::OPERATOR_NO_CANDIDATE,
+                at,
+                message,
+                "GEN-5",
+            )
+        } else {
+            let mut diagnostic = error(
+                Category::Operator,
+                codes::OPERATOR_AMBIGUOUS,
+                at,
+                format!(
+                    "{} value candidates of operator `{}` take {takes} equally",
+                    selected.len(),
+                    name
+                ),
+                "GEN-5",
+            );
+            for chosen in selected {
+                let candidate = &program.modules[chosen.module].declarations[chosen.declaration];
+                diagnostic = diagnostic.with_related(candidate.at, "this candidate");
+            }
+            diagnostic
+        }
     }
 
     /// The list a call of `operator` converts its one argument to, where

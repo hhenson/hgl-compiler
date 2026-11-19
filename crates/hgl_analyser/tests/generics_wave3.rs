@@ -207,3 +207,79 @@ fn a_candidate_a_type_parameter_selects_is_selected_for_each_instance() {
         .expect("`wired` has a body");
     assert_eq!(called(&checked, &wired), ["kind_of(i64)"]);
 }
+
+/// GEN-6: "A candidate states in `requires` the values of a generic value
+/// parameter it is for, by comparing it with constants ... A call admits
+/// the candidate only where that holds for the parameter's value at the
+/// call, a default included." GEN-5: "No match rejects; tied
+/// most-specific candidates are ambiguous." In `go<const M: Mode>`,
+/// `step(v, mode: M)` is told for each instance and rejected where the
+/// instance is made: `go<.medium>(1)` makes one no candidate admits, as
+/// `step(1, mode: .medium)` written in place is; `go<.both>(1)` one two
+/// candidates admit equally; `relay<.medium>(1)` one through another
+/// instance; `later(1)` one through `M`'s default; and two calls of one
+/// instance are each reported. A candidate whose result is not what the
+/// place asks for admits none either (GEN-5: "the requested output
+/// before inputs"): core's `div_` with `zero: .error` gives a `result`
+/// where an `f64` is returned. Core's `<` takes no `list<i64>`. Where the
+/// instance selects, nothing is reported.
+#[test]
+fn a_call_no_one_candidate_admits_in_an_instance_rejects() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast, medium, both }\n",
+        "operator step(value: i64, const mode: Mode = .slow) -> i64\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode in {.slow, .both} => value + 1\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode in {.fast, .both} => value + 10\n",
+        "const fn go<const M: Mode>(v: i64) -> i64 => step(v, mode: M)\n",
+        "const fn relay<const N: Mode>(v: i64) -> i64 => go<N>(v)\n",
+        "const fn later<const M: Mode = .medium>(v: i64) -> i64 => step(v, mode: M)\n",
+        "const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 => div_(a, b, zero: Z)\n",
+        "const fn less<T>(a: T, b: T) -> bool => a < b\n",
+        "const fn slow() -> i64 => go<.slow>(1)\n",
+        "const fn fast() -> i64 => relay<.fast>(1)\n",
+        "const fn medium() -> i64 => go<.medium>(1)\n",
+        "const fn direct() -> i64 => step(1, mode: .medium)\n",
+        "const fn both() -> i64 => go<.both>(1)\n",
+        "const fn deep() -> i64 => relay<.medium>(1)\n",
+        "const fn defaulted() -> i64 => later(1)\n",
+        "const fn again() -> i64 => go<.medium>(1) + go<.medium>(1)\n",
+        "const fn nan() -> f64 => ratio<.nan>(1.0, 0.0)\n",
+        "const fn checked() -> f64 => ratio<.error>(1.0, 0.0)\n",
+        "const fn ordered() -> bool => less(1, 2)\n",
+        "const fn lists() -> bool => less([1], [2])\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:13:29 operator/operator.no_candidate GEN-5",
+            "m.hgl:14:29 operator/operator.no_candidate GEN-5",
+            "m.hgl:15:27 operator/operator.ambiguous GEN-5",
+            "m.hgl:16:27 operator/operator.no_candidate GEN-5",
+            "m.hgl:17:32 operator/operator.no_candidate GEN-5",
+            "m.hgl:18:28 operator/operator.no_candidate GEN-5",
+            "m.hgl:18:45 operator/operator.no_candidate GEN-5",
+            "m.hgl:20:30 operator/operator.no_candidate GEN-5",
+            "m.hgl:22:29 operator/operator.no_candidate GEN-5",
+        ],
+        "{}",
+        checked.report
+    );
+    // Each points at the call in the generic body it is about.
+    let medium = checked
+        .findings
+        .iter()
+        .find(|finding| finding.at == "m.hgl:13:29")
+        .expect("the instance's call is reported");
+    assert!(
+        medium.message.contains("operator `step`"),
+        "{}",
+        medium.message
+    );
+    assert!(
+        checked
+            .report
+            .contains("`step` is called here, with the generic arguments this call gives"),
+        "{}",
+        checked.report
+    );
+}

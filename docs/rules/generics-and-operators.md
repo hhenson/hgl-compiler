@@ -62,6 +62,7 @@ analyser: partial
 - In a value function, a call of an operator, by name or by the symbol that stands for it, selects among its value candidates: the requested output first, then the inputs; an integer literal selects as an `i64` before it is widened, which the candidates' types settle before their conditions, and candidates that tie in which literals they widen give way to the one that widens every one; no candidate and a tie rejected
 - A generic candidate is admitted with its parameters resolved from the call, and the most specific admitted one is selected (GEN-12)
 - In a graph a call selects among temporal and value candidates, and a temporal candidate outranks a value one of the same parameter types
+- A call whose candidates are not told for a generic parameter of the declaration it is written in is selected for each instance (GEN-3), as it would be written with the instance's types; no candidate and a tie there are reported at the call that makes the instance
 - Left: a candidate with a pack; an operator with a pack, and so the Boolean connectives and `!`; an argument that is itself a call only its requested output selects; composition, where a temporal candidate outranks a value one of the same parameter types, and runtime bodies
 
 ## GEN-6
@@ -72,7 +73,8 @@ analyser: partial
 - An option that selects is a generic value parameter, given by name or by its default, and the candidate's `requires` is checked against its value; one that does not select is a parameter, by name or position
 - An option's name is one kind across an operator's candidates
 - A value candidate may mark a parameter `var`, which takes no part in selecting it (FN-15)
-- Left: a `requires` on a generic value parameter of the enclosing function; a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
+- An option given a generic value parameter of the enclosing function, `step(v, mode: M)` in `go<const M: Mode>`, a default of it included, is told for each instance of that function (GEN-3), which selects the candidate its value admits; where none or more than one most-specific candidate admits it, the call that makes the instance is `operator.no_candidate` or `operator.ambiguous`, with the call in the body beside it
+- Left: a candidate's shape against its operator, the names and types of the operator's parameters and its generic relationships; candidates that stay resolvable together; temporal candidates
 
 ## GEN-7
 

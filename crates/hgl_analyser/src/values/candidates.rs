@@ -772,15 +772,11 @@ impl<'a> Typer<'a> {
     ///
     /// GEN-5: "Select exactly one most-specific admitted candidate ...
     /// No match rejects; tied most-specific candidates are ambiguous."
-    /// `None` where not exactly one is selected, or which candidates
-    /// admit the call is not told, as it is not where the call is
-    /// written with those types: a constant it compares this compiler
-    /// does not work out.
     pub(super) fn select_at_instance(
         &mut self,
         selecting: &Selecting,
         values: Option<Vec<Expr>>,
-    ) -> Option<(Chosen<'a>, Vec<Given>)> {
+    ) -> AtInstance<'a> {
         let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
         let given_types: Vec<(Location, Argument)> = self.instance.clone();
         let map: Vec<(Location, &Argument)> = given_types
@@ -795,11 +791,11 @@ impl<'a> Typer<'a> {
             .details
             .get(operator.declaration)
         else {
-            return None;
+            return AtInstance::Untold;
         };
         let candidates = self.value_candidates(operator);
         if unreadable(public, &candidates) {
-            return None;
+            return AtInstance::Untold;
         }
         let built = values.is_some();
         let mut values = values.map(Vec::into_iter);
@@ -846,13 +842,38 @@ impl<'a> Typer<'a> {
         };
         let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
         if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
-            return None;
+            return AtInstance::Untold;
         }
-        match (selected.pop(), selected.is_empty()) {
-            (Some(chosen), true) => Some((chosen, given)),
-            _ => None,
+        if selected.len() == 1
+            && let Some(chosen) = selected.pop()
+        {
+            return AtInstance::Selected(chosen, given);
         }
+        // Named as the operator is declared: a symbol stands for it.
+        let name = &program.modules[operator.module].declarations[operator.declaration].name;
+        AtInstance::Rejected(self.no_one_candidate(
+            (name, selecting.name),
+            public,
+            (&given, &wanted),
+            (!candidates.is_empty(), &selected),
+        ))
     }
+}
+
+/// What a call selected for each instance ([`Selecting`]) selects in one
+/// instance ([`Typer::select_at_instance`]).
+pub(super) enum AtInstance<'a> {
+    /// The one most-specific candidate admitted, and the call's
+    /// arguments as it takes them.
+    Selected(Chosen<'a>, Vec<Given>),
+    /// None is admitted, or more than one most-specific candidate is
+    /// admitted equally: the report, at the call's operator.
+    Rejected(hgl_diagnostics::Diagnostic),
+    /// Which candidates admit it is not told, as it is not where the
+    /// call is written with those types: a constant a condition
+    /// compares that this compiler does not work out. The call is not
+    /// judged.
+    Untold,
 }
 
 /// A call of an operator, in the body of a generic declaration, whose
@@ -954,7 +975,8 @@ pub(crate) fn select_in_instance(
             .iter()
             .map(|argument| argument.value.clone())
             .collect();
-        let Some((chosen, given)) = typer.select_at_instance(call, Some(values)) else {
+        let AtInstance::Selected(chosen, given) = typer.select_at_instance(call, Some(values))
+        else {
             return;
         };
         let (kind, ty) = typer.called(call.operator, chosen, given, (call.form, call.name));

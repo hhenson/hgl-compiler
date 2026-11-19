@@ -31,3 +31,21 @@ test a_type_parameter_selects_a_candidate_for_each_instance {
     assert less(1, 2)
     assert !less("b", "a")
 }
+
+# GEN-6: "A call admits the candidate only where that holds for the
+# parameter's value at the call, a default included." Core's division
+# selects by its `zero` option, which a generic value parameter gives.
+const fn ratio<const Z: ZeroPolicy>(a: f64, b: f64) -> f64 => div_(a, b, zero: Z)
+const fn checked<const Z: ZeroPolicy>(a: f64, b: f64) -> result<f64, error> => div_(a, b, zero: Z)
+const fn quietly<const Z: ZeroPolicy = .nan>(a: f64, b: f64) -> f64 => ratio<Z>(a, b)
+
+test an_option_a_generic_parameter_gives_selects_for_each_instance {
+    assert ratio<.ieee>(1.0, 4.0) == 0.25
+    assert ratio<.ieee>(1.0, 0.0) > 1.0e300
+    let nan = ratio<.nan>(1.0, 0.0)
+    assert nan != nan
+    let failed = quietly(1.0, 0.0)
+    assert failed != failed
+    assert is_err(checked<.error>(1.0, 0.0))
+    assert is_ok(checked<.error>(1.0, 2.0))
+}

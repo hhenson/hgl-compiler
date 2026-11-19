@@ -6244,3 +6244,20 @@ fn a_candidate_a_type_parameter_selects_is_written_for_each_instance() {
         "def _inst_less__str(a, b):\n    return _core.lt__T_T(lhs=a, rhs=b)",
     ]);
 }
+
+/// GEN-6: "A call admits the candidate only where that holds for the
+/// parameter's value at the call, a default included." Core's division
+/// given its `zero` option by a generic value parameter is written for
+/// each instance with the option's value, the enclosing function's
+/// default among them.
+#[test]
+fn an_option_a_generic_parameter_gives_is_written_for_each_instance() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "def _inst_ratio__core__ZeroPolicy_ieee(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"ieee\")",
+        "def _inst_ratio__core__ZeroPolicy_nan(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"nan\")",
+        "def _inst_checked__core__ZeroPolicy_error(a, b):\n    return _core.div__f64_f64(lhs=a, rhs=b, zero=\"error\")",
+        "def _inst_quietly__core__ZeroPolicy_nan(a, b):\n    return _inst_ratio__core__ZeroPolicy_nan(a=a, b=b)",
+    ]);
+}
