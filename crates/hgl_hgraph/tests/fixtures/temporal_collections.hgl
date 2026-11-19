@@ -26,12 +26,11 @@ const fn doubled(values: list<i64>) -> list<i64> {
     return made
 }
 
-# TYPE-9: a fixed list maps to child positions. TYPE-16: its delta is a
-# `dict<i64, delta<V>>`, and a whole value sets each position.
+# TYPE-9: a fixed list maps to child positions. TYPE-16: its delta names
+# the positions `updated`, and a whole value sets each position.
 fn one_position(slot: i64, reading: i64) -> list<i64, 2> {
     when {
-        let change: delta<list<i64, 2>> = [slot: reading]
-        return change
+        return delta<list<i64, 2>>(updated: [slot: reading])
     }
 }
 
@@ -39,16 +38,16 @@ fn both_positions(low: i64) -> list<i64, 2> {
     when { return [low, low + 1] }
 }
 
-# A fixed list read whole, once each position is valid, and its delta, in a hook.
+# A fixed list read whole, once every position is valid (TIME-9), and its delta, in a hook.
 fn pair_span(pair: list<i64, 2>) -> i64 {
-    when { return pair[1] - pair[0] }
+    when all_valid(pair) { return pair[1] - pair[0] }
 }
 
 fn changed_high(pair: list<i64, 2>) -> i64? {
-    when { return get(delta_value(pair), 1) }
+    when { return get(delta_value(pair).updated, 1) }
 }
 
-# A lifted helper over a fixed list waits for every position.
+# A lifted helper over a fixed list runs once it is valid (FN-12).
 const fn pair_total(pair: list<i64, 2>) -> i64 => pair[0] + pair[1]
 
 # TYPE-9: a dictionary maps to keyed children. TYPE-16: its delta has
@@ -85,7 +84,7 @@ fn high_of(low: i64) -> i64 => both_positions(low)[1]
 fn span_of(low: i64) -> i64 => pair_span(both_positions(low))
 fn partial_span_of(slot: i64, reading: i64) -> i64 => pair_span(one_position(slot, reading))
 fn changes_of(slot: i64, reading: i64) -> i64? => changed_high(one_position(slot, reading))
-fn pair_total_of(slot: i64, reading: i64) -> i64 => pair_total(one_position(slot, reading))
+fn pair_total_of(low: i64) -> i64 => pair_total(both_positions(low))
 fn keys_of(key: str, price: i64) -> i64? => b_in_hook(priced(key, price))
 fn removals_of(key: str, price: i64) -> i64 => removals(priced(key, price))
 fn a_of(key: str, price: i64) -> i64? => price_of_a(priced(key, price))
@@ -109,8 +108,8 @@ test lists_tick_whole_or_by_position {
     assert eval(high_of(low: [1, 5])) == [2, 6]
     assert eval(span_of(low: [1, 5])) == [1, 1]
     assert eval(partial_span_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, 5, 4]
-    assert eval(changes_of(slot: [0, 1], reading: [3, 8])) == [_, 8]
-    assert eval(pair_total_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [_, 11, 12]
+    assert eval(changes_of(slot: [0, 1], reading: [3, 8])) == [null, 8]
+    assert eval(pair_total_of(low: [3, 8])) == [7, 17]
 }
 
 test dictionaries_tick_by_key {
