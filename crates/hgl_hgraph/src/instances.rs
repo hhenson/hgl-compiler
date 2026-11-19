@@ -138,10 +138,12 @@ fn published_type(cell: &Type) -> Type {
 /// the eval's own type, a trace of what the target publishes. `None`
 /// where `call` is no call of a function.
 ///
-/// A trace's cell is the delta of what is published (the language's
-/// TST-5), so the type published is read back from it: a scalar is its
-/// own delta, and a set's and a nullable's delta name the type they
-/// are of.
+/// A target with no generic parameter says the type of each input and
+/// of its result: they are its own. A generic one's are read back from
+/// its traces, since a trace's cell is the delta of what is published
+/// (the language's TST-5): a scalar is its own delta, and a set's and a
+/// nullable's delta name the type they are of. A delta does not say
+/// that a part of it was an `atomic<V>`, whose delta is V.
 pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<Wiring> {
     let ExprKind::Call {
         callee:
@@ -160,17 +162,23 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
+    let own = signature.generics.is_empty();
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
             let parameter = signature.parameters.get(argument.parameter?)?;
-            Some((parameter.name.clone(), trace_payload(&argument.value.ty)?))
+            // Only an argument that is a trace is replayed.
+            let payload = trace_payload(&argument.value.ty)?;
+            let ty = if own { parameter.ty.clone() } else { payload };
+            Some((parameter.name.clone(), ty))
         })
         .collect();
-    Some(Wiring {
-        inputs,
-        result: trace_payload(eval),
-    })
+    let result = if own {
+        signature.result.clone()
+    } else {
+        trace_payload(eval)
+    };
+    Some(Wiring { inputs, result })
 }
 
 /// The type of what the entry of the run statement `run` publishes,

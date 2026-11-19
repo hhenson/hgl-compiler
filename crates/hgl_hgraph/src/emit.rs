@@ -7083,8 +7083,20 @@ impl Emitter<'_> {
             let signature = instances
                 .find(self.program, (*module, *declaration), generics)
                 .map_or(signature, |instance| &instance.signature);
+            // An input is of its parameter's type where the function has
+            // no generic parameter, as the run's replay is
+            // (`run_wiring`), and of the type its trace is of otherwise.
+            let own = signature.generics.is_empty();
             let (written, bound) = self.bound(function, signature, arguments, |_, value| {
-                crate::instances::trace_payload(&value.ty)
+                let payload = crate::instances::trace_payload(&value.ty)?;
+                let parameter = arguments
+                    .iter()
+                    .find(|argument| std::ptr::eq(&argument.value, value))
+                    .and_then(|argument| signature.parameters.get(argument.parameter?));
+                Some(match parameter {
+                    Some(parameter) if own => parameter.ty.clone(),
+                    _ => payload,
+                })
             });
             let node = self.lifted(
                 (*module, *declaration),

@@ -84,6 +84,22 @@ fn nested_changes(parts: tuple<Quote, tuple<i64, i64>>) -> i64 {
     }
 }
 
+# TYPE-9: an atomic position is a `TS` of the whole value; an eval's
+# traces of it are of the target's own types.
+fn snapshot(bid: i64) -> atomic<Quote> {
+    when { return Quote(bid: bid, ask: bid + 1) }
+}
+
+fn snap_pair(snap: atomic<Quote>, n: i64) -> tuple<atomic<Quote>, i64> {
+    when { return (snap, n) }
+}
+
+fn snap_ask(pair: tuple<atomic<Quote>, i64>) -> i64 {
+    when { return pair[0].ask + pair[1] }
+}
+
+fn snap_pair_of(bid: i64, n: i64) -> tuple<atomic<Quote>, i64> => snap_pair(snapshot(bid), n)
+
 # Value helpers lifted over a temporal tuple, taking and giving one (FN-6).
 const fn total(pair: tuple<i64, str>) -> i64 => pair[0] + 1
 const fn swapped(pair: tuple<i64, str>) -> tuple<str, i64> => (pair[1], pair[0])
@@ -132,6 +148,9 @@ test a_tuple_ticks_by_its_positions {
     assert eval(total_of(a: [1, 2], b: ["x", _])) == [2, 3]
     assert eval(swapped_second(a: [1, 2], b: ["x", _])) == [1, 2]
     assert eval(made(a: [1, _], b: ["x", "y"])) == [(1, "x"), (null, "y")]
+    assert eval(snap_pair_of(bid: [1, _], n: [10, 20])) ==
+        [(Quote(bid: 1, ask: 2), 10), (Quote(bid: 1, ask: 2), 20)]
+    assert eval(snap_ask(pair: [(Quote(bid: 1, ask: 2), 10), (null, 20)])) == [12, 22]
     assert eval(made_first(a: [1, _, 2], b: ["x", "y", _])) == [1, 1, 2]
     assert eval(made_total(a: [1, 2])) == [2, 3]
     assert eval(kept_first(a: [1, 2], b: ["x", _])) == [1, 2]
