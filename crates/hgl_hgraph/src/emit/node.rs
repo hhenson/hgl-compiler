@@ -773,7 +773,11 @@ impl Emitter<'_> {
             .result
             .as_ref()
             .and_then(|result| list_parts_shape(self.program, result));
-        if let (Some(_), Some(result)) = (&grows, &result) {
+        // SOURCE-3: "On wake it publishes and resumes after yield." The
+        // provider publishes through the node's output before it resumes
+        // the generator, so that what is published stands where the rest
+        // of the pass fails (ERR-8: "Earlier writes remain visible").
+        if let Some(result) = &result {
             node_parameters.push(format!("_output: {} = None", output_annotation(result)));
         }
         let returns = result
@@ -791,19 +795,14 @@ impl Emitter<'_> {
         for (parameter, _) in &capabilities {
             self.line(1, &format!("_state.{parameter} = {parameter}"));
         }
+        let output = if result.is_some() { "_output" } else { "None" };
+        let shape = grows.map_or(String::new(), |shape| format!(", {shape}"));
         self.line(
             1,
-            "_published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)",
+            &format!(
+                "_core.resume(_state._source, _clock.evaluation_time, _scheduler, {output}{shape})"
+            ),
         );
-        self.line(1, "if _published is not None:");
-        if let Some(shape) = &grows {
-            self.line(
-                2,
-                &format!("return _core.published_into(_output, _published[0], {shape})"),
-            );
-        } else {
-            self.line(2, "return _published[0]");
-        }
 
         // `start`: the first values, the hook, and the generator.
         let hooks = hooks.join(", ");

@@ -1,0 +1,42 @@
+module demo.source_writes
+
+# SOURCE-3: "a future target retains its payload and suspends. On wake it
+# publishes and resumes after yield." ERR-8: "Capture ends the failed pass
+# without rollback or immediate retry ... Earlier writes remain visible."
+# A source's publication stands where the rest of its pass then fails.
+
+# At 2s the source publishes 100, then resumes and fails: `n` is 0.
+fn counted() -> i64 {
+    cache n: i64 = 3
+    while true {
+        n -= 1
+        yield 1s: 100 // n
+    }
+}
+
+fn counted_captured() -> i64 {
+    let seen = capture(counted)
+    return seen.value
+}
+
+# SOURCE-3: "a current target publishes now". The source publishes 7 as
+# the run starts, and then fails in the same pass.
+fn first_then_failed() -> i64 {
+    cache n: i64 = 1
+    {
+        yield 0s: 7
+        n -= 1
+        yield 1s: 1 // n
+    }
+}
+
+fn first_captured() -> i64 {
+    let seen = capture(first_then_failed)
+    return seen.value
+}
+
+test a_sources_publication_before_its_failure_stands {
+    assert eval(counted_captured(), RunConfig(length: 5s)) == [1s: 50, 2s: 100]
+    assert eval(first_captured(), RunConfig(length: 5s)) == [0s: 7]
+    assert raises("numeric.division_by_zero") { eval(counted(), RunConfig(length: 5s)) }
+}

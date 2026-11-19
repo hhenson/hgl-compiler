@@ -56,11 +56,16 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && let Some(port) = self.input_port(function, value)
                 {
-                    if matches!(function.port_type(value), Type::RollingWindow { .. }) {
-                        let window = function.port_type(value).clone();
+                    let ty = function.port_type(value);
+                    if matches!(ty, Type::RollingWindow { .. }) {
+                        let window = ty.clone();
                         return self.window_value(&window, &port, value.at);
                     }
-                    return self.port_value(function.port_type(value), &port, value.at);
+                    let read = self.port_value(ty, &port, value.at);
+                    if function.is_out(*local) {
+                        return self.published_read(ty, &port, read);
+                    }
+                    return read;
                 }
                 let read = self.place(function, *local);
                 if function.mode == Mode::Lifecycle && function.is_input(*local) {
@@ -798,13 +803,17 @@ impl Emitter<'_> {
                     format!("{capture}.out")
                 }
             }
-            // TIME-3 says what `modified([])` selects in a header, and
-            // not what it is as a value: under `!`, say.
+            // TIME-3: "The empty selection `modified([])` subscribes to
+            // no input and selects a wake from the node's scheduler or
+            // alarm. Where it is a bool, in a body or under a negation
+            // or a disjunction, it is true in a cycle where no temporal
+            // input was modified." This target writes the selection in a
+            // header, and not that test yet.
             ExprKind::Endpoint {
                 operation: EndpointOperation::Modified,
                 inputs: Some(inputs),
             } if inputs.is_empty() => {
-                self.unsupported(value.at, "`modified([])` as a value");
+                self.unsupported(value.at, "`modified([])` read as a bool");
                 "None".to_string()
             }
             _ => {
@@ -1512,6 +1521,25 @@ impl Emitter<'_> {
     /// and a struct's, a tuple's or a list's parts each in turn.
     pub(super) fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
         self.part_value_at(ty, port, 0, at)
+    }
+
+    /// `read`, the whole of the node's `out` read at its port `port`, of
+    /// the result's type `ty`, where it is valid.
+    ///
+    /// TIME-7: "`inject out` exposes that same result for reads", read
+    /// in a `when` and in `stop`. Until the node has published, and after
+    /// `invalidate(out)`, `out` holds no payload, and nothing is made up
+    /// for it: the read fails with the catalogue's `value.unset_read`,
+    /// "Executed operation requires an unset ordinary payload", an
+    /// execution failure (ERR-1) a capture takes (ERR-7). It fails where
+    /// `valid(out)` is false, by the same test (`valid_test`). A part of
+    /// `out` read alone is held to its own `valid` (`part_value`).
+    fn published_read(&mut self, ty: &Type, port: &str, read: String) -> String {
+        let ready = self.valid_test(ty, port);
+        self.natives = true;
+        format!(
+            "({read} if {ready} else _core.unset_read(\"`out` is read before it holds a value\"))"
+        )
     }
 
     /// `part_value` of a port read inside `depth` comprehensions.

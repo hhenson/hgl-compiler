@@ -155,6 +155,8 @@ analyser: done
 
 - In a graph an assignment into a place of a `var` is read as one elsewhere is (EXPR-3), and is an assignment to the `var`: a connection stays one whatever its place is given, an ordinary value given a connection, indexed by one, or assigned in a branch selected at runtime is rejected (`binding.category`), and so is a `var` declared outside a loop that makes one child for each member (`loop.carried`)
 
-transpiler: planned
+transpiler: partial
 
-- The new connection: the old one with the place's value from what is assigned
+- hgraph: a field of a struct's connection, a tuple's position and a fixed list's position under a literal index, at any depth, rebind the `var` to a new bundle or `TSL` of the old one's parts but the place's, made where the graph is built (`from_ts`); what read the `var` before keeps its connection, and a branch selected at runtime assigns it as it assigns the `var`
+- An ordinary value assigned is a constant connection of the place's type; a nullable scalar place takes a connection of its `T` through `_core.nullable`
+- Left, reported: a field of an atomic struct's connection, an entry of a dictionary's, a position of an unsized list's, and a fixed list's or a tuple's position by an index that is no literal

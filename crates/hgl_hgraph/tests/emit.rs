@@ -2032,8 +2032,13 @@ fn a_stop_is_given_the_nodes_output() {
         python.contains(expected),
         "the module has:\n{expected}\nin:\n{python}"
     );
+    // TIME-7: `out` read holds what was published, and fails with
+    // `value.unset_read` before it holds a value.
+    let read = out_read("_output.value", "_output.valid");
     assert!(
-        python.contains("if _core.eq__i64_i64_f64_f64(lhs=_output.value, rhs=expected"),
+        python.contains(&format!(
+            "if _core.eq__i64_i64_f64_f64(lhs={read}, rhs=expected"
+        )),
         "{python}"
     );
 }
@@ -2128,11 +2133,11 @@ fn a_source_is_a_generator_a_node_resumes() {
         concat!(
             "@_hg.compute_node\n",
             "def _source_two_values(_begin: _hg.TS[_py.bool], _state: _hg.STATE = None, ",
-            "_clock: _hg.EvaluationClock = None, _scheduler: _hg.SCHEDULER = None) ",
-            "-> _hg.TS[_py.int]:\n",
-            "    _published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)\n",
-            "    if _published is not None:\n",
-            "        return _published[0]\n",
+            "_clock: _hg.EvaluationClock = None, _scheduler: _hg.SCHEDULER = None, ",
+            "_output: _hg.TS_OUT[_py.int] = None) -> _hg.TS[_py.int]:\n",
+            // SOURCE-3: "On wake it publishes and resumes after yield":
+            // the provider publishes through `_output`, then resumes.
+            "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output)\n",
         ),
         concat!(
             "@_source_two_values.start\n",
@@ -3639,8 +3644,10 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
 }
 
 /// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
-/// in `start` or `stop`; TIME-3 says what `modified([])` subscribes to,
-/// and not what it is as a bool. Each is reported.
+/// in `start` or `stop`, where it is reported. TIME-3: `modified([])`
+/// "Where it is a bool, in a body or under a negation or a disjunction,
+/// it is true in a cycle where no temporal input was modified", which
+/// this target does not write yet, and reports.
 #[test]
 fn scheduled_in_a_lifecycle_hook_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3652,7 +3659,7 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
         [
             "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` as a value yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` read as a bool yet",
         ]
     );
 }
@@ -4910,7 +4917,7 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "(_core.valid_of(pair, (\"list\", None)) and pair.all_valid)",
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
-        "        return _core.published_into(_output, _published[0], \"list\")",
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
         "        return _core.removed(pair.delta_value)",
     ]);
 }
@@ -4971,7 +4978,7 @@ fn a_growing_list_is_an_unbounded_tsl() {
         "        _core.list_child(_output, 1).value = 9\n".to_string(),
         "        _output.value = _core.list_applied(_output, _core.list_delta(size_modified=_core.neg__i64(value=1)))\n".to_string(),
         // SOURCE-1: what a source yields is applied as it is due.
-        "        return _core.published_into(_output, _published[0], \"list\")\n".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")\n".to_string(),
         // FN-3: a branch's constant is the provider's node.
         format!("        return _core.constant_of({list})(_hg.const(True), given=_core.Held((_core.copied(no_values()), \"list\")))\n"),
         // A lifted helper's empty result ticks through its `_output`.
@@ -5109,7 +5116,7 @@ fn a_growing_lists_position_is_an_endpoint_of_its_own() {
         "_core.checked_child_result(_core.list_position(values, index.value), lambda _port: ".to_string(),
         "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",))\n".to_string(),
         "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"})".to_string(),
-        "        return _core.published_into(_output, _published[0], {\"items\": \"list\"})\n".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"})\n".to_string(),
         "_core.bundled(Basket(owner=\"b\", items=[]), {\"owner\": None, \"items\": \"list\"}, _core.DEFERRED)".to_string(),
         "        _core.invalidated(_output, \"list\")\n".to_string(),
         "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
@@ -5314,11 +5321,20 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]] = None".to_string(),
         "    _output[1].value = ".to_string(),
         "    _output.value = {key.value: value.value}".to_string(),
-        "    _output.value = _core.with_field(_output.value, ask=".to_string(),
         format!(
-            "    whole = Quote(bid={}, ask={})",
-            part("_output[\"bid\"]"),
-            part("_output[\"ask\"]")
+            "    _output.value = _core.with_field({}, ask=",
+            out_read("_output.value", "_output.valid")
+        ),
+        format!(
+            "    whole = {}",
+            out_read(
+                &format!(
+                    "Quote(bid={}, ask={})",
+                    part("_output[\"bid\"]"),
+                    part("_output[\"ask\"]")
+                ),
+                "_output.valid"
+            )
         ),
     ]);
 }
@@ -5411,7 +5427,10 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
         "    return width(quote=quote.value)".to_string(),
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
-        "    whole = _output.value\n".to_string(),
+        format!(
+            "    whole = {}\n",
+            out_read("_output.value", "_output.valid")
+        ),
         "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:"
             .to_string(),
         // An atomic input's value is hgraph's: a `var` takes a copy.
@@ -5496,6 +5515,12 @@ fn an_atomic_field_that_may_be_left_out_is_not_written_yet() {
 /// where it is not.
 fn part(port: &str) -> String {
     format!("({port}.value if {port}.valid else _core.unset_read())")
+}
+
+/// How a hook reads the whole of its `out`, `read` where `out` is valid
+/// by `valid`, and `value.unset_read` where it is not (TIME-7).
+fn out_read(read: &str, valid: &str) -> String {
+    format!("({read} if {valid} else _core.unset_read(\"`out` is read before it holds a value\"))")
 }
 
 /// TYPE-9 and TIME-9: a part of a struct or a tuple that has not
@@ -5598,6 +5623,86 @@ fn a_control_form_that_would_be_wrong_is_reported() {
             "m.hgl:14:17 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
             "m.hgl:21:21 target.unsupported: the hgraph target does not write an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it yet",
             "m.hgl:29:14 target.unsupported: the hgraph target does not write a `switch` two of whose labels have one value in an instance yet",
+        ]
+    );
+}
+
+/// CTRL-6: "Switch labels are typed source constants, compared by
+/// resolved value ... Duplicate values reject." A `switch` over a
+/// connection is hgraph's `switch_`, whose branches are keyed by each
+/// label's value: of two labels of one value it keeps the last, where a
+/// `switch` over an ordinary value takes the first. So a label whose
+/// value the analyser has not worked out, a constant a `const fn`
+/// computes or a negation by a candidate of the program's own, is
+/// reported beside another label: it may be another's value. A label
+/// alone, and labels whose values are worked out, are written.
+const UNVALUED_LABELS: (&str, &str) =
+    fixture!("a_switch_label_not_worked_out_is_reported", "m.hgl");
+
+#[test]
+fn a_switch_label_not_worked_out_is_reported() {
+    let emitted = emit(&[UNVALUED_LABELS]);
+    let unvalued = "the hgraph target does not write a `switch` over a connection with a label whose value the compiler does not work out yet";
+    assert_eq!(
+        emitted.reported,
+        [
+            format!("m.hgl:10:14 target.unsupported: {unvalued}"),
+            format!("m.hgl:17:14 target.unsupported: {unvalued}"),
+            format!("m.hgl:39:14 target.unsupported: {unvalued}"),
+        ]
+    );
+    assert_eq!(
+        emitted.blocked("graph_path_int"),
+        Some(format!("m.hgl:10:14 {unvalued}"))
+    );
+    assert_eq!(
+        emitted.blocked("graph_path_enum"),
+        Some(format!("m.hgl:17:14 {unvalued}"))
+    );
+    assert_eq!(emitted.blocked("graph_path_valued"), None);
+}
+
+/// The `switch`es of [`UNVALUED_LABELS`] that are written select the
+/// case of the selector's value. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_switch_whose_labels_are_worked_out_selects_by_value() {
+    let hgraph = on_hgraph("hgraph_unvalued_labels");
+    let emitted = emit(&[UNVALUED_LABELS]);
+    let tests = [emitted.test("graph_path_valued").0];
+    let ran = hgraph.run(&emitted, &tests);
+    assert_eq!(
+        outcomes(&emitted, &tests, &ran),
+        ["graph_path_valued passed"]
+    );
+}
+
+/// EXPR-15: "In a graph, an assignment into a place of a `var` is copy
+/// on write ... `point.x = price` rebinds `point` to a new connection".
+/// A struct's, a tuple's and a fixed list's connection is made anew of
+/// its parts (`demo.graph_places`). One whose parts hgraph has as one
+/// value or knows only as the graph runs is reported, each with its own
+/// reason: a field of an atomic struct, an entry of a dictionary and a
+/// position of an unsized list.
+#[test]
+fn a_place_of_a_connection_not_written_yet_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_place_of_a_connection_not_written_yet_is_reported",
+        "m.hgl"
+    )]);
+    let unsupported = "target.unsupported: the hgraph target does not write";
+    assert_eq!(
+        emitted.reported,
+        [
+            format!(
+                "m.hgl:11:5 {unsupported} a field of an atomic struct's connection assigned in a graph yet"
+            ),
+            format!(
+                "m.hgl:19:5 {unsupported} an entry of a dictionary's connection assigned in a graph yet"
+            ),
+            format!(
+                "m.hgl:27:5 {unsupported} a position of an unsized list's connection assigned in a graph yet"
+            ),
         ]
     );
 }

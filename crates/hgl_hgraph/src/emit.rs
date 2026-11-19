@@ -1396,8 +1396,13 @@ impl<'a> Emitter<'a> {
                 // something else holds it.
                 let written = self.expression(function, value);
                 let copied = self.copied(function, value, written);
+                // EXPR-15: in a graph, a place of a `var` that holds a
+                // connection gives the `var` a new connection
+                // (`connected_place`).
                 let assigned = if to_out {
                     self.assigned_to_out(function, place, value, copied)
+                } else if function.mode == Mode::Graph && self.connects(function, root) {
+                    self.connected_place(function, place, value, copied)
                 } else {
                     self.assigned(function, place, copied)
                 };

@@ -219,6 +219,20 @@ test an_invalidated_structs_list_holds_no_position {
     assert eval(cleared_digits(command: [0, 1, 2])) == [123, _, 5]
 }
 
+# A relay of the invalidated list is not invalidated itself: it holds
+# three positions when the list's next delta, of a list of one, reaches
+# it, and that delta shrinks it. TYPE-16: "The delta read ... on a
+# shrink names the tail positions it drops in `removed`".
+fn cleared_relay(command: i64) -> list<i64> => relayed(cleared(command))
+
+test a_relay_of_an_invalidated_list_shrinks {
+    assert eval(cleared_relay(command: [0, 1, 2])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        _,
+        delta<list<i64>>(updated: [0: 5], removed: [1, 2], size_modified: 1),
+    ]
+}
+
 # EXPR-7: a position selected in a graph, by a constant and by an index
 # that ticks: a connection that is not valid while the list does not hold
 # the position (TIME-1).
