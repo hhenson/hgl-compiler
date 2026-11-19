@@ -1,0 +1,18 @@
+module m
+fn first(value: i64) -> bool {
+    state seen: bool = false
+    inject scheduler
+    start { seen = scheduled() }
+    when { return seen }
+}
+fn last(value: i64) -> bool {
+    state seen: bool = false
+    inject alarm
+    when { return seen }
+    stop { seen = scheduled() }
+}
+fn unwoken(value: i64) -> bool {
+    inject scheduler
+    start { schedule(scheduler, 1s) }
+    when !modified([]) { return true }
+}

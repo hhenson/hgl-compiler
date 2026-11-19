@@ -1,0 +1,4 @@
+module demo.lib
+const fn base() -> i64 => 2
+export const fn scale(value: i64, factor: i64 = base()) -> i64 => value * factor
+export const fn pick(first: i64?, second: i64 = 1) -> i64 => second

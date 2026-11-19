@@ -1,0 +1,28 @@
+module demo.lists
+
+fn first_gathered(value: i64) -> i64 {
+    cache seen: list<i64> = []
+    when {
+        append(seen, value)
+        return seen[0]
+    }
+}
+
+const fn grown(first: list<i64>, more: list<i64>) -> list<i64> {
+    var entries: list<i64> = first
+    extend(entries, more)
+    append(entries, 0)
+    return entries
+}
+
+test lists {
+    var entries: list<i64> = [1, 2]
+    let before = entries
+    append(entries, 3)
+    extend(entries, before)
+    extend(entries, [])
+    assert before == [1, 2]
+    assert entries == [1, 2, 3, 1, 2]
+    assert grown([7], [8, 9]) == [7, 8, 9, 0]
+    assert eval(first_gathered(value: [7, _, 9])) == [7, _, 7]
+}

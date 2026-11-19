@@ -1,0 +1,10 @@
+module demo.given.fails
+fn pass(value: i64) -> i64 {
+    when { return delta_value(value) }
+}
+const fn ticks(seen: list<tuple<datetime, i64>>) -> i64 {
+    var count = 0
+    for tick in seen { count += 1 }
+    return count
+}
+test silence_counted { assert ticks(eval(pass(value: [7, _, 7]))) == 3 }

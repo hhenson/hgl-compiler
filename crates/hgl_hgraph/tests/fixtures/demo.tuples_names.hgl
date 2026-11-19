@@ -3,7 +3,8 @@ module demo.tuples_names
 # TYPE-3: "Structs are nominal". `Quote`, `Level` and `Box` have the
 # names of structs of `demo.tuples` and `demo.bundles`, with other
 # fields: each is a type of its own, as a bundle and as an atomic value,
-# and the modules are loaded together.
+# and the modules are loaded together. hgraph knows a class and a
+# bundle's schema by its module and its name.
 struct Quote {
     price: i64
 }

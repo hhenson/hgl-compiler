@@ -1,0 +1,4 @@
+module m
+abstract struct Shape {}
+struct Round : Shape { radius: f64 }
+export const fn widened(values: list<Round>) -> list<Shape> => convert<list<Shape>>(values)
