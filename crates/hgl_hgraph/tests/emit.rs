@@ -6292,6 +6292,12 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
     let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_copy_points/__init__.py");
+    let saved = format!(
+        "            _state.saved = Ticket(id={}, size={}, price={})\n",
+        part("current[\"id\"]"),
+        part("current[\"size\"]"),
+        part("current[\"price\"]")
+    );
     for expected in [
         // A struct of two scalars is a value; one of three, one with a
         // `str`, one another inherits from, and one of structs are not.
@@ -6373,7 +6379,7 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        _core.raise_if_failed(_given[0])\n",
         ),
         // No copy: a struct read whole from its bundle is made anew.
-        "            _state.saved = Ticket(id=current[\"id\"].value, size=current[\"size\"].value, price=current[\"price\"].value)\n",
+        saved.as_str(),
         // A copy: a result that may be the function's own `var` or its
         // parameter, a constant or what a loop over one gives.
         "def pick(p, flag):\n    mine = [0]\n    x = (mine if flag else p)\n    return _core.copied(x)\n",
