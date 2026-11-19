@@ -94,7 +94,7 @@ analyser: partial
 - An `inject` in a `const fn`, a value candidate, the contract of a native value function, or an anonymous function written in a node is rejected (`node.in_value_function`); a value function is given a capability by a parameter of its type (TIME-8)
 - An application injects `global_state` alone, for the statements before its run statement (UNIT-14)
 - A graph injects it alone too, and a call on it there is given no connection (`connection.as_constant`)
-- `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is local `scheduled.outside_node`: the catalogue has no row for it
+- `scheduled()` in a value function or a graph, which has no schedule of its own (TIME-9), is local `scheduled.outside_node`: the catalogue has no row for it; so is one in an anonymous function written there, and `scheduled<T>()`
 - Left: an anonymous function written in a graph; a capability used outside a hook or a source's body
 
 ## FN-10
@@ -145,6 +145,7 @@ analyser: done
 
 - What an anonymous function may use from around it
 - A call's callee is read as any expression is, so an anonymous function chosen by an `if` or taken from a list reads the node's inputs where it is written (TIME-1)
+- An endpoint operation in one, `scheduled()` among them, is judged where the function is written, in a hook, an initialiser, a source, a value function, a graph or a test (TIME-9); the guards of TIME-4 and the phases of TIME-5 hold in it as around it
 
 ## FN-15
 
