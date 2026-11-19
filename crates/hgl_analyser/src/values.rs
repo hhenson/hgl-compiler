@@ -50,7 +50,7 @@ use crate::types::{
     Argument, CallArguments, Constant, ConstantValue, Detail, GenericKind, GenericParameter,
     NamedKind, Pack, Scalar, Signature, StructType, TraceStyle, Type,
 };
-use crate::{RESULT_FORMS, codes, error, warning};
+use crate::{RESULT_FORMS, codes, error, local_error, warning};
 
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
@@ -487,6 +487,8 @@ struct Typer<'a> {
     undriven: Vec<Location>,
     /// True while a `state`'s initializer is read (TIME-5).
     initializing: bool,
+    /// True while a node's `cache`'s initializer is read (TIME-1).
+    caching: bool,
     /// How many requirements deep a candidate's condition is being
     /// tested: see [`REQUIRING`].
     requiring: u32,
@@ -559,6 +561,7 @@ impl<'a> Typer<'a> {
             driven: false,
             undriven: Vec::new(),
             initializing: false,
+            caching: false,
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
@@ -741,10 +744,12 @@ impl<'a> Typer<'a> {
             match statement.kind() {
                 SyntaxKind::StateDecl | SyntaxKind::CacheDecl => {
                     // TIME-5: "State initializers cannot read current
-                    // temporal inputs."
+                    // temporal inputs." TIME-1: nor can a cache's.
                     self.initializing = statement.kind() == SyntaxKind::StateDecl;
+                    self.caching = statement.kind() == SyntaxKind::CacheDecl;
                     statements.push(self.local(&statement));
                     self.initializing = false;
+                    self.caching = false;
                 }
                 SyntaxKind::InjectDecl => statements.extend(self.inject(&statement)),
                 SyntaxKind::LifecycleBlock | SyntaxKind::WhenStmt => {
@@ -1432,6 +1437,12 @@ impl<'a> Typer<'a> {
 
     /// A read of a temporal input's payload in a node.
     ///
+    /// TIME-1: "A payload read requires admission/readability; metadata
+    /// may observe an invalid endpoint." The endpoint operations are
+    /// metadata, and are not read here (TIME-9): each takes the
+    /// endpoint and not its payload. A read is admitted where the
+    /// input is known to be valid, and nowhere else.
+    ///
     /// TIME-4: "A payload read under manual admission must be dominated
     /// by a successful guard": in a `when`, the input is one its header
     /// admits, or a `valid(input)` holds where the read stands. TIME-5:
@@ -1454,6 +1465,26 @@ impl<'a> Typer<'a> {
                 ),
                 "TIME-5",
             ));
+            return;
+        }
+        // TIME-1: a cache's initializer admits no read either. TIME-6:
+        // a cache is "initialized on every start", and TIME-5: that is
+        // "before any has a value". The catalogue's `state.input_read`
+        // names a state's initializer alone, so the code is local.
+        if self.caching {
+            self.diagnostics.emit(
+                local_error(
+                    Category::Phase,
+                    codes::local::CACHE_INPUT_READ,
+                    at,
+                    format!(
+                        "`{name}` is a temporal input, and a `cache` is given its first value \
+                         on every start, before any input has one"
+                    ),
+                    "TIME-1",
+                )
+                .with_note("a `when` reads it, and may assign the cache"),
+            );
             return;
         }
         let (unproved, rule) = match self.hook {
@@ -3135,7 +3166,8 @@ impl<'a> Typer<'a> {
 
     /// FN-3: "Where a constant is required ... a `const` parameter's
     /// argument ... a connection rejects." A connection has no value
-    /// while the graph is built.
+    /// while the graph is built. TIME-2: "Composition describes a typed
+    /// graph without reading live payloads."
     fn constants_of(&mut self, kind: &ExprKind) {
         let ExprKind::Call {
             callee, arguments, ..
@@ -3582,7 +3614,9 @@ impl<'a> Typer<'a> {
             // One report for one `var`.
             self.assigned[local] = true;
         }
-        if self.is_temporal_input(local) && (self.hook.is_some() || self.initializing) {
+        if self.is_temporal_input(local)
+            && (self.hook.is_some() || self.initializing || self.caching)
+        {
             self.payload_read(local, at);
         }
         // TIME-7: "`start` neither reads nor writes it".
@@ -8922,6 +8956,18 @@ impl<'a> Typer<'a> {
                 ));
             }
         }
+        // EXPR-14: a symbol's configuration, `{abs: tolerance}`, given
+        // to a value candidate in a graph binds where the graph is
+        // built. The entries given by name to a symbol are its
+        // configuration (EXPR-10); its operands are given in position.
+        let lifted = self.graph
+            && !matches!(form, Form::Named)
+            && matches!(
+                program.modules[module].declarations[declaration]
+                    .kind
+                    .candidate(),
+                Some((Role::Value, _))
+            );
         let arguments = given
             .into_iter()
             .enumerate()
@@ -8948,6 +8994,11 @@ impl<'a> Typer<'a> {
                 } else {
                     self.fit(given.value, &parameter.ty, &place)
                 };
+                // A `const` parameter given a connection is reported as
+                // one where the call is read (FN-3).
+                if lifted && !parameter.constant && matches!(given.key, Key::Name(_)) {
+                    self.configuration_input(form, &parameter.name, &value);
+                }
                 Some(hir::Argument {
                     parameter: Some(index),
                     value,
@@ -8968,6 +9019,45 @@ impl<'a> Typer<'a> {
         };
         self.finished_call(&kind, false);
         (kind, signature.result.clone().unwrap_or(Type::Unknown))
+    }
+
+    /// An entry of the configuration of the symbol written `form` in a
+    /// graph, `value` given to the option `option` of the value
+    /// candidate selected, which the graph lifts (FN-6).
+    ///
+    /// EXPR-14: "Scalar operator configuration binds during graph
+    /// construction in temporal composition ... Configuration must not
+    /// silently introduce a temporal input: time-varying temporal
+    /// configuration requires a signature explicitly admitting that
+    /// input." A value candidate's parameter is a scalar one: a
+    /// connection there would be an input the configuration brought
+    /// in. A temporal candidate's parameter admits one, and a call by
+    /// name, `eq_(a, b, abs: tolerance)`, gives it explicitly (FN-6).
+    /// TIME-2: "Composition describes a typed graph without reading
+    /// live payloads." So the entry is given what is known where the
+    /// graph is built (`connection.as_constant`).
+    fn configuration_input(&mut self, form: Form, option: &str, value: &Expr) {
+        if self.category(value) != ValueCategory::Connection {
+            return;
+        }
+        let symbol = match form {
+            Form::Binary(operator) => operator.symbol(),
+            Form::Unary(operator) => operator.symbol(),
+            Form::Named => return,
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Phase,
+                codes::CONNECTION_AS_CONSTANT,
+                value.at,
+                format!(
+                    "`{option}` configures `{symbol}`, which binds it where the graph is built, \
+                     and this is a connection"
+                ),
+                "EXPR-14",
+            )
+            .with_note("a constant or a `const` parameter is known where the graph is built"),
+        );
     }
 
     /// The arguments of an operator's call as they are written, each
