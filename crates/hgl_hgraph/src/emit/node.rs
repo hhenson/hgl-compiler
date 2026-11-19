@@ -130,9 +130,14 @@ impl Emitter<'_> {
         }
         // TIME-7: "`inject out` exposes that same result": hgraph's own
         // `_output`, which it gives the node and its `stop`.
-        // An unsized list's delta is applied to what the node last
-        // published (see `bundled`), which it reads from `_output`.
-        let has_out = has_out || signature.result.as_ref().is_some_and(growing_list);
+        // An unsized list's delta is counted from the size the list
+        // holds, and an empty one made to tick, on `_output` (see
+        // `bundled`), in the result or in a part of it.
+        let has_out = has_out
+            || signature
+                .result
+                .as_ref()
+                .is_some_and(|result| holds_growing_list(self.program, result));
         // A whole dictionary published replaces what the node published
         // before, which it reads from `_output` (see `bundled`).
         let has_out = has_out
@@ -140,22 +145,8 @@ impl Emitter<'_> {
                 whole_dictionary(result) && returns_whole(&body.statements, result)
             });
         let output = has_out.then(|| {
-            // hgraph names the output's type after its input's:
-            // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
-            // `TSB_OUT[...]` for a struct's bundle, `TSD_OUT` for a
-            // dictionary's and `TSW_OUT` for a window's. Only the
-            // outermost is renamed: a child stays as it is. hgraph has no
-            // `TSL_OUT`: a list's is its `TSL` given to `TS_OUT`, which
-            // takes a time-series type as it is.
             let annotation = match &result {
-                Some(result) if result.starts_with("_hg.TSL[") => format!("_hg.TS_OUT[{result}]"),
-                Some(result) => {
-                    let kind = ["TSS", "TSB", "TSD", "TSW"]
-                        .into_iter()
-                        .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
-                        .unwrap_or("TS");
-                    result.replacen(&format!("{kind}["), &format!("{kind}_OUT["), 1)
-                }
+                Some(result) => output_annotation(result),
                 None => "_py.object".to_string(),
             };
             format!("_output: {annotation} = None")
@@ -429,8 +420,24 @@ impl Emitter<'_> {
                 guards.push(input_guard.clone());
             }
             for &local in &handler.required {
-                if !valid.contains(&local) {
-                    guards.push(format!("{}.valid", endpoint(local)));
+                // TIME-9: `valid` of a value that holds a list is not
+                // hgraph's (`valid_test`), whose `valid=` the node is
+                // given too: it holds where the language's does. A
+                // condition of the handler that is `all_valid` of the
+                // input holds only where it is valid.
+                let ty = &body.locals[local].ty;
+                let all_valid = handler.conditions.iter().any(|condition| {
+                    matches!(&condition.kind, ExprKind::Endpoint {
+                        operation: EndpointOperation::AllValid,
+                        inputs: Some(inputs),
+                    } if inputs.as_slice() == [local])
+                });
+                match self.precise_valid(ty, &endpoint(local)) {
+                    Some(precise) if !all_valid => guards.push(precise),
+                    _ if !valid.contains(&local) => {
+                        guards.push(format!("{}.valid", endpoint(local)));
+                    }
+                    _ => {}
                 }
             }
             for condition in &handler.conditions {
@@ -445,10 +452,11 @@ impl Emitter<'_> {
                     let mut publications = Vec::new();
                     for &local in selected.as_deref().unwrap_or(&inputs) {
                         let input = endpoint(local);
+                        let valid = self.valid_test(&body.locals[local].ty, &input);
                         publications.push(if handler.required.contains(&local) {
                             format!("{input}.modified")
                         } else {
-                            format!("({input}.modified and {input}.valid)")
+                            format!("({input}.modified and {valid})")
                         });
                     }
                     guards.push(match publications.as_slice() {
@@ -638,6 +646,13 @@ impl Emitter<'_> {
             node_parameters.push("_clock: _hg.EvaluationClock = None".to_string());
         }
         node_parameters.push("_scheduler: _hg.SCHEDULER = None".to_string());
+        // TIME-7, TYPE-16: what a source yields to an unsized list is
+        // applied to the list as it is when it is due, on the node's own
+        // output (`list_published`).
+        let grows = signature.result.as_ref().is_some_and(growing_list);
+        if let (true, Some(result)) = (grows, &result) {
+            node_parameters.push(format!("_output: {} = None", output_annotation(result)));
+        }
         let returns = result
             .as_ref()
             .map_or(String::new(), |result| format!(" -> {result}"));
@@ -658,7 +673,11 @@ impl Emitter<'_> {
             "_published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)",
         );
         self.line(1, "if _published is not None:");
-        self.line(2, "return _published[0]");
+        if grows {
+            self.line(2, "return _core.list_published(_output, _published[0])");
+        } else {
+            self.line(2, "return _published[0]");
+        }
 
         // `start`: the first values, the hook, and the generator.
         let hooks = hooks.join(", ");

@@ -429,6 +429,9 @@ impl<'a> Emitter<'a> {
         let mut required = Vec::new();
         let mut inputs = 0;
         let mut passed = Vec::new();
+        // What the node tests of a required input that holds a list,
+        // whose `valid` is not hgraph's (`valid_test`).
+        let mut admitted = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let python = name(&parameter.name);
             match bound.get(index).and_then(Option::as_ref) {
@@ -439,14 +442,19 @@ impl<'a> Emitter<'a> {
                     // What the input holds, a struct's value made
                     // from its bundle's fields (TYPE-9).
                     let read = self.port_value(ty, &python, at);
-                    // FN-12: "A fixed-size list is valid as any list is
-                    // (TIME-9)": hgraph's `valid` of it.
+                    // FN-12: "An unsized `list<T>` needs
+                    // `valid(list_value)` ... A fixed-size list is valid
+                    // as any list is (TIME-9)": `valid` as the language
+                    // has it (`valid_test`).
+                    let precise = self.precise_valid(ty, &python);
                     match self.left_out(target, index, parameter) {
-                        Some(fallback) => passed.push(format!(
-                            "{python}=({read} if {python}.valid else {fallback})"
-                        )),
+                        Some(fallback) => {
+                            let valid = precise.unwrap_or_else(|| format!("{python}.valid"));
+                            passed.push(format!("{python}=({read} if {valid} else {fallback})"));
+                        }
                         None => {
                             passed.push(format!("{python}={read}"));
+                            admitted.extend(precise);
                             required.push(python);
                         }
                     }
@@ -497,22 +505,38 @@ impl<'a> Emitter<'a> {
             Lifts::Native(..) => self.native_result(signature.result.as_ref(), call),
             Lifts::Function(_) => call,
         };
+        // An unsized list in the result ticks through the node's own
+        // port of its output where it is published empty (`bundle_of`).
+        let output = match (result, &returns) {
+            (Some(result), Some(returns)) if holds_growing_list(self.program, result) => {
+                parameters.push(format!("_output: {} = None", output_annotation(returns)));
+                Some("_output")
+            }
+            _ => None,
+        };
         let call = match result {
-            Some(result) => self.published_to(result, at, call),
+            Some(result) => self.published_to(result, at, call, output),
             None => call,
+        };
+        // A required input that holds a list and is not valid as the
+        // language has it publishes nothing.
+        let admission = if admitted.is_empty() {
+            String::new()
+        } else {
+            format!("    if not ({}):\n        return\n", admitted.join(" and "))
         };
         let (decorator, after) = match (result, returns) {
             (Some(_), returns) => (
                 "compute_node",
                 format!(
-                    "({}) -> {}:\n    return {call}\n",
+                    "({}) -> {}:\n{admission}    return {call}\n",
                     parameters.join(", "),
                     returns.unwrap_or_else(|| "_py.object".to_string()),
                 ),
             ),
             (None, _) => (
                 "sink_node",
-                format!("({}):\n    {call}\n", parameters.join(", ")),
+                format!("({}):\n{admission}    {call}\n", parameters.join(", ")),
             ),
         };
         self.lifted_node(&of, format!("@_hg.{decorator}{options}\ndef "), after)

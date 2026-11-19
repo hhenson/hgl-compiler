@@ -35,8 +35,10 @@ from hgraph import (
     REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS,
     K as _K,
     SCALAR as _SCALAR,
+    TIME_SERIES_TYPE as _TIME_SERIES_TYPE,
     TS as _TS,
     TSD as _TSD,
+    TSLDelta as _TSLDelta,
     TS_OUT as _TS_OUT,
     TimeSeriesSchema as _TimeSeriesSchema,
     set_delta as _set_delta,
@@ -142,7 +144,7 @@ def _equal(lhs, rhs):
     if isinstance(lhs, dict):
         return (
             isinstance(rhs, dict)
-            # A list's delta also holds its `size_modified` (see `ListDelta`).
+            # A list's delta also holds its `size_modified` (see `list_delta`).
             and size_modified(lhs) == size_modified(rhs)
             and lhs.keys() == rhs.keys()
             and all(_equal(value, rhs[key]) for key, value in lhs.items())
@@ -636,109 +638,265 @@ def _marked(changes, removed):
     return changes
 
 
-class ListDelta(dict):
-    """A list's delta (the language's TYPE-16), as hgraph's delta of a
-    `TSL`: a `dict` of each position updated with its delta, and of each
-    removed with `REMOVE`. It also holds `size_modified`, "the new size
-    where the size changed, else null", which hgraph's `dict` has no
-    place for."""
-
-    size_modified = None
-
-    def __eq__(self, other):
-        # Two list deltas are one where their positions and their
-        # `size_modified` are; a plain `dict`'s is null.
-        return (
-            isinstance(other, dict)
-            and size_modified(self) == size_modified(other)
-            and dict.__eq__(self, other)
-        )
-
-    def __ne__(self, other):
-        return not self == other
-
-    __hash__ = None
-
-
 def list_delta(updated=None, removed=(), size_modified=None):
     """A list's delta made from its properties (TYPE-16: "`updated`,
     each changed position with its delta; `removed`, the positions that
-    lost their value ... and `size_modified`"). A property left out is
-    empty, or null for `size_modified`. What is updated is copied: the
-    program may go on changing the dictionary it was given in."""
-    made = _marked(ListDelta({} if updated is None else copied(updated)), removed)
-    made.size_modified = size_modified
-    return made
+    lost their value ... and `size_modified`"), as hgraph's own delta of
+    a `TSL`, its `TSLDelta`: a `dict` of each position updated with its
+    delta, and of each removed with `REMOVE`, that holds `size_modified`
+    too. A property left out is empty, or null for `size_modified`.
+    hgraph's `TSLDelta` copies the `dict` it is given, which the program
+    may go on changing; a delta in it is never changed."""
+    return _TSLDelta({} if updated is None else updated, removed=tuple(removed), size_modified=size_modified)
 
 
 def size_modified(delta):
     """The property `size_modified` of a list's delta (TYPE-16): the
-    new size, or null where the size did not change."""
+    new size, or null where the size did not change. hgraph's delta of a
+    fixed list is a plain `dict`, whose size never moves."""
     return getattr(delta, "size_modified", None)
 
 
-def list_applied(output, delta):
-    """The whole list an unsized list publishes for `delta`, applied to
-    what it last published, `output`'s value (TYPE-16).
+def _held_size(port):
+    """How many positions an unsized list holds, given its port: none
+    where it is not valid. END-4: "Invalidation clears validity,
+    modification, payload, and delta", and hgraph keeps an invalidated
+    `TSL`'s positions, each not valid."""
+    return len(port) if port.valid else 0
 
-    "A delta written with a smaller `size_modified` and no `removed`
-    shrinks the list", and one whose `removed` is the whole tail does
-    too. "A negative `size_modified` written reduces the list by that
-    count ... and a count more than the list holds leaves it empty,
-    which is no failure." "An `updated` entry written at the position
-    after a `list<V>`'s last, with no `size_modified`, extends the list
-    to hold it."
 
-    This target writes an unsized list as a whole tuple, which holds no
-    position without a value: a position removed short of the end, and
-    one that growth leaves with no value (the proposed gap of TYPE-16),
-    are not written yet."""
-    held = list(output.value) if output.valid else []
-    gone = removed(delta)
-    size = size_modified(delta)
-    if size is not None and size < 0:
-        size = max(len(held) + size, 0)
-    if size is None:
-        # Only a `removed` that is the whole tail shrinks the list, and
-        # an entry past the end extends it to hold the entry.
-        size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
-        written = list(updated(delta))
-        if written and not gone:
-            size = max(size, max(written) + 1)
-    if any(position < size for position in gone):
-        raise NotImplementedError(
-            "the hgraph target does not write a position removed inside an unsized list yet"
-        )
-    made = held[:size]
-    for position in range(len(made), size):
-        if position not in delta:
+def _ticked(port):
+    """Makes the unsized list at `port` tick in this evaluation where
+    what is published next would change nothing hgraph can see.
+
+    TIME-7 has a write publish ("No write means no tick"), and TIME-9 has
+    "A published empty list ... valid". hgraph 0.9.5's unbounded `TSL`
+    does not tick for a publication that leaves it as it was, the empty
+    list it holds or holds no value yet among them, and so is never
+    valid where an empty list is published first. It does tick for a
+    position added and dropped again in one evaluation, which leaves
+    nothing in the delta read: so the list is grown by one position here,
+    and what is published next gives it its size again. Where the port
+    has published in this evaluation already, it has ticked."""
+    if not port.modified:
+        port.value = _TSLDelta({}, size_modified=len(port) + 1)
+
+
+def _whole_list(value, port):
+    """What an unsized list of elements that publish whole publishes for
+    `value`, a whole list of it (TIME-7: "a complete value of the
+    result's type T, published whole"): a tuple of its elements, which
+    hgraph's unbounded `TSL` takes as the whole list, a position for each
+    element, dropping those past them. The tuple is a copy: hgraph keeps
+    no list the program goes on changing.
+
+    An empty list published where the list holds none, or holds no value
+    yet, would not tick (`_ticked`), so `port`, the list's port of the
+    node's output, is made to: with no port it is not written."""
+    if not value:
+        if port is None:
             raise NotImplementedError(
-                "the hgraph target does not write an unsized list grown with no value yet"
+                "the hgraph target does not write an empty unsized list inside a value a source "
+                "yields or a dictionary's entry holds yet"
             )
-        made.append(None)
-    for position, change in delta.items():
-        if not _removes(change):
-            if not 0 <= position < size:
-                raise HglError(f"the position {position} is outside a list of {size}")
-            # A whole tuple holds a null as `None`, not hgraph's `Null`.
-            made[position] = unpublished(change)
-    return tuple(made)
+        if len(port) == 0:
+            _ticked(port)
+    return tuple(value)
+
+
+def list_replaced(port, value):
+    """What a node publishes to its unsized list at `port` for `value`, a
+    whole list (see `_whole_list`)."""
+    return _whole_list(value, port)
+
+
+def list_applied(port, delta):
+    """What a node publishes to its unsized list at `port`, of elements
+    of any type, for `delta`, the list's delta (TYPE-16), as hgraph's
+    unbounded `TSL` takes it: a `TSLDelta` of the positions updated and
+    removed, and the size the list has after it, counted from the size it
+    holds (`_held_size`).
+
+    TYPE-16: "A delta written with a smaller `size_modified` and no
+    `removed` shrinks the list. A negative `size_modified` written
+    reduces the list by that count: `size_modified: -1` drops its last
+    position, and a count more than the list holds leaves it empty, which
+    is no failure. An `updated` entry written at the position after a
+    `list<V>`'s last, with no `size_modified`, extends the list to hold
+    it." hgraph fails a run given a negative size, so the count is the
+    size here. `removed` alone, "the positions that lost their value",
+    leaves each not valid and the size as it was. TYPE-16, agreed on
+    hhenson/hgl_spec#124: "an `updated` entry written further past a
+    `list<V>`'s last position extends the list as well, and the positions
+    between hold no value and are not valid", as hgraph's `TSL` grows.
+
+    A negative position fails, as an index outside a list does (EXPR-3).
+    Neither rule says what an entry at or past a size written with it is,
+    nor a removed position the list never held: hgraph fails the run for
+    the first and drops the second, so each is not written. A delta that
+    changes nothing hgraph sees still ticks (`_ticked`)."""
+    held = _held_size(port)
+    changes = updated(delta)
+    gone = removed(delta)
+    for position in (*changes, *gone):
+        if position < 0:
+            raise HglError(f"the position {position} is outside a list of {held}")
+    written = size_modified(delta)
+    if written is None:
+        size = max(held, max(changes) + 1) if changes else held
+    elif written < 0:
+        size = max(held + written, 0)
+    else:
+        size = written
+    if written is not None and any(position >= size for position in changes):
+        raise NotImplementedError(
+            "the hgraph target does not write an updated position at or past the size "
+            "a list's delta gives it yet"
+        )
+    if any(position >= max(held, size) for position in gone):
+        raise NotImplementedError(
+            "the hgraph target does not write a removed position past an unsized list's end yet"
+        )
+    if size == held and not changes:
+        _ticked(port)
+    return _TSLDelta(changes, removed=tuple(position for position in gone if position < size), size_modified=size)
+
+
+def list_published(port, published):
+    """What a source publishes to its unsized list at `port` for what it
+    yielded, `published`: a list's delta (`list_applied`) or a whole
+    list (`list_replaced`). The source's statements make it before its
+    time is due, and it is applied to the list as the list is then."""
+    if isinstance(published, dict):
+        return list_applied(port, published)
+    # A whole list of what a generic replay is given, whose type the
+    # compiler did not know: its `_whole_list` takes elements that publish
+    # whole and are not null.
+    for part in published:
+        if part is None or isinstance(part, (list, tuple, dict, frozenset)) or hasattr(part, "_hgl_fields"):
+            raise NotImplementedError(
+                "the hgraph target does not write a whole unsized list of nullable or "
+                "composite elements yielded by a source yet"
+            )
+    return list_replaced(port, published)
+
+
+def list_child(port, index):
+    """The port of the position `index` of an unsized list's port, which
+    a part of `out` is assigned through (the language's TIME-7). An index
+    outside what the list holds fails (EXPR-3: "An index outside a list
+    fails where it is evaluated"); hgraph's own would add positions up to
+    it."""
+    _index(index, _held_size(port))
+    return port[index]
+
+
+def list_value(port):
+    """A temporal list of elements that publish whole and are not null,
+    read whole at its port, a fixed list or an unsized one: a Python list
+    of its elements, made anew. A position that is not valid leaves no
+    whole value (the owner's decision on hhenson/hgl_spec#126 so far, as
+    `unset_read` has it): a list grown past a gap, or with a position
+    removed, is read whole only once each position is valid again."""
+    if not port.all_valid:
+        unset_read()
+    return list(port.value)
 
 
 def list_within(delta, size):
     """`delta`, a fixed list's of `size` positions, as it is published
     (TYPE-16): "A `list<V, N>` keeps its bounds: ... one in a delta made as
     the program runs fails the write that publishes it, as an index
-    outside a list does (EXPR-3)". The catalogue has no execution code for
-    it, so the failure has none, as `item`'s has none. A whole list given
-    for the delta, as a replay is given a trace's cell written whole, is
-    published as it is."""
+    outside a list does (EXPR-3)". A removed position is one of its
+    positions, which hgraph's bounded `TSL` makes not valid. A
+    `size_modified` that moves the size, a negative count among them,
+    would not keep the bounds, and fails too. The catalogue has no
+    execution code for either, so the failure has none, as `item`'s has
+    none. A whole list given for the delta, as a replay is given a
+    trace's cell written whole, is published as it is."""
     if not isinstance(delta, dict):
         return delta
     for position in delta:
         if not 0 <= position < size:
             raise HglError(f"the position {position} is outside a list of {size}")
-    return delta
+    written = size_modified(delta)
+    if written is not None and (written if written >= 0 else max(size + written, 0)) != size:
+        raise HglError(f"a list of {size} keeps its size, which the delta moves")
+    # hgraph's bounded `TSL` takes the positions alone.
+    return dict(delta)
+
+
+def valid_of(port, shape):
+    """`valid` of a temporal value at `port` that holds a list (TIME-9,
+    END-7): "true where any element, field or entry is valid, and for a
+    published empty list or dictionary, which has none", each part by its
+    own `valid`.
+
+    hgraph's `TSL` stays valid once it has ticked, where each position
+    has since lost its value, and its `TSB` once a field has, so hgraph's
+    own `valid` is not this where a list is in what the port holds.
+    `shape` is what the compiler wrote for the type: `("list", part)` for
+    a list of elements of `part`, `("fields", {name: part})` for each
+    field of a struct and position of a tuple, `("entries", part)` for a
+    dictionary, and `None` for a part whose `valid` is hgraph's."""
+    if not port.valid:
+        return False
+    if shape is None:
+        return True
+    kind, part = shape
+    if kind == "list":
+        # An output's port is read by position, as an input's is.
+        size = len(port)
+        return size == 0 or any(valid_of(port[index], part) for index in range(size))
+    if kind == "fields":
+        return any(valid_of(port[field], within) for field, within in part.items())
+    keys = list(port.keys())
+    return not keys or any(valid_of(port[key], part) for key in keys)
+
+
+def all_valid_of(port, shape):
+    """`all_valid` of a temporal value at `port` whose parts hold a list
+    (TIME-9: "true where every one is, by its own `valid`, one level
+    deep ... true of a valid empty collection"), each part by `valid_of`.
+    `shape` is as `valid_of` has it."""
+    if not port.valid:
+        return False
+    kind, part = shape
+    if kind == "list":
+        return all(valid_of(port[index], part) for index in range(len(port)))
+    if kind == "fields":
+        return all(valid_of(port[field], within) for field, within in part.items())
+    return all(valid_of(port[key], part) for key in port.keys())
+
+
+@_sink_node(active=(), valid=())
+def discarded(published: _TIME_SERIES_TYPE):
+    """Keeps what publishes `published` in the graph, and reads nothing of
+    it: hgraph leaves out of a graph a node whose output nothing reads
+    (see `each` in the compiler, which gives a loop's child graphs an
+    output only so that hgraph runs them)."""
+
+
+_constants = {}
+
+
+def constant_of(tp):
+    """The node that publishes, once as the graph starts, a constant of
+    the temporal type `tp` that holds an unsized list (FN-3: "an ordinary
+    value in a branch is then wired as a constant"). hgraph's own `const`
+    has no port of its output to make an empty list tick (`_ticked`), so
+    this node, given `_core.Held((value, shape))`, publishes
+    `bundled(value, shape)` to its own. One node is made for each type."""
+    made = _constants.get(tp)
+    if made is None:
+
+        def _constant(tick: _TS[bool], given: object, _output: _TS_OUT[tp] = None) -> tp:
+            value, shape = given.value
+            return bundled(value, shape, _output)
+
+        made = _compute_node(_constant)
+        _constants[tp] = made
+    return made
 
 
 def _removes(change):
@@ -881,22 +1039,6 @@ def checked_child_result(port, read):
         return Err(Error("a part of the child read is not valid", code="value.unset_read"))
 
 
-def whole_item(port, index):
-    """The read of an unsized list's element known only when it runs
-    (TIME-1). This target writes an unsized list as a whole tuple, whose
-    every position holds a value while the list is valid."""
-    if not port.valid:
-        raise _unset(port)
-    return item(list(port.value), index)
-
-
-def whole_item_result(port, index):
-    """`whole_item` where the place expects `result<T, error>` (ERR-14)."""
-    if not port.valid:
-        return Err(Error("the child read is not valid", code="value.unset_read"))
-    return Ok(item(list(port.value), index))
-
-
 def dict_replaced(output, value):
     """What a temporal dictionary publishes for a whole value of it,
     given its own output (TIME-7, TST-9: a T whole "replaces what the
@@ -908,7 +1050,7 @@ def dict_replaced(output, value):
     return made
 
 
-def whole_delta(value, keys, fixed=False):
+def whole_delta(value, keys, fixed=False, size=0):
     """The delta that publishing `value` whole records, to a value that
     holds the keys or members `keys` (the language's TST-9: "a T whole,
     which replaces what the input held"; TST-16: "A T published whole is
@@ -916,8 +1058,11 @@ def whole_delta(value, keys, fixed=False):
     dictionary's is each entry, and the removal of each key it has not; a
     set's the members added and removed; a struct's each field, as
     hgraph's bundle takes it (see `bundled`); a fixed list's, `fixed`,
-    each position, as its `TSL` records it; and an unsized list's its
-    whole tuple."""
+    each position, as its `TSL` records it; and an unsized list's, to a
+    list of `size` positions, each position, the tail past them removed,
+    and the new size where it moves, as hgraph's unbounded `TSL` reads
+    it (TYPE-16: "on a shrink names the tail positions it drops in
+    `removed`")."""
     if isinstance(value, (set, frozenset)):
         added, removed = frozenset(value - keys), frozenset(keys - value)
         members = added | removed
@@ -933,8 +1078,24 @@ def whole_delta(value, keys, fixed=False):
     if isinstance(value, list) and fixed:
         return {position: published(entry) for position, entry in enumerate(value)}
     if isinstance(value, list):
-        return tuple(value)
+        return _TSLDelta(
+            dict(enumerate(value)),
+            removed=tuple(range(len(value), size)),
+            size_modified=None if len(value) == size else len(value),
+        )
     return value
+
+
+def list_size(size, delta):
+    """How many positions an unsized list of `size` positions holds once
+    `delta`, its delta, is published to it (TYPE-16), as `list_applied`
+    counts them: a trace's cells are followed through so that a whole
+    list removes the tail it has not (`whole_delta`)."""
+    written = size_modified(delta)
+    if written is None:
+        changes = updated(delta)
+        return max(size, max(changes) + 1) if changes else size
+    return max(size + written, 0) if written < 0 else written
 
 
 def updated(delta):
@@ -967,7 +1128,7 @@ def unset_read():
     raise HglError("a part that has not published is read", code="value.unset_read")
 
 
-def bundled(value, shape=None):
+def bundled(value, shape=None, port=None):
     """What a temporal struct or tuple publishes for a whole value of it
     (TYPE-9: "Temporalization recursively maps tuples/structs to child
     fields"): each part, as hgraph's bundle takes it. A part that is
@@ -980,24 +1141,35 @@ def bundled(value, shape=None):
     publishes whole; a `dict` of each field's shape for a struct, which
     names the fields of the type and not of the struct below it that a
     value of an abstract one is; a tuple of each position's for a tuple,
-    which hgraph's bundle takes position by position; and `[None]` for a
-    fixed list of elements that publish whole, as a tuple of them. A set
-    is given as the set it is, which hgraph's `TSS` takes as its members
-    now, removing those it no longer has."""
+    which hgraph's bundle takes position by position; `[None]` for a
+    fixed list of elements that publish whole, as a tuple of them; and
+    `"list"` for an unsized list of them (see `_whole_list`). A set is
+    given as the set it is, which hgraph's `TSS` takes as its members
+    now, removing those it no longer has.
+
+    `port` is the port of the output the value is published to, where
+    the node has one: an unsized list in the value is made to tick
+    through its own (`_whole_list`)."""
     if shape is None:
         # Each field publishes whole.
         shape = dict.fromkeys(value._hgl_fields)
-    return _bundled(value, shape)
+    return _bundled(value, shape, port)
 
 
-def _bundled(value, shape):
+def _bundled(value, shape, port):
     if shape is None:
         return published(value)
+    if shape == "list":
+        return _whole_list(value, port)
+    within = (lambda key: None) if port is None else (lambda key: port[key])
     if isinstance(shape, dict):
-        return {field: _bundled(getattr(value, field), part) for field, part in shape.items()}
+        return {field: _bundled(getattr(value, field), part, within(field)) for field, part in shape.items()}
     if isinstance(shape, tuple):
-        return tuple(_bundled(item, part) for item, part in zip(value, shape))
-    return tuple(_bundled(element, shape[0]) for element in value)
+        return tuple(
+            _bundled(item, part, within(position(index)))
+            for index, (item, part) in enumerate(zip(value, shape))
+        )
+    return tuple(_bundled(element, shape[0], within(index)) for index, element in enumerate(value))
 
 
 def position(index):

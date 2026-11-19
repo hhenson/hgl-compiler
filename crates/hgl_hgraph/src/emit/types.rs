@@ -97,9 +97,9 @@ pub(super) enum DeltaOf<'t> {
     Struct(&'t Type),
     /// A dictionary's: `updated` and `removed`.
     Dict,
-    /// A list's: `updated`, `removed` and `size_modified`. `fixed` for
-    /// a list with a size.
-    List { fixed: bool },
+    /// A list's, fixed or unsized: `updated`, `removed` and
+    /// `size_modified`.
+    List,
     /// A set's, of this element type: `added` and `removed`.
     Set(&'t Type),
 }
@@ -118,9 +118,7 @@ impl<'t> DeltaOf<'t> {
                 ..
             } => Some(DeltaOf::Struct(of)),
             Type::Dict { .. } => Some(DeltaOf::Dict),
-            Type::List { size, .. } => Some(DeltaOf::List {
-                fixed: size.is_some(),
-            }),
+            Type::List { .. } => Some(DeltaOf::List),
             Type::Set(element) => Some(DeltaOf::Set(element)),
             _ => None,
         }
@@ -280,9 +278,112 @@ pub(super) fn windows_in(program: &Program, ty: &Type) -> Vec<Type> {
 }
 
 /// True for an unsized list, `list<T>` (TYPE-10: "a growing shape"),
-/// which this target writes as a `TS` of a whole tuple.
+/// which this target writes as hgraph's unbounded `TSL`.
 pub(super) fn growing_list(ty: &Type) -> bool {
     matches!(ty, Type::List { size: None, .. })
+}
+
+/// How deep a type is looked into for what it holds: a struct holds
+/// itself only through an `atomic`, which is not looked into (TYPE-6).
+const HELD_DEPTH: usize = 32;
+
+/// True where a temporal value of `ty` holds an unsized list as a part
+/// at any depth, itself among them: a struct's field, a tuple's
+/// position, a list's element or a dictionary's value (TYPE-9), and
+/// what a delta is of. An `atomic<V>` publishes whole, and holds no
+/// part of its own.
+pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
+    fn within(program: &Program, ty: &Type, depth: usize) -> bool {
+        if depth > HELD_DEPTH {
+            return false;
+        }
+        match ty {
+            Type::List { size: None, .. } => true,
+            Type::Nullable(inner) | Type::Delta(inner) => within(program, inner, depth + 1),
+            Type::List { element, .. } => within(program, element, depth + 1),
+            Type::Dict { value, .. } => within(program, value, depth + 1),
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| within(program, element, depth + 1)),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => program
+                .field_types(ty)
+                .unwrap_or_default()
+                .iter()
+                .any(|field| within(program, field, depth + 1)),
+            _ => false,
+        }
+    }
+    within(program, ty, 0)
+}
+
+/// Where a temporal value of `ty` holds a list, fixed or unsized, as a
+/// part at any depth, itself among them: the provider's shape of it for
+/// `valid_of` and `all_valid_of`, `("list", part)`, `("fields", {name:
+/// part})` for a struct or a tuple, and `("entries", part)` for a
+/// dictionary, with `None` for a part that holds no list. `None` where
+/// `ty` holds none.
+///
+/// TIME-9: "`valid` of a collection is true where any element, field or
+/// entry is valid". hgraph's `TSL` stays valid once it has ticked where
+/// each position has since lost its value (TYPE-16's `removed`), and so
+/// does a `TSB` that holds one: only where a list is in the value does
+/// hgraph's `valid` differ from the language's.
+pub(super) fn validity_shape(program: &Program, ty: &Type) -> Option<String> {
+    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+        if depth > HELD_DEPTH {
+            return None;
+        }
+        let fields = |named: Vec<(String, Type)>| -> Option<String> {
+            let parts: Vec<(String, Option<String>)> = named
+                .into_iter()
+                .map(|(field, part)| (field, within(program, &part, depth + 1)))
+                .collect();
+            if parts.iter().all(|(_, part)| part.is_none()) {
+                return None;
+            }
+            let written: Vec<String> = parts
+                .into_iter()
+                .map(|(field, part)| {
+                    format!(
+                        "{}: {}",
+                        string(&field),
+                        part.unwrap_or_else(|| "None".to_string())
+                    )
+                })
+                .collect();
+            Some(format!("(\"fields\", {{{}}})", written.join(", ")))
+        };
+        match ty {
+            Type::List { element, .. } => Some(format!(
+                "(\"list\", {})",
+                within(program, element, depth + 1).unwrap_or_else(|| "None".to_string())
+            )),
+            Type::Dict { value, .. } => {
+                within(program, value, depth + 1).map(|part| format!("(\"entries\", {part})"))
+            }
+            Type::Tuple(elements) => fields(
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| (position(index), element.clone()))
+                    .collect(),
+            ),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => fields(
+                fields_of(program, ty)?
+                    .into_iter()
+                    .map(|(member, field)| (name(&member.name), field))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+    within(program, ty, 0)
 }
 
 /// True for a temporal type whose null is published whole, as hgraph's

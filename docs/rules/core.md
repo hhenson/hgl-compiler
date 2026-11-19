@@ -345,10 +345,10 @@ analyser: partial
 transpiler: partial
 
 - hgraph: `delta_value(input)` of a scalar input, and of a nullable scalar, whose delta is hgraph's own
-- A fixed list's delta, and an unsized list's as the delta read on a shrink, a negative `size_modified` and growth by one position
-- A fixed list's entry past its bounds fails the write
+- A fixed list's delta, `REMOVE` for a position that lost its value; an unsized list's, hgraph 0.9.5's `TSLDelta`: the new size where it moves, never a negative one, and on a shrink the dropped tail in `removed`, also for a smaller `size_modified` alone and a negative one, which the provider counts from what the list holds, to empty at most; growth by an entry after the last and past it, the positions between not valid
+- A fixed list's entry past its bounds, and a `size_modified` that moves its size, fails the write
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
-- Left: an unsized list's delta read, and other structural inputs
+- Left: an entry at or past a `size_modified` written with it, and a removed position the list never held, which neither rule settles: each fails as the graph runs, named as not written
 
 ## END-4
 
@@ -391,6 +391,7 @@ analyser: done
 transpiler: done
 
 - hgraph: `valid` of a fixed list, a tuple or a struct is true once any child is, and `all_valid` once every one is
+- A list's, fixed or unsized, and a value's that holds one, is the provider's (`_core.valid_of`): false again once every position has lost its value, true for a published empty list, where hgraph's `TSL` stays valid
 
 ## END-8
 
@@ -400,8 +401,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: a child's endpoint is hgraph's child of the input, `_core.position_of`, a bundle's field and `_core.entry_port`; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
-- Left: an endpoint of an unsized list's element, a whole tuple here (reported)
+- hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed or an unsized list (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
 
 ## CAP-1
 

@@ -315,7 +315,7 @@ impl Emitter<'_> {
     /// TIME-7: "`inject out` exposes that same result for reads,
     /// assignment, and admitted piecewise mutation." EXPR-3: "The
     /// place's root is ... in a `when`, `out`". TYPE-9 maps a struct's
-    /// fields, a tuple's positions and a fixed list's positions to
+    /// fields, a tuple's positions and a list's positions to
     /// children of their own, each a port of hgraph's: `out.ask = 1`
     /// assigns the port of `ask`, `_output["ask"].value = 1`, which
     /// publishes that field alone, and `out` read after it holds it. A
@@ -323,9 +323,10 @@ impl Emitter<'_> {
     /// `{key: value}`. A part is assigned a whole value of its type
     /// (EXPR-3), which publishes whole, a struct's fields each. A place
     /// inside a part that
-    /// publishes whole, a field of an `atomic<Quote>` or an element of
-    /// an unsized list, gives that part a new value with the place
-    /// changed, published whole.
+    /// publishes whole, a field of an `atomic<Quote>`, gives that part a
+    /// new value with the place changed, published whole. An unsized
+    /// list's position is its own port too, by an index inside what the
+    /// list holds.
     pub(super) fn assigned_to_out(
         &mut self,
         function: &Function,
@@ -337,6 +338,9 @@ impl Emitter<'_> {
         let mut steps: Vec<&Expr> = place_steps(place).map(|(step, _)| step).collect();
         steps.reverse();
         let mut port = "_output".to_string();
+        // Whether the port is reached by an index evaluated where it is
+        // written: such a port is written once, as the place assigned.
+        let mut indexed = false;
         // The part the port holds.
         let mut part = place.place_root();
         for (taken, step) in steps.iter().enumerate() {
@@ -361,14 +365,28 @@ impl Emitter<'_> {
                         } else {
                             self.natives = true;
                             port = format!("_core.child({port}, {written})");
+                            indexed = true;
                             part = step;
                             continue;
                         }
                     }
-                    // A key of a dictionary: the change of that key.
+                    // An unsized list's position, by an index the
+                    // provider holds to what the list holds (EXPR-3):
+                    // hgraph's own child would add positions up to it.
+                    Type::List { size: None, .. } => {
+                        let written = self.expression(function, index);
+                        self.natives = true;
+                        port = format!("_core.list_child({port}, {written})");
+                        indexed = true;
+                        part = step;
+                        continue;
+                    }
+                    // A key of a dictionary: the change of that key. An
+                    // entry has no port of its own here to tick an empty
+                    // unsized list through (`bundle_of`).
                     Type::Dict { .. } if taken + 1 == steps.len() => {
                         let key = self.expression(function, index);
-                        let published = self.published_to(&step.ty, value.at, written);
+                        let published = self.published_to(&step.ty, value.at, written, None);
                         return Some((format!("{port}.value"), format!("{{{key}: {published}}}")));
                     }
                     Type::Dict { .. } => {
@@ -388,12 +406,15 @@ impl Emitter<'_> {
             port = format!("{port}[{child}]");
             part = step;
         }
+        // An unsized list in the value ticks through its own port of the
+        // output (`bundle_of`), named again in the value published.
+        let own = (!indexed).then_some(port.as_str());
         if std::ptr::eq(part, place) {
-            let published = self.published_to(&place.ty, value.at, written);
+            let published = self.published_to(&place.ty, value.at, written, own);
             return Some((format!("{port}.value"), published));
         }
         let changed = self.changed_within(function, place, part, written)?;
-        let published = self.published_to(&part.ty, part.at, changed);
+        let published = self.published_to(&part.ty, part.at, changed, own);
         Some((format!("{port}.value"), published))
     }
 

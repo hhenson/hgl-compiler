@@ -70,7 +70,8 @@ transpiler: partial
 
 - hgraph: a cell written whole is `_harness.whole(value)`
 - An expectation's is compared with the value the result holds after its cycle, read from the result's port (`_hold`), and one written as a delta with the delta recorded
-- The value held follows the owner's decision on hhenson/hgl_spec#126, ahead of the pinned text: a struct, a tuple or a fixed list is whole only where each part is valid, an optional part that is not being null; where a required part is not valid there is no whole value, and no cell written whole equals it: it is read as a part is (`part_value`)
+- An unsized list's whole cell replays as the `TSLDelta` that replaces what the input held, the tail it has not removed (`_core.whole_delta`); core's `record` records hgraph's `TSLDelta`
+- The value held follows the owner's decision on hhenson/hgl_spec#126, ahead of the pinned text: a struct, a tuple or a list is whole only where each part is valid, an optional part that is not being null; where a required part is not valid there is no whole value, and no cell written whole equals it: it is read as a part is (`part_value`)
 - A tuple's cell is read as its delta, a tuple of its positions
 - Left: a tuple's cell with no null position, which reads as a whole tuple too: which comparison it takes is not stated
 
