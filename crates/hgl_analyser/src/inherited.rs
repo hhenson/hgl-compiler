@@ -19,7 +19,7 @@ use hgl_source::Span;
 
 use crate::codes;
 use crate::declared::substitute_within;
-use crate::hir::{Callee, Expr, ExprKind, Form, Stmt, Value};
+use crate::hir::{Callee, Expr, ExprKind, Form, Stmt, UnaryOperator, Value};
 use crate::program::Program;
 use crate::types::{Argument, Constant, ConstantValue, Detail, FieldRef, Type};
 
@@ -131,6 +131,11 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
         expression.at = place;
         expression.ty = substitute_within(&expression.ty, &map);
         canonical_type(&mut expression.ty);
+        // A minus before a number is the negative number it writes, as
+        // a generic argument `-3` is: LEX-7 reads the least `i64` so.
+        if let Some(value) = negated(&expression.kind) {
+            expression.kind = ExprKind::Literal(value);
+        }
         match &mut expression.kind {
             ExprKind::Unread => known = false,
             // A generic value parameter of the struct that writes the
@@ -248,7 +253,36 @@ fn literal_of(constant: &Constant) -> Option<Value> {
         "true" => Some(Value::Bool(true)),
         "false" => Some(Value::Bool(false)),
         text if text.starts_with('"') => decode_string(text).ok().map(Value::Str),
-        text => decode_float(text).ok().map(Value::Float),
+        // A float after one minus is the negative float.
+        text => match text.strip_prefix('-') {
+            Some(number) => decode_float(number).ok().map(|value| Value::Float(-value)),
+            None => decode_float(text).ok().map(Value::Float),
+        },
+    }
+}
+
+/// The negative number `kind` writes, where it is a minus before a
+/// number literal: by symbol, read as core's `neg_`, or not read as a
+/// call. `None` for any other, and for the negation of the least `i64`,
+/// which is no `i64`.
+fn negated(kind: &ExprKind) -> Option<Value> {
+    let operand = match kind {
+        ExprKind::Call {
+            form: Form::Unary(UnaryOperator::Negate),
+            arguments,
+            ..
+        } if arguments.len() == 1 => &arguments[0].value,
+        ExprKind::Unary {
+            operator: UnaryOperator::Negate,
+            operand,
+        } => operand,
+        _ => return None,
+    };
+    match &operand.kind {
+        ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Value::Int),
+        ExprKind::Literal(Value::Float(value)) => Some(Value::Float(-value)),
+        ExprKind::Literal(Value::Duration(value)) => value.checked_neg().map(Value::Duration),
+        _ => None,
     }
 }
 

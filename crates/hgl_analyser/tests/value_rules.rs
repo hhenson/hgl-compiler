@@ -193,7 +193,8 @@ fn defaults_from_two_parents_are_one_or_the_struct_chooses() {
 /// canonical type after substitution". A generic value parameter that
 /// is a `bool`, a `str` or an `f64` is the literal its path gives it,
 /// and a constant a callee is given is one value however it is written:
-/// `mark<1.0>()` is `mark<1.00>()`.
+/// `mark<1.0>()` is `mark<1.00>()`. A minus before a number is the
+/// negative number: `Counts<-3>` gives `size = N` what `size = -3` is.
 #[test]
 fn literal_constants_in_defaults_are_compared_by_value() {
     let checked = module(concat!(
@@ -218,6 +219,15 @@ fn literal_constants_in_defaults_are_compared_by_value() {
         "abstract struct Half : Scaled { scale = 0.5 }\n",
         "struct RealSame : ByReal<0.50>, Half {}\n",
         "struct RealClash : ByReal<0.25>, Half {}\n",
+        // A minus before a number is the negative number, in a
+        // generic argument and in a default alike.
+        "abstract struct Counted { size: i64 }\n",
+        "abstract struct Counts<const N: i64> : Counted { size = N }\n",
+        "abstract struct Minus : Counted { size = -3 }\n",
+        "struct IntSame : Counts<-3>, Minus {}\n",
+        "abstract struct Negative : Scaled { scale = -0.5 }\n",
+        "struct NegativeSame : ByReal<-0.5>, Negative {}\n",
+        "struct NegativeClash : ByReal<-0.25>, Negative {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -226,6 +236,7 @@ fn literal_constants_in_defaults_are_compared_by_value() {
             "m.hgl:11:35 local:type/default.conflict UNIT-9",
             "m.hgl:18:24 local:type/default.conflict UNIT-9",
             "m.hgl:22:34 local:type/default.conflict UNIT-9",
+            "m.hgl:29:39 local:type/default.conflict UNIT-9",
         ]
     );
 }
