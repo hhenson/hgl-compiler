@@ -283,16 +283,18 @@ impl<'a> Typer<'a> {
         };
         self.present.truncate(frame);
         self.hook = before;
-        // TIME-3: "The empty selection `modified([])` subscribes to no
-        // input and selects a wake from the node's scheduler or alarm",
-        // where it is a selector: "A selector sets subscription or
-        // admission when it stands alone in the header or appears as a
-        // top-level conjunct." Each such is judged once the whole node
-        // is read (`node.no_activation`). One that "is a bool, in a body
-        // or under a negation or a disjunction" leaves the default
-        // subscription, which an input wakes. A header that is itself
-        // rejected is not judged further (ERR-9): `modified(step)` of a
-        // `const` parameter names no input either.
+        // TIME-3: "The empty selection `modified([])` makes every
+        // temporal input passive for its handler: it subscribes to none,
+        // and selects a wake from the node's scheduler or alarm", where
+        // it is a selector: "A selector sets subscription or admission
+        // when it stands alone in the header or appears as a top-level
+        // conjunct." Each such is judged once the whole node is read
+        // (`node.no_activation`). One read "as a bool", in a body or
+        // "under a negation or a disjunction", sets no subscription: a
+        // handler with none of its header's subscribes to every input,
+        // which wakes it. A header that is itself rejected is not judged
+        // further (ERR-9): `modified(step)` of a `const` parameter names
+        // no input either.
         let selectors = condition.iter().filter(|_| !rejected);
         let empty = selectors.flat_map(Expr::conjuncts).filter(|conjunct| {
             matches!(&conjunct.kind, ExprKind::Endpoint {

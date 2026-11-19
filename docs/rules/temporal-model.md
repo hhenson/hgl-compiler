@@ -40,7 +40,7 @@ analyser: partial
 - A header that is `scheduled()` alone, in parentheses or not, admits none, and one that is `modified([])` alone every input
 - What a header admits is its record's (`hir::Header`), which the target reads, and by which the header's and the body's reads are judged: core's `valid` named through an alias, `c::valid(a)`, is the selector; under a configured `&&{...}`, the call of a candidate its configuration selects, nothing is a top-level conjunct and the default stands, which TIME-3 does not say in words
 - `modified(a, b)` names the inputs it subscribes to, each by its name, and `modified([])` none: where the node injects neither `scheduler` nor `alarm`, or its `start` does not use the one it injects, the selector is warned of (`node.no_activation`) and the source accepted; any use in `start` counts, and `@suppress_warning("node.no_activation")` before the function acknowledges it
-- `modified([])` is that selector alone or as a top-level conjunct of its header; as a bool, in a body or under a negation or a disjunction, it leaves the default subscription, and is not warned of
+- `modified([])` is that selector alone or as a top-level conjunct of its header; read as a bool, in a body or under a negation or a disjunction, it sets no subscription, and is not warned of: a handler whose header has no `modified` selector subscribes to every input
 - A sequence that names inputs is no selector's form (`endpoint.argument`)
 - Left: subscription, which `modified` sets; a selector that takes no part in its header's condition
 

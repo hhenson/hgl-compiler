@@ -642,9 +642,9 @@ What is rejected there:
 
 `modified([])` subscribes to no input, so only the node's scheduler or
 alarm wakes the handler (TIME-3). It is that selector alone or as a
-top-level conjunct of its header; as a bool, in a body or under a
-negation or a disjunction, it leaves the default subscription, and the
-node is not warned of. Where the node injects neither, or its
+top-level conjunct of its header; read as a bool, in a body or under a
+negation or a disjunction, it sets no subscription, and is not warned
+of. Where the node injects neither, or its
 `start` does not use the one it injects, the selector is warned of,
 `node.no_activation`, and the source is accepted. Any use in `start`
 counts, by the capability's name or by a local it is bound to: what a

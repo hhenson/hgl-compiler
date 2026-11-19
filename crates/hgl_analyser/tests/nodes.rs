@@ -450,13 +450,13 @@ fn a_dormant_node_is_warned_of() {
 
 /// TIME-3: "A selector sets subscription or admission when it stands
 /// alone in the header or appears as a top-level conjunct. Selectors
-/// under negation or disjunction leave the default in place." Where
-/// `modified([])` "is a bool, in a body or under a negation or a
-/// disjunction, it is true in a cycle where no temporal input was
-/// modified": no selector, so the handler subscribes to every input
-/// ("A handler with no `modified` selector subscribes to every temporal
-/// input"), which wakes it, and the node is not dormant. A selector
-/// alone and as a top-level conjunct is warned of (`node.no_activation`).
+/// under negation or disjunction leave the default in place." Read "as a
+/// bool ... in another body or under a negation or a disjunction, it is
+/// true in a cycle where no temporal input was modified": no selector,
+/// so the handler subscribes to every input ("A handler with no
+/// `modified` selector subscribes to every temporal input"), which wakes
+/// it, and the node is not dormant. A selector alone and as a top-level
+/// conjunct is warned of (`node.no_activation`).
 #[test]
 fn an_empty_selection_that_is_no_selector_leaves_the_node_awake() {
     let checked = module(concat!(
