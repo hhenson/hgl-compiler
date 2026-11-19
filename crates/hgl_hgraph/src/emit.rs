@@ -5812,10 +5812,11 @@ impl Emitter<'_> {
                         }
                     };
                 }
+                let delta = DeltaOf::of(&base.ty);
                 // TYPE-16: a nullable's delta has one property, `value`,
                 // "null for a published null". hgraph's delta of that
                 // is `Null`.
-                if matches!(&base.ty, Type::Delta(of) if is_nullable(of)) && *member == 0 {
+                if matches!(delta, Some(DeltaOf::Nullable)) && *member == 0 {
                     self.natives = true;
                     let base = self.expression(function, base);
                     return format!("_core.unpublished({base})");
@@ -5828,14 +5829,12 @@ impl Emitter<'_> {
                 // `TSL` does not report a position that became invalid,
                 // so a fixed list's `removed` is not read; its size
                 // does not move, so its `size_modified` is null.
-                if let Type::Delta(of) = &base.ty
-                    && let Type::List { size, .. } = &**of
-                {
-                    let read = match (*member, size) {
+                if let Some(DeltaOf::List { fixed }) = delta {
+                    let read = match (*member, fixed) {
                         (0, _) => "updated",
-                        (1, None) => "removed",
-                        (2, None) => "size_modified",
-                        (2, Some(_)) => return "None".to_string(),
+                        (1, false) => "removed",
+                        (2, false) => "size_modified",
+                        (2, true) => return "None".to_string(),
                         _ => {
                             self.unsupported(
                                 value.at,
@@ -5849,7 +5848,7 @@ impl Emitter<'_> {
                     let base = self.expression(function, base);
                     return format!("_core.{read}({base})");
                 }
-                if matches!(&base.ty, Type::Delta(of) if matches!(**of, Type::Dict { .. })) {
+                if matches!(delta, Some(DeltaOf::Dict)) {
                     let read = if *member == 0 { "updated" } else { "removed" };
                     self.natives = true;
                     let base = self.expression(function, base);
@@ -5860,7 +5859,7 @@ impl Emitter<'_> {
                 // hgraph's delta of a bundle, a `dict` of the fields
                 // that changed, and a field is read through the
                 // provider.
-                if let Type::Delta(of) = &base.ty
+                if let Some(DeltaOf::Struct(of)) = delta
                     && let Some(field) = field_of(self.program, of, *member)
                 {
                     self.natives = true;
@@ -9041,7 +9040,8 @@ impl Emitter<'_> {
         // published null", and `delta<i64?>(value: 7)` a published 7.
         // It is hgraph's own delta of such a value: `Null`, or the
         // value.
-        if matches!(&value.ty, Type::Delta(of) if is_nullable(of)) {
+        let delta = DeltaOf::of(&value.ty);
+        if let Some(DeltaOf::Nullable) = delta {
             return match arguments.first() {
                 Some(argument) => {
                     let value = self.expression(function, &argument.value);
@@ -9060,23 +9060,15 @@ impl Emitter<'_> {
         // bundle: a `dict` of the fields that changed, which the
         // provider makes from the properties given, in the order
         // written, leaving out each that is null.
-        if let Type::Delta(of) = &value.ty
-            && let Type::Named {
-                module,
-                declaration,
-                kind: NamedKind::Struct,
-                ..
-            } = &**of
-        {
+        if let Some(DeltaOf::Struct(of)) = delta {
             let program = self.program;
-            let members = match program.modules[*module].details.get(*declaration) {
-                Some(Detail::Struct(read)) => &read.members[..],
-                _ => &[],
-            };
             let mut written = Vec::new();
             for argument in arguments {
                 let given = self.expression(function, &argument.value);
-                if let Some(field) = argument.parameter.and_then(|index| members.get(index)) {
+                if let Some(field) = argument
+                    .parameter
+                    .and_then(|index| field_of(program, of, index))
+                {
                     written.push(format!("{}={given}", name(&field.name)));
                 }
             }
@@ -9089,7 +9081,7 @@ impl Emitter<'_> {
         // `dict` of each key updated with its delta, and of each
         // removed with hgraph's `REMOVE`, which the provider makes from
         // the properties, given by name in the order written (EXPR-13).
-        if matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::Dict { .. })) {
+        if let Some(DeltaOf::Dict) = delta {
             const PROPERTIES: [&str; 2] = ["updated", "removed"];
             let mut written = Vec::new();
             for argument in arguments {
@@ -9107,9 +9099,7 @@ impl Emitter<'_> {
         // hgraph's delta of a `TSL`, a `dict` of each position updated,
         // which holds the other two (see `list_delta`). hgraph's bounded
         // `TSL` takes no removed position and no size.
-        if let Type::Delta(of) = &value.ty
-            && let Type::List { size, .. } = &**of
-        {
+        if let Some(DeltaOf::List { fixed }) = delta {
             const PROPERTIES: [&str; 3] = ["updated", "removed", "size_modified"];
             let mut written = Vec::new();
             for argument in arguments {
@@ -9118,7 +9108,7 @@ impl Emitter<'_> {
                 else {
                     continue;
                 };
-                if size.is_some() && index > 0 {
+                if fixed && index > 0 {
                     self.unsupported(
                         argument.value.at,
                         &format!(
@@ -9133,14 +9123,7 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.list_delta({})", written.join(", "));
         }
-        let element = match &value.ty {
-            Type::Delta(of) => match &**of {
-                Type::Set(element) => Some(&**element),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some(element) = element else {
+        let Some(DeltaOf::Set(element)) = delta else {
             self.unsupported(
                 value.at,
                 "a delta that is not a set's, a list's, a nullable's, a dictionary's or a struct's",
@@ -9757,6 +9740,48 @@ fn empty_struct(program: &Program, ty: &Type) -> bool {
     matches!(program.modules[*module].details.get(*declaration),
         Some(Detail::Struct(read)) if read.members.is_empty())
         && !inherited(program, *module, *declaration)
+}
+
+/// What a delta is the delta of, where the delta is a type of its own
+/// (TYPE-16, `Type::delta`). Each kind has properties of its own,
+/// which `Emitter::delta` makes a delta of and a read of the delta's
+/// field reads.
+#[derive(Clone, Copy)]
+enum DeltaOf<'t> {
+    /// A nullable's: `value`, null for a published null.
+    Nullable,
+    /// A struct's, of this struct type: a property for each field.
+    Struct(&'t Type),
+    /// A dictionary's: `updated` and `removed`.
+    Dict,
+    /// A list's: `updated`, `removed` and `size_modified`. `fixed` for
+    /// a list with a size.
+    List { fixed: bool },
+    /// A set's, of this element type: `added` and `removed`.
+    Set(&'t Type),
+}
+
+impl<'t> DeltaOf<'t> {
+    /// What `ty` is the delta of. `None` for a type that is no
+    /// `delta<T>` of these.
+    fn of(ty: &'t Type) -> Option<DeltaOf<'t>> {
+        let Type::Delta(of) = ty else {
+            return None;
+        };
+        match &**of {
+            Type::Nullable(_) => Some(DeltaOf::Nullable),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => Some(DeltaOf::Struct(of)),
+            Type::Dict { .. } => Some(DeltaOf::Dict),
+            Type::List { size, .. } => Some(DeltaOf::List {
+                fixed: size.is_some(),
+            }),
+            Type::Set(element) => Some(DeltaOf::Set(element)),
+            _ => None,
+        }
+    }
 }
 
 /// True where `value` is published to a place of the type `ty` as a
