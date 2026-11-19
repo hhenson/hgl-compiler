@@ -1,0 +1,4 @@
+application m.live
+use m::{one}
+const fn twice(value: i64) -> i64 => value * 2
+run(one())

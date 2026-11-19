@@ -1,0 +1,3 @@
+module reach.far
+use reach.deep as deep
+export const fn relay(value: i64) -> i64 => deep::counted(value)

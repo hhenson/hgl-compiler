@@ -53,12 +53,8 @@ def outcome(entry, values):
     try:
         return repr(eval_node(entry, value=values))
     except Exception as error:
-        seen = set()
-        while error is not None and id(error) not in seen:
-            seen.add(id(error))
-            if isinstance(error, _core.Escaped):
-                return "escaped"
-            error = error.__cause__ or error.__context__
+        if any(isinstance(found, _core.Escaped) for found in _core._causes(error)):
+            return "escaped"
         return "failed otherwise"
 
 

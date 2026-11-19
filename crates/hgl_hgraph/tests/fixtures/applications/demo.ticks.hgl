@@ -1,0 +1,37 @@
+module demo.ticks
+# A source: an entry, with no temporal parameter.
+export fn counted(const upto: i64, const every: duration = 1s) -> i64 {
+    cache count: i64 = 0
+    while count < upto {
+        count += 1
+        yield every: count
+    }
+}
+# A graph over it, an entry too.
+export fn doubled(const upto: i64) -> i64 {
+    return counted(upto) * 2
+}
+# An entry with no result.
+fn kept(value: i64) {
+    inject global_state
+    when { put(global_state, "last", value) }
+}
+export fn quiet(const upto: i64) {
+    kept(counted(upto))
+}
+# An entry that reads a key of the run's store.
+export fn limited(const every: duration = 1s) -> i64 {
+    inject global_state
+    cache count: i64 = 0
+    while count < get<i64>(global_state, "limit") {
+        count += 1
+        yield every: count
+    }
+}
+# An entry whose run fails.
+fn inverse(value: i64) -> i64 {
+    when { return 6 // (value - 2) }
+}
+export fn failing() -> i64 {
+    return inverse(counted(3))
+}

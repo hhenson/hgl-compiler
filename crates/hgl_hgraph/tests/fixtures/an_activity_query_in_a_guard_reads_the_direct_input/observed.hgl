@@ -1,0 +1,9 @@
+module observed
+use core as c
+fn sample(probe: bool, data: i64) -> bool {
+    when modified(probe) && valid([]) && is_active(input: data) {
+        passivate(data)
+        return c::is_active<i64>(data)
+    }
+    stop { let final_activity = is_active(data) }
+}

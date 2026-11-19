@@ -28,7 +28,7 @@ use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
 use crate::copies::{self, Copies};
 use crate::instances::Instances;
-use crate::{codes, provided, python_module, test_function};
+use crate::{codes, provides, python_module, test_function};
 
 /// What writing a module gave.
 pub(crate) struct Written {
@@ -234,6 +234,61 @@ impl Mode {
             self,
             Mode::Value | Mode::Node | Mode::Lifecycle | Mode::Stop | Mode::Source
         )
+    }
+}
+
+/// What the body of a node or a source is made of that both write
+/// alike: each `state` and `cache` with its first value, and the
+/// `start` and `stop` hooks. `rest` is every other statement, in the
+/// order written, for the node or the source to write.
+struct NodeParts<'b> {
+    /// TIME-6: "Cache is reconstructible node-local value data,
+    /// initialized on every start". hgraph's `STATE` is the node's own
+    /// and is recorded nowhere, so a `state` and a `cache` are both
+    /// fields of it, given their values in `start`, in the order
+    /// written: each local with its value.
+    states: Vec<(usize, &'b Option<Expr>)>,
+    /// The `start` hook's statements.
+    start: Option<&'b [Stmt]>,
+    /// The `stop` hook's statements.
+    stop: Option<&'b [Stmt]>,
+    /// The other statements.
+    rest: Vec<&'b Stmt>,
+}
+
+impl<'b> NodeParts<'b> {
+    /// The parts of `body`.
+    fn of(body: &'b Body) -> NodeParts<'b> {
+        let mut parts = NodeParts {
+            states: Vec::new(),
+            start: None,
+            stop: None,
+            rest: Vec::new(),
+        };
+        for statement in &body.statements {
+            match statement {
+                Stmt::Declare { local, value }
+                    if matches!(
+                        body.locals[*local].kind,
+                        LocalKind::State | LocalKind::Cache
+                    ) =>
+                {
+                    parts.states.push((*local, value));
+                }
+                Stmt::Hook {
+                    hook: Hook::Start,
+                    body,
+                    ..
+                } => parts.start = Some(body),
+                Stmt::Hook {
+                    hook: Hook::Stop,
+                    body,
+                    ..
+                } => parts.stop = Some(body),
+                other => parts.rest.push(other),
+            }
+        }
+        parts
     }
 }
 
@@ -963,7 +1018,7 @@ struct Emitter<'a> {
     ran: Option<Piece>,
 }
 
-impl Emitter<'_> {
+impl<'a> Emitter<'a> {
     /// Reports a form this target does not write yet. The piece being
     /// written is then left out of the file.
     fn unsupported(&mut self, at: Location, what: &str) {
@@ -1157,14 +1212,8 @@ impl Emitter<'_> {
         if self.instances.instanced(program, self.module, index) {
             let candidate = declaration.kind.candidate().is_some();
             if candidate
-                && !self
-                    .candidates
-                    .insert(self.definition_name(self.module, index))
+                && !self.new_candidate(self.definition_name(self.module, index), declaration.at)
             {
-                self.unsupported(
-                    declaration.at,
-                    "a candidate with the parameter types of another of its module",
-                );
                 return;
             }
             // Each instance is a piece of its own: one with a form
@@ -1191,16 +1240,9 @@ impl Emitter<'_> {
             // its own is a function as any other, under a name of the
             // target's: an operator may have many.
             (DeclarationKind::Implementation(Role::Value, _), Some(signature), Some(body)) => {
-                // Two candidates that differ only in what they require
-                // would be one Python function.
                 let python = self.definition_name(self.module, index);
-                if self.candidates.insert(python.clone()) {
+                if self.new_candidate(python.clone(), declaration.at) {
                     self.value_function(&python, signature, body);
-                } else {
-                    self.unsupported(
-                        declaration.at,
-                        "a candidate with the parameter types of another of its module",
-                    );
                 }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
@@ -1212,13 +1254,8 @@ impl Emitter<'_> {
             // function is, under a name of the target's.
             (DeclarationKind::Implementation(Role::Temporal, _), Some(signature), Some(body)) => {
                 let python = self.definition_name(self.module, index);
-                if self.candidates.insert(python.clone()) {
+                if self.new_candidate(python.clone(), declaration.at) {
                     self.node_or_graph(index, &python, signature, body);
-                } else {
-                    self.unsupported(
-                        declaration.at,
-                        "a candidate with the parameter types of another of its module",
-                    );
                 }
             }
             // An operator is a name for its candidates, which are the
@@ -1236,6 +1273,21 @@ impl Emitter<'_> {
                 self.unsupported(declaration.at, what);
             }
         }
+    }
+
+    /// True where `python` names no candidate of the module written
+    /// before, and records it. Two candidates that differ only in what
+    /// they require would be one Python function: the second, declared
+    /// at `at`, is reported.
+    fn new_candidate(&mut self, python: String, at: Location) -> bool {
+        if self.candidates.insert(python) {
+            return true;
+        }
+        self.unsupported(
+            at,
+            "a candidate with the parameter types of another of its module",
+        );
+        false
     }
 
     /// A temporal function or a temporal candidate, the declaration
@@ -1492,14 +1544,7 @@ impl Emitter<'_> {
             // failure returns the same E as Err." A `?` is inside an
             // expression, where Python has no `return`: the provider
             // raises, and the function returns what was raised.
-            let body: String = self.text[start..]
-                .lines()
-                .map(|line| format!("    {line}\n"))
-                .collect();
-            self.text.truncate(start);
-            self.line(1, "try:");
-            self.text.push_str(&body);
-            self.line(1, "except _core.Propagated as _left:");
+            self.tried(start, "_core.Propagated as _left");
             // What `?` passes on may hold what the function was given.
             // A result is the caller's to keep, so it is a copy, as
             // any result that is not the function's own is
@@ -1528,19 +1573,26 @@ impl Emitter<'_> {
             // each `var` parameter holds then: the call assigns each
             // place, and then raises it again
             // (`_core.raise_if_failed`).
-            let body: String = self.text[start..]
-                .lines()
-                .map(|line| format!("    {line}\n"))
-                .collect();
-            self.text.truncate(start);
             self.natives = true;
-            self.line(1, "try:");
-            self.text.push_str(&body);
-            self.line(1, "except _py.Exception as _failed:");
+            self.tried(start, "_py.Exception as _failed");
             let given = self.returned("_core.Failed(_failed)");
             self.line(2, &format!("return {given}"));
         }
         self.given_back.clear();
+    }
+
+    /// Puts the lines of a function's body written since `start` under a
+    /// `try:`, and writes the `except` that catches `caught` after them,
+    /// for the lines of its handler to follow.
+    fn tried(&mut self, start: usize, caught: &str) {
+        let body: String = self.text[start..]
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect();
+        self.text.truncate(start);
+        self.line(1, "try:");
+        self.text.push_str(&body);
+        self.line(1, &format!("except {caught}:"));
     }
 
     /// What a `return` of `value` gives: the value, or in a function
@@ -1710,6 +1762,14 @@ impl Emitter<'_> {
         Some("_given[0]".to_string())
     }
 
+    /// `python`, the name of a function of the provider of core's
+    /// natives, where what it is for is declared in core, the module
+    /// `module`, and the provider defines it (NATIVE-7). `None` for
+    /// any other.
+    fn native_function(&self, module: usize, python: String) -> Option<String> {
+        (Some(module) == self.program.core() && provides(&python)).then_some(python)
+    }
+
     /// A call of a native function of core that is given a place inside
     /// a value as its one `var` parameter, `append(book.orders, order)`
     /// (FN-15, LIST-1): the provider goes in to the place, and the
@@ -1730,13 +1790,10 @@ impl Emitter<'_> {
     ) -> Option<String> {
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
-        let native = format!("fn_{}", declared.name);
-        if declared.kind != DeclarationKind::NativeFunction(Role::Value)
-            || Some(module) != program.core()
-            || !provided().any(|provided| provided == native)
-        {
+        if declared.kind != DeclarationKind::NativeFunction(Role::Value) {
             return None;
         }
+        let native = self.native_function(module, format!("fn_{}", declared.name))?;
         let mut places = signature
             .parameters
             .iter()
@@ -2394,9 +2451,12 @@ impl Emitter<'_> {
             .filter(|&local| function.is_input(local))
             .collect();
         // What the body is made of: the declarations, and each hook.
-        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
-        let mut start: Option<&[Stmt]> = None;
-        let mut stop: Option<&[Stmt]> = None;
+        let NodeParts {
+            states,
+            start,
+            stop,
+            rest,
+        } = NodeParts::of(body);
         let mut handlers: Vec<Handler> = Vec::new();
         let mut has_out = false;
         // TIME-8: the capabilities the node injects, each as hgraph
@@ -2404,31 +2464,8 @@ impl Emitter<'_> {
         let mut capabilities: Vec<(&str, &str)> = Vec::new();
         // TIME-9: the scheduler or the alarm, where it injects one.
         let mut timer: Option<Timer> = None;
-        for statement in &body.statements {
+        for statement in rest {
             match statement {
-                // TIME-6: "Cache is reconstructible node-local value
-                // data, initialized on every start". hgraph's `STATE`
-                // is the node's own and is recorded nowhere, so a
-                // `state` and a `cache` are both fields of it, given
-                // their values in `start`, in the order written.
-                Stmt::Declare { local, value }
-                    if matches!(
-                        body.locals[*local].kind,
-                        LocalKind::State | LocalKind::Cache
-                    ) =>
-                {
-                    states.push((*local, value));
-                }
-                Stmt::Hook {
-                    hook: Hook::Start,
-                    body,
-                    ..
-                } => start = Some(body),
-                Stmt::Hook {
-                    hook: Hook::Stop,
-                    body,
-                    ..
-                } => stop = Some(body),
                 Stmt::Hook {
                     hook: Hook::When,
                     condition,
@@ -2820,17 +2857,7 @@ impl Emitter<'_> {
             self.line(0, &format!("def _start_{python}({lifecycle}):"));
             let before = self.text.len();
             self.unheld(signature);
-            for (local, value) in &states {
-                let field = name(&body.locals[*local].name);
-                let value = match value {
-                    Some(value) => {
-                        let written = self.expression(&lifecycle_hook, value);
-                        self.kept(&lifecycle_hook, *local, value, written)
-                    }
-                    None => "None".to_string(),
-                };
-                self.line(1, &format!("_state.{field} = {value}"));
-            }
+            self.state_values(&lifecycle_hook, &states);
             if let Some(start) = start {
                 self.statements(&lifecycle_hook, start, 1);
             }
@@ -2867,6 +2894,23 @@ impl Emitter<'_> {
         }
     }
 
+    /// Writes, in a node's `start`, the first value of each of its
+    /// `state`s and `cache`s, `states`, as a field of its `STATE`:
+    /// `hook` is the function `start` reads them in.
+    fn state_values(&mut self, hook: &Function, states: &[(usize, &Option<Expr>)]) {
+        for (local, value) in states {
+            let field = name(&hook.locals[*local].name);
+            let value = match value {
+                Some(value) => {
+                    let written = self.expression(hook, value);
+                    self.kept(hook, *local, value, written)
+                }
+                None => "None".to_string(),
+            };
+            self.line(1, &format!("_state.{field} = {value}"));
+        }
+    }
+
     /// A source (SOURCE-1): "a node that produces its output and has no
     /// temporal parameters". It is written as three functions and a
     /// graph that wires them, `python`:
@@ -2895,31 +2939,16 @@ impl Emitter<'_> {
         self.window_inputs(signature);
         // What the body is made of: the declarations, the hooks, and
         // the statements that yield.
-        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
-        let mut start: Option<&[Stmt]> = None;
-        let mut stop: Option<&[Stmt]> = None;
+        let NodeParts {
+            states,
+            start,
+            stop,
+            rest,
+        } = NodeParts::of(body);
         let mut capabilities: Vec<(&str, &str)> = Vec::new();
         let mut block: Vec<Stmt> = Vec::new();
-        for statement in &body.statements {
+        for statement in rest {
             match statement {
-                Stmt::Declare { local, value }
-                    if matches!(
-                        body.locals[*local].kind,
-                        LocalKind::State | LocalKind::Cache
-                    ) =>
-                {
-                    states.push((*local, value));
-                }
-                Stmt::Hook {
-                    hook: Hook::Start,
-                    body,
-                    ..
-                } => start = Some(body),
-                Stmt::Hook {
-                    hook: Hook::Stop,
-                    body,
-                    ..
-                } => stop = Some(body),
                 Stmt::Inject { local, at } => {
                     let injected = &body.locals[*local].name;
                     match capability(injected) {
@@ -3012,17 +3041,7 @@ impl Emitter<'_> {
         self.line(0, &format!("@{node}.start"));
         self.line(0, &format!("def _start_{node}({hooks}):"));
         self.unheld(signature);
-        for (local, value) in &states {
-            let field = name(&body.locals[*local].name);
-            let value = match value {
-                Some(value) => {
-                    let written = self.expression(&lifecycle_hook, value);
-                    self.kept(&lifecycle_hook, *local, value, written)
-                }
-                None => "None".to_string(),
-            };
-            self.line(1, &format!("_state.{field} = {value}"));
-        }
+        self.state_values(&lifecycle_hook, &states);
         // The generator is made before the source's `start` runs: a
         // `return` there ends the hook, and must not leave the node
         // with nothing to resume. Making it runs none of the source's
@@ -3062,11 +3081,7 @@ impl Emitter<'_> {
             } else {
                 python
             };
-            if held(&parameter.ty) {
-                format!("_core.Held({python})")
-            } else {
-                python
-            }
+            self.held_value(held(&parameter.ty), python)
         }));
         self.line(0, "");
         self.line(0, "");
@@ -5719,12 +5734,12 @@ impl Emitter<'_> {
                         Some(Detail::Native(read)) => read.properties.get(*member),
                         _ => None,
                     };
-                    let read = property.map(|property| format!("{native}_{}", property.name));
-                    let core = Some(*module) == program.core();
-                    return match (property, read) {
-                        (Some(property), Some(read))
-                            if core && provided().any(|provided| provided == read) =>
-                        {
+                    let read = property.and_then(|property| {
+                        self.native_function(*module, format!("{native}_{}", property.name))
+                            .map(|read| (property, read))
+                    });
+                    return match read {
+                        Some((property, read)) => {
                             self.natives = true;
                             let base = self.expression(function, base);
                             self.native_result(Some(&property.ty), format!("_core.{read}({base})"))
@@ -5735,10 +5750,11 @@ impl Emitter<'_> {
                         }
                     };
                 }
+                let delta = DeltaOf::of(&base.ty);
                 // TYPE-16: a nullable's delta has one property, `value`,
                 // "null for a published null". hgraph's delta of that
                 // is `Null`.
-                if matches!(&base.ty, Type::Delta(of) if is_nullable(of)) && *member == 0 {
+                if matches!(delta, Some(DeltaOf::Nullable)) && *member == 0 {
                     self.natives = true;
                     let base = self.expression(function, base);
                     return format!("_core.unpublished({base})");
@@ -5751,14 +5767,12 @@ impl Emitter<'_> {
                 // `TSL` does not report a position that became invalid,
                 // so a fixed list's `removed` is not read; its size
                 // does not move, so its `size_modified` is null.
-                if let Type::Delta(of) = &base.ty
-                    && let Type::List { size, .. } = &**of
-                {
-                    let read = match (*member, size) {
+                if let Some(DeltaOf::List { fixed }) = delta {
+                    let read = match (*member, fixed) {
                         (0, _) => "updated",
-                        (1, None) => "removed",
-                        (2, None) => "size_modified",
-                        (2, Some(_)) => return "None".to_string(),
+                        (1, false) => "removed",
+                        (2, false) => "size_modified",
+                        (2, true) => return "None".to_string(),
                         _ => {
                             self.unsupported(
                                 value.at,
@@ -5772,7 +5786,7 @@ impl Emitter<'_> {
                     let base = self.expression(function, base);
                     return format!("_core.{read}({base})");
                 }
-                if matches!(&base.ty, Type::Delta(of) if matches!(**of, Type::Dict { .. })) {
+                if matches!(delta, Some(DeltaOf::Dict)) {
                     let read = if *member == 0 { "updated" } else { "removed" };
                     self.natives = true;
                     let base = self.expression(function, base);
@@ -5783,7 +5797,7 @@ impl Emitter<'_> {
                 // hgraph's delta of a bundle, a `dict` of the fields
                 // that changed, and a field is read through the
                 // provider.
-                if let Type::Delta(of) = &base.ty
+                if let Some(DeltaOf::Struct(of)) = delta
                     && let Some(field) = field_of(self.program, of, *member)
                 {
                     self.natives = true;
@@ -6276,11 +6290,7 @@ impl Emitter<'_> {
                     continue;
                 };
                 let value = self.expression(function, &argument.value);
-                let value = if kept[index] {
-                    format!("_core.Held({value})")
-                } else {
-                    value
-                };
+                let value = self.held_value(kept[index], value);
                 let input = !signature.parameters[index].constant;
                 written.push((argument, index, value, input));
             }
@@ -6328,11 +6338,7 @@ impl Emitter<'_> {
                 if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                     // A node keeps a default of its configuration as it
                     // keeps one given (`kept_configuration`).
-                    let value = if kept[index] {
-                        format!("_core.Held({value})")
-                    } else {
-                        value
-                    };
+                    let value = self.held_value(kept[index], value);
                     called.push(format!("{}={value}", name(&parameter.name)));
                 }
             }
@@ -6961,13 +6967,6 @@ impl Emitter<'_> {
         // gives it that is no connection, so such an argument is
         // copied below.
         let node = self.is_node(callee);
-        let kept = |index: usize, value: String| {
-            if kept[index] {
-                format!("_core.Held({value})")
-            } else {
-                value
-            }
-        };
         // The owner's rule: an argument is a reference to what it
         // names, and is copied in two cases alone.
         //
@@ -7057,7 +7056,8 @@ impl Emitter<'_> {
                         written
                     }
                 };
-                Some(format!("{}={}", name(&parameter.name), kept(index, value)))
+                let value = self.held_value(kept[index], value);
+                Some(format!("{}={value}", name(&parameter.name)))
             })
             .collect();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -7068,7 +7068,8 @@ impl Emitter<'_> {
                 continue;
             }
             if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
-                written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
+                let value = self.held_value(kept[index], value);
+                written.push(format!("{}={value}", name(&parameter.name)));
             }
         }
         written.join(", ")
@@ -7098,13 +7099,9 @@ impl Emitter<'_> {
         {
             return self.left_out(callee, index, parameter);
         }
-        let instances = self.instances;
-        let instance = instances
-            .instanced(self.program, callee.0, callee.1)
-            .then(|| instances.find(self.program, callee, generics))
-            .flatten();
-        let ty = instance
-            .and_then(|instance| instance.signature.parameters.get(index))
+        let ty = self
+            .instance_signature(callee, generics)
+            .and_then(|signature| signature.parameters.get(index))
             .map_or(&parameter.ty, |parameter| &parameter.ty);
         Some(self.never_valid(ty, parameter.at))
     }
@@ -7125,6 +7122,34 @@ impl Emitter<'_> {
         format!("_hg.nothing(tp={annotation})")
     }
 
+    /// The signature of the instance a call of `callee`, a module and a
+    /// declaration of it, names with the generic arguments `generics`,
+    /// where `callee` is written by instance (GEN-2). `None` where it is
+    /// not, or where no instance is found for them.
+    fn instance_signature(
+        &self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+    ) -> Option<&'a Signature> {
+        let instances = self.instances;
+        instances
+            .instanced(self.program, callee.0, callee.1)
+            .then(|| instances.find(self.program, callee, generics))
+            .flatten()
+            .map(|instance| &instance.signature)
+    }
+
+    /// `written`, configuration a node is given, inside `_core.Held(...)`
+    /// where `kept`: an object hgraph keeps as it is (`held`,
+    /// `kept_configuration`). Otherwise `written` as it is.
+    fn held_value(&mut self, kept: bool, written: String) -> String {
+        if !kept {
+            return written;
+        }
+        self.natives = true;
+        format!("_core.Held({written})")
+    }
+
     /// For each parameter of `callee`, a module and a declaration of it,
     /// whether a call gives it inside `_core.Held(...)`.
     ///
@@ -7141,12 +7166,9 @@ impl Emitter<'_> {
         signature: &Signature,
     ) -> Vec<bool> {
         let node = self.is_node(callee);
-        let instances = self.instances;
-        let instance = instances
-            .instanced(self.program, callee.0, callee.1)
-            .then(|| instances.find(self.program, callee, generics))
-            .flatten();
-        let taken = instance.map_or(signature, |instance| &instance.signature);
+        let taken = self
+            .instance_signature(callee, generics)
+            .unwrap_or(signature);
         let kept: Vec<bool> = signature
             .parameters
             .iter()
@@ -8416,10 +8438,7 @@ impl Emitter<'_> {
                 _ => value,
             };
             let value = match &taken {
-                Bound::Configuration(ty) if held(ty) => {
-                    self.natives = true;
-                    format!("_core.Held({value})")
-                }
+                Bound::Configuration(ty) => self.held_value(held(ty), value),
                 _ => value,
             };
             bound[index] = Some(taken);
@@ -8597,11 +8616,10 @@ impl Emitter<'_> {
                 native = format!("{native}_to_{}", mangled(given));
                 shown = format!("{shown} -> {given}");
             }
-            let core = Some(module) == program.core();
-            if !core || !provided().any(|provided| provided == native) {
+            let Some(native) = self.native_function(module, native) else {
                 self.unsupported(at, &format!("the candidate `{shown}`"));
                 return "None".to_string();
-            }
+            };
             Some(native)
         } else {
             None
@@ -8610,16 +8628,15 @@ impl Emitter<'_> {
         // `_core.fn_log`. It binds its own name (NATIVE-3), which the
         // provider's own helpers are kept apart from by the `fn_`.
         if let DeclarationKind::NativeFunction(Role::Value) = declared.kind {
-            let native = format!("fn_{}", declared.name);
-            let core = Some(module) == program.core();
+            let native = self.native_function(module, format!("fn_{}", declared.name));
             let lifted = function.mode == Mode::Graph
                 && arguments
                     .iter()
                     .any(|argument| self.connects(function, &argument.value));
-            if !core || lifted || !provided().any(|provided| provided == native) {
+            let (Some(native), false) = (native, lifted) else {
                 self.unsupported(at, &format!("the native function `{}`", declared.name));
                 return "None".to_string();
-            }
+            };
             self.natives = true;
             let arguments = self.arguments(
                 function,
@@ -8756,10 +8773,9 @@ impl Emitter<'_> {
             // GEN-2: a function written by instance is lifted as its
             // instance for the eval's generic arguments, whose result
             // names no generic parameter.
-            let instances = self.instances;
-            let signature = instances
-                .find(self.program, (*module, *declaration), generics)
-                .map_or(signature, |instance| &instance.signature);
+            let signature = self
+                .instance_signature((*module, *declaration), generics)
+                .unwrap_or(signature);
             // An input is of its parameter's type where the function has
             // no generic parameter, as the run's replay is
             // (`run_wiring`), and of the type its trace is of otherwise.
@@ -8786,14 +8802,7 @@ impl Emitter<'_> {
             let run = self.run_wired(call, ty);
             let mut given = vec![node, run];
             given.extend(written);
-            if let Some(config) = config {
-                given.push(format!("_config={}", self.expression(function, config)));
-            }
-            if real_time {
-                given.push("_real_time=True".to_string());
-            }
-            given.extend(self.held_reader(&call.ty, call.at));
-            return format!("_harness.evaluate({})", given.join(", "));
+            return self.evaluated(function, given, call, config, real_time);
         }
         let run = self.run_wired(call, ty);
         let target = self.called_name((*module, *declaration), generics, call.at);
@@ -8808,6 +8817,21 @@ impl Emitter<'_> {
         if !arguments.is_empty() {
             given.push(arguments);
         }
+        self.evaluated(function, given, call, config, real_time)
+    }
+
+    /// The harness's run of an eval of `call`, given `given`: what it
+    /// runs, the run's wiring and the arguments. After them come the
+    /// configuration, where the eval has one, `_real_time=True` for a
+    /// `run`, and how the harness reads what the run gives (`eval`).
+    fn evaluated(
+        &mut self,
+        function: &Function,
+        mut given: Vec<String>,
+        call: &Expr,
+        config: Option<&Expr>,
+        real_time: bool,
+    ) -> String {
         if let Some(config) = config {
             given.push(format!("_config={}", self.expression(function, config)));
         }
@@ -8964,7 +8988,8 @@ impl Emitter<'_> {
         // published null", and `delta<i64?>(value: 7)` a published 7.
         // It is hgraph's own delta of such a value: `Null`, or the
         // value.
-        if matches!(&value.ty, Type::Delta(of) if is_nullable(of)) {
+        let delta = DeltaOf::of(&value.ty);
+        if let Some(DeltaOf::Nullable) = delta {
             return match arguments.first() {
                 Some(argument) => {
                     let value = self.expression(function, &argument.value);
@@ -8983,23 +9008,15 @@ impl Emitter<'_> {
         // bundle: a `dict` of the fields that changed, which the
         // provider makes from the properties given, in the order
         // written, leaving out each that is null.
-        if let Type::Delta(of) = &value.ty
-            && let Type::Named {
-                module,
-                declaration,
-                kind: NamedKind::Struct,
-                ..
-            } = &**of
-        {
+        if let Some(DeltaOf::Struct(of)) = delta {
             let program = self.program;
-            let members = match program.modules[*module].details.get(*declaration) {
-                Some(Detail::Struct(read)) => &read.members[..],
-                _ => &[],
-            };
             let mut written = Vec::new();
             for argument in arguments {
                 let given = self.expression(function, &argument.value);
-                if let Some(field) = argument.parameter.and_then(|index| members.get(index)) {
+                if let Some(field) = argument
+                    .parameter
+                    .and_then(|index| field_of(program, of, index))
+                {
                     written.push(format!("{}={given}", name(&field.name)));
                 }
             }
@@ -9012,7 +9029,7 @@ impl Emitter<'_> {
         // `dict` of each key updated with its delta, and of each
         // removed with hgraph's `REMOVE`, which the provider makes from
         // the properties, given by name in the order written (EXPR-13).
-        if matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::Dict { .. })) {
+        if let Some(DeltaOf::Dict) = delta {
             const PROPERTIES: [&str; 2] = ["updated", "removed"];
             let mut written = Vec::new();
             for argument in arguments {
@@ -9030,9 +9047,7 @@ impl Emitter<'_> {
         // hgraph's delta of a `TSL`, a `dict` of each position updated,
         // which holds the other two (see `list_delta`). hgraph's bounded
         // `TSL` takes no removed position and no size.
-        if let Type::Delta(of) = &value.ty
-            && let Type::List { size, .. } = &**of
-        {
+        if let Some(DeltaOf::List { fixed }) = delta {
             const PROPERTIES: [&str; 3] = ["updated", "removed", "size_modified"];
             let mut written = Vec::new();
             for argument in arguments {
@@ -9041,7 +9056,7 @@ impl Emitter<'_> {
                 else {
                     continue;
                 };
-                if size.is_some() && index > 0 {
+                if fixed && index > 0 {
                     self.unsupported(
                         argument.value.at,
                         &format!(
@@ -9056,14 +9071,7 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.list_delta({})", written.join(", "));
         }
-        let element = match &value.ty {
-            Type::Delta(of) => match &**of {
-                Type::Set(element) => Some(&**element),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some(element) = element else {
+        let Some(DeltaOf::Set(element)) = delta else {
             self.unsupported(
                 value.at,
                 "a delta that is not a set's, a list's, a nullable's, a dictionary's or a struct's",
@@ -9680,6 +9688,48 @@ fn empty_struct(program: &Program, ty: &Type) -> bool {
     matches!(program.modules[*module].details.get(*declaration),
         Some(Detail::Struct(read)) if read.members.is_empty())
         && !inherited(program, *module, *declaration)
+}
+
+/// What a delta is the delta of, where the delta is a type of its own
+/// (TYPE-16, `Type::delta`). Each kind has properties of its own,
+/// which `Emitter::delta` makes a delta of and a read of the delta's
+/// field reads.
+#[derive(Clone, Copy)]
+enum DeltaOf<'t> {
+    /// A nullable's: `value`, null for a published null.
+    Nullable,
+    /// A struct's, of this struct type: a property for each field.
+    Struct(&'t Type),
+    /// A dictionary's: `updated` and `removed`.
+    Dict,
+    /// A list's: `updated`, `removed` and `size_modified`. `fixed` for
+    /// a list with a size.
+    List { fixed: bool },
+    /// A set's, of this element type: `added` and `removed`.
+    Set(&'t Type),
+}
+
+impl<'t> DeltaOf<'t> {
+    /// What `ty` is the delta of. `None` for a type that is no
+    /// `delta<T>` of these.
+    fn of(ty: &'t Type) -> Option<DeltaOf<'t>> {
+        let Type::Delta(of) = ty else {
+            return None;
+        };
+        match &**of {
+            Type::Nullable(_) => Some(DeltaOf::Nullable),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => Some(DeltaOf::Struct(of)),
+            Type::Dict { .. } => Some(DeltaOf::Dict),
+            Type::List { size, .. } => Some(DeltaOf::List {
+                fixed: size.is_some(),
+            }),
+            Type::Set(element) => Some(DeltaOf::Set(element)),
+            _ => None,
+        }
+    }
 }
 
 /// True where `value` is published to a place of the type `ty` as a

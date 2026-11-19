@@ -1,0 +1,6 @@
+module demo.enums.fails
+enum Side { buy, sell = 5, hold }
+const fn numbered(number: i64) -> Side => Side(number)
+const fn named(text: str) -> Side => Side(text)
+test no_number { assert numbered(9) == .buy }
+test no_name { assert named("none") == .buy }

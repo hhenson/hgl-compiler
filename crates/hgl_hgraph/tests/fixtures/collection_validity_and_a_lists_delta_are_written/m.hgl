@@ -1,0 +1,13 @@
+module m
+fn both(probe: bool, pair: list<i64, 2>) -> bool {
+    when modified(probe) && valid([]) { return valid(pair) && all_valid(pair) }
+}
+fn resized(size: i64) -> list<i64> {
+    when { return delta<list<i64>>(size_modified: size) }
+}
+fn shrinking() -> list<i64> {
+    yield 1s: delta<list<i64>>(size_modified: 0)
+}
+fn lost(pair: list<i64, 2>) -> set<i64> {
+    when { return delta_value(pair).removed }
+}

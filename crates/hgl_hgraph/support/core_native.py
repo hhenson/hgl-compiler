@@ -152,6 +152,19 @@ def _equal(lhs, rhs):
     return lhs == rhs
 
 
+def _causes(error):
+    """`error`, and then each error it was raised from or while handling,
+    in turn: what Python keeps as its `__cause__`, or else as its
+    `__context__`. hgraph raises an error of its own for a node's
+    failure, with what the node raised under it. Each is given once,
+    where an error is among its own causes."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        yield error
+        error = error.__cause__ or error.__context__
+
+
 class Result:
     """A `result`: an `Ok` or an `Err` (ERR-2). The class a temporal
     `result` is a time series of."""
@@ -212,6 +225,13 @@ class Error:
 
     def __repr__(self):
         return f"error(message: {self.message!r}, code: {self.code!r})"
+
+
+def _raise(error):
+    """Fails with `error`, an `Error`: the HGL error it is, with its
+    message, its code and its provenance (ERR-8: a failure "keeps its
+    first provenance")."""
+    raise HglError(error.message, code=error.code, context=error.context)
 
 
 class ErrorContext:
@@ -331,7 +351,7 @@ def _escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
     out again: each boundary lets it out."""
     error = error_of(failure.value, _clock.evaluation_time)
     if error.context.phase != "evaluate":
-        raise HglError(error.message, code=error.code, context=error.context)
+        _raise(error)
 
 
 def captured(attempt):
@@ -388,7 +408,7 @@ def succeeded(result):
     the node with the error it holds (ERR-5)."""
     if type(result) is Ok:
         return result.value
-    raise HglError(result.error.message, code=result.error.code, context=result.error.context)
+    _raise(result.error)
 
 
 @_compute_node
@@ -606,10 +626,16 @@ def dict_delta(updated=None, removed=()):
     of each removed with `REMOVE`. A property left out is empty. What is
     updated is copied: the program may go on changing the dictionary it
     was given in."""
-    made = {} if updated is None else copied(updated)
+    return _marked({} if updated is None else copied(updated), removed)
+
+
+def _marked(changes, removed):
+    """`changes`, a `dict` of each key or position updated with its
+    delta, with each of `removed` given hgraph's `REMOVE`: a `TSD`'s and
+    a `TSL`'s delta (TYPE-16's `updated` and `removed`)."""
     for key in removed:
-        made[key] = _REMOVE
-    return made
+        changes[key] = _REMOVE
+    return changes
 
 
 class ListDelta(dict):
@@ -642,9 +668,7 @@ def list_delta(updated=None, removed=(), size_modified=None):
     lost their value ... and `size_modified`"). A property left out is
     empty, or null for `size_modified`. What is updated is copied: the
     program may go on changing the dictionary it was given in."""
-    made = ListDelta({} if updated is None else copied(updated))
-    for position in removed:
-        made[position] = _REMOVE
+    made = _marked(ListDelta({} if updated is None else copied(updated)), removed)
     made.size_modified = size_modified
     return made
 
@@ -672,7 +696,7 @@ def list_applied(output, delta):
     one that growth leaves with no value (the proposed gap of TYPE-16),
     are not written yet."""
     held = list(output.value) if output.valid else []
-    gone = {position for position, change in delta.items() if _removes(change)}
+    gone = removed(delta)
     size = size_modified(delta)
     if size is not None and size < 0:
         size = max(len(held) + size, 0)
@@ -680,7 +704,7 @@ def list_applied(output, delta):
         # Only a `removed` that is the whole tail shrinks the list, and
         # an entry past the end extends it to hold the entry.
         size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
-        written = [position for position, change in delta.items() if not _removes(change)]
+        written = list(updated(delta))
         if written and not gone:
             size = max(size, max(written) + 1)
     if any(position < size for position in gone):
@@ -772,14 +796,29 @@ class _AbsentEntry:
 _ABSENT_ENTRY = _AbsentEntry()
 
 
+def _index(index, size):
+    """Fails where `index` is no position of a sequence of `size`
+    elements, a list's or a tuple's or a fixed list's port: "An index
+    outside a list fails where it is evaluated" (EXPR-3). Python's own
+    indexing would count a negative index back from the end."""
+    if not 0 <= index < size:
+        raise HglError(f"the index {index} is outside a sequence of {size}")
+
+
+def _key(dictionary, key):
+    """Fails where `dictionary` has no entry for `key`: a strict read
+    (ERR-6: "absence fails"), with the code `value.missing_key`."""
+    if key not in dictionary:
+        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
+
+
 def position_of(port, index):
     """The endpoint of a fixed list's element at `index`, hgraph's child
     of the list's input (TIME-1). "An index outside a list fails where it
     is evaluated" (EXPR-3). A position of an absent entry is absent."""
     if port is _ABSENT_ENTRY:
         return port
-    if not 0 <= index < len(port):
-        raise HglError(f"the index {index} is outside a sequence of {len(port)}")
+    _index(index, len(port))
     return port[index]
 
 
@@ -948,7 +987,8 @@ def bundled(value, shape=None):
     is given as the set it is, which hgraph's `TSS` takes as its members
     now, removing those it no longer has."""
     if shape is None:
-        return {field: published(getattr(value, field)) for field in value._hgl_fields}
+        # Each field publishes whole.
+        shape = dict.fromkeys(value._hgl_fields)
     return _bundled(value, shape)
 
 
@@ -985,7 +1025,7 @@ def positions(delta, shape):
     if delta is None or shape is None:
         return delta
     if isinstance(shape, tuple):
-        return tuple(positions(delta.get(f"_{index}"), part) for index, part in enumerate(shape))
+        return tuple(positions(delta.get(position(index)), part) for index, part in enumerate(shape))
     return {field: positions(change, shape.get(field)) for field, change in delta.items()}
 
 
@@ -993,8 +1033,7 @@ def item(sequence, index):
     """`sequence[index]`: the element of a list or a tuple at an `i64`
     index (EXPR-7). An index outside it fails: Python's own would count
     a negative one back from the end."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    _index(index, len(sequence))
     return sequence[index]
 
 
@@ -1004,9 +1043,7 @@ def child(port, index):
     outside the list fails, as an element's does (EXPR-3: "An index
     outside a list fails where it is evaluated"); Python's own would
     count a negative one back from the end."""
-    size = len(port)
-    if not 0 <= index < size:
-        raise HglError(f"the index {index} is outside a sequence of {size}")
+    _index(index, len(port))
     return port[index]
 
 
@@ -1014,10 +1051,8 @@ def entry(dictionary, key):
     """`dictionary[key]`: the value a dictionary has for a key. The
     read is strict (ERR-6: "absence fails"), with the code
     `value.missing_key`."""
-    try:
-        return dictionary[key]
-    except KeyError:
-        raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key") from None
+    _key(dictionary, key)
+    return dictionary[key]
 
 
 def published(value):
@@ -1367,6 +1402,40 @@ def copied(value):
     return value
 
 
+def _step(holder, kind, key):
+    """What one step of a place's way in leads to inside `holder`: the
+    field `key` of a struct (`"f"`), the entry `key` of a dictionary
+    (`"k"`), or the element at `key` of a list or a tuple (`"i"`). A key
+    the dictionary has not and an index outside the sequence fail."""
+    if kind == "f":
+        return getattr(holder, key)
+    if kind == "k":
+        _key(holder, key)
+    else:
+        _index(key, len(holder))
+    return holder[key]
+
+
+def _spliced(sequence, index, value):
+    """`sequence`, a list or a tuple, with the element at `index` another
+    value: a new sequence of its type, and `sequence` as it was."""
+    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+
+
+def _put(holder, kind, key, value):
+    """What `holder` is to be with the step `kind`, `key` (see `_step`)
+    holding `value`. A struct that is a value and a tuple are never
+    changed: a new one is made (`set_field`, `_spliced`). A list, a
+    dictionary and a struct that is no value are changed where they are,
+    and given back."""
+    if kind == "f":
+        return set_field(holder, key, value)
+    if type(holder) is tuple:
+        return _spliced(holder, key, value)
+    holder[key] = value
+    return holder
+
+
 def _changed(holder, steps, at, change):
     """What `holder` is to be once the value `steps[at:]` leads to inside
     it has been changed by `change`.
@@ -1382,25 +1451,9 @@ def _changed(holder, steps, at, change):
     if at == len(steps):
         return change(holder)
     kind, key = steps[at]
-    if kind == "f":
-        inner = getattr(holder, key)
-        changed = _changed(inner, steps, at + 1, change)
-        return holder if changed is inner else set_field(holder, key, changed)
-    if kind == "k":
-        if key not in holder:
-            raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-    else:
-        if not 0 <= key < len(holder):
-            raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-        if type(holder) is tuple:
-            inner = holder[key]
-            changed = _changed(inner, steps, at + 1, change)
-            return holder if changed is inner else holder[:key] + (changed,) + holder[key + 1 :]
-    inner = holder[key]
+    inner = _step(holder, kind, key)
     changed = _changed(inner, steps, at + 1, change)
-    if changed is not inner:
-        holder[key] = changed
-    return holder
+    return holder if changed is inner else _put(holder, kind, key, changed)
 
 
 def _read_in(holder, steps):
@@ -1408,16 +1461,7 @@ def _read_in(holder, steps):
     step that fails, an index outside a list or a key a dictionary has
     not, fails here, as it does where a place is read."""
     for kind, key in steps:
-        if kind == "f":
-            holder = getattr(holder, key)
-        elif kind == "k":
-            if key not in holder:
-                raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
-            holder = holder[key]
-        else:
-            if not 0 <= key < len(holder):
-                raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-            holder = holder[key]
+        holder = _step(holder, kind, key)
     return holder
 
 
@@ -1445,17 +1489,11 @@ def set_at(root, steps, value, /):
     new = value()
 
     def assign(holder):
-        if kind == "f":
-            return set_field(holder, key, new)
-        if kind == "k":
-            holder[key] = new
-            return holder
-        if not 0 <= key < len(holder):
-            raise HglError(f"the index {key} is outside a sequence of {len(holder)}")
-        if type(holder) is tuple:
-            return holder[:key] + (new,) + holder[key + 1 :]
-        holder[key] = new
-        return holder
+        # The place assigned is not read: a key the dictionary has not is
+        # added, and only an index is checked.
+        if kind == "i":
+            _index(key, len(holder))
+        return _put(holder, kind, key, new)
 
     return _changed(root, steps[:-1], 0, assign)
 
@@ -1492,8 +1530,7 @@ def set_item(sequence, index, value, /):
     a `var`, a `state` or a `cache` holds itself (EXPR-3). The list is
     changed where it is, and keeps `value`. "An index outside a list
     fails where it is evaluated", and the list is then as it was."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
+    _index(index, len(sequence))
     sequence[index] = value
     return sequence
 
@@ -1541,9 +1578,8 @@ def with_item(sequence, index, value, /):
     place's own (EXPR-3): the sequence with one element another value.
     "An index outside a list fails where it is evaluated." `sequence`
     itself is as it was, for whatever else holds it."""
-    if not 0 <= index < len(sequence):
-        raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
-    return sequence[:index] + type(sequence)((value,)) + sequence[index + 1 :]
+    _index(index, len(sequence))
+    return _spliced(sequence, index, value)
 
 
 def with_entry(dictionary, key, value, /):
@@ -1559,9 +1595,12 @@ def unmatched(selected):
     raise HglError(f"no case of the `switch` has the value {selected!r}")
 
 
-def _i64(value):
+def _i64(value, what="an i64 result"):
+    """`value`, where it is in the range of an `i64`. NUM-2: "an `i64`
+    result outside the signed 64-bit range is an HGL error with code
+    `numeric.out_of_range`"; `what` says what it is."""
     if not _I64_MIN <= value <= _I64_MAX:
-        raise HglError("an i64 result is outside the signed 64-bit range", code="numeric.out_of_range")
+        raise HglError(f"{what} is outside the signed 64-bit range", code="numeric.out_of_range")
     return value
 
 
@@ -1609,20 +1648,29 @@ def mul__i64_f64(lhs, rhs):
     return float(lhs) * rhs
 
 
+def _by_zero():
+    """The error of a zero divisor: NUM-3, "The `fail` policy makes a zero
+    divisor an HGL error with code `numeric.division_by_zero`", and NUM-9,
+    under `error` "`err(...)` carrying error code
+    `numeric.division_by_zero`"."""
+    return Error("a division by zero", code="numeric.division_by_zero")
+
+
 def _zero_divisor(lhs, rhs, zero):
     """What a division by the zero `rhs` gives, when it gives a number.
 
     NUM-3: under `ieee`, "a finite nonzero numerator divided by signed
     zero produces signed infinity; zero divided by zero produces NaN.
     The infinity sign combines both operand signs." Under `nan` every
-    zero divisor gives NaN, and under `fail` it is an error.
+    zero divisor gives NaN, and under `fail` it is an error. The
+    candidates of core that come here require one of the three:
+    `error` is `_divide`'s.
     """
     if zero == "fail":
-        raise HglError("a division by zero", code="numeric.division_by_zero")
+        _raise(_by_zero())
     if zero == "nan" or lhs == 0 or lhs != lhs:
         return _NAN
-    if zero != "ieee":
-        raise HglError(f"the zero policy `{zero}` is not provided")
+    # `ieee`.
     sign = _math.copysign(1.0, lhs) * _math.copysign(1.0, rhs)
     return _math.copysign(_INFINITY, sign)
 
@@ -1659,12 +1707,12 @@ def _floordiv(lhs, rhs, zero):
 
 
 def _mod(lhs, rhs, zero):
-    """`%` with an `f64` operand: NaN for a zero divisor under `ieee`."""
+    """`%` with an `f64` operand: NaN for a zero divisor under `ieee`
+    and `nan`, the other two its candidates require (`error` is
+    `_divide`'s)."""
     if rhs == 0:
         if zero == "fail":
-            raise HglError("a division by zero", code="numeric.division_by_zero")
-        if zero not in ("ieee", "nan"):
-            raise HglError(f"the zero policy `{zero}` is not provided")
+            _raise(_by_zero())
         return _NAN
     # NUM-1: there `%` is "what IEEE `fmod` gives: a remainder by an
     # infinity is the numerator as it is, whatever its sign". Of an
@@ -1677,27 +1725,21 @@ def _mod(lhs, rhs, zero):
     return float(lhs % rhs)
 
 
-def _whole(zero):
-    """A division of two `i64` gives an `i64`, which holds no NaN or
-    infinity: NUM-12 admits `fail` there, and `error`."""
-    if zero != "fail":
-        raise HglError(f"the zero policy `{zero}` is not provided")
-    raise HglError("a division by zero", code="numeric.division_by_zero")
-
-
 def _floordiv_i64(lhs, rhs, zero):
     # NUM-1: "Integer floor division rounds toward negative infinity",
-    # as Python's does.
+    # as Python's does. A division of two `i64` gives an `i64`, which
+    # holds no NaN or infinity: NUM-12 admits `fail` there, and `error`,
+    # which is `_divide`'s.
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     return _i64(lhs // rhs)
 
 
 def _mod_i64(lhs, rhs, zero):
     # NUM-1: "modulo has the divisor's sign when nonzero", as Python's
-    # does.
+    # does. `fail`, as `_floordiv_i64`'s.
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     return lhs % rhs
 
 
@@ -1711,7 +1753,7 @@ def _divide(ordinary, lhs, rhs, zero):
     if zero != "error":
         return ordinary(lhs, rhs, zero)
     if rhs == 0:
-        return Err(Error("a division by zero", code="numeric.division_by_zero"))
+        return Err(_by_zero())
     # The divisor is not zero, so no policy is consulted.
     return Ok(ordinary(lhs, rhs, "fail"))
 
@@ -1823,7 +1865,7 @@ def _div_duration(lhs, rhs, zero):
     and these candidates admit `fail`, and `error` through `_divide`.
     """
     if rhs == 0:
-        _whole(zero)
+        _raise(_by_zero())
     if isinstance(rhs, float) and not _math.isfinite(rhs):
         raise HglError(
             "a duration divided by an infinity or a NaN", code="numeric.out_of_range"
@@ -1917,9 +1959,8 @@ def _unconverted(message, invalid):
     """
     if invalid == "error":
         return Err(Error(message, code="convert.invalid"))
-    if invalid == "fail":
-        raise HglError(message, code="convert.invalid")
-    raise HglError(f"the invalid policy `{invalid}` is not provided")
+    # `fail`, the other of core's `InvalidPolicy`.
+    raise HglError(message, code="convert.invalid")
 
 
 def _converted(value, invalid):
@@ -1954,10 +1995,8 @@ def _rounded(value, rounding):
     if rounding == "half_up":
         # "a tie away from zero"
         return away if left >= 0.5 else whole
-    if rounding == "half_down":
-        # "a tie toward zero"
-        return away if left > 0.5 else whole
-    raise HglError(f"the rounding `{rounding}` is not provided")
+    # `half_down`, the last of core's `Rounding`: "a tie toward zero".
+    return away if left > 0.5 else whole
 
 
 def convert_f64_Rounding_i64__to_i64(value, rounding, nan, invalid):
@@ -2332,9 +2371,7 @@ class Tenor:
 def _tenor_count(value):
     """TEN-2: "A count outside the i64 range is an HGL error with code
     `numeric.out_of_range`"."""
-    if not _I64_MIN <= value <= _I64_MAX:
-        raise HglError("a count of a tenor is outside the signed 64-bit range", code="numeric.out_of_range")
-    return value
+    return _i64(value, "a count of a tenor")
 
 
 def _same_form(lhs, rhs):

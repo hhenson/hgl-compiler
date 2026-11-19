@@ -525,6 +525,29 @@ impl Declaration {
     pub fn is_public(&self) -> bool {
         self.exported || self.kind == DeclarationKind::Operator
     }
+
+    /// A temporal function named `name` that stands in for what is no
+    /// declaration and is read as a graph's body is: a test (TST-3), a
+    /// run statement (RUN-1), or an application's store statements
+    /// (UNIT-14). `file` is the position of its file in
+    /// [`Module::files`]; `test_only` is true for a test.
+    pub(crate) fn stand_in(
+        name: &str,
+        at: Location,
+        file: usize,
+        syntax: &SyntaxNode,
+        test_only: bool,
+    ) -> Declaration {
+        Declaration {
+            name: name.to_string(),
+            at,
+            kind: DeclarationKind::Function(Role::Temporal),
+            exported: false,
+            test_only,
+            file,
+            syntax: syntax.clone(),
+        }
+    }
 }
 
 /// One named test.

@@ -1,0 +1,67 @@
+module demo.results
+
+const fn checked(a: f64, b: f64) -> result<f64, error> => a /{zero: .error} b
+
+const fn halved(a: f64, b: f64) -> result<f64, error> {
+    let ratio = checked(a, b)?
+    return ok(ratio / 2)
+}
+
+const fn described(a: f64, b: f64) -> str {
+    let outcome = checked(a, b)
+    if is_ok(outcome) { return "fine" }
+    return outcome.error.message
+}
+
+const fn code_of(a: f64, b: f64) -> str? {
+    let outcome = checked(a, b)
+    if is_err(outcome) { return outcome.error.code }
+    return null
+}
+
+const fn value_or(a: f64, b: f64, fallback: f64) -> f64 {
+    let outcome = checked(a, b)
+    if is_ok(outcome) { return outcome.value }
+    return fallback
+}
+
+const fn failing(reason: str) -> result<i64, error> =>
+    err(error(message: reason, code: "demo.failed"))
+
+const fn plain(reason: str) -> error => error(message: reason)
+
+const fn fail(text: str) -> result<str, str> => err(text)
+const fn ordered() -> result<error, str> =>
+    ok(error(code: fail("code")?, message: fail("message")?))
+const fn met() -> str {
+    let outcome = ordered()
+    if is_err(outcome) { return outcome.error }
+    return "none"
+}
+
+fn ratios(a: f64, b: f64) -> f64 {
+    when { return checked(a, b)? }
+}
+
+test results {
+    assert value_or(6.0, 4.0, 0.0) == 1.5
+    # NUM-9: a zero divisor gives an `err`, and no other does.
+    assert value_or(6.0, 0.0, -1.0) == -1.0
+    assert described(6.0, 4.0) == "fine"
+    assert described(6.0, 0.0) == "a division by zero"
+    assert code_of(6.0, 0.0) != null
+    assert code_of(6.0, 4.0) == null
+    assert plain("no").code == null
+    # ERR-5: a failure leaves the function as the same error.
+    assert is_ok(halved(6.0, 4.0))
+    assert is_err(halved(6.0, 0.0))
+    assert halved(6.0, 0.0) == checked(1.0, 0.0)
+    # ERR-2: equality compares the tag, then the payload.
+    assert halved(6.0, 4.0) == halved(3.0, 2.0)
+    assert failing("no") != failing("yes")
+    assert failing("no") == failing("no")
+    assert plain("no") == plain("no")
+    # EXPR-2: the failure met first is the one written first.
+    assert met() == "code"
+    assert eval(ratios(a: [6.0], b: [4.0])) == [1.5]
+}
