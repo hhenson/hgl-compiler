@@ -91,6 +91,7 @@ mod read;
 mod references;
 mod resolve;
 mod signatures;
+mod syntax;
 mod types;
 mod values;
 
