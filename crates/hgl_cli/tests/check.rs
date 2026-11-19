@@ -311,10 +311,30 @@ fn the_limits_options_apply() {
     );
 }
 
+/// The declarations of core's rejection cases the compiler does not yet
+/// reject: the `[rejections]` of `crates/hgl_hgraph/ci/unsupported_cases.toml`,
+/// each listed under a reason that names the rule not yet built.
+fn unrejected() -> Vec<String> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../hgl_hgraph/ci/unsupported_cases.toml");
+    let text = fs::read_to_string(path).expect("the list of unsupported cases");
+    text.lines()
+        .skip_while(|line| line.trim() != "[rejections]")
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .filter_map(|line| {
+            let name = line.trim().strip_prefix('"')?.strip_suffix("\",")?;
+            Some(name.rsplit_once("::")?.1.to_string())
+        })
+        .collect()
+}
+
 /// UNIT-1, CONF-3: core's conformance cases are the parts of one module.
 /// Its source rejections, in `rejections/`, are a module of their own,
 /// `conformance.rejections`, which `hgl check` rejects and `hgl test`
-/// passes, each case rejected as its annotation says (TST-12, TST-14).
+/// passes, each case rejected as its annotation says (TST-12, TST-14),
+/// but for those listed as not yet rejected (`unrejected`), each of which
+/// fails as no other does.
 #[test]
 fn the_conformance_cases_are_one_module() {
     let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/tests/conformance");
@@ -334,11 +354,23 @@ fn the_conformance_cases_are_one_module() {
     let rejections = core.join("rejections");
     let tested = hgl(&["test", &argument(&rejections), "--rejections-only"]);
     assert_eq!(text(&tested.stderr), "");
-    assert_eq!(tested.status.code(), Some(0), "{}", text(&tested.stdout));
+    let stdout = text(&tested.stdout);
+    let failed: Vec<String> = stdout
+        .lines()
+        .filter(|line| line.starts_with("FAILED"))
+        .filter_map(|line| line.rsplit_once(' ').map(|(_, name)| name.to_string()))
+        .collect();
+    let listed = unrejected();
+    assert_eq!(failed, listed, "{stdout}");
+    let code = if listed.is_empty() { 0 } else { 1 };
+    assert_eq!(tested.status.code(), Some(code), "{stdout}");
     assert!(
-        text(&tested.stdout).contains("rejection cases: 2 passed, 0 failed\n"),
-        "{}",
-        text(&tested.stdout)
+        stdout.contains(&format!(
+            "rejection cases: {} passed, {} failed\n",
+            5 - listed.len(),
+            listed.len()
+        )),
+        "{stdout}"
     );
     let output = hgl(&["check", &argument(&cases), "--modules"]);
     assert_eq!(text(&output.stderr), "");

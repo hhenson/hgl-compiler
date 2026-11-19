@@ -8,6 +8,7 @@ analyser: partial
 
 - A value function's parameters and result, and a `const` parameter, are ordinary value types; each signature recorded; a value function holds no `state`, `cache`, `inject`, `start`, `when` or `stop`
 - A parameter of a capability's type, and `endpoint<T>` in a native value function, are admitted (TIME-8, TYPE-12)
+- A `const fn` parameter marked `ref` is `ref.position` (FN-16)
 - In a hook, a source and a value function a `const` parameter is given a constant expression (`argument.constant`); in a graph, no connection (`connection.as_constant`)
 - Left: a `const` parameter that only an operator marks; roles of `const fn` and a temporal `fn` in bodies
 
@@ -23,7 +24,7 @@ analyser: done
 analyser: partial
 
 - A value function calls only value functions (with FN-4), and an operator through a value candidate (GEN-5)
-- A node's hook is read as value code: a temporal parameter is a value of its declared type, and a temporal function called there is rejected (`call.role`)
+- A node's hook is read as value code: a temporal parameter that is not `ref` is a value of its declared type, a `ref` one an endpoint (FN-16), and a temporal function called there is rejected (`call.role`)
 - A graph's body calls any function: a temporal parameter and the result of a temporal or lifted call are connections, and a connection given to a `const` parameter is rejected (`connection.as_constant`)
 - Left: what a composition body admits of a connection; what it calls; iteration and conditionals in composition
 
@@ -108,14 +109,21 @@ analyser: planned
 transpiler: partial
 
 - hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid
-- Left: null bound for an input that admits null, which waits on nullable scalars
+- Left: null bound for an input that admits null, which waits on nullable scalars; a struct, a tuple or a fixed list supplied only where it is `all_valid` too, with no fallback where it is not
 
 ## FN-12
+
+analyser: partial
+
+- A window's connection is given to a value function's `list<V>` in composition, the list it holds (TYPE-11)
+- Left: which aggregates need `all_valid` (FN-11)
 
 transpiler: partial
 
 - hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
-- Left: what the helper is given for a position not yet valid
+- A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
+- Left: a struct, a tuple and a fixed list required all valid, an optional child passed as null
+- Left, reported: a window given to a lifted helper
 
 ## FN-13
 
@@ -156,3 +164,25 @@ transpiler: partial
 - A function that fails gives back what it raised, `_core.Failed`, beside what each `var` parameter holds then, and the call assigns each place before it raises it again: no change is undone, of a parameter of any type, and of one given a value of its own
 - An argument that fails is evaluated before the call, which assigns nothing
 - Left: such a call inside an expression, which is reported
+
+## FN-16
+
+parser: done
+
+- `ref` before a parameter's name and before a declared function's result type, a token of the parameter or of the result; no `const`, `var` or `...` after it, and none on an anonymous function's parameter or result
+
+analyser: partial
+
+- The mark is recorded on the parameter and on the signature, and is no part of the type (`Parameter::reference`, `Signature::reference`): a caller, a graph among them, gives a `ref` parameter a connection of its type, and a `ref` result is a connection of its type
+- A mark on a value function, a value candidate, a graph, an operator, or a native implementation part that is a graph (`{}`) is `ref.position`, a code whose row is proposed; a node, a temporal candidate that is one, and a native temporal declaration with no body take it
+- In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, a code whose row is proposed; an atomic projection, an iteration, a comparison and a call that reads one among them
+- A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`
+- Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
+
+transpiler: partial
+
+- hgraph: a `ref` parameter and a `ref` result are hgraph's `REF` of the type, bound to and by connections of it as they are; `valid`, `modified`, `last_modified` and activity are the `REF`'s own
+- `return low` of a `ref` parameter is the reference it holds; `return value` of an input that is no `ref` parameter, and `return items[idx]` of a fixed list's position, read a hidden `REF` input the node is given beside it through a graph of the function's name; `out =` designates alike
+- A reference the result holds already is not published again (TIME-10, END-10)
+- A struct's connection given to a `ref` parameter of a struct it inherits from, and a `ref` result given where one is expected, are narrowed as any connection is (TYPE-3); an eval of a `ref` result records what it designates
+- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node; a `ref` result of a source

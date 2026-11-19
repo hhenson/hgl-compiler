@@ -228,8 +228,6 @@ define_syntax_kinds! {
         DictType,
         /// `rolling_window<f64, 5m>` or `rolling_window<f64, 5, 2>`
         RollingWindowType,
-        /// `ref<f64>`
-        RefType,
         /// `signal`
         SignalType,
         /// `endpoint<f64>`

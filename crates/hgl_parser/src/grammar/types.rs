@@ -15,7 +15,6 @@ fn built_in(word: SyntaxKind) -> Option<SyntaxKind> {
         KwSet => SetType,
         KwDict => DictType,
         KwRollingWindow => RollingWindowType,
-        KwRef => RefType,
         KwEndpoint => EndpointType,
         KwAtomic => AtomicType,
         KwResult => ResultType,
@@ -49,9 +48,13 @@ impl Parser<'_> {
 
     /// ```text
     /// type_base = scalar_type | named_type | tuple_type | list_type | set_type
-    ///           | dict_type | rolling_window_type | ref_type | "signal" | endpoint_type
+    ///           | dict_type | rolling_window_type | "signal" | endpoint_type
     ///           | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
     /// ```
+    ///
+    /// TYPE-12: "`ref` is no type": `ref<f64>`, `list<ref<f64>>` and
+    /// `ref<ref<f64>>` are syntax errors, as `ref` starts no type. It is
+    /// a mode of a parameter and of a result (FN-16), read with them.
     ///
     /// False, with a report, when no type starts at the cursor.
     fn type_base(&mut self) -> bool {
@@ -103,7 +106,6 @@ impl Parser<'_> {
     /// dict_type = "dict", "<", value_type, ",", type, ">" ;
     /// rolling_window_type = "rolling", "<", value_type, ",", const_expression,
     ///     [ ",", const_expression ], ">" ;
-    /// ref_type = "ref", "<", type, ">" ;
     /// endpoint_type = "endpoint", "<", type, ">" ;
     /// result_type = "result", "<", value_type, ",", value_type, ">" ;
     /// delta_type = "delta", "<", type, ">" ;
@@ -153,8 +155,7 @@ impl Parser<'_> {
                     parser.expression();
                 }
             }
-            // `set`, `ref`, `endpoint`, `atomic` and `delta` take one
-            // type.
+            // `set`, `endpoint`, `atomic` and `delta` take one type.
             _ => parser.type_(),
         });
         self.close_angle();

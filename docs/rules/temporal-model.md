@@ -10,7 +10,9 @@ analyser: partial
 - A read in an anonymous function is held to the admission where the function is written (FN-14)
 - An endpoint operation observes an invalid endpoint with no guard
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
+- A `return` to a `ref` result names an input or a child and reads no payload, so it needs no admission (FN-16)
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type
+- Left: a struct, a tuple or a fixed list read whole, a child among them, admitted only by its `all_valid` (`payload.unguarded`): core's case `quote_without_admission` is listed as not yet rejected
 
 transpiler: done
 
@@ -49,7 +51,7 @@ transpiler: partial
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
-- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` read as a bool, in a body or under a negation or a disjunction, which TIME-3 has true in a cycle where no temporal input was modified, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
+- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` read as a bool, in a body or under a negation or a disjunction, which TIME-3 has true in a cycle where no temporal input was modified, and in the body of a handler that selects it true at a wake that lands with an input's tick too, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4
 
@@ -58,7 +60,7 @@ analyser: partial
 - In a `when`, a payload read of an input its header does not admit needs a `valid(input)` that holds where it stands: in the branch it holds for, in the right operand of the `&&` it guards, after a branch that returns (`payload.unguarded`)
 - A child's guard is `all_valid` of its collection or `valid` of the child as the read names it, in a body or as a header's test; a child's `valid` in a header names no input, and the default admission stands with it
 - An endpoint argument is read through its grouping (EXPR-1) by every check: `valid((quote.bid))` is `valid(quote.bid)`
-- Left: aggregate subscriptions; node-wide validity
+- Left: aggregate subscriptions; node-wide validity; the guard of a whole read of a struct, a tuple or a fixed list, `all_valid` of what it reads (TIME-1)
 
 transpiler: partial
 
@@ -97,6 +99,7 @@ analyser: partial
 - `out` is read in a `when` and in `stop`, not in a `state`'s or a `cache`'s initialiser, and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`)
 - A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3)
 - What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`
+- A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
 transpiler: partial
 
@@ -119,12 +122,14 @@ analyser: partial
 - A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
 
-transpiler: done
+transpiler: partial
 
 - hgraph: `inject clock`, `inject logger` and `inject global_state` are hgraph's own `EvaluationClock`, `LOGGER` and `GlobalState`, given to the node, to its `start` and to its `stop`, each for that call; one given to a function is passed as it is
 - A graph's `inject global_state` is the store current where hgraph builds the graph, and a call on it there is run then (FN-9)
 - `inject scheduler` and `inject alarm` are both hgraph's `SCHEDULER`: it has one for a node, and no cheaper one; given to a function or bound to a `let` it is passed as it is
 - A source injects neither (SOURCE-1)
+- A zero duration asked of the scheduler or the alarm in `start` wakes the node's first evaluation, and a wake asked for at a `datetime` before the evaluation time is dropped, with no failure
+- Left, reported: a wake asked for outside `start` with a duration that may not be more than zero, a literal or one the node reads as it runs, which TIME-8 rejects or fails (`schedule.non_positive_duration`, proposed)
 
 ## TIME-9
 
@@ -134,7 +139,7 @@ analyser: partial
 - An `endpoint<T>` parameter of a native value function is given an input by its name, a child of one, or `out`, in a hook, and its payload is not read; anything else, and any argument in a graph or a value function, is `endpoint.argument`
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`
-- `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct or dictionary (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
+- `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct, dictionary or window (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - In a guard it sets neither subscription nor validity
 - Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained
@@ -146,11 +151,20 @@ transpiler: partial
 - Under a negation, in a disjunction and in a handler's body `scheduled()` is that bool, read once where the node is entered (`_timer_woke`): a handler that asks again under the tag that is due leaves it true, and `scheduler.is_scheduled_now` with it (CAP-4)
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
+- `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4)
+- A window's `valid` and `all_valid` are the `TSW`'s, for a window of ticks whose minimum is one
 - Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
+- Left, reported: `all_valid` of a value with an optional child beside another, which hgraph's `all_valid` asks and TIME-9 does not
 
 ## TIME-10
 
+analyser: done
+
+- A `ref` parameter's `valid`, `modified` and `last_modified` are endpoint operations as any input's are (FN-16)
+
 transpiler: partial
 
-- hgraph: a `REF` input ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `REF` output, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
-- Left: a route kept to a removed child; a designation published again unchanged, which hgraph ticks
+- hgraph: a `ref` parameter, a `REF` input, ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `ref` result, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
+- A designation published again unchanged is no tick: a node does not publish the reference its result holds (`_core.designation`, `_core.designate`)
+- Proposed, and as hgraph has it: a `ref` parameter's `valid` is true where it designates something, `modified` where its designation changed, and `last_modified` is when it last did, each the `REF`'s own
+- Left: a route kept to a removed child

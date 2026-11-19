@@ -74,14 +74,13 @@ test scalars_configure_a_node {
     assert eval(zoned_on(tick: [true], zone: @[Europe/Jersey], lag: 1M)) == [-1M]
 }
 
-# TYPE-2: "Same-instant zoned values need not be equal; zone aliases are
-# distinct names". Europe/Jersey is a link to Europe/London.
+# TYPE-2: "Zone aliases are distinct names". Europe/Jersey is a link to
+# Europe/London. Two zoned datetimes are compared by core's candidates,
+# which take the option `utc` and are not written yet
+# (`a_zoned_equality_is_not_written_yet`).
 test a_zone_is_its_name {
     assert @[Europe/London] == @[Europe/London]
     assert @[Europe/London] != @[Europe/Jersey]
-    assert @2026-09-03T09:30+01:00[Europe/London] == @2026-09-03T08:30+01:00[Europe/London] + 1h
-    assert @2026-09-03T09:30+01:00[Europe/London] != @2026-09-03T09:30+01:00[Europe/Jersey]
-    assert @2026-09-03T08:30+00:00[UTC] != @2026-09-03T09:30+01:00[Europe/London]
     assert @09:30[Europe/London] != @09:30[Europe/Jersey]
 }
 
@@ -92,11 +91,8 @@ test a_zone_is_its_name {
 test an_offset_is_the_zones_own {
     let first = @2026-10-25T01:30+01:00[Europe/London]
     let second = @2026-10-25T01:30+00:00[Europe/London]
-    assert first != second
-    assert later(first, 1h) == second
-    assert earlier(second, 1h) == first
-    assert later(@2026-03-29T00:30+00:00[Europe/London], 1h) == @2026-03-29T02:30+01:00[Europe/London]
     assert eval(later(at: [first, _, second], by: [1h])) == [second, _, second + 1h]
+    assert eval(earlier(at: [second], by: [1h])) == [first]
 }
 
 # What a probe reads of `watched` each time it ticks: its retained

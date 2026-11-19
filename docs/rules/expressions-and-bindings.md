@@ -77,12 +77,13 @@ analyser: partial
 - A field of a struct value has its type, the value's generic arguments in place; a list's element by an `i64`, a tuple's by a constant within its length, read by the one reader (`constant`): a literal, a constant of a module, and a constant expression of those
 - A set indexed is rejected, to read or to assign
 - A member or an element of a nullable's payload is read where a null test proves it present (ERR-12), and a result's payload through its tag (ERR-3)
-- Left: an index on any other value that has none; temporal projection; `ref` access
+- A structural projection of a `ref` parameter in a hook, `xs[i]` or `quote.bid`, selects its child, an endpoint, and reads no payload; an atomic projection of one, `quote.bid` of `ref quote: atomic<Quote>`, reads its payload and is `ref.read` (FN-16)
+- Left: an index on any other value that has none; temporal projection
 
 transpiler: partial
 
 - hgraph: brackets read a list's and a tuple's element by its index, failing outside the sequence, and a dictionary's value by its key
-- Left: projection of a connection; a reference's access
+- Left: projection of a connection; a child of a `ref` parameter, which is reported (FN-16)
 
 ## EXPR-8
 

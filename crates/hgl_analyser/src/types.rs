@@ -201,8 +201,6 @@ pub enum Type {
         /// written, which means the maximum.
         minimum: Option<Constant>,
     },
-    /// `ref<f64>`: an endpoint, not a payload (TYPE-12).
-    Ref(Box<Type>),
     /// `signal`: an input with no payload (TYPE-12).
     Signal,
     /// `endpoint<f64>`: the endpoint of a temporal value, where a native
@@ -269,7 +267,6 @@ impl Type {
             Type::Tuple(elements) => elements.iter().any(part),
             Type::List { element, size } => size.as_ref().is_some_and(constant) || part(element),
             Type::Set(inner)
-            | Type::Ref(inner)
             | Type::Endpoint(inner)
             | Type::Atomic(inner)
             | Type::Delta(inner)
@@ -365,15 +362,14 @@ impl Type {
             // argument or a field that may be left out, and is no part
             // of what is published".
             Type::Nullable(inner) => match *inner {
-                inner @ (Type::RollingWindow { .. }
-                | Type::Atomic(_)
-                | Type::Ref(_)
-                | Type::Signal) => Type::delta(inner),
+                inner @ (Type::RollingWindow { .. } | Type::Atomic(_) | Type::Signal) => {
+                    Type::delta(inner)
+                }
                 inner => Type::Delta(Box::new(Type::Nullable(Box::new(inner)))),
             },
             // A type of its own; one not yet known; and one that has no
-            // delta, a `ref` or a `signal`, which is reported where it
-            // is written (`delta.unsupported_shape`).
+            // delta, a `signal`, which is reported where it is written
+            // (`delta.unsupported_shape`).
             Type::Set(_)
             | Type::List { .. }
             | Type::Dict { .. }
@@ -383,7 +379,6 @@ impl Type {
             }
             | Type::Delta(_)
             | Type::Parameter { .. }
-            | Type::Ref(_)
             | Type::Signal
             | Type::Endpoint(_)
             | Type::Trace { .. }
@@ -623,7 +618,6 @@ impl fmt::Display for Type {
                 Some(minimum) => write!(f, "rolling_window<{value}, {maximum}, {minimum}>"),
                 None => write!(f, "rolling_window<{value}, {maximum}>"),
             },
-            Type::Ref(target) => write!(f, "ref<{target}>"),
             Type::Endpoint(target) => write!(f, "endpoint<{target}>"),
             Type::Signal => f.write_str("signal"),
             Type::Atomic(payload) => write!(f, "atomic<{payload}>"),
@@ -702,6 +696,10 @@ pub struct Signature {
     /// Its result type; `None` when it has no `->`. A temporal function
     /// without one has no output (FN-1).
     pub result: Option<Type>,
+    /// True when the result is marked `ref`, `-> ref f64`: a node's
+    /// result that designates an endpoint its `return` names (FN-16).
+    /// The mark is no part of the type: `result` is the T after it.
+    pub reference: bool,
 }
 
 impl Signature {
@@ -714,6 +712,7 @@ impl Signature {
             generics: read.generics.clone(),
             parameters: Vec::new(),
             result: None,
+            reference: false,
         }
     }
 }
@@ -730,6 +729,11 @@ pub struct Parameter {
     /// True when it is marked `var`: a call gives it a place, which the
     /// call assigns (FN-15).
     pub var: bool,
+    /// True when it is marked `ref`: a node's temporal parameter that
+    /// is an endpoint and not a value, given a connection of its type,
+    /// which it designates (FN-16). The mark is a mode, "and no part of
+    /// the type (TYPE-12)": `ty` is the T after it.
+    pub reference: bool,
     /// Its type. For a pack, the type after `...` or inside `...{ }`.
     pub ty: Type,
     /// What kind of pack it is, when it is one (FN-8).
@@ -880,6 +884,7 @@ impl fmt::Display for Signature {
         comma_separated(f, &self.parameters)?;
         f.write_str(")")?;
         match &self.result {
+            Some(result) if self.reference => write!(f, " -> ref {result}"),
             Some(result) => write!(f, " -> {result}"),
             None => Ok(()),
         }
@@ -890,6 +895,9 @@ impl fmt::Display for Parameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.constant {
             f.write_str("const ")?;
+        }
+        if self.reference {
+            f.write_str("ref ")?;
         }
         write!(f, "{}: ", self.name)?;
         match self.pack {

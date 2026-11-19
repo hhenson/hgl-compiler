@@ -57,6 +57,10 @@ impl Emitter<'_> {
                     && let Some(port) = self.input_port(function, value)
                 {
                     let ty = function.port_type(value);
+                    if matches!(ty, Type::RollingWindow { .. }) {
+                        let window = ty.clone();
+                        return self.window_value(&window, &port, value.at);
+                    }
                     let read = self.port_value(ty, &port, value.at);
                     if function.is_out(*local) {
                         return self.published_read(ty, &port, read);
@@ -104,6 +108,32 @@ impl Emitter<'_> {
                     self.unsupported(value.at, "this endpoint read in `start` or `stop`");
                 }
                 let input = endpoint_name(endpoint);
+                // FN-16: "the endpoint operations take" a `ref`
+                // parameter, and `out` of a `ref` result, each hgraph's
+                // `REF`. TIME-10, proposed: its `valid` is where it
+                // designates something, its `modified` where its
+                // designation changed, and its `last_modified` when it
+                // last did, which are the `REF`'s own.
+                if function.designates(inputs[0]) {
+                    return match operation {
+                        EndpointOperation::Valid => format!("{input}.valid"),
+                        EndpointOperation::Modified => format!("{input}.modified"),
+                        EndpointOperation::LastModified => {
+                            format!("({input}.last_modified_time if {input}.valid else None)")
+                        }
+                        EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                        EndpointOperation::Activate => format!("{input}.make_active()"),
+                        EndpointOperation::Passivate => format!("{input}.make_passive()"),
+                        EndpointOperation::IsActive => format!("{input}.active"),
+                        other => {
+                            self.unsupported(
+                                value.at,
+                                &format!("`{}` of a `ref` parameter or result", other.name()),
+                            );
+                            "None".to_string()
+                        }
+                    };
+                }
                 // The endpoint of what holds a window, itself or within
                 // (`windows_in`): an input's readiness is asked of its
                 // parameter (`window_inputs`), and `out`'s here.
@@ -127,7 +157,9 @@ impl Emitter<'_> {
                     // TIME-9: "`all_valid` is true where every one is, by
                     // its own `valid`, one level deep": hgraph's
                     // `all_valid`, but where a part holds a list.
-                    EndpointOperation::AllValid => self.all_valid_test(&endpoint.ty, &input),
+                    EndpointOperation::AllValid => {
+                        self.all_valid_test(&endpoint.ty, &input, value.at)
+                    }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta." hgraph's own
                     // `modified` of an input in the cycle it is
@@ -414,6 +446,26 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && self.reads_child(function, value) =>
             {
+                // TYPE-11: a window child's value is read as a `list<V>`,
+                // which the child's port is not.
+                let window_child = match &value.kind {
+                    ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
+                        .is_some_and(|field| matches!(field.ty, Type::RollingWindow { .. })),
+                    ExprKind::Index { base, index } => match &base.ty {
+                        Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
+                            matches!(**child, Type::RollingWindow { .. })
+                        }
+                        Type::Tuple(elements) => constant_position(index)
+                            .and_then(|position| elements.get(position))
+                            .is_some_and(|element| matches!(element, Type::RollingWindow { .. })),
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if window_child {
+                    self.unsupported(value.at, "a window's value inside another value");
+                    return "None".to_string();
+                }
                 match self.child_port(function, value) {
                     Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
@@ -982,6 +1034,58 @@ impl Emitter<'_> {
         }
     }
 
+    /// The reference `value` designates, a designation (`designates`)
+    /// given to a `ref` result by a `return` or `out =` (FN-16). Of a
+    /// `ref` parameter it is the reference its `REF` input holds, its
+    /// `value`; of a temporal input that is no `ref` parameter, and of a
+    /// position of a fixed list that is one, it is the reference the
+    /// hidden `REF` input the node is given beside it holds
+    /// (`Designated`). `None`, reported, for one not written yet.
+    pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<String> {
+        if let ExprKind::EndpointOf(local) = value.kind
+            && function.is_reference(local)
+        {
+            return Some(format!("{}.value", endpoint_name(&function.locals[local])));
+        }
+        match (designated(function, value), &value.kind) {
+            (Some((local, Designated::Whole)), _) => Some(format!(
+                "{}.value",
+                designated_name(&function.locals[local])
+            )),
+            (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
+                let ExprKind::Index { index, .. } = &child.kind else {
+                    return None;
+                };
+                let index = self.expression(function, index);
+                self.natives = true;
+                Some(format!(
+                    "_core.position_of({}, {index}).value",
+                    designated_name(&function.locals[local])
+                ))
+            }
+            _ => {
+                // hgraph gives a `REF` input of a list no reference of
+                // its child; a dictionary's absent key and an unsized
+                // list's position it does not hold have no port to
+                // refer to.
+                let rooted_at_reference = matches!(
+                    &value.kind,
+                    ExprKind::ChildEndpointOf(child)
+                        if matches!(child.place_root().kind, ExprKind::Local(local) if function.is_reference(local))
+                );
+                self.unsupported(
+                    value.at,
+                    if rooted_at_reference {
+                        "a child of a `ref` parameter designated"
+                    } else {
+                        "a designation of a child that is no position of a fixed list"
+                    },
+                );
+                None
+            }
+        }
+    }
+
     /// The endpoint of `child`, a child of a temporal input of the node
     /// (TIME-1), as hgraph has it: its own child of the input's,
     /// `parts[1]` as `_core.position_of(parts, 1)`, `quote.bid` as
@@ -1034,8 +1138,8 @@ impl Emitter<'_> {
         fn within(emitter: &Emitter<'_>, function: &Function, value: &Expr) -> bool {
             match &value.kind {
                 // The input, or `out`, is a collection (TIME-9): an
-                // `atomic<V>`, a `T?` and a `ref<T>` have no child, as the
-                // analyser has it. TIME-7: `out` read holds what it
+                // `atomic<V>` and a `T?` have no child, as the analyser
+                // has it. TIME-7: `out` read holds what it
                 // published, each part by its own port.
                 ExprKind::Local(local) => {
                     (function.is_input(*local) || function.is_out(*local))
@@ -1099,7 +1203,15 @@ impl Emitter<'_> {
     /// deep". hgraph's `all_valid` counts each part by hgraph's `valid`,
     /// which is the language's where the part holds no list
     /// (`valid_test`); where one does, the provider counts it.
-    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str) -> String {
+    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str, at: Location) -> String {
+        // TIME-9: "`all_valid` is true where every one is, by its own
+        // `valid`, one level deep, an optional child aside: one whose type
+        // is `T?`, or a field that TYPE-4 makes optional, is not asked".
+        // hgraph's `all_valid` asks every child.
+        if optional_child(self.program, ty) {
+            self.unsupported(at, "`all_valid` of a value with an optional child (TIME-9)");
+            return "False".to_string();
+        }
         let parts_hold_lists = match ty {
             Type::List { element, .. } => validity_shape(self.program, element).is_some(),
             other => validity_shape(self.program, other).is_some(),
@@ -1162,6 +1274,13 @@ impl Emitter<'_> {
             self.unsupported(at, "this endpoint read in `start` or `stop`");
             return "None".to_string();
         }
+        // hgraph's `REF` input holds one reference, and gives none of a
+        // child (FN-16: "A `ref` parameter and its children ... are
+        // endpoints").
+        if matches!(child.place_root().kind, ExprKind::Local(local) if function.designates(local)) {
+            self.unsupported(at, "an endpoint of a child of a `ref` parameter or result");
+            return "None".to_string();
+        }
         let Some(port) = self.child_port(function, child) else {
             self.unsupported(at, "an endpoint of this child");
             return "None".to_string();
@@ -1169,7 +1288,7 @@ impl Emitter<'_> {
         self.natives = true;
         match operation {
             EndpointOperation::Valid => self.valid_test(&child.ty, &port),
-            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port),
+            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port, at),
             // END-4, END-6: a child that is not valid is not modified and
             // has no time it was last modified, nor a delta to read, by
             // `valid` as the language has it where a list is in the child
@@ -1257,6 +1376,22 @@ impl Emitter<'_> {
         }
     }
 
+    /// The value of a window input or `out`, `port`, of the window type
+    /// `window`, read in a hook. TYPE-11: "That value, read in a hook ...
+    /// is a `list<V>` of the values held, oldest first", and core's END-9:
+    /// "The read gives a `list<V>` of the values held", as hgraph's `TSW`
+    /// holds them (`_core.window_values`). Only a window whose readiness
+    /// this target writes is read (`readable_window`): one of ticks whose
+    /// minimum is one, all valid at its first value; where a read must
+    /// fail before it is all valid (END-9), it is reported.
+    fn window_value(&mut self, window: &Type, port: &str, at: Location) -> String {
+        if !self.readable_window(window, at) {
+            return "None".to_string();
+        }
+        self.natives = true;
+        format!("_core.window_values({port})")
+    }
+
     /// What the port `port`, of a temporal value of `ty`, holds, read in
     /// a hook. A struct's bundle holds a value of the struct, made from
     /// each field's port in turn (TYPE-9), and a tuple's a tuple of each
@@ -1271,12 +1406,10 @@ impl Emitter<'_> {
     /// names `_child{depth}` and `_key{depth}` are its own.
     fn port_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         match ty {
-            // TYPE-12: a window is no ordinary value, and core has no
-            // operation that reads what one holds: its values, or how
-            // many. Only its endpoint is read (TIME-9). So a value that
-            // holds one, a struct's or a list's, is not read whole.
+            // A value that holds a window, a struct's or a list's, is not
+            // read whole yet; a window input itself is (`window_value`).
             Type::RollingWindow { .. } => {
-                self.unsupported(at, "what a window holds, which no core operation reads,");
+                self.unsupported(at, "a window's value inside another value");
                 return "None".to_string();
             }
             // TYPE-9: "lists to child positions". A list's value is each
@@ -1839,4 +1972,34 @@ pub(super) fn constant_position(index: &Expr) -> Option<usize> {
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True where `ty` is a collection with an optional child one level down
+/// (TIME-9), a struct's field whose type is `T?` or an `atomic<T?>`
+/// (TYPE-4), or a tuple's position, a list's element or a dictionary's
+/// value of a `T?`, beside another child: where it is the struct's or the
+/// tuple's one child, `all_valid` asks what hgraph's does, that the value
+/// is valid.
+fn optional_child(program: &Program, ty: &Type) -> bool {
+    let optional = |child: &Type| match child {
+        Type::Nullable(_) => true,
+        Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
+        _ => false,
+    };
+    match ty {
+        Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } => match program.modules[*module].details.get(*declaration) {
+            Some(Detail::Struct(read)) => {
+                read.members.len() > 1 && read.members.iter().any(|member| optional(&member.ty))
+            }
+            _ => false,
+        },
+        Type::Tuple(elements) => elements.len() > 1 && elements.iter().any(optional),
+        Type::List { element: child, .. } | Type::Dict { value: child, .. } => optional(child),
+        _ => false,
+    }
 }

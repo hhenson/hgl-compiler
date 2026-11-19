@@ -53,3 +53,41 @@ class CoreGateTest(unittest.TestCase):
     def test_rejected_source_never_admits_a_suite(self):
         rejected = CompletedProcess([], 1, stdout="no case was run\n")
         self.assertTrue(verify(rejected, rejected, self.expected))
+
+    # A rejection case listed as not yet rejected, as `unsupported_cases.toml`
+    # lists one under `[rejections]`.
+    rejection = "spec/hgl_core/tests/conformance/rejections/children.hgl:46 fn whole"
+    unrejected = {"conformance::rejections/children.hgl::whole"}
+    not_rejected = (
+        "    expected phase/payload.unguarded on line 49 of spec/hgl_core/tests/conformance/"
+        "rejections/children.hgl: not reported\n"
+    )
+
+    def rejection_problems(self, row, counts, code, listed=None):
+        listed = self.unrejected if listed is None else listed
+        rows = row + self.passing + self.pending + self.reason
+        summary = counts + "executable cases: 1 passed, 0 failed, 1 not run\n"
+        found = CompletedProcess([], code, stdout=rows + summary)
+        failed = row.startswith("FAILED")
+        discovered = CompletedProcess(
+            [], 1 if failed else 2, stdout=row + self.inventory.stdout)
+        expected = dict(self.expected)
+        expected.update({name: "a whole read needs `all_valid` (TIME-1)" for name in listed})
+        return verify(discovered, found, expected, listed)
+
+    def test_a_listed_rejection_fails_only_by_not_being_rejected(self):
+        failed = f"FAILED   rejection   {self.rejection}\n"
+        counts = "rejection cases: 0 passed, 1 failed\n"
+        self.assertFalse(self.rejection_problems(failed + self.not_rejected, counts, code=1))
+        # Rejected now, or failing another way, the listed case fails the check.
+        passed = f"passed   rejection   {self.rejection}\n"
+        self.assertTrue(self.rejection_problems(
+            passed, "rejection cases: 1 passed, 0 failed\n", code=2))
+        other = "    expected phase/payload.unguarded on line 49: found type/type.mismatch\n"
+        self.assertTrue(self.rejection_problems(failed + other, counts, code=1))
+        # One that is not listed fails as before, and so does a listed one
+        # that is gone.
+        self.assertTrue(self.rejection_problems(
+            failed + self.not_rejected, counts, code=1, listed=set()))
+        self.assertTrue(self.rejection_problems(
+            "", "rejection cases: 0 passed, 0 failed\n", code=2))

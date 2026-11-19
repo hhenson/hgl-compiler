@@ -210,30 +210,6 @@ impl Emitter<'_> {
         value: &Expr,
         written: String,
     ) -> String {
-        // A connection given across a reference (TYPE-12, TIME-10)
-        // between two struct types, one inheriting from the other,
-        // would be narrowed on the far side of the reference
-        // (`Type::followed`), which is not written yet.
-        let (expected, given) = (ty.followed(), value.ty.followed());
-        let crosses = expected != *ty || given != value.ty;
-        if function.mode == Mode::Graph
-            && crosses
-            && expected != given
-            && matches!(
-                expected,
-                Type::Named {
-                    kind: NamedKind::Struct,
-                    ..
-                }
-            )
-            && self.connects(function, value)
-        {
-            self.unsupported(
-                value.at,
-                "a struct connection given across a reference to a struct it inherits from",
-            );
-            return written;
-        }
         let Type::Named {
             module,
             declaration,

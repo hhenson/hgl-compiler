@@ -6,7 +6,7 @@ fn full(prices: rolling_window<f64, 3>) -> f64 {
 fn timed(prices: rolling_window<f64, 5s, 0s>) -> f64 {
     when { return delta_value(prices) }
 }
-fn whole(prices: rolling_window<f64, 3, 1>) -> rolling_window<f64, 3, 1> {
+fn whole(prices: rolling_window<f64, 3, 1>) -> list<f64> {
     when { return prices }
 }
 fn own(price: f64) -> rolling_window<f64, 3> {
@@ -32,3 +32,8 @@ fn recent(price: f64) -> rolling_window<f64, 5s> {
 test recorded {
     assert eval(recent(price: [1.0])) == [1.0]
 }
+const fn total(values: list<f64>) -> f64 => 0.0
+fn collected(price: f64) -> rolling_window<f64, 3, 1> {
+    when { return price }
+}
+fn lifted(price: f64) -> f64 => total(collected(price))

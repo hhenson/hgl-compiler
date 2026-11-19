@@ -338,7 +338,6 @@ pub(super) fn canonical(program: &Program, ty: &Type) -> Option<String> {
                 canonical_constant(maximum)?
             ),
         },
-        Type::Ref(target) => format!("ref<{}>", one(target)?),
         Type::Endpoint(target) => format!("endpoint<{}>", one(target)?),
         Type::Signal => "signal".to_string(),
         Type::Atomic(payload) => format!("atomic<{}>", one(payload)?),

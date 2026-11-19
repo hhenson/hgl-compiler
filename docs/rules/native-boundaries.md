@@ -20,7 +20,7 @@ analyser: partial
 
 - An implementation completes one declaration of its name and role; duplicates rejected
 - A native candidate's implementation needs a candidate of its name and role
-- Left: the exact match of signatures, which says which candidate an implementation completes; selection
+- Left: the exact match of signatures, which says which candidate an implementation completes, their `var` and `ref` marks among them (FN-15, FN-16); selection
 
 ## NATIVE-3
 
