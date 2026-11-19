@@ -718,6 +718,17 @@ nothing is reported of it. A connection given to a `const` parameter is
 `generic.argument_constant`, and one that is a tuple's index
 `tuple.index`.
 
+A connection given to a function's parameter, or returned by the graph,
+may cross a reference (`references`): a `T` is given to a `ref<T>`
+input, which designates it (TYPE-12), and a `ref<T>` to an input of
+`T`, which follows it (TIME-10); any connection is given to a `signal`.
+A generic parameter is inferred from such a connection with its
+references removed, but where the pattern is `ref<T>` (GEN-11). What a
+follower observes is `Type::followed`: the type with every reference
+and a `?` that marks omission removed (TYPE-14, `Type::omission_removed`).
+The hgraph target writes a follower's input by the same two methods, so
+the stages cannot disagree on it.
+
 An `if` in a graph is read as a value function's is, and then told
 apart by what its condition is (CTRL-1, CTRL-13; owner's decisions of
 2026-11-16 on hhenson/hgl_spec#61):
@@ -1519,6 +1530,9 @@ only where the program reaches it, at core's source.
 | `quote.bid` of a temporal `Quote`, in a graph and in a hook | `quote["bid"]`, the field's port taken by name, so a field may be named `value`; in a hook `(quote["bid"].value if quote["bid"].valid else _core.unset_read())`, and `quote` read whole `Quote(bid=(...), ask=(...))` of each field so read: a required part that has not published fails with `value.unset_read`, and an optional one is `None` (hhenson/hgl_spec#126, an interim reading); `out` as `_output` |
 | A temporal `struct Empty {}`, and a branch's ordinary `fixed()` of a composite in a graph | `_hg.TS[Empty]`: hgraph's bundle with no field never ticks; a publication, whole or its delta, is `_core.only_value(value, Empty)`, and `delta_value(e)` the empty `_core.struct_delta()`. `_hg.const(_core.bundled(fixed(), ...), tp=_hg.TSB[...])`: a constant told its time-series type |
 | A temporal `atomic<Quote>`, and `quote.bid` of it (TYPE-9) | `_hg.TS[Quote]`; in a graph `_hg.getattr_[_hg.SCALAR: _py.int](quote, "bid")`, told the field's type, and in a hook `quote.value.bid` |
+| A temporal `ref<i64>` (TYPE-12, TIME-10) | `_hg.REF[_hg.TS[_py.int]]`: in a hook its value is a reference, which a node returns to re-point what follows it. A graph passes an `i64` to it, and it to an `i64` input, as they are: hgraph binds one to the other. A lifted input given it is a `_hg.TS[_py.int]`, which follows the target |
+| A `signal` input (TYPE-12) | `_hg.SIGNAL`, bound to any output, read only by `tick.valid` and `tick.modified` |
+| A temporal `T?` input left out (UNIT-8) | `_hg.nothing(tp=...)` of the input's type, an output that never ticks; for a `signal?` one of `_hg.TS[_py.bool]` |
 | `delta<Quote>(bid: 1)`, `change.bid` (TYPE-16) | `_core.struct_delta(bid=1)`, `_core.changed(change, "bid")`: hgraph's delta of a bundle, a `dict` of each field that changed, a null property left out |
 | A temporal `list<i64, 2>` (TYPE-9, TYPE-10) | `_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]`, `_hg.TS_OUT[_hg.TSL[...]]` for `out`. A whole value published is `_py.tuple(value)`; a delta, `_core.list_delta(updated={1: v})`, a `dict` of each position. Read whole `_py.list(pair.value)`; `valid(pair)` is `pair.valid`, true once a position is, and `all_valid(pair)` `pair.all_valid`; `pair[0]` in a graph is the child's port |
 | A temporal `list<i64>` (TYPE-10) | `_hg.TS[_py.tuple[_py.int, ...]]`: hgraph has no `TSL` that grows, so a tick is the whole list, published as `_py.tuple(value)`, a copy, and read as `_py.list(values.value)`. A delta published is applied to `_output`'s last tuple, `_core.list_applied(_output, delta)`, a shrink among them. Its delta read, its children and composite elements are reported, and so is an eval's replay or record of one, which publish and read deltas |

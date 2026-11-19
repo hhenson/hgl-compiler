@@ -6068,6 +6068,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("windows.hgl", WINDOWS));
     files.push(("scalars.hgl", SCALARS));
     files.push(("errors.hgl", ERRORS));
+    files.push(("references.hgl", REFERENCES));
     files.push(("tuples.hgl", TUPLES));
     files.push(("tuples_names.hgl", TUPLES_NAMES));
     files.push(("struct_review.hgl", STRUCT_REVIEW));
@@ -9007,6 +9008,169 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
             "m.hgl:21:22 target.unsupported",
             "m.hgl:27:12 target.unsupported",
             "m.hgl:32:37 target.unsupported",
+        ]
+    );
+}
+
+/// TYPE-12: "`ref<T>` designates an endpoint, not an ordinary payload
+/// type ... `signal` is a complete temporal input constraint with no
+/// readable payload". TIME-10: "A reference ticks on changed
+/// designation, not every target tick. Ordinary followers observe the
+/// selected target". GEN-11: argument inference removes reference
+/// boundaries. TYPE-9: "`atomic<V>` stops expansion at a complete
+/// ordinary V".
+const REFERENCES: &str = include_str!("fixtures/references.hgl");
+
+/// A reference is hgraph's `REF` of the temporal type it designates,
+/// and a `signal` its `SIGNAL`. A node returns a `REF` input's value, a
+/// reference, to re-point what follows it; a graph passes a connection
+/// across the boundary as it is, and hgraph binds an ordinary input,
+/// a lifted node's among them, to what a reference designates. A
+/// generic input given a reference is written for the type under it.
+/// A `signal?` left out is bound to an output that never ticks
+/// (UNIT-8), by a call and a captured one alike. A hook reads an atomic
+/// input as its whole value.
+#[test]
+fn a_reference_is_a_ref_and_a_signal_a_signal() {
+    let emitted = emit(&[("references.hgl", REFERENCES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_references/__init__.py");
+    let reference = "_hg.REF[_hg.TS[_py.int]]";
+    for expected in [
+        format!(
+            "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}) -> {reference}:"
+        ),
+        "        return left.value\n".to_string(),
+        "    held = target.value\n    return held\n".to_string(),
+        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:".to_string(),
+        "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:".to_string(),
+        "    return _lift_0_doubled(value=pick(use_left=use_left, left=left, right=right))"
+            .to_string(),
+        format!("def designated(left: {reference}) -> _hg.TS[_py.int]:\n    return left\n"),
+        "    return _inst_ticks__i64(value=pick(use_left=use_left, left=left, right=right))"
+            .to_string(),
+        format!("def _inst_ref_ticks__i64(value: {reference}, "),
+        "    return _inst_same__ref_i64_(value=left)".to_string(),
+        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))".to_string(),
+        // A captured call binds what it leaves out as a call does.
+        "        return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
+            .to_string(),
+        "    return width(quote=quote.value)".to_string(),
+        "    held = quote.value\n".to_string(),
+        "    return quote.delta_value.ask".to_string(),
+        "    whole = _output.value\n".to_string(),
+        "def bid_or(value: _hg.TS[_py.int], quote: _hg.TS[Quote]) -> _hg.TS[_py.int]:".to_string(),
+        // An atomic input's value is hgraph's: a `var` takes a copy.
+        "    saved = _core.copied(triple.value)\n".to_string(),
+        "        whole = quote.value\n".to_string(),
+        "rhs=quote.value.ask), rhs=quote.value.ask)".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// TIME-10 and GEN-11: a lifted helper given a reference to a reference,
+/// or a reference that may be left out (TYPE-14), follows it to an
+/// ordinary input of what it designates: `Type::followed`, which the
+/// analyser admits it by.
+#[test]
+fn a_lifted_input_follows_every_reference_it_is_given() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "const fn doubled(value: i64) -> i64 => value * 2\n",
+            "fn twice(left: ref<ref<i64>>) -> i64 => doubled(left)\n",
+            "fn optional(left: ref<i64>?) -> i64 => doubled(left)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    assert!(!python.contains("value: _hg.REF"), "{python}");
+    for expected in [
+        "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:",
+        "def twice(left: _hg.REF[_hg.REF[_hg.TS[_py.int]]]) -> _hg.TS[_py.int]:",
+        "def optional(left: _hg.REF[_hg.TS[_py.int]]) -> _hg.TS[_py.int]:",
+    ] {
+        assert!(
+            python.contains(expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// TYPE-3: a struct is a value where an abstract struct it inherits from
+/// is expected, and its connection is narrowed to the abstract struct's
+/// bundle. Across a reference, designated or followed, that narrowing is
+/// not written yet: reported, where the same struct on both sides is not.
+#[test]
+fn an_inherited_struct_across_a_reference_is_not_written_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "abstract struct Shape {\n",
+            "    id: i64\n",
+            "}\n",
+            "struct Circle : Shape {\n",
+            "    radius: i64\n",
+            "}\n",
+            "fn circled(id: i64) -> Circle {\n",
+            "    when { return Circle(id: id, radius: 1) }\n",
+            "}\n",
+            "fn shape_id(shape: Shape) -> i64 {\n",
+            "    when { return shape.id }\n",
+            "}\n",
+            "fn designated(id: i64) -> ref<Shape> => circled(id)\n",
+            "fn same(id: i64) -> ref<Circle> => circled(id)\n",
+            "fn followed(id: i64) -> i64 => shape_id(same(id))\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:14:41 target.unsupported",
+            "m.hgl:16:41 target.unsupported",
+        ]
+    );
+}
+
+/// What this target does not write of a reference is reported: one as
+/// a field of a temporal struct or an element of a temporal list, and
+/// an atomic field that may be left out (TYPE-14).
+#[test]
+fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote { bid: i64 }\n",
+            "struct Routed {\n",
+            "    target: ref<i64>\n",
+            "}\n",
+            "struct Maybe {\n",
+            "    quote: atomic<Quote>?\n",
+            "}\n",
+            "fn routed(value: Routed) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn maybe(value: Maybe) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn pair(values: list<ref<i64>, 2>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:9:11 target.unsupported",
+            "m.hgl:12:10 target.unsupported",
+            "m.hgl:15:9 target.unsupported",
         ]
     );
 }
