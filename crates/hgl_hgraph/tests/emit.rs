@@ -6731,6 +6731,26 @@ fn a_window_is_hgraphs_tsw() {
             "missing {expected} in:\n{python}"
         );
     }
+    // TYPE-9: a window within a struct, a fixed list, a dictionary and
+    // a tuple is that one's child, read by its port, and wired from it
+    // in a graph; a part that is no window is read in a hook.
+    let small = "_hg.TSW[_py.float, _hg.WindowSize[2], _hg.WindowSize[1]]";
+    for expected in [
+        format!("_core.schema(Book, {{\"prices\": {ticks}, \"last\": _hg.TS[_py.float]}})"),
+        format!("_hg.TSL[{small}, _hg.Size[2]]"),
+        format!("_hg.TSD[_py.str, {small}]"),
+        format!("_hg.TSB[\"_0\": {small}, \"_1\": _hg.TS[_py.float]]"),
+        "    return book[\"last\"].value\n".to_string(),
+        "    return pair[\"_1\"].value\n".to_string(),
+        "_core.changed(book.delta_value, \"prices\")".to_string(),
+        "    return arrived(prices=booked(price=price)[\"prices\"])\n".to_string(),
+        "    return arrived_two(prices=slots(slot=slot, price=price)[1])\n".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
     // Core's `replay` and `record` written for the window.
     let core = emitted.text("_hgl/_m_core/__init__.py");
     for expected in [
@@ -6816,6 +6836,186 @@ fn a_window_form_not_written_yet_is_reported() {
              which core leaves undefined, yet"
         ),
         "{blocked}"
+    );
+}
+
+/// TYPE-9: a window inside a struct, a tuple, a list or a dictionary is
+/// a child of its own, and a value that holds one is read as the window
+/// is (`windows_in`). A node reads it only where each window it holds
+/// has a minimum of one tick (FN-12, `readable_window`): an input's or
+/// `out`'s readiness is reported otherwise. What a window holds is not
+/// read, whole or as a part of the value that holds it, and `out` that
+/// holds one is not invalidated.
+#[test]
+fn a_window_within_a_value_is_reported_where_it_is_read() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Full {\n",
+            "    prices: rolling_window<f64, 3>\n",
+            "    last: f64\n",
+            "}\n",
+            "struct Book {\n",
+            "    prices: rolling_window<f64, 3, 1>\n",
+            "    last: f64\n",
+            "}\n",
+            "fn full(book: Full) -> f64 {\n",
+            "    when { return book.last }\n",
+            "}\n",
+            "fn timed(slots: list<rolling_window<f64, 5s, 0s>, 2>) -> bool {\n",
+            "    when { return valid(slots) }\n",
+            "}\n",
+            "fn keyed(prices: dict<str, rolling_window<f64, 3>>) -> bool {\n",
+            "    when { return valid(prices) }\n",
+            "}\n",
+            "fn own(price: f64) -> Full {\n",
+            "    inject out\n",
+            "    when {\n",
+            "        if valid(out) { return }\n",
+            "        out = delta<Full>(last: price)\n",
+            "    }\n",
+            "}\n",
+            "fn whole(book: Book) -> Book {\n",
+            "    when { return book }\n",
+            "}\n",
+            "fn bound(book: Book) -> f64 {\n",
+            "    when {\n",
+            "        let copy = book\n",
+            "        return copy.last\n",
+            "    }\n",
+            "}\n",
+            "fn field(book: Book) -> bool {\n",
+            "    when {\n",
+            "        let prices = book.prices\n",
+            "        return true\n",
+            "    }\n",
+            "}\n",
+            "fn entries(prices: dict<str, rolling_window<f64, 3, 1>>) -> bool {\n",
+            "    when {\n",
+            "        let all = prices\n",
+            "        return true\n",
+            "    }\n",
+            "}\n",
+            "fn first(pair: tuple<rolling_window<f64, 3, 1>, f64>) -> bool {\n",
+            "    when {\n",
+            "        let window = pair[0]\n",
+            "        return true\n",
+            "    }\n",
+            "}\n",
+            "fn cleared(price: f64) -> Book {\n",
+            "    inject out\n",
+            "    when { invalidate(out) }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            // The readiness of a field's window, of a list's element of
+            // a duration, of a dictionary's value, and of `out`'s field.
+            "m.hgl:10:9 target.unsupported",
+            "m.hgl:13:10 target.unsupported",
+            "m.hgl:16:10 target.unsupported",
+            "m.hgl:22:12 target.unsupported",
+            // A struct read whole, bound whole, its window field, a
+            // dictionary of windows bound whole, a tuple's window.
+            "m.hgl:27:19 target.unsupported",
+            "m.hgl:31:20 target.unsupported",
+            "m.hgl:37:22 target.unsupported",
+            "m.hgl:43:19 target.unsupported",
+            "m.hgl:49:22 target.unsupported",
+            // `out` that holds a window, invalidated.
+            "m.hgl:55:12 target.unsupported",
+        ]
+    );
+}
+
+/// hgraph's `switch_` and `map_` fail as the graph runs where a window,
+/// alone or within a bundle or a dictionary, is given to the graph they
+/// make (`windows_given`): a window read in the branch of a graph's `if`
+/// (CTRL-13), a struct that holds one, and a loop over a dictionary of
+/// windows (CTRL-15) are reported. TIME-7, END-5: a second write in one
+/// evaluation is the publication, and hgraph's `TSW` takes one value in
+/// a cycle, so a window `out` may be written where it is the one place
+/// that publishes, out of any loop (`window_published_once`): two writes,
+/// one in a loop, and one with a `return` after it are reported, and
+/// returns alone are not.
+#[test]
+fn a_window_a_target_cannot_carry_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Book {\n",
+            "    prices: rolling_window<f64, 3, 1>\n",
+            "    last: f64\n",
+            "}\n",
+            "fn collect(price: f64) -> rolling_window<f64, 3, 1> {\n",
+            "    when { return price }\n",
+            "}\n",
+            "fn arrived(prices: rolling_window<f64, 3, 1>) -> f64 {\n",
+            "    when { return delta_value(prices) }\n",
+            "}\n",
+            "fn booked(price: f64) -> Book {\n",
+            "    when { return delta<Book>(prices: price, last: price) }\n",
+            "}\n",
+            "fn last(book: Book) -> f64 {\n",
+            "    when { return book.last }\n",
+            "}\n",
+            "fn routed(flag: bool, price: f64) -> f64 {\n",
+            "    let w = collect(price)\n",
+            "    if flag { return arrived(w) } else { return 0.0 }\n",
+            "}\n",
+            "fn routed_book(flag: bool, price: f64) -> f64 {\n",
+            "    let b = booked(price)\n",
+            "    if flag { return last(b) } else { return 0.0 }\n",
+            "}\n",
+            "fn keyed(key: str, price: f64) -> dict<str, rolling_window<f64, 3, 1>> {\n",
+            "    when { return delta<dict<str, rolling_window<f64, 3, 1>>>(updated: [key: price]) }\n",
+            "}\n",
+            "fn watched(prices: rolling_window<f64, 3, 1>) {\n",
+            "    when { let seen = delta_value(prices) }\n",
+            "}\n",
+            "fn each(key: str, price: f64) {\n",
+            "    for name, window in keyed(key, price) { watched(window) }\n",
+            "}\n",
+            "fn twice(price: f64) -> rolling_window<f64, 3, 1> {\n",
+            "    inject out\n",
+            "    when {\n",
+            "        out = price\n",
+            "        out = price + 1.0\n",
+            "    }\n",
+            "}\n",
+            "fn looped(price: f64) -> rolling_window<f64, 3, 1> {\n",
+            "    inject out\n",
+            "    when {\n",
+            "        for step in [1.0, 2.0] { out = price + step }\n",
+            "    }\n",
+            "}\n",
+            "fn then_returned(price: f64) -> Book {\n",
+            "    inject out\n",
+            "    when { out = delta<Book>(last: price) }\n",
+            "    when { return delta<Book>(prices: price) }\n",
+            "}\n",
+            "fn returns(price: f64) -> rolling_window<f64, 3, 1> {\n",
+            "    when {\n",
+            "        if price < 0.0 { return 0.0 }\n",
+            "        return price\n",
+            "    }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:20:5 target.unsupported",
+            "m.hgl:24:5 target.unsupported",
+            "m.hgl:33:5 target.unsupported",
+            "m.hgl:38:9 target.unsupported",
+            "m.hgl:45:34 target.unsupported",
+            "m.hgl:50:12 target.unsupported",
+        ]
     );
 }
 
