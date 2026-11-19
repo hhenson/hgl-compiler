@@ -626,6 +626,9 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "fn kept_whole<T>(pair: atomic<tuple<i64, i64>>, const tag: T) -> i64 {\n",
         "    when { return pair[0] }\n",
         "}\n",
+        "fn kept_part<T>(pair: atomic<tuple<T, i64>>, const tag: T) -> i64 {\n",
+        "    when { return pair[1] }\n",
+        "}\n",
         "fn same_pair<T>(pair: tuple<T, T>) -> i64 {\n",
         "    when all_valid(pair) { return 1 }\n",
         "}\n",
@@ -641,6 +644,7 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "    let snaps = eval(snap(command: [1]))\n",
         "    assert eval(kept_whole(pair: snaps, tag: 1)) == [1]\n",
         "    assert eval(kept_whole(pair: [(1, 2)], tag: 1)) == [1]\n",
+        "    assert eval(kept_part(pair: snaps, tag: 1)) == [1]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
@@ -677,6 +681,7 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
             "i64",
             "i64",
             "tuple<i64, i64>",
+            "i64",
             "i64",
         ]
     );
