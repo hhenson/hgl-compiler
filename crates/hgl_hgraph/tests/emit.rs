@@ -1571,10 +1571,16 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
                 "fn one() -> i64 {\n",
                 "    yield 1s: 1\n",
                 "}\n",
-                // A loop in a graph is not written yet.
+                // An `if` over a connection whose branches assign two
+                // `var`s is not written yet.
                 "export fn waits() -> i64 {\n",
-                "    for item in [1, 2] { let seen = one() }\n",
-                "    return one()\n",
+                "    var first = one()\n",
+                "    var second = one()\n",
+                "    if one() > 0 {\n",
+                "        first = one()\n",
+                "        second = one()\n",
+                "    }\n",
+                "    return first + second\n",
                 "}\n",
             ),
         ),
@@ -1587,7 +1593,7 @@ fn an_application_that_needs_what_is_not_written_is_blocked() {
         panic!("one application is written");
     };
     let blocked = application.blocked.as_ref().expect("it is blocked");
-    assert_eq!(emitted.place(blocked.primary), "m.hgl:6:5");
+    assert_eq!(emitted.place(blocked.primary), "m.hgl:8:5");
 }
 
 /// Core's CRUN-2: "`start` is inclusive and `end` exclusive: no cycle
@@ -6076,6 +6082,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
+    files.push(("graph_for.hgl", GRAPH_FOR));
     files.push(("captures.hgl", CAPTURES));
     files.push(("errors.hgl", ERRORS));
     files.extend(MODULES);
@@ -7987,5 +7994,137 @@ fn a_negative_list_size_fails_as_the_graph_runs() {
     assert!(
         message.contains("HglError: the size -1 of a list is negative"),
         "{message}"
+    );
+}
+
+/// CTRL-2, CTRL-3 and CTRL-7 to CTRL-15: a graph's `for`, `while` and
+/// `switch` over an ordinary value, an outputless `if`, and a `return`
+/// in an `if` that gives a `let` its value.
+const GRAPH_FOR: &str = include_str!("fixtures/graph_for.hgl");
+
+/// CTRL-15: "`for item in items` over an ordinary list, set, or
+/// dictionary composes its body once for each element ... Over a
+/// connection of `list<T, N>` it composes its body `N` times": Python's
+/// own loop. "Over a connection of `list<T>`, `set<T>`, or `dict<K, V>`
+/// it makes one child for each member (CTRL-7)": hgraph's `map_`, with a
+/// graph for the body that takes the key's port and, CTRL-7, "Captured
+/// temporal connections are bound whole and add no membership". CTRL-3:
+/// "An outputless if has no synthetic result; an omitted false branch
+/// performs no conditional work": `switch_` of graphs with no output.
+#[test]
+fn a_graph_for_is_a_python_loop_or_a_child_for_each_member() {
+    let emitted = emit(&[("graph_for.hgl", GRAPH_FOR)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_graph_for/__init__.py");
+    for expected in [
+        // Unrolled where the graph is built, carrying the `var`.
+        concat!(
+            "    running = price\n",
+            "    for factor in factors:\n",
+            "        running = _lift_0_mul__i64_i64(lhs=running, rhs=factor)\n",
+        ),
+        "    for name, weight in weights.items():\n",
+        // A fixed list's `TSL` gives a port for each position.
+        "    for item in both_positions(low=low):\n",
+        // A dictionary: a child for each key, given the key's port.
+        concat!(
+            "    @_hg.graph\n",
+            "    def _each_0(name: _hg.TS[_py.str], value: _hg.TS[_py.int]):\n",
+            "        counted(name=name, price=value)\n",
+            "    _hg.map_(_each_0, value=priced(key=key, price=price), __key_arg__=\"name\")\n",
+        ),
+        // A list: its positions as a `TSD`, and no key.
+        "    _hg.map_(_each_1, item=_hg.convert[_hg.TSD[_py.int, _hg.TS[_py.int]]](readings(reading=reading)), __key_arg__=\"\")\n",
+        // A set: its members are the keys.
+        "    _hg.map_(_each_2, __keys__=members(member=member), __key_arg__=\"each\")\n",
+        // A connection from outside is given whole; one named as a
+        // parameter of `switch_` is taken under a name of its own.
+        concat!(
+            "        def _case_0_0(_taken_name: _hg.TS[_py.str], value: _hg.TS[_py.int]):\n",
+            "            name = _taken_name\n",
+            "            counted(name=name, price=value)\n",
+        ),
+        "        _hg.switch_(open, {True: _case_0_0, False: _case_0_1}, _taken_name=name, value=value)\n",
+        "    _hg.map_(_each_3, value=priced(key=key, price=price), __key_arg__=\"name\", open=_hg.pass_through(open))\n",
+        // A `while` and a `switch` over an ordinary value.
+        "    while _core.gt__T_T(lhs=left, rhs=0):\n",
+        concat!(
+            "    _selected_1 = route\n",
+            "    if _selected_1 == 1:\n",
+            "        return price\n",
+            "    elif _selected_1 == 2:\n",
+        ),
+        // An outputless `if`: no `else` is a graph with nothing in it.
+        concat!(
+            "    def _case_3_1(price: _hg.TS[_py.int]):\n",
+            "        pass\n",
+            "    _hg.switch_(open, {True: _case_3_0, False: _case_3_1}, price=price)\n",
+        ),
+        // A `return` in a `let`'s `if`: the other branch's graph gives
+        // the `let` its value and has what follows.
+        concat!(
+            "    def _case_4_1(left: _hg.TS[_py.int], right: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        taken = _lift_9_mul__i64_i64(lhs=right, rhs=2)\n",
+            "        return _lift_10_add__i64_i64(lhs=taken, rhs=1)\n",
+            "    return _hg.switch_(flag, {True: _case_4_0, False: _case_4_1}, left=left, right=right)\n",
+        ),
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// What this target does not write of a graph's loops is reported: a
+/// key read where hgraph has no value for it, as an operand and as a
+/// `const` argument (`map_` gives a child its key as a port); a
+/// `return` under a branch selected at runtime in an unrolled loop,
+/// whose other path is the passes after it; a loop over a growing list
+/// of nullables; and a `return` in an `if` over a connection that gives
+/// a `let` its value where a branch has none.
+#[test]
+fn a_graph_loop_form_not_written_yet_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn sink(value: i64) { when { } }\n",
+            "fn labelled(value: i64, const label: str) { when { } }\n",
+            "fn keyed(prices: dict<str, i64>) {\n",
+            "    for name, price in prices {\n",
+            "        if name == \"a\" { sink(price) }\n",
+            "    }\n",
+            "}\n",
+            "fn configured(prices: dict<str, i64>) {\n",
+            "    for name, price in prices {\n",
+            "        labelled(price, name)\n",
+            "    }\n",
+            "}\n",
+            "fn looped(flag: bool, price: i64, const factors: list<i64>) -> i64 {\n",
+            "    for factor in factors {\n",
+            "        if flag { return price }\n",
+            "    }\n",
+            "    return price\n",
+            "}\n",
+            "fn nsink(value: i64?) { when { } }\n",
+            "fn maybe(values: list<i64?>) {\n",
+            "    for value in values { nsink(value) }\n",
+            "}\n",
+            "fn absent(flag: bool, price: i64) -> i64? {\n",
+            "    let taken: i64? = if flag { return price }\n",
+            "    return taken\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:12 target.unsupported",
+            "m.hgl:11:25 target.unsupported",
+            "m.hgl:16:9 target.unsupported",
+            "m.hgl:22:5 target.unsupported",
+            "m.hgl:25:23 target.unsupported",
+        ]
     );
 }
