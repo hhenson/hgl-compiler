@@ -234,6 +234,7 @@ It is built in passes:
 | Declared types | Struct parents and fields; structs that hold themselves; enum numbering | TYPE-3, TYPE-4, TYPE-6, TYPE-7 | done |
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
 | Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6 | in part: a default that names something is not checked |
+| Documentation | The keys of a documentation comment's `Args:` and `Type Args:` sections, against the declaration's parameters and generic parameters; nothing recorded | SDOC-3, SDOC-6 | in part: `Requires:` and `Properties:` keys are not checked |
 | Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
 | Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | in part: each temporal body is classified a graph or a node. What each admits is planned: see "Temporal bodies" below |
 | Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
@@ -472,6 +473,8 @@ else".
 | `state`, `cache`, `start`, `when` or `stop` in a `const fn` | `node.in_value_function` | FN-1 |
 | `inject` in a `const fn`, or in the contract of a native one | `node.in_value_function` | FN-9, NATIVE-3 |
 | `inject`, `state`, `cache` or a hook in an anonymous function written in a node | `node.in_value_function` | FN-9, FN-3 |
+| A temporal input read in a `cache`'s initialiser | local `cache.input_read` | TIME-1 |
+| A connection in a graph given to a value candidate's option by a symbol's configuration, `a =={abs: tolerance} b` | `connection.as_constant` | EXPR-14 |
 
 A value function injects no capability (owner's decision of 2026-11-16
 on hhenson/hgl_spec#57): what it needs of one is its argument, a value
