@@ -1378,6 +1378,26 @@ fn binary(
     if configured(node) {
         return configured_value(node, scope, None);
     }
+    if matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual) {
+        // TYPE-7: an implied member is of the enum its place expects:
+        // `Mode.fast == .slow` compares two of `Mode`, as core's `==`
+        // is selected for them. Two implied members, or one beside no
+        // enum's value or naming no member of it, are of no type `==`
+        // takes (OPS-2), and not worked out.
+        let boolean = Some(Type::Scalar(Scalar::Bool));
+        match (left.open == Open::Member, right.open == Open::Member) {
+            (true, true) => return Ok(Typed::unevaluated(boolean)),
+            (true, false) => match implied(left, &right, scope.program) {
+                Some(member) => left = member,
+                None => return Ok(Typed::unevaluated(boolean)),
+            },
+            (false, true) => match implied(right, &left, scope.program) {
+                Some(member) => right = member,
+                None => return Ok(Typed::unevaluated(boolean)),
+            },
+            (false, false) => {}
+        }
+    }
     // An integer literal beside an `f64` in arithmetic is taken as the
     // `f64` it is nearest: core's mixed candidates make it one (NUM-1,
     // "Unconfigured mixed i64/f64 and f64 arithmetic returns f64"). A
@@ -1425,6 +1445,20 @@ fn binary(
         open,
         parts: Vec::new(),
     })
+}
+
+/// The implied member `member` as one of the enum `other` is of.
+/// `Some` of it unchanged where `other`'s type is not known; `None`
+/// where that type is no enum, or the enum has no such member.
+fn implied(member: Typed, other: &Typed, program: &Program) -> Option<Typed> {
+    let Some(ty) = other.ty.as_ref().filter(|ty| !unknown(ty)) else {
+        return Some(member);
+    };
+    enum_place(ty)?;
+    match fit(member, Some(ty), program) {
+        Ok(value) => Some(Typed::of(value, Some(ty.clone()))),
+        Err(_) => None,
+    }
 }
 
 /// An integer literal as the `f64` it is where one is expected.
