@@ -1112,8 +1112,8 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
 /// generic arguments the call resolves is rejected." A call that passes
 /// on a generic value parameter of its own, `one_only<Y>`, resolves its
 /// arguments where a call gives `Y` a value: the `requires` is told
-/// there, at any depth, in a value function and in a graph, of a type
-/// as of a value. "Not told"
+/// there, at any depth, in a value function, a graph and an operator's
+/// candidate, of a type as of a value. "Not told"
 /// is never "holds": one still not told where every argument is given,
 /// as of a constant this compiler does not work out, is rejected.
 #[test]
@@ -1148,7 +1148,11 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
              const fn e() -> f64 => one_only<C>(1.0)\n\
              const fn f() -> i64 => wrap(FBox<2.0>(v: 1))\n\
              const fn only_two<T>(x: T) -> i64 requires T == FBox<2.0> => 1\n\
-             const fn g() -> i64 => only_two(FBox<C>(v: 1))\n"
+             const fn g() -> i64 => only_two(FBox<C>(v: 1))\n\
+             operator unwrap<T>(boxed: T) -> i64\n\
+             impl const fn unwrap<const X: f64>(boxed: FBox<X>) -> i64 => only_two(boxed)\n\
+             const fn h() -> i64 => unwrap(FBox<1.0>(v: 1))\n\
+             const fn k() -> i64 => unwrap(FBox<2.0>(v: 1))\n"
         ),
         &[
             "13 requires.unmet",
@@ -1158,6 +1162,7 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
             "17 requires.unmet",
             "18 requires.unmet",
             "20 requires.unmet",
+            "23 requires.unmet",
         ],
     );
 }

@@ -1324,13 +1324,21 @@ fn made_by(expression: &Expr, made: &mut Vec<Made>) {
     expression.walk(&mut |expression| made_at(expression, made));
 }
 
-/// The call `expression` is, where it is one of a function or a struct
-/// it gives generic arguments.
+/// The call `expression` is, where it is one of a function, an
+/// operator's candidate or a struct it gives generic arguments.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
     let (callee, generics) = match &expression.kind {
+        // A function, or the candidate a call of an operator selected
+        // (GEN-5), whose body may pass its parameters on as any does.
         ExprKind::Call {
             callee:
                 Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                }
+                | Callee::Candidate {
                     module,
                     declaration,
                     generics,
