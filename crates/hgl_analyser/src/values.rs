@@ -1435,15 +1435,6 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// The inputs a `when` header admits by its own `valid` selectors;
-    /// `None` when it has none, and the default stands.
-    ///
-    /// TIME-3: "A selector sets subscription or admission when it
-    /// stands alone in the header or appears as a top-level conjunct.
-    /// Selectors under negation or disjunction leave the default in
-    /// place." A selector is the language's `valid`: a name a
-    /// declaration binds is a call of that declaration, and no selector
-    /// (TIME-9).
     /// True when the name at `name` may be one of the language's own
     /// forms: nothing binds it, or core's module declares it. TIME-9
     /// has core declare the endpoint operations, and in a `when` header
@@ -1476,6 +1467,15 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The inputs a `when` header admits by its own `valid` selectors;
+    /// `None` when it has none, and the default stands.
+    ///
+    /// TIME-3: "A selector sets subscription or admission when it
+    /// stands alone in the header or appears as a top-level conjunct.
+    /// Selectors under negation or disjunction leave the default in
+    /// place." A selector is the language's `valid`: a name a
+    /// declaration binds is a call of that declaration, and no selector
+    /// (TIME-9).
     fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
         match header.kind() {
             SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
