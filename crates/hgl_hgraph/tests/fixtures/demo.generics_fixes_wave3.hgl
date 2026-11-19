@@ -49,3 +49,15 @@ test an_option_a_generic_parameter_gives_selects_for_each_instance {
     assert is_err(checked<.error>(1.0, 0.0))
     assert is_ok(checked<.error>(1.0, 2.0))
 }
+
+# UNIT-13: "A constant is read by its name wherever an ordinary value
+# is": in a `requires`, compared with a generic value parameter, and in
+# the set it is compared with.
+const THREE: i64 = 3
+const fn named<const N: i64>(v: i64) -> i64 requires N == THREE => v + N
+const fn among<const N: i64>(v: i64) -> i64 requires N in {THREE, 5} => v + N
+
+test a_constant_in_a_requires_is_read_by_its_name {
+    assert named<3>(1) == 4
+    assert among<5>(1) == 6
+}

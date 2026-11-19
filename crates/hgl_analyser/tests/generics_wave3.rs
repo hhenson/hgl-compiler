@@ -350,3 +350,53 @@ fn a_generic_argument_that_fails_in_an_instance_rejects() {
     );
     assert!(grown.message.contains("fails"), "{}", grown.message);
 }
+
+/// UNIT-13: "A constant is read by its name wherever an ordinary value
+/// is." GEN-3: a `requires` may use "equalities, the membership of a
+/// constant in a set of constants". A module's constant compared with a
+/// generic value parameter, `N == C` and `C == N`, among a set, `N in {C,
+/// 5}`, and compared with a candidate's option, `mode == FAST`, is that
+/// constant: the condition holds where the parameter's value is the
+/// constant's, at a call that writes it and for each instance a call
+/// makes. One compared with a type parameter, `T == C`, compares a type
+/// with a value, and is still no type (`type.not_a_type`).
+#[test]
+fn a_constant_in_a_requires_is_read_by_its_name() {
+    let checked = module(concat!(
+        "enum Mode { slow, fast }\n",
+        "const C: i64 = 3\n",
+        "const FAST: Mode = .fast\n",
+        "const fn named_eq<const N: i64>(v: i64) -> i64 requires N == C => v + N\n",
+        "const fn named_left<const N: i64>(v: i64) -> i64 requires C == N => v + N\n",
+        "const fn named_in<const N: i64>(v: i64) -> i64 requires N in {C, 5} => v + N\n",
+        "operator step(value: i64, const mode: Mode = .slow) -> i64\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == FAST => value + 10\n",
+        "impl const fn step(value: i64, const mode: Mode) -> i64 requires mode == .slow => value + 1\n",
+        "const fn typed<T>(v: T) -> i64 requires T == C => 1\n",
+        "const fn pass<const M: i64>(v: i64) -> i64 => named_eq<M>(v)\n",
+        "const fn a() -> i64 => named_eq<3>(1)\n",
+        "const fn b() -> i64 => named_eq<4>(1)\n",
+        "const fn c() -> i64 => named_left<3>(1) + named_left<2>(1)\n",
+        "const fn d() -> i64 => named_in<3>(1) + named_in<5>(1) + named_in<4>(1)\n",
+        "const fn e() -> i64 => step(1, mode: .fast) + step(1)\n",
+        "const fn f() -> i64 => pass<3>(1) + pass<4>(1)\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:11:46 type/type.not_a_type UNIT-10",
+            "m.hgl:14:24 constraint/requires.unmet GEN-3",
+            "m.hgl:15:43 constraint/requires.unmet GEN-3",
+            "m.hgl:16:58 constraint/requires.unmet GEN-3",
+            "m.hgl:18:37 constraint/requires.unmet GEN-3",
+        ],
+        "{}",
+        checked.report
+    );
+    // The candidate for `FAST` is selected by `.fast`, and the other by
+    // the operator's default.
+    assert_eq!(
+        called(&checked, body(&checked, "e")),
+        ["add_(i64, i64)", "step(i64, Mode)", "step(i64, Mode)"]
+    );
+}

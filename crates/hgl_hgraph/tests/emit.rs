@@ -6261,3 +6261,14 @@ fn an_option_a_generic_parameter_gives_is_written_for_each_instance() {
         "def _inst_quietly__core__ZeroPolicy_nan(a, b):\n    return _inst_ratio__core__ZeroPolicy_nan(a=a, b=b)",
     ]);
 }
+
+/// UNIT-13: "A constant is read by its name wherever an ordinary value
+/// is." A `requires` that compares a generic value parameter with a
+/// module's constant holds for the constant's value, and the instance
+/// is written.
+#[test]
+fn a_constant_in_a_requires_is_read_by_its_name() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&["def _inst_named__3(v):", "def _inst_among__5(v):"]);
+}
