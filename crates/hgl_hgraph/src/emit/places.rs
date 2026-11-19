@@ -338,7 +338,7 @@ impl Emitter<'_> {
         steps.reverse();
         let mut port = "_output".to_string();
         // The part the port holds.
-        let mut part = place_root(place);
+        let mut part = place.place_root();
         for (taken, step) in steps.iter().enumerate() {
             let child = match &step.kind {
                 ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
@@ -525,7 +525,7 @@ impl Emitter<'_> {
             }
             steps += 1;
         }
-        let ExprKind::Local(local) = place_root(place).kind else {
+        let ExprKind::Local(local) = place.place_root().kind else {
             return None;
         };
         let root = function.mode != Mode::Graph && owns(self.program, function, local);
@@ -698,12 +698,6 @@ fn step_of(at: &Expr) -> Option<(&Expr, &Expr)> {
         ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => Some((at, base)),
         _ => None,
     }
-}
-
-/// What the steps of `place` start from: `rows` for `rows[0].orders`,
-/// and a place that is a name itself.
-pub(crate) fn place_root(place: &Expr) -> &Expr {
-    place_steps(place).last().map_or(place, |(_, base)| base)
 }
 
 /// Whether reading `place` reads an element of a list or an entry of
