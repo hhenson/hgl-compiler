@@ -213,6 +213,36 @@ fn an_anonymous_function_reads_under_the_admission_where_it_is_written() {
     );
 }
 
+/// CTRL-5: "Return targets the enclosing HGL function", and `?` leaves
+/// it (ERR-5): in an anonymous function's body that is the anonymous
+/// function, whose result its accepting form gives (FN-7). Its `return`
+/// and its `?` are judged against neither the node's result nor its
+/// hook, in a `when`, in `start` or in `stop`. `out` it uses is a
+/// capture (`name.captured`, FN-14), and is reported as that alone.
+#[test]
+fn an_anonymous_function_returns_from_itself() {
+    let checked = module(concat!(
+        "fn hooked(value: i64) -> i64 {\n",
+        "    inject out\n",
+        "    start {\n",
+        "        let first = fn(x: result<i64, str>) -> result<i64, str> { let n = x?\n",
+        "            return ok(n) }\n",
+        "        let written = fn() => out\n",
+        "    }\n",
+        "    when {\n",
+        "        let each = fn(x: result<i64, str>) -> result<i64, str> { let n = x?\n",
+        "            return ok(n + value) }\n",
+        "        return value\n",
+        "    }\n",
+        "    stop {\n",
+        "        let last = fn(x: result<i64, str>) -> result<i64, str> { let n = x?\n",
+        "            return ok(n) }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:7:31 name/name.captured FN-14"]);
+}
+
 /// TIME-7: "`out` is read in a `when` and in `stop` ... `start` neither
 /// reads nor writes it". A `state`'s and a `cache`'s initializer give
 /// them their first values on every start (TIME-6), before the node has

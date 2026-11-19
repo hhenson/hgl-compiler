@@ -1541,7 +1541,14 @@ impl<'a> Typer<'a> {
     /// Reports a use of the node's output where TIME-7 has none: "`out`
     /// is read in a `when` and in `stop`, and written only in a `when`:
     /// `start` neither reads nor writes it".
+    ///
+    /// In an anonymous function's body `out` is a capture, which the
+    /// resolver reports (`name.captured`, FN-14), and is not reported
+    /// again here.
     fn out_lifecycle(&mut self, at: Location, message: String) {
+        if self.anonymous {
+            return;
+        }
         self.diagnostics.emit(
             error(Category::Phase, codes::OUT_LIFECYCLE, at, message, "TIME-7").with_note(
                 "a node that publishes when the graph starts schedules itself in `start` and \
@@ -3833,10 +3840,8 @@ impl<'a> Typer<'a> {
         // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
         // neither reads nor writes it". Nor does a `state`'s or a
         // `cache`'s initializer, which gives it its first value on
-        // every start (TIME-6), before the node has published. In an
-        // anonymous function `out` is a capture, which the resolver
-        // reports (`name.captured`, FN-14).
-        if Some(local) == self.out && !self.anonymous {
+        // every start (TIME-6), before the node has published.
+        if Some(local) == self.out {
             if self.hook == Some(Hook::Start) {
                 self.out_lifecycle(
                     at,
@@ -7228,8 +7233,13 @@ impl<'a> Typer<'a> {
             .map_or(self.at(node), |mark| Location::new(self.file, mark.span()));
         let operand = self.expression(&operand, None);
         let value_function = self.declaration.kind.role() == Some(Role::Value);
+        // In an anonymous function's body `?` leaves that function
+        // (CTRL-5), a value function whose result its accepting form
+        // gives (FN-7), which is not read: neither where it stands nor
+        // what it returns is judged against the node.
+        let anonymous = self.anonymous;
         // Where it stands, when that is a place nothing propagates from.
-        let forbidden = if value_function {
+        let forbidden = if value_function || anonymous {
             None
         } else if self.graph {
             Some("in composition: a graph wires its failures, and has none to leave by")
@@ -7273,7 +7283,7 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Propagate(Box::new(operand)), Type::Unknown);
             }
         };
-        if forbidden.is_none() && whole(&failure) {
+        if forbidden.is_none() && whole(&failure) && !anonymous {
             if value_function {
                 // "Failure returns the same E as Err."
                 match &self.signature.result {
