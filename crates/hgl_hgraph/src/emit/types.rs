@@ -67,6 +67,22 @@ pub(super) fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
 }
 
+/// True for a temporal value of `ty` that is read whole only where it is
+/// all valid (TIME-1: "A read of a struct, a tuple or a fixed list whole
+/// ... requires `all_valid` of it"): a struct with a field, a tuple and a
+/// list of a size. A struct with none publishes its one value whole
+/// (`empty_struct`).
+pub(super) fn read_whole_all_valid(program: &Program, ty: &Type) -> bool {
+    match ty {
+        Type::Named {
+            kind: NamedKind::Struct,
+            ..
+        } => !empty_struct(program, ty),
+        Type::Tuple(_) | Type::List { size: Some(_), .. } => true,
+        _ => false,
+    }
+}
+
 /// True for a concrete struct with no field, `struct Empty {}`, which
 /// this target writes as a temporal `TS` of its class
 /// (`Emitter::struct_annotation`).
@@ -365,6 +381,62 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
                     })
                     .collect();
                 (!written.is_empty()).then(|| format!("{{{}}}", written.join(", ")))
+            }
+            _ => None,
+        }
+    }
+    within(program, ty, 0)
+}
+
+/// Where a temporal value of `ty` holds a dictionary or a set, itself
+/// among them, through dictionaries' values, structs' fields, tuples'
+/// positions and fixed lists' elements: the provider's shape of it for
+/// `entries_published`, `"entries"` for one whose own parts hold none,
+/// `("entries", part)` for a dictionary whose values hold one,
+/// `("fields", {name: part})` for a struct, `("positions", (part, ...))`
+/// for a tuple and `("list", part)` for a fixed list, `None` for a part
+/// that holds none. `None` where `ty` holds none so: hgraph's `TSD`
+/// fails the run for a `REMOVE` of a key it does not hold, and neither
+/// it nor the `TSS` is made valid by a delta that names no change. An
+/// unsized list's is published by its size (`list_parts_shape`), and one
+/// in it is not looked for.
+pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
+    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+        if depth > HELD_DEPTH {
+            return None;
+        }
+        let part = |ty: &Type| within(program, ty, depth + 1);
+        let written = |part: Option<String>| part.unwrap_or_else(|| "None".to_string());
+        match ty {
+            Type::Set(_) => Some("\"entries\"".to_string()),
+            Type::Dict { value, .. } => Some(match part(value) {
+                Some(inner) => format!("(\"entries\", {inner})"),
+                None => "\"entries\"".to_string(),
+            }),
+            Type::List {
+                element,
+                size: Some(_),
+            } => part(element).map(|inner| format!("(\"list\", {inner})")),
+            Type::Tuple(elements) => {
+                let parts: Vec<Option<String>> = elements.iter().map(part).collect();
+                if parts.iter().all(Option::is_none) {
+                    return None;
+                }
+                let parts: Vec<String> = parts.into_iter().map(written).collect();
+                Some(format!("(\"positions\", ({},))", parts.join(", ")))
+            }
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let fields: Vec<String> = fields_of(program, ty)?
+                    .into_iter()
+                    .filter_map(|(member, field)| {
+                        let inner = part(&field)?;
+                        Some(format!("{}: {inner}", string(&name(&member.name))))
+                    })
+                    .collect();
+                (!fields.is_empty()).then(|| format!("(\"fields\", {{{}}})", fields.join(", ")))
             }
             _ => None,
         }

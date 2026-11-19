@@ -121,7 +121,9 @@ test a_required_part_not_published_fails_its_read {
     assert eval(ask_of_bid(bid: [1])) == []
     assert eval(second_of_first(a: [1])) == []
     assert raises("value.unset_read") { eval(whole_first_of(a: [1])) }
-    assert raises("value.unset_read") { eval(spread_of(bid: [1])) }
+    # FN-11: a struct "that is valid and not all valid binds no fallback,
+    # and the helper is not invoked".
+    assert eval(spread_of(bid: [1])) == []
 }
 
 test an_optional_part_not_published_is_null {

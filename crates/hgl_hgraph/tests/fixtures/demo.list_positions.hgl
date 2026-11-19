@@ -95,7 +95,9 @@ test a_runtime_read_past_the_list_fails_with_its_code {
 }
 
 # TYPE-16: a removed position the list never held: nothing is lost and
-# nothing fails, as for a dictionary's absent key.
+# nothing fails, as for a dictionary's absent key. Proposed in TIME-7 on
+# the specification's main (hhenson/hgl_spec#124): such a delta names no
+# change, and where the list is valid is no tick.
 fn relayed(values: list<i64>) -> list<i64> {
     when { return delta_value(values) }
 }
@@ -105,10 +107,10 @@ fn relay_of(command: i64) -> list<i64> => relayed(edited(command))
 fn digits_of(command: i64) -> i64 => digits(edited(command))
 
 test a_removed_position_never_held_is_ignored {
-    assert eval(digits_of(command: [0, 5])) == [123, 123]
+    assert eval(digits_of(command: [0, 5])) == [123, _]
     assert eval(relay_of(command: [0, 5])) == [
         delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
-        delta<list<i64>>(),
+        _,
     ]
 }
 
