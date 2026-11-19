@@ -119,6 +119,7 @@ pub(crate) fn module(
         looped: 0,
         ported: Vec::new(),
         unrolling: 0,
+        results: Vec::new(),
         scheduled: None,
         candidates: BTreeSet::new(),
         propagates: false,
@@ -542,6 +543,10 @@ enum Tail {
     /// Nothing, and the graph has no output: CTRL-3, "An outputless if
     /// has no synthetic result".
     Outputless,
+    /// The `default` of a `switch` that writes none: CTRL-6, "An
+    /// unmatched selector uses default or fails". The graph fails when
+    /// it is selected, as a node's `switch` does (`_core.unmatched`).
+    Unmatched,
 }
 
 /// The statements of a branch of an `if` that stands as a statement:
@@ -624,6 +629,34 @@ fn taken_name(python: &str) -> String {
     } else {
         python.to_string()
     }
+}
+
+/// The locals `statements` assign, by name or by a place inside them,
+/// that they do not declare themselves: the `var`s of what encloses
+/// them that they change.
+fn assigned_outside(statements: &[Stmt]) -> Vec<usize> {
+    use hgl_analyser::hir::{Node, walk_statement_nodes};
+    let mut assigned = Vec::new();
+    let mut declared = Vec::new();
+    walk_statement_nodes(statements, &mut |node| match node {
+        Node::Statement(Stmt::Declare { local, .. }) => declared.push(*local),
+        Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
+        Node::Statement(Stmt::Assign { local, .. }) => assigned.push(*local),
+        Node::Statement(Stmt::AssignPlace { place, .. }) => {
+            let mut root = place;
+            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
+                root = base;
+            }
+            if let ExprKind::Local(local) = root.kind {
+                assigned.push(local);
+            }
+        }
+        _ => {}
+    });
+    assigned.retain(|local| !declared.contains(local));
+    assigned.sort_unstable();
+    assigned.dedup();
+    assigned
 }
 
 /// Adds what `node`, a part of a child graph's statements, names to
@@ -845,6 +878,9 @@ struct Emitter<'a> {
     /// being written. A `return` under a branch selected at runtime
     /// there would need the passes after it as its other path.
     unrolling: usize,
+    /// What each branch graph of a `switch_` that encloses what is
+    /// being written gives, innermost last: what a `return` there gives.
+    results: Vec<Type>,
     /// While the `when`s of a node that injects a scheduler or an alarm
     /// are written, what `scheduled()` is there (TIME-9): the name what
     /// woke the node is held under where the node is entered. `None`
@@ -3108,10 +3144,7 @@ impl Emitter<'_> {
                     // of the block: each branch's graph has it after
                     // its own statements.
                     let on = |statements: &[Stmt]| continued(statements, rest);
-                    let Some(result) = function
-                        .signature
-                        .and_then(|signature| signature.result.clone())
-                    else {
+                    let Some(result) = self.current_result(function) else {
                         self.unsupported(*at, "a `return` in an `if` of a graph with no result");
                         return Branched::Ended;
                     };
@@ -3133,7 +3166,7 @@ impl Emitter<'_> {
                     return Branched::Ended;
                 }
                 let branches = [("True", then_statements), ("False", other_statements)];
-                self.assigned_in_branches(function, condition, &branches, *at, depth);
+                self.assigned_in_branches(function, condition, (&branches, false), *at, depth);
                 Branched::Written
             }
             // An `if` over an ordinary value that stands as a statement,
@@ -3238,6 +3271,23 @@ impl Emitter<'_> {
                             depth,
                         );
                     }
+                    // CTRL-14: "After the `if` the `var` is one
+                    // connection: the branch's binding while that branch
+                    // is selected". `switch_` gives one connection, the
+                    // `if`'s value: a `var` of what encloses the `if`
+                    // that a branch assigns is not written here. Where
+                    // the graph returns the value nothing reads the
+                    // `var` after the branch, which reads its own.
+                    if declared.is_some()
+                        && !assigned_outside(std::slice::from_ref(&Stmt::Expr(whole.clone())))
+                            .is_empty()
+                    {
+                        self.unsupported(
+                            *at,
+                            "an `if` over a connection that gives a `let` or a `var` its value and assigns a `var` declared before it",
+                        );
+                        return Branched::Written;
+                    }
                     let tail = |value: Option<&Expr>| match value {
                         Some(value) => Tail::Value(Box::new(value.clone())),
                         None => Tail::Nothing,
@@ -3258,8 +3308,16 @@ impl Emitter<'_> {
                             tail: other.map_or(Tail::Nothing, |(_, value)| tail(value)),
                         },
                     ];
+                    // What a `return` gives is the graph's result, or the
+                    // branch's it stands in: each branch's graph gives
+                    // that, null where it is nullable (TYPE-14).
+                    let result = match declared {
+                        Some(_) => Some(whole.ty.clone()),
+                        None => self.current_result(function),
+                    }
+                    .unwrap_or_else(|| whole.ty.clone());
                     let call =
-                        self.switched(function, condition, &branches, Some(&whole.ty), *at, depth);
+                        self.switched(function, condition, &branches, Some(&result), *at, depth);
                     self.line(depth, &given(call));
                     if let Some(local) = declared {
                         self.bind(function, local);
@@ -3357,13 +3415,26 @@ impl Emitter<'_> {
                         // absent value, and then what follows.
                         self.statements(function, statements, depth + 1);
                         if !always_returns(statements) {
-                            self.line(
-                                depth + 1,
-                                &(match &target {
-                                    Some(target) => format!("{target} = {absent}"),
-                                    None => format!("return {absent}"),
-                                }),
-                            );
+                            match &target {
+                                Some(target) => {
+                                    self.line(depth + 1, &format!("{target} = {absent}"))
+                                }
+                                // An absent ordinary value returned is a
+                                // null, published as the `return` of one
+                                // is (TYPE-14).
+                                None if !connection => {
+                                    let null = Stmt::Return {
+                                        value: Some(Expr {
+                                            kind: ExprKind::Literal(Value::Null),
+                                            ty: whole.ty.clone(),
+                                            at: *at,
+                                        }),
+                                        at: *at,
+                                    };
+                                    self.statement(function, &null, depth + 1);
+                                }
+                                None => self.line(depth + 1, &format!("return {absent}")),
+                            }
                             if let Some(local) = declared {
                                 self.bind(function, local);
                             }
@@ -3407,6 +3478,9 @@ impl Emitter<'_> {
                 default,
                 at,
             } if self.connects(function, selector) => {
+                if self.labels_repeat(cases) {
+                    return Branched::Ended;
+                }
                 let mut branches: Vec<(String, &[Stmt])> = Vec::new();
                 for case in cases {
                     let label = self.expression(function, &case.label);
@@ -3416,6 +3490,10 @@ impl Emitter<'_> {
                     // CTRL-6: "An unmatched selector uses default".
                     branches.push(("_hg.DEFAULT".to_string(), default));
                 }
+                // CTRL-6: "An unmatched selector ... fails": with no
+                // `default`, `switch_`'s own is a graph that fails as
+                // a node's `switch` does (`Tail::Unmatched`).
+                let unmatched = default.is_none();
                 if branches
                     .iter()
                     .any(|(_, statements)| may_return(statements))
@@ -3423,17 +3501,14 @@ impl Emitter<'_> {
                     if self.unrolled_return(*at) {
                         return Branched::Ended;
                     }
-                    let Some(result) = function
-                        .signature
-                        .and_then(|signature| signature.result.clone())
-                    else {
+                    let Some(result) = self.current_result(function) else {
                         self.unsupported(*at, "a `return` in a `switch` of a graph with no result");
                         return Branched::Ended;
                     };
                     // A case that can reach its end goes on into the rest
                     // of the block, as an `if`'s branch does. With no
                     // `default`, an unmatched selector fails (CTRL-6).
-                    let branches: Vec<Branch> = branches
+                    let mut branches: Vec<Branch> = branches
                         .into_iter()
                         .map(|(key, statements)| Branch {
                             key,
@@ -3441,6 +3516,13 @@ impl Emitter<'_> {
                             tail: Tail::Returns,
                         })
                         .collect();
+                    if unmatched {
+                        branches.push(Branch {
+                            key: "_hg.DEFAULT".to_string(),
+                            statements: Vec::new(),
+                            tail: Tail::Unmatched,
+                        });
+                    }
                     let call =
                         self.switched(function, selector, &branches, Some(&result), *at, depth);
                     self.line(depth, &format!("return {call}"));
@@ -3450,7 +3532,7 @@ impl Emitter<'_> {
                     .iter()
                     .map(|(key, statements)| (key.as_str(), *statements))
                     .collect();
-                self.assigned_in_branches(function, selector, &branches, *at, depth);
+                self.assigned_in_branches(function, selector, (&branches, unmatched), *at, depth);
                 Branched::Written
             }
             // CTRL-15: "a `switch` over an ordinary value composes the
@@ -3465,6 +3547,9 @@ impl Emitter<'_> {
                 default,
                 ..
             } => {
+                if self.labels_repeat(cases) {
+                    return Branched::Ended;
+                }
                 let returns = cases.iter().any(|case| nested_return(&case.body))
                     || default.as_deref().is_some_and(nested_return);
                 let ends = returns && !rest.is_empty();
@@ -3542,6 +3627,131 @@ impl Emitter<'_> {
     /// continuation's otherwise", and the continuation of a pass is the
     /// passes after it and what follows the loop, which this target does
     /// not write as a branch's graph.
+    /// What a `return` written now gives: the result of the innermost
+    /// branch graph of a `switch_` that encloses it, or the graph's.
+    fn current_result(&self, function: &Function) -> Option<Type> {
+        self.results.last().cloned().or_else(|| {
+            function
+                .signature
+                .and_then(|signature| signature.result.clone())
+        })
+    }
+
+    /// `written`, what a `return` of a graph gives, as a connection of
+    /// the `T?` the graph, or the branch graph it stands in, gives.
+    /// TYPE-14: "a T is a value where a T? is expected". hgraph's
+    /// `switch_` takes branches of one type, and a connection of `T` is
+    /// hgraph's `TS[T]`, not `TS[T | None]`: the provider's `nullable`
+    /// gives the one for the other, and a connection that is one
+    /// already as it is. FN-3: an ordinary value is "wired as a
+    /// constant, one publication when the graph starts", and a null is
+    /// published as hgraph's `Null` (TYPE-15). A `T?` of any other `T`
+    /// is reported.
+    fn normalized(
+        &mut self,
+        function: &Function,
+        written: String,
+        connection: bool,
+        at: Location,
+    ) -> String {
+        let scalar = match self.current_result(function) {
+            Some(Type::Nullable(inner)) if publishes_whole(&inner) && !is_nullable(&inner) => {
+                self.annotation(&inner, false, at)
+            }
+            _ => None,
+        };
+        let Some(scalar) = scalar else {
+            self.unsupported(at, "a nullable result of a graph of this type");
+            return written;
+        };
+        self.natives = true;
+        self.hgraph = true;
+        // A graph's own result may be either: what a graph gives is
+        // taken as it is, and a branch graph that is given it makes it
+        // one.
+        if connection && self.results.is_empty() {
+            written
+        } else if connection {
+            format!("_core.nullable({written}, {scalar})")
+        } else {
+            format!("_hg.const(_core.published({written}), _hg.TS[{scalar} | None])")
+        }
+    }
+
+    /// The case among `labels` whose value an earlier one has, where the
+    /// values are known here: a literal, a member of an enum, a constant
+    /// of a module that comes to one, and an integer under a minus.
+    /// CTRL-6: "Duplicate values reject". The analyser rejects those it
+    /// can tell apart; a label that is a generic value parameter has the
+    /// value of an instance's call (GEN-13), which only an instance has.
+    fn repeated_label<'e>(&self, labels: impl Iterator<Item = &'e Expr>) -> Option<Location> {
+        let mut seen: Vec<String> = Vec::new();
+        for label in labels {
+            let Some(value) = self.label_text(label, 0) else {
+                continue;
+            };
+            if seen.contains(&value) {
+                return Some(label.at);
+            }
+            seen.push(value);
+        }
+        None
+    }
+
+    /// The value of `label` as text that no other value has, `depth`
+    /// constants in; `None` where it is not known here.
+    fn label_text(&self, label: &Expr, depth: usize) -> Option<String> {
+        // `-1`: a minus over an integer literal, as written or as the
+        // call it stands for.
+        let negated = |operand: &Expr| match operand.kind {
+            ExprKind::Literal(Value::Int(value)) => Some(format!("i{}", value.checked_neg()?)),
+            _ => None,
+        };
+        match &label.kind {
+            ExprKind::Literal(Value::Int(value)) => Some(format!("i{value}")),
+            ExprKind::Literal(Value::Bool(value)) => Some(format!("b{value}")),
+            ExprKind::Literal(Value::Str(value)) => Some(format!("s{value}")),
+            ExprKind::EnumMember { member, .. } => Some(format!("m{member}")),
+            ExprKind::Constant {
+                module,
+                declaration,
+            } if depth < 64 => {
+                let value = self.program.modules[*module]
+                    .constants
+                    .get(*declaration)?
+                    .as_ref()?;
+                self.label_text(value, depth + 1)
+            }
+            ExprKind::Unary {
+                operator: UnaryOperator::Negate,
+                operand,
+            } => negated(operand),
+            ExprKind::Call {
+                arguments,
+                form: hgl_analyser::hir::Form::Unary(UnaryOperator::Negate),
+                ..
+            } if arguments.len() == 1 => negated(&arguments[0].value),
+            _ => None,
+        }
+    }
+
+    /// Reports a `switch` two of whose labels have one value (see
+    /// [`Emitter::repeated_label`]), and says whether it did: hgraph's
+    /// `switch_` would keep the last of them, and Python's `if` the
+    /// first.
+    fn labels_repeat(&mut self, cases: &[Case]) -> bool {
+        match self.repeated_label(cases.iter().map(|case| &case.label)) {
+            Some(at) => {
+                self.unsupported(
+                    at,
+                    "a `switch` two of whose labels have one value in an instance",
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
     fn unrolled_return(&mut self, at: Location) -> bool {
         if self.unrolling > 0 {
             self.unsupported(
@@ -3578,10 +3788,7 @@ impl Emitter<'_> {
         if self.unrolled_return(at) {
             return Branched::Ended;
         }
-        let Some(result) = function
-            .signature
-            .and_then(|signature| signature.result.clone())
-        else {
+        let Some(result) = self.current_result(function) else {
             self.unsupported(at, "a `return` in an `if` of a graph with no result");
             return Branched::Ended;
         };
@@ -3626,27 +3833,26 @@ impl Emitter<'_> {
         &mut self,
         function: &Function,
         key: &Expr,
-        branches: &[(&str, &[Stmt])],
+        (branches, unmatched): (&[(&str, &[Stmt])], bool),
         at: Location,
         depth: usize,
     ) {
-        // The `var`s declared outside the branches that one assigns.
+        // A `switch` with no `default` fails where no case matches.
+        let failing = unmatched.then(|| Branch {
+            key: "_hg.DEFAULT".to_string(),
+            statements: Vec::new(),
+            tail: Tail::Unmatched,
+        });
+        // The `var`s declared outside the branches that one assigns, by
+        // name or by a place inside them.
         let mut assigned: Vec<usize> = Vec::new();
-        let mut declared: Vec<usize> = Vec::new();
         for (_, statements) in branches {
-            hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| match node {
-                hgl_analyser::hir::Node::Statement(Stmt::Declare { local, .. }) => {
-                    declared.push(*local)
+            for local in assigned_outside(statements) {
+                if !assigned.contains(&local) {
+                    assigned.push(local);
                 }
-                hgl_analyser::hir::Node::Statement(Stmt::Assign { local, .. })
-                    if !assigned.contains(local) =>
-                {
-                    assigned.push(*local);
-                }
-                _ => {}
-            });
+            }
         }
-        assigned.retain(|local| !declared.contains(local));
         // CTRL-3: "An outputless if has no synthetic result; an omitted
         // false branch performs no conditional work": branches that
         // assign nothing are graphs with no output, and `switch_` gives
@@ -3659,6 +3865,7 @@ impl Emitter<'_> {
                     statements: statements.to_vec(),
                     tail: Tail::Outputless,
                 })
+                .chain(failing)
                 .collect();
             let call = self.switched(function, key, &branches, None, at, depth);
             self.line(depth, &call);
@@ -3679,6 +3886,7 @@ impl Emitter<'_> {
                 statements: statements.to_vec(),
                 tail: Tail::Local(*var),
             })
+            .chain(failing)
             .collect();
         let call = self.switched(function, key, &branches, Some(&result), at, depth);
         let target = self.place(function, *var);
@@ -3723,7 +3931,7 @@ impl Emitter<'_> {
                 // A branch that does not assign the `var` gives the
                 // binding it had before.
                 Tail::Local(var) => read.push(*var),
-                Tail::Nothing | Tail::Returns | Tail::Outputless => {}
+                Tail::Nothing | Tail::Returns | Tail::Outputless | Tail::Unmatched => {}
             }
         }
         let read = self.taken(function, read, &declared);
@@ -3743,6 +3951,32 @@ impl Emitter<'_> {
             self.bound = read.clone();
             let graph = format!("_case_{number}_{position}");
             self.line(depth, "@_hg.graph");
+            if let Tail::Unmatched = branch.tail {
+                // `switch_` gives the selector to a branch whose first
+                // parameter is `key`.
+                let failing = self.unmatched_node(key, annotation.as_deref(), at);
+                let mut taken = vec![format!(
+                    "key: {}",
+                    self.annotation(&key.ty, true, at)
+                        .unwrap_or_else(|| "_py.object".to_string())
+                )];
+                taken.extend(parameters.iter().cloned());
+                self.line(
+                    depth,
+                    &format!("def {graph}({}){returns}:", taken.join(", ")),
+                );
+                let call = format!("{failing}(key=key)");
+                self.line(
+                    depth + 1,
+                    &if annotation.is_some() {
+                        format!("return {call}")
+                    } else {
+                        call
+                    },
+                );
+                cases.push(format!("{}: {graph}", branch.key));
+                continue;
+            }
             self.line(
                 depth,
                 &format!("def {graph}({}){returns}:", parameters.join(", ")),
@@ -3764,10 +3998,14 @@ impl Emitter<'_> {
                     }),
                     at,
                 }),
-                Tail::Nothing | Tail::Returns | Tail::Outputless => {}
+                Tail::Nothing | Tail::Returns | Tail::Outputless | Tail::Unmatched => {}
             }
             self.in_case += 1;
+            self.results.extend(result.cloned());
             let lines = self.statements(function, &all, depth + 1);
+            if result.is_some() {
+                self.results.pop();
+            }
             self.in_case -= 1;
             if let (Tail::Nothing, Some(annotation)) = (&branch.tail, &annotation)
                 && !always_returns(&all)
@@ -3789,6 +4027,26 @@ impl Emitter<'_> {
             format!("{}={python}", taken_name(&python))
         }));
         format!("_hg.switch_({})", given.join(", "))
+    }
+
+    /// The node a `switch_`'s failing `default` wires (`Tail::Unmatched`):
+    /// it fails with the provider's `unmatched` when it is evaluated, as
+    /// the branch is selected, giving what `annotation` names, or
+    /// nothing.
+    fn unmatched_node(&mut self, key: &Expr, annotation: Option<&str>, at: Location) -> String {
+        self.natives = true;
+        let selector = self
+            .annotation(&key.ty, true, at)
+            .unwrap_or_else(|| "_py.object".to_string());
+        let (decorator, returns) = match annotation {
+            Some(annotation) => ("compute_node", format!(" -> {annotation}")),
+            None => ("sink_node", String::new()),
+        };
+        self.lifted_node(
+            "unmatched",
+            format!("@_hg.{decorator}\ndef "),
+            format!("(key: {selector}){returns}:\n    _core.unmatched(key.value)\n"),
+        )
     }
 
     /// What a child graph takes of the graph it is written in, from
@@ -4154,7 +4412,14 @@ impl Emitter<'_> {
                 let value = self.bundled(function, returned, value);
                 // FN-3: in a branch's graph "an ordinary value in a
                 // branch is then wired as a constant".
-                let value = if function.mode == Mode::Graph
+                let nullable = function.mode == Mode::Graph
+                    && self
+                        .current_result(function)
+                        .is_some_and(|result| matches!(result, Type::Nullable(_)));
+                let value = if nullable {
+                    let connection = self.connects(function, returned);
+                    self.normalized(function, value, connection, returned.at)
+                } else if function.mode == Mode::Graph
                     && self.in_case > 0
                     && !self.connects(function, returned)
                 {
@@ -4647,6 +4912,9 @@ impl Emitter<'_> {
         default: Option<&[Stmt]>,
         depth: usize,
     ) {
+        if self.labels_repeat(cases) {
+            return;
+        }
         let selected = format!("_selected_{depth}");
         let selector = self.expression(function, selector);
         self.line(depth, &format!("{selected} = {selector}"));

@@ -1,0 +1,129 @@
+module demo.control_review
+
+# CTRL-6: "Switch labels are typed source constants, compared by
+# resolved value ... Enum coverage can establish exhaustiveness". A
+# constant that names a member covers it.
+enum Side { buy, sell }
+
+const BUY: Side = Side.buy
+
+const fn quoted(side: Side) -> str {
+    switch side {
+        case BUY: return "bid"
+        case .sell: return "ask"
+    }
+}
+
+fn routed(side: Side, a: i64, b: i64) -> i64 {
+    switch side {
+        case BUY: return a
+        case .sell: return b
+    }
+}
+
+test a_constant_label_covers_its_member {
+    assert quoted(Side.buy) == "bid"
+    assert quoted(Side.sell) == "ask"
+    assert eval(routed(side: [Side.buy, Side.sell], a: [1, 2], b: [10, 20])) == [1, 20]
+}
+
+# CTRL-12: a label is "a literal, an enum member, a constant (UNIT-13),
+# or a generic value parameter".
+fn routed_at<const k: i64>(route: i64, a: i64) -> i64 {
+    switch route {
+        case k: return a * 10
+        default: return a
+    }
+}
+
+fn at_two(route: i64, a: i64) -> i64 => routed_at<2>(route, a)
+
+const fn picked<const k: i64>(route: i64) -> i64 {
+    switch route {
+        case k: return 10
+        default: return 0
+    }
+}
+
+test a_generic_label {
+    assert eval(at_two(route: [2, 1], a: [1, 2])) == [10, 2]
+    assert picked<2>(2) == 10
+    assert picked<2>(1) == 0
+}
+
+# TYPE-14: "a T is a value where a T? is expected". CTRL-13: an `if`
+# over a connection "has the one type its branches' values have", and
+# "an ordinary value in a branch is then wired as a constant".
+fn gated_nullable(open: bool, price: i64) -> i64? {
+    if open { price }
+}
+
+fn picked_nullable(open: bool, other: i64, price: i64?) -> i64? {
+    if open { price } else { other }
+}
+
+fn null_branch(open: bool, price: i64) -> i64? {
+    if open { price } else { null }
+}
+
+# The same where a branch's graph is itself a branch: what it gives is
+# a `T?` too.
+fn nested_nullable(outer: bool, inner: bool, price: i64) -> i64? {
+    if outer { if inner { price } else { null } } else { price }
+}
+
+test a_nullable_result_of_a_graphs_if {
+    assert eval(gated_nullable(open: [true, false, true], price: [1, 2, 3])) == [1, _, 3]
+    assert eval(picked_nullable(open: [true, false, true], price: [1, 2, null], other: [10, 20, 30])) ==
+        [1, 20, null]
+    assert eval(null_branch(open: [true, false, true], price: [1, 2, 3])) == [1, null, 3]
+    assert eval(nested_nullable(outer: [true, true, false], inner: [true, false, _], price: [1, 2, 3])) ==
+        [1, null, 3]
+}
+
+# CTRL-13: "Under a wiring-time condition a branch that is an ordinary
+# value makes it a `T?`, as in a value function"; FN-3: an ordinary value
+# where a connection is expected "is wired as a constant, one publication
+# when the graph starts".
+fn maybe_three(price: i64, const wide: bool) -> i64? {
+    let t = if wide { 3 }
+    return t
+}
+
+fn maybe_three_direct(price: i64, const wide: bool) -> i64? {
+    if wide { 3 }
+}
+
+fn plain_null(price: i64) -> i64? {
+    return null
+}
+
+fn let_null(price: i64) -> i64? {
+    let t: i64? = null
+    return t
+}
+
+test an_ordinary_nullable_is_published {
+    assert eval(maybe_three(price: [1, 2], wide: true)) == [3]
+    assert eval(maybe_three(price: [1, 2], wide: false)) == [null]
+    assert eval(maybe_three_direct(price: [1, 2], wide: true)) == [3]
+    assert eval(maybe_three_direct(price: [1, 2], wide: false)) == [null]
+    assert eval(plain_null(price: [1, 2])) == [null]
+    assert eval(let_null(price: [1, 2])) == [null]
+}
+
+# CTRL-14: where the graph returns the `if`'s value, a `var` a branch
+# assigns is read in the branch's own value.
+fn read_back(flag: bool, a: i64, b: i64) -> i64 {
+    var chosen = a
+    return if flag {
+        chosen = b
+        chosen + 1
+    } else {
+        chosen
+    }
+}
+
+test a_var_assigned_and_read_in_a_returned_branch {
+    assert eval(read_back(flag: [true, false], a: [1, 2], b: [10, 20])) == [11, 2]
+}

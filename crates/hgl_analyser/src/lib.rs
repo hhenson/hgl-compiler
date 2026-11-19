@@ -471,9 +471,12 @@ pub mod codes {
         /// declaration it documents (SDOC-3). Local: the catalogue has
         /// no row for it.
         pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
+        /// A `switch` label that is no compile-time constant (CTRL-12,
+        /// UNIT-13). Local: the catalogue has no row for it.
+        pub const SWITCH_LABEL_CONSTANT: &str = "switch.label_constant";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 2] = [CACHE_INPUT_READ, DOC_UNKNOWN_KEY];
+        pub const ALL: [&str; 3] = [CACHE_INPUT_READ, DOC_UNKNOWN_KEY, SWITCH_LABEL_CONSTANT];
     }
 }
 
