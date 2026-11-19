@@ -66,14 +66,35 @@ impl Emitter<'_> {
         }
         // TYPE-16: "A `list<V, N>` keeps its bounds: ... one in a delta
         // made as the program runs fails the write that publishes it".
-        if let Some(Type::List {
+        let bounded = if let Some(Type::List {
             size: Some(size), ..
         }) = result
             && let ConstantValue::Int(count) = size.value
             && matches!(&value.ty, Type::Delta(of) if matches!(**of, Type::List { .. }))
         {
             self.natives = true;
-            return format!("_core.list_within({written}, {count})");
+            Some(format!("_core.list_within({written}, {count})"))
+        } else {
+            None
+        };
+        // TIME-7: a node's delta of a value that holds a dictionary or a
+        // set is "published as that change", which ticks where it
+        // changes nothing hgraph sees, and TYPE-16: "A `removed` that
+        // names a key a dictionary does not hold is ignored, and is no
+        // failure, as one that names a member a set does not hold is."
+        // The provider publishes it on the node's `_output`
+        // (`entries_published`).
+        if function.mode == Mode::Node
+            && let Some(result) = result
+            && !whole_value(result, value)
+            && let Some(shape) = entries_delta(self.program, result)
+        {
+            let written = bounded.unwrap_or(written);
+            self.natives = true;
+            return format!("_core.entries_published(_output, {written}, {shape})");
+        }
+        if let Some(bounded) = bounded {
+            return bounded;
         }
         // TIME-7: a node's whole dictionary is "a complete value of the
         // result": it replaces what the dictionary held, and each key it
@@ -537,6 +558,33 @@ pub(super) struct Shape {
     leaf: bool,
     /// True where each of its own parts is a leaf.
     flat: bool,
+}
+
+/// Where a node's delta of `ty` holds a dictionary or a set, the shape
+/// of where (`entries_shape`), which the provider publishes it by
+/// (`entries_published`). `None` where it holds none, and where it holds
+/// an unsized list, whose delta is published by its size
+/// (`published_into`).
+pub(super) fn entries_delta(program: &Program, ty: &Type) -> Option<String> {
+    if list_parts_shape(program, ty).is_some() {
+        return None;
+    }
+    entries_shape(program, ty)
+}
+
+/// True where `statements` return a delta of `ty`, at any depth.
+pub(super) fn returns_delta(statements: &[Stmt], ty: &Type) -> bool {
+    let delta = Type::delta(ty.clone());
+    let mut found = false;
+    hgl_analyser::hir::walk_statement_nodes(statements, &mut |node| {
+        if let hgl_analyser::hir::Node::Statement(Stmt::Return {
+            value: Some(value), ..
+        }) = node
+        {
+            found |= value.ty == delta && value.ty != *ty;
+        }
+    });
+    found
 }
 
 /// True where `statements` return a value of `ty` itself, at any depth.

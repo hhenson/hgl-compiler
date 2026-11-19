@@ -154,7 +154,7 @@ transpiler: partial
 - `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4)
 - A window's `valid` and `all_valid` are the `TSW`'s, for a window of ticks whose minimum is one
 - Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
-- Left, reported: `all_valid` of a value with an optional child beside another, which hgraph's `all_valid` asks and TIME-9 does not
+- `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
 
 ## TIME-10
 

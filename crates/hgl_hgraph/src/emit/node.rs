@@ -149,6 +149,14 @@ impl Emitter<'_> {
             || signature.result.as_ref().is_some_and(|result| {
                 whole_dictionary(result) && returns_whole(&body.statements, result)
             });
+        // A delta of what holds a dictionary or a set is published on
+        // `_output`, which makes each tick where it changes nothing (see
+        // `bundled`).
+        let has_out = has_out
+            || signature.result.as_ref().is_some_and(|result| {
+                entries_delta(self.program, result).is_some()
+                    && returns_delta(&body.statements, result)
+            });
         // TIME-10: "A designation published again unchanged is no tick":
         // a `ref` result is published where it designates what it did not
         // (`_core.designation`), which it reads from `_output`.
@@ -797,10 +805,19 @@ impl Emitter<'_> {
         }
         let output = if result.is_some() { "_output" } else { "None" };
         let shape = grows.map_or(String::new(), |shape| format!(", {shape}"));
+        // What a source publishes to a dictionary or a set, or to what
+        // holds one, ticks each where it changes nothing hgraph sees, as a
+        // node's delta does (`bundled`).
+        let ticks = signature
+            .result
+            .as_ref()
+            .and_then(|result| entries_shape(self.program, result))
+            .map_or(String::new(), |shape| format!(", entries={shape}"));
         self.line(
             1,
             &format!(
-                "_core.resume(_state._source, _clock.evaluation_time, _scheduler, {output}{shape})"
+                "_core.resume(_state._source, _clock.evaluation_time, _scheduler, \
+                 {output}{shape}{ticks})"
             ),
         );
 

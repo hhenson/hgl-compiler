@@ -11,9 +11,6 @@
     "core_implementation::zoned_datetimes_are_equal_by_instant_and_zone",
     "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
 ]
-"`all_valid` of a value with an optional child (TIME-9)" = [
-    "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
-]
 "`modified([])` read as a bool" = [
     "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
 ]

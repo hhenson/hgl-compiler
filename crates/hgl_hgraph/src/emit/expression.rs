@@ -157,9 +157,7 @@ impl Emitter<'_> {
                     // TIME-9: "`all_valid` is true where every one is, by
                     // its own `valid`, one level deep": hgraph's
                     // `all_valid`, but where a part holds a list.
-                    EndpointOperation::AllValid => {
-                        self.all_valid_test(&endpoint.ty, &input, value.at)
-                    }
+                    EndpointOperation::AllValid => self.all_valid_test(&endpoint.ty, &input),
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta." hgraph's own
                     // `modified` of an input in the cycle it is
@@ -1200,17 +1198,41 @@ impl Emitter<'_> {
 
     /// TIME-9's `all_valid` of the endpoint `port`, of a temporal value of
     /// `ty`: "true where every one is, by its own `valid`, one level
-    /// deep". hgraph's `all_valid` counts each part by hgraph's `valid`,
-    /// which is the language's where the part holds no list
-    /// (`valid_test`); where one does, the provider counts it.
-    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str, at: Location) -> String {
+    /// deep", an optional child aside. hgraph's `all_valid` counts each
+    /// part by hgraph's `valid`, which is the language's where the part
+    /// holds no list (`valid_test`); where one does, or where a child is
+    /// optional, the provider counts them.
+    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str) -> String {
         // TIME-9: "`all_valid` is true where every one is, by its own
         // `valid`, one level deep, an optional child aside: one whose type
         // is `T?`, or a field that TYPE-4 makes optional, is not asked".
-        // hgraph's `all_valid` asks every child.
-        if optional_child(self.program, ty) {
-            self.unsupported(at, "`all_valid` of a value with an optional child (TIME-9)");
-            return "False".to_string();
+        // hgraph's `all_valid` asks every child, so where one is optional
+        // the provider asks the others (`all_valid_of`), each by its own
+        // `valid` (`validity_shape`). Where every child is optional none
+        // is asked, and `all_valid` is the collection's `valid`: true of
+        // a valid collection, and, as TIME-9 proposes, false of one that
+        // is not valid.
+        match asked_children(self.program, ty) {
+            Asked::Every => {}
+            Asked::None => return self.valid_test(ty, port),
+            Asked::Some(required) => {
+                let parts: Vec<String> = required
+                    .iter()
+                    .map(|(key, part)| {
+                        let shape = validity_shape(self.program, part);
+                        format!(
+                            "{}: {}",
+                            string(key),
+                            shape.unwrap_or_else(|| "None".to_string())
+                        )
+                    })
+                    .collect();
+                self.natives = true;
+                return format!(
+                    "_core.all_valid_of({port}, (\"fields\", {{{}}}))",
+                    parts.join(", ")
+                );
+            }
         }
         let parts_hold_lists = match ty {
             Type::List { element, .. } => validity_shape(self.program, element).is_some(),
@@ -1288,7 +1310,7 @@ impl Emitter<'_> {
         self.natives = true;
         match operation {
             EndpointOperation::Valid => self.valid_test(&child.ty, &port),
-            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port, at),
+            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port),
             // END-4, END-6: a child that is not valid is not modified and
             // has no time it was last modified, nor a delta to read, by
             // `valid` as the language has it where a list is in the child
@@ -1974,32 +1996,74 @@ fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
 }
 
-/// True where `ty` is a collection with an optional child one level down
-/// (TIME-9), a struct's field whose type is `T?` or an `atomic<T?>`
-/// (TYPE-4), or a tuple's position, a list's element or a dictionary's
-/// value of a `T?`, beside another child: where it is the struct's or the
-/// tuple's one child, `all_valid` asks what hgraph's does, that the value
-/// is valid.
-fn optional_child(program: &Program, ty: &Type) -> bool {
-    let optional = |child: &Type| match child {
+/// Which children of a temporal value of `ty` its `all_valid` asks
+/// (TIME-9): "every one ... one level deep, an optional child aside".
+enum Asked {
+    /// Every child: no child is optional, or `ty` is no collection.
+    Every,
+    /// None: every child is optional, a list's element or a dictionary's
+    /// value of a `T?`, or each field of a struct or position of a tuple.
+    None,
+    /// A struct's fields or a tuple's positions that are not optional,
+    /// beside one that is: each by the name of its port, `"bid"` or
+    /// `"_0"` (`tuple_annotation`), and its type.
+    Some(Vec<(String, Type)>),
+}
+
+/// The children of `ty` its `all_valid` asks. TIME-9: "an optional
+/// child aside: one whose type is `T?`, or a field that TYPE-4 makes
+/// optional, is not asked", and TYPE-4: "A field is optional when its
+/// type is nullable, `T?`, or an `atomic<...>` of a nullable type", with
+/// the struct's own arguments given (`fields_of`): the `value: T` of a
+/// `Box<i64?>` is optional.
+fn asked_children(program: &Program, ty: &Type) -> Asked {
+    let field = |child: &Type| match child {
         Type::Nullable(_) => true,
         Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
         _ => false,
     };
-    match ty {
+    let parts: Vec<(String, Type, bool)> = match ty {
         Type::Named {
-            module,
-            declaration,
             kind: NamedKind::Struct,
             ..
-        } => match program.modules[*module].details.get(*declaration) {
-            Some(Detail::Struct(read)) => {
-                read.members.len() > 1 && read.members.iter().any(|member| optional(&member.ty))
-            }
-            _ => false,
+        } => match fields_of(program, ty) {
+            Some(fields) => fields
+                .into_iter()
+                .map(|(member, part)| {
+                    let optional = field(&part);
+                    (name(&member.name), part, optional)
+                })
+                .collect(),
+            None => return Asked::Every,
         },
-        Type::Tuple(elements) => elements.len() > 1 && elements.iter().any(optional),
-        Type::List { element: child, .. } | Type::Dict { value: child, .. } => optional(child),
-        _ => false,
+        Type::Tuple(elements) => elements
+            .iter()
+            .enumerate()
+            .map(|(index, element)| {
+                let optional = matches!(element, Type::Nullable(_));
+                (position(index), element.clone(), optional)
+            })
+            .collect(),
+        Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
+            return if matches!(**child, Type::Nullable(_)) {
+                Asked::None
+            } else {
+                Asked::Every
+            };
+        }
+        _ => return Asked::Every,
+    };
+    if parts.iter().all(|(_, _, optional)| !optional) {
+        return Asked::Every;
+    }
+    let required: Vec<(String, Type)> = parts
+        .into_iter()
+        .filter(|(_, _, optional)| !optional)
+        .map(|(key, part, _)| (key, part))
+        .collect();
+    if required.is_empty() {
+        Asked::None
+    } else {
+        Asked::Some(required)
     }
 }

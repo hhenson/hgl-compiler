@@ -19,6 +19,7 @@ what keeps it elsewhere keeps a copy (TYPE-5, `copied`).
 import calendar as _calendar
 import dataclasses as _dataclasses
 import datetime as _datetime
+import enum as _enum
 import functools as _functools
 import json as _json
 import math as _math
@@ -640,13 +641,171 @@ def dict_delta(updated=None, removed=()):
     return changes
 
 
-def _marked(changes, removed):
-    """`changes`, a `dict` of each key or position updated with its
-    delta, with each of `removed` given hgraph's `REMOVE`: a `TSD`'s and
-    a `TSL`'s delta (TYPE-16's `updated` and `removed`)."""
-    for key in removed:
-        changes[key] = _REMOVE
-    return changes
+def _entries_change(change, shape):
+    """`change`, what a node or a source publishes to a value of `shape`,
+    with each key a dictionary in it removes given `REMOVE_IF_EXISTS`.
+
+    TYPE-16: "A `removed` that names a key a dictionary does not hold is
+    ignored, and is no failure, as one that names a member a set does not
+    hold is." hgraph's `TSD` fails the run for a key it does not hold
+    given `REMOVE`, which a delta read from an input (`delta_value`) has;
+    its `TSS` ignores a member it does not hold.
+
+    `shape` is what the compiler wrote for where the dictionaries and the
+    sets are: `"entries"` for one whose own parts hold none, `("entries",
+    part)` for a dictionary whose values hold one, `("fields", {name:
+    part})` for a struct, `("positions", (part, ...))` for a tuple,
+    `("list", part)` for a fixed list, and `None` for a part that holds
+    none. A struct's delta and a fixed list's are each a `dict`, of each
+    field or position that changed, and a tuple's a tuple, null where a
+    position did not change."""
+    if change is None or shape is None:
+        return change
+    if shape == "entries":
+        if isinstance(change, dict):
+            return {key: _REMOVE_IF_EXISTS if entry is _REMOVE else entry for key, entry in change.items()}
+        return change
+    kind, part = shape
+    # A whole value given where a delta may be, as a replay is given a
+    # trace's cell written whole, is published as it is.
+    if not isinstance(change, tuple if kind == "positions" else dict):
+        return change
+    if kind == "entries":
+        return {
+            key: _REMOVE_IF_EXISTS if entry is _REMOVE else entry if _removes(entry) else _entries_change(entry, part)
+            for key, entry in change.items()
+        }
+    if kind == "fields":
+        return {field: _entries_change(entry, part.get(field)) for field, entry in change.items()}
+    if kind == "positions":
+        return tuple(_entries_change(entry, within) for entry, within in zip(change, part))
+    return {index: entry if _removes(entry) else _entries_change(entry, part) for index, entry in change.items()}
+
+
+def _candidates(sample, count):
+    """Values of the type of `sample`, a key a dictionary holds, `count`
+    of them where the type has that many, each another: what `_absent`
+    picks from. None for a type it does not know, a struct's among them."""
+    if isinstance(sample, bool):
+        return [False, True]
+    if isinstance(sample, _enum.Enum):
+        return list(type(sample))
+    if isinstance(sample, int):
+        return range(count)
+    if isinstance(sample, float):
+        return [float(index) for index in range(count)]
+    if isinstance(sample, str):
+        return [str(index) for index in range(count)]
+    if isinstance(sample, bytes):
+        return [str(index).encode() for index in range(count)]
+    if isinstance(sample, _datetime.datetime):
+        return [sample.replace(year=2000, month=1, day=1) + _MICROSECOND * index for index in range(count)]
+    if isinstance(sample, _datetime.date):
+        return [_datetime.date(2000, 1, 1) + _datetime.timedelta(days=index) for index in range(count)]
+    if isinstance(sample, _datetime.time):
+        midnight = _datetime.datetime(2000, 1, 1, tzinfo=sample.tzinfo)
+        return [(midnight + _MICROSECOND * index).timetz() for index in range(count)]
+    if isinstance(sample, _datetime.timedelta):
+        return [_MICROSECOND * index for index in range(count)]
+    if isinstance(sample, tuple) and sample:
+        return [(candidate, *sample[1:]) for candidate in _candidates(sample[0], count)]
+    return []
+
+
+def _absent(held):
+    """A key of the type of those `held` holds, which it does not hold.
+    Where the type has none, a `bool` or an enum each of whose values it
+    holds, or is one `_candidates` does not know, the target does not
+    write what needs one."""
+    for candidate in _candidates(next(iter(held)), len(held) + 1):
+        if candidate not in held:
+            return candidate
+    raise NotImplementedError(
+        "the hgraph target does not write a delta that changes nothing, of a dictionary "
+        "that holds every key of its type or keyed by a type it does not know, yet"
+    )
+
+
+def _ticked_entries(port):
+    """Makes the dictionary or the set at `port`, a node's output, tick in
+    this evaluation where it has not: what was published changed nothing
+    hgraph sees.
+
+    TIME-7 has a write publish ("No write means no tick"), and END-5: "A
+    publication notifies active subscribers, including when its value
+    repeats". hgraph 0.9.5's `TSD` and `TSS` do not tick for a delta that
+    changes nothing, one that removes a key or a member they do not hold
+    among them (TYPE-16: "is ignored, and is no failure"), and have no
+    way to mark them modified. They tick for what is added and removed
+    again in one evaluation, which leaves nothing in the delta read: an
+    empty one is cleared, a set's member is removed and added again, and
+    a key the dictionary does not hold is added and removed. A set's
+    `value` is a `set`, and a dictionary's a mapping of its entries."""
+    if port.modified:
+        return
+    held = port.value if port.valid else None
+    if not held:
+        port.clear()
+        return
+    if isinstance(held, (set, frozenset)):
+        member = next(iter(held))
+        port.remove(member)
+        port.add(member)
+        return
+    key = _absent(set(held.keys()))
+    port.get_or_create(key)
+    port.value = {key: _REMOVE}
+
+
+def _ticked_parts(port, change, shape):
+    """Makes each dictionary and set at `port` that `change` publishes to
+    tick where it has not (`_ticked_entries`), and so the value that holds
+    it. `shape` is as `_entries_change` has it."""
+    if change is None or shape is None:
+        return
+    if shape == "entries":
+        _ticked_entries(port)
+        return
+    kind, part = shape
+    if not isinstance(change, tuple if kind == "positions" else dict):
+        return
+    if kind == "entries":
+        for key, entry in change.items():
+            if not _removes(entry):
+                _ticked_parts(port[key], entry, part)
+        _ticked_entries(port)
+    elif kind == "fields":
+        for field, entry in change.items():
+            if part.get(field) is not None:
+                _ticked_parts(port[field], entry, part[field])
+    elif kind == "positions":
+        for index, (entry, within) in enumerate(zip(change, part)):
+            if within is not None:
+                _ticked_parts(port[position(index)], entry, within)
+    else:
+        for index, entry in change.items():
+            if not _removes(entry):
+                _ticked_parts(port[index], entry, part)
+
+
+def entries_published(port, change, shape):
+    """Publishes `change`, a delta (TYPE-16) of a value of `shape` that
+    holds a dictionary or a set (`_entries_change`), to `port`, the node's
+    own output, and gives what the node then publishes as its value:
+    nothing more, an empty delta of its kind.
+
+    TIME-7: "a `delta<T>` (TYPE-16), published as that change", which
+    ticks where it changes nothing hgraph sees, each dictionary and set in
+    it as the value itself (`_ticked_parts`). A key removed that a
+    dictionary does not hold is ignored (`_entries_change`)."""
+    change = _entries_change(change, shape)
+    port.value = change
+    _ticked_parts(port, change, shape)
+    if isinstance(change, dict):
+        return {}
+    if isinstance(change, tuple):
+        return tuple(None for _ in change)
+    return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
 
 
 def list_delta(updated=None, removed=(), size_modified=None):
@@ -1438,10 +1597,13 @@ class Source:
         self.previous = None
 
 
-def resume(source, now, scheduler, port, shape=None):
+def resume(source, now, scheduler, port, shape=None, entries=None):
     """Resumes a source in the evaluation at `now`, and publishes what it
     is due there through `port`, its node's output (`None` for a source
-    with no result), as `published_into` has it for `shape`.
+    with no result), as `published_into` has it for `shape`. Where the
+    output holds a dictionary or a set, `entries` is where, and what is
+    published ticks where it changes nothing hgraph sees, as a node's
+    delta does (`entries_published`).
 
     SOURCE-2: "A duration is relative to current evaluation time; a
     datetime is absolute. Negative duration fails. Resolve duration
@@ -1458,8 +1620,11 @@ def resume(source, now, scheduler, port, shape=None):
     is `None` publishes nothing, as a node that returns `None` does."""
 
     def publish(value):
-        if port is not None and value is not None:
-            port.value = published_into(port, value, shape)
+        if port is None or value is None:
+            return
+        published = _entries_change(published_into(port, value, shape), entries)
+        port.value = published
+        _ticked_parts(port, published, entries)
 
     if source.pending is not None:
         if source.target != now:

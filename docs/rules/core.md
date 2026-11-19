@@ -351,7 +351,9 @@ transpiler: partial
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
-- A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure
+- A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
+- A delta of a dictionary or a set that so changes nothing ticks, published by a node or a source, a trace's cell among them, and so does one within a dictionary, a struct, a tuple or a fixed list: hgraph 0.9.5 ticks for neither, and the provider adds and removes a key or a member it does not hold (`_core.entries_published`); a dictionary that holds each key a `bool` or an enum has, or keyed by a type the provider has no other value of, fails the run as not written
+- Left: one within a value that holds an unsized list, and a dictionary's or a set's assigned to an entry of `out`
 
 ## END-4
 
@@ -395,7 +397,7 @@ transpiler: partial
 
 - hgraph: `valid` of a fixed list, a tuple or a struct is true once any child is, and `all_valid` once every one is
 - A list's, fixed or unsized, and a value's that holds one, is the provider's (`_core.valid_of`): false again once every position has lost its value, true for a published empty list, where hgraph's `TSL` stays valid
-- Left, reported: `all_valid` of a value with an optional child beside another, which hgraph's asks and END-7 does not
+- `all_valid` asks no optional child (TIME-9): of a struct or a tuple with one the provider asks the others, and of a value whose every child is optional it is its `valid`; in a whole value an optional child that is not valid is null
 
 ## END-8
 
