@@ -37,7 +37,7 @@ fn spread(quote: Quote) -> i64 {
 }
 
 fn whole_spread(quote: Quote) -> i64 {
-    when {
+    when all_valid(quote) {
         let held = quote
         return held.ask - held.bid
     }

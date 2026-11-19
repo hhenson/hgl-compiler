@@ -158,6 +158,31 @@ impl<'a> Typer<'a> {
                 "TIME-9",
             ));
         }
+        // TIME-9: `scheduled()` is "a wake asked of the scheduler is due
+        // in this evaluation", and `start` and `stop` are no evaluation
+        // of the node: "A node that injects neither rejects it
+        // (`inject.no_scheduler`), and so do `start` and `stop`
+        // (`scheduled.lifecycle`)."
+        if operation == EndpointOperation::Scheduled
+            && let Some(hook @ (Hook::Start | Hook::Stop)) = self.hook
+        {
+            // The selector: `scheduled()`, its name to its `)`.
+            let selector = list.parent().map_or(at, |call| self.at(&call));
+            let hook = if hook == Hook::Start { "start" } else { "stop" };
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::SCHEDULED_LIFECYCLE,
+                    selector,
+                    format!(
+                        "`scheduled()` asks whether a wake is due in the node's evaluation, and \
+                         `{hook}` is none"
+                    ),
+                    "TIME-9",
+                )
+                .with_note("a `when` asks it: `when scheduled() { ... }`"),
+            );
+        }
         // The endpoints named, each by its name. `valid([])` and
         // `modified([])` name none (TIME-3); any other sequence is no
         // endpoint, and is reported as one.

@@ -1,17 +1,8 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
-"`modified([])` read as a bool" = [
-    "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
-]
-"a wake asked for with a duration that may not be more than zero (TIME-8)" = [
-    "conformance::a_zero_duration_asked_of_the_scheduler_fails",
-]
 
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,
 # under a reason that names the missing rule. A listed case must fail by
 # not being rejected: one that is rejected fails the check.
 [rejections]
-"a whole read needs `all_valid` (TIME-1)" = [
-    "conformance::rejections/collection_children.hgl::quote_without_admission",
-]

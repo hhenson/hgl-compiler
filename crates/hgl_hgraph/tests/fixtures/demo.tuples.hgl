@@ -27,7 +27,7 @@ fn two(a: i64, b: i64) -> tuple<i64, i64> {
 }
 
 fn whole_sum(pair: tuple<i64, i64>) -> i64 {
-    when {
+    when all_valid(pair) {
         let held = pair
         return held[0] + held[1]
     }
@@ -293,7 +293,7 @@ fn ordered(bid: i64, size: i64) -> Order {
 }
 
 fn order_total(order: Order) -> i64 {
-    when {
+    when all_valid(order) {
         let held = order
         return held.quote.ask + held.size
     }

@@ -236,9 +236,9 @@ impl Emitter<'_> {
             // TIME-9: `scheduled()` as a bool, where it sets no
             // subscription (TIME-3: "Selectors under negation or
             // disjunction leave the default in place"): what woke the
-            // node, as `node` holds it where the node is entered. In
-            // `start` and `stop` no wake is due, and the rule says
-            // nothing of it there.
+            // node, as `node` holds it where the node is entered. The
+            // analyser rejects it in `start` and `stop`
+            // (`scheduled.lifecycle`), where no wake is due.
             ExprKind::Endpoint {
                 operation: EndpointOperation::Scheduled,
                 ..
@@ -812,18 +812,47 @@ impl Emitter<'_> {
                     format!("{capture}.out")
                 }
             }
-            // TIME-3: "The empty selection `modified([])` subscribes to
-            // no input and selects a wake from the node's scheduler or
-            // alarm. Where it is a bool, in a body or under a negation
+            // TIME-3: "In that handler's body `modified([])`, as a bool,
+            // is true, at a wake that lands with an input's tick
+            // included: what the header selected is taken as nothing
+            // modified. Elsewhere, in another body or under a negation
             // or a disjunction, it is true in a cycle where no temporal
-            // input was modified." This target writes the selection in a
-            // header, and not that test yet.
+            // input was modified." The selection in a header is the
+            // node's (`node`). Elsewhere each input is asked what
+            // `modified(input)` asks of it: a publication, and no
+            // invalidation, which "never satisfies a modification test".
+            // `start` and `stop` are no cycle of the node, and the rule
+            // does not say what it is there.
             ExprKind::Endpoint {
                 operation: EndpointOperation::Modified,
                 inputs: Some(inputs),
             } if inputs.is_empty() => {
-                self.unsupported(value.at, "`modified([])` read as a bool");
-                "None".to_string()
+                if function.mode != Mode::Node {
+                    self.unsupported(value.at, "`modified([])` in `start` or `stop`");
+                    return "None".to_string();
+                }
+                if self.empty_selected {
+                    return "True".to_string();
+                }
+                let modified: Vec<String> = (0..function.locals.len())
+                    .filter(|&local| function.is_input(local))
+                    .map(|local| {
+                        let one = Expr {
+                            kind: ExprKind::Endpoint {
+                                operation: EndpointOperation::Modified,
+                                inputs: Some(vec![local]),
+                            },
+                            ty: Type::Scalar(Scalar::Bool),
+                            at: value.at,
+                        };
+                        self.expression(function, &one)
+                    })
+                    .collect();
+                match modified.as_slice() {
+                    // A node with no temporal input.
+                    [] => "True".to_string(),
+                    _ => format!("(not ({}))", modified.join(" or ")),
+                }
             }
             _ => {
                 self.unsupported(value.at, "this expression");
@@ -1548,12 +1577,13 @@ impl Emitter<'_> {
     /// or as its composite is read whole, `let held = quote`.
     ///
     /// A part that has not published has no value to give, and none is
-    /// made up. The owner's decision so far, on hhenson/hgl_spec issue
-    /// 126, is that a whole read needs each required part valid, and
-    /// that a part whose type is optional may not be, and is then null
-    /// in the whole value; how the language says so is open there. Until
-    /// it says, this target reads a required part that is not valid as a
-    /// failure where the read runs, with the catalogued
+    /// made up. TIME-1: "A read of a struct, a tuple or a fixed list
+    /// whole, `return quote`, requires `all_valid` of it ... In the value
+    /// it reads, an optional child (TIME-9) that is not valid is null".
+    /// The analyser holds a whole read it sees to `all_valid`; one checked
+    /// when it runs, `rows[i]`, "that is not all valid fails it
+    /// (`value.unset_read`)" (ERR-14). So this target reads a required
+    /// part that is not valid as that failure, with the catalogued
     /// `value.unset_read` ("Executed operation requires an unset
     /// ordinary payload"), and an optional part that is not valid as
     /// null. A fixed list of required elements that publish whole is held
