@@ -613,10 +613,16 @@ def dict_delta(updated=None, removed=()):
     of each removed with `REMOVE`. A property left out is empty. What is
     updated is copied: the program may go on changing the dictionary it
     was given in."""
-    made = {} if updated is None else copied(updated)
+    return _marked({} if updated is None else copied(updated), removed)
+
+
+def _marked(changes, removed):
+    """`changes`, a `dict` of each key or position updated with its
+    delta, with each of `removed` given hgraph's `REMOVE`: a `TSD`'s and
+    a `TSL`'s delta (TYPE-16's `updated` and `removed`)."""
     for key in removed:
-        made[key] = _REMOVE
-    return made
+        changes[key] = _REMOVE
+    return changes
 
 
 class ListDelta(dict):
@@ -649,9 +655,7 @@ def list_delta(updated=None, removed=(), size_modified=None):
     lost their value ... and `size_modified`"). A property left out is
     empty, or null for `size_modified`. What is updated is copied: the
     program may go on changing the dictionary it was given in."""
-    made = ListDelta({} if updated is None else copied(updated))
-    for position in removed:
-        made[position] = _REMOVE
+    made = _marked(ListDelta({} if updated is None else copied(updated)), removed)
     made.size_modified = size_modified
     return made
 
@@ -679,7 +683,7 @@ def list_applied(output, delta):
     one that growth leaves with no value (the proposed gap of TYPE-16),
     are not written yet."""
     held = list(output.value) if output.valid else []
-    gone = {position for position, change in delta.items() if _removes(change)}
+    gone = removed(delta)
     size = size_modified(delta)
     if size is not None and size < 0:
         size = max(len(held) + size, 0)
@@ -687,7 +691,7 @@ def list_applied(output, delta):
         # Only a `removed` that is the whole tail shrinks the list, and
         # an entry past the end extends it to hold the entry.
         size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
-        written = [position for position, change in delta.items() if not _removes(change)]
+        written = list(updated(delta))
         if written and not gone:
             size = max(size, max(written) + 1)
     if any(position < size for position in gone):
@@ -970,7 +974,8 @@ def bundled(value, shape=None):
     is given as the set it is, which hgraph's `TSS` takes as its members
     now, removing those it no longer has."""
     if shape is None:
-        return {field: published(getattr(value, field)) for field in value._hgl_fields}
+        # Each field publishes whole.
+        shape = dict.fromkeys(value._hgl_fields)
     return _bundled(value, shape)
 
 
@@ -1007,7 +1012,7 @@ def positions(delta, shape):
     if delta is None or shape is None:
         return delta
     if isinstance(shape, tuple):
-        return tuple(positions(delta.get(f"_{index}"), part) for index, part in enumerate(shape))
+        return tuple(positions(delta.get(position(index)), part) for index, part in enumerate(shape))
     return {field: positions(change, shape.get(field)) for field, change in delta.items()}
 
 
