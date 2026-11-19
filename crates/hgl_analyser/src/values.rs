@@ -489,6 +489,9 @@ struct Typer<'a> {
     initializing: bool,
     /// True while a node's `cache`'s initializer is read (TIME-1).
     caching: bool,
+    /// True while the body of an anonymous function written in a node
+    /// is read (FN-14): what it reads is checked where it is written.
+    anonymous: bool,
     /// How many requirements deep a candidate's condition is being
     /// tested: see [`REQUIRING`].
     requiring: u32,
@@ -562,6 +565,7 @@ impl<'a> Typer<'a> {
             undriven: Vec::new(),
             initializing: false,
             caching: false,
+            anonymous: false,
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
@@ -2034,6 +2038,21 @@ impl<'a> Typer<'a> {
 
     fn statement(&mut self, node: &SyntaxNode) -> Stmt {
         match node.kind() {
+            // CTRL-5: "Return targets the enclosing HGL function": in an
+            // anonymous function's body, that function. What it returns
+            // is given its type by the accepting form (FN-7), which is
+            // not read: its value is read for what it reads itself.
+            SyntaxKind::ReturnStmt if self.anonymous => {
+                let value = node
+                    .children()
+                    .next()
+                    .map(|value| self.expression(&value, Some(&Type::Unknown)));
+                self.returned = true;
+                Stmt::Return {
+                    value,
+                    at: self.at(node),
+                }
+            }
             SyntaxKind::LocalDecl => self.local(node),
             // FN-9: "A graph injects `global_state` and no other, and
             // uses it where the graph is built". An `inject` of any
@@ -3114,9 +3133,11 @@ impl<'a> Typer<'a> {
             SyntaxKind::TypeCall => self.type_call(node),
             SyntaxKind::TryExpr => self.propagation(node),
             // An anonymous function's body is for a later part. What it
-            // captures of a capability is reported here.
+            // captures of a capability is reported here, and what it
+            // reads of a node's inputs where it is written.
             SyntaxKind::FnExpr => {
                 self.captured_capabilities(node);
+                self.anonymous_reads(node);
                 (ExprKind::Unread, Type::Unknown)
             }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
@@ -3605,6 +3626,66 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The body of the anonymous function `function`, read where it is
+    /// written in a node, for what it reads there.
+    ///
+    /// FN-14: "An anonymous function's scope is the scope around it
+    /// plus its parameters ... its body uses only parameters, generic
+    /// parameters, `let` locals, and iteration bindings." A temporal
+    /// input is a parameter: in a hook it is the payload (FN-3), and
+    /// TIME-1: "A payload read requires admission/readability". So each
+    /// read is held to the admission where the function is written: its
+    /// `when` header, the guards around it and those in the body itself
+    /// (TIME-4), `start` and `stop` (TIME-5), a `state`'s or a
+    /// `cache`'s initializer (TIME-5, TIME-1). An input's validity does
+    /// not change within an evaluation, so a read proved where the
+    /// function is written is proved wherever it is called in that
+    /// evaluation.
+    ///
+    /// The function's parameters and result take their types from its
+    /// accepting form (FN-7), which is not read: a parameter is of the
+    /// type written for it, or of none known, and what the body
+    /// declares, assigns or proves is taken back. What it reports
+    /// stands.
+    fn anonymous_reads(&mut self, function: &SyntaxNode) {
+        if !(self.hook.is_some() || self.initializing || self.caching) {
+            return;
+        }
+        let mark = self.mark();
+        let before = std::mem::replace(&mut self.anonymous, true);
+        let parameters = child(function, SyntaxKind::ParamList)
+            .into_iter()
+            .flat_map(|list| list.children())
+            .filter(|parameter| parameter.kind() == SyntaxKind::LambdaParam);
+        for parameter in parameters {
+            let Some(name) = tokens(&parameter).find(|token| token.kind() == SyntaxKind::Ident)
+            else {
+                continue;
+            };
+            let ty = parameter
+                .children()
+                .find(|part| is_type(part.kind()))
+                .and_then(|part| self.written.get(&(self.file, part.span().start)))
+                .map_or(Type::Unknown, |ty| (*ty).clone());
+            let at = Location::new(self.file, name.span());
+            self.declare(name.text(), at, LocalKind::Parameter, ty, true);
+        }
+        let body = function.children().find_map(|part| match part.kind() {
+            SyntaxKind::ArrowBody => part.children().next(),
+            SyntaxKind::Block => Some(part),
+            _ => None,
+        });
+        if let Some(body) = body {
+            self.flow(&body, Some(&Type::Unknown), true);
+        }
+        self.anonymous = before;
+        let reported = self.diagnostics.as_slice()[mark.diagnostics..].to_vec();
+        self.take_back(mark, false);
+        for diagnostic in reported {
+            self.diagnostics.emit(diagnostic);
+        }
+    }
+
     /// How the capability named at `node` is retained where it stands,
     /// in a few words for the message; `None` where it is used and not
     /// retained.
@@ -3749,12 +3830,26 @@ impl<'a> Typer<'a> {
         {
             self.payload_read(local, at);
         }
-        // TIME-7: "`start` neither reads nor writes it".
-        if Some(local) == self.out && self.hook == Some(Hook::Start) {
-            self.out_lifecycle(
-                at,
-                "`out` is neither read nor written in `start`".to_string(),
-            );
+        // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
+        // neither reads nor writes it". Nor does a `state`'s or a
+        // `cache`'s initializer, which gives it its first value on
+        // every start (TIME-6), before the node has published. In an
+        // anonymous function `out` is a capture, which the resolver
+        // reports (`name.captured`, FN-14).
+        if Some(local) == self.out && !self.anonymous {
+            if self.hook == Some(Hook::Start) {
+                self.out_lifecycle(
+                    at,
+                    "`out` is neither read nor written in `start`".to_string(),
+                );
+            } else if self.initializing || self.caching {
+                self.out_lifecycle(
+                    at,
+                    "`out` is read in a `when` and in `stop`, and a `state` or a `cache` is \
+                     given its first value on every start, before the node has published"
+                        .to_string(),
+                );
+            }
         }
         // TIME-3: the node's scheduler or alarm used in `start` is what
         // may wake a handler that subscribes to no input. "Any use in
@@ -3773,7 +3868,10 @@ impl<'a> Typer<'a> {
         // and is not retained". An injected capability other than `out`,
         // which is the node's result, and a parameter of a capability's
         // type are both one.
+        // A capability an anonymous function uses is a capture, which
+        // is reported as one (`name.captured`, FN-14).
         if self.is_capability(local)
+            && !self.anonymous
             && let Some(how) = self.retained(node)
         {
             self.diagnostics.emit(
@@ -5663,6 +5761,12 @@ impl<'a> Typer<'a> {
                 && let Some(operation) = EndpointOperation::language_form(name.text())
             {
                 return self.endpoint(operation, &name, &list);
+            }
+            // `(fn(x) => x + 1)(7)` (FN-10), and the call of what one
+            // gives, `(fn(a) => fn(b) => a + b)(1)(2)`: the function is
+            // read where it is written, for what it reads (FN-14).
+            if calls_anonymous(&callee) {
+                self.expression(&callee, Some(&Type::Unknown));
             }
             return self.unread_call(&list);
         };
@@ -12181,6 +12285,19 @@ impl Written {
             Written::Duration => "a `duration`".to_string(),
             Written::Member(name) => format!("the enum member `.{name}`"),
         }
+    }
+}
+
+/// True when the callee `node` is an anonymous function, in
+/// parentheses or not, or a call of one, or of what such a call gives.
+fn calls_anonymous(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::FnExpr => true,
+        SyntaxKind::ParenExpr | SyntaxKind::CallExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| calls_anonymous(&inner)),
+        _ => false,
     }
 }
 

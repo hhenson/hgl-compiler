@@ -129,6 +129,113 @@ fn a_cache_is_initialized_from_state_and_configuration() {
     assert_eq!(checked.summary(), NONE);
 }
 
+/// TIME-1 and TIME-5 with FN-14: "An anonymous function's scope is the
+/// scope around it plus its parameters". A temporal input it reads is
+/// read where it is written, and held to the admission there: the
+/// temporal-model chapter's rejections, each with the read in an
+/// anonymous function called on the spot, `return value + 1` under
+/// `valid([])`, `start { last = value }`, `stop { last = value }`, and a
+/// `state`'s and a `cache`'s initializer. A call of what such a call
+/// gives is read too.
+#[test]
+fn an_anonymous_function_reads_where_it_is_written() {
+    let checked = module(concat!(
+        "fn manual_forward(value: i64) -> i64 {\n",
+        "    when valid([]) { return (fn() => value + 1)() }\n",
+        "}\n",
+        "fn started(value: i64) -> i64 {\n",
+        "    state last: i64 = 0\n",
+        "    start { last = (fn() { return value })() }\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn stopped(value: i64) -> i64 {\n",
+        "    state last: i64 = 0\n",
+        "    when { return value }\n",
+        "    stop { last = (fn() => value)() }\n",
+        "}\n",
+        "fn initialized(value: i64) -> i64 {\n",
+        "    state last: i64 = (fn() => value)()\n",
+        "    cache kept: i64 = (fn() => value)()\n",
+        "    when { return last + kept }\n",
+        "}\n",
+        "fn curried(value: i64) -> i64 {\n",
+        "    when valid([]) { return (fn(a) => fn(b) => a + b + value)(1)(2) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:3:38 phase/payload.unguarded TIME-4",
+            "m.hgl:7:35 phase/input.lifecycle TIME-5",
+            "m.hgl:13:28 phase/payload.unguarded TIME-5",
+            "m.hgl:16:32 phase/state.input_read TIME-5",
+            "m.hgl:17:32 local:phase/cache.input_read TIME-1",
+            "m.hgl:21:56 phase/payload.unguarded TIME-4",
+        ]
+    );
+}
+
+/// TIME-4 with FN-14: what proves an input valid where an anonymous
+/// function is written proves it in the function's body, and so does a
+/// guard in the body itself. An input's validity does not change within
+/// an evaluation, so a function written under a guard reads under it
+/// wherever that evaluation calls it. One written where nothing proves
+/// the input valid reads it there, though it is called under a guard.
+#[test]
+fn an_anonymous_function_reads_under_the_admission_where_it_is_written() {
+    let checked = module(concat!(
+        "fn admitted(value: i64) -> i64 {\n",
+        "    when { return (fn(x: i64) -> i64 => x + value)(1) }\n",
+        "}\n",
+        "fn inside(value: i64) -> i64 {\n",
+        "    when valid([]) { return (fn() => if valid(value) { value } else { 0 })() }\n",
+        "}\n",
+        "fn outside(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        if valid(value) {\n",
+        "            let add = fn(x) => x + value\n",
+        "            return add(1)\n",
+        "        }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+        "fn unproved(value: i64) -> i64 {\n",
+        "    when valid([]) {\n",
+        "        let read = fn() => value\n",
+        "        if valid(value) { return read() }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:19:28 phase/payload.unguarded TIME-4"]
+    );
+}
+
+/// TIME-7: "`out` is read in a `when` and in `stop` ... `start` neither
+/// reads nor writes it". A `state`'s and a `cache`'s initializer give
+/// them their first values on every start (TIME-6), before the node has
+/// published: `out` read there is `out.lifecycle`.
+#[test]
+fn out_is_not_read_in_an_initializer() {
+    let checked = module(concat!(
+        "fn kept(value: i64) -> i64 {\n",
+        "    inject out\n",
+        "    state first: i64 = out\n",
+        "    cache again: i64 = out + 1\n",
+        "    when { return value + first + again }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:4:24 phase/out.lifecycle TIME-7",
+            "m.hgl:5:24 phase/out.lifecycle TIME-7",
+        ]
+    );
+}
+
 // ---- TIME-2: composition reads no live payload ----
 
 /// TIME-2: "Composition describes a typed graph without reading live
