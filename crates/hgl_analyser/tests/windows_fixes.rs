@@ -125,3 +125,22 @@ fn a_window_child_of_out_is_read_as_its_list() {
     ));
     assert_eq!(checked.summary(), Vec::<String>::new());
 }
+
+/// FN-1 has two exceptions to its ordinary parameters, among them "in a
+/// native value function, one of `endpoint<T>` (TIME-9)", which takes
+/// the endpoint and not its payload. A generic that stands only in such
+/// a parameter may stand for a window: core's `is_active` of a window
+/// input, and a program's native function of a window's endpoint.
+#[test]
+fn an_endpoints_generic_may_stand_for_a_window() {
+    let checked = module(concat!(
+        "native const fn peek<T>(input: endpoint<T>) -> bool\n",
+        "fn active(prices: rolling_window<i64, 3>) -> bool {\n",
+        "    when { return is_active(prices) }\n",
+        "}\n",
+        "fn peeked(prices: rolling_window<i64, 3>) -> bool {\n",
+        "    when { return peek(prices) }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), Vec::<String>::new());
+}

@@ -730,11 +730,27 @@ impl<'a> Typer<'a> {
         // to a value function binds its generic parameters to the list
         // it holds (`inferred_from`); one that the call's place, or what
         // the call writes, binds to a type that holds a window rejects.
+        // FN-1's exception, "in a native value function, one of
+        // `endpoint<T>` (TIME-9)", takes the endpoint and not its
+        // payload, and is the whole type of its parameter (TYPE-12): a
+        // generic that stands only there is in no ordinary position.
+        let ordinary = |at: Location| {
+            signature
+                .result
+                .as_ref()
+                .is_some_and(|result| mentions(result, &[at]))
+                || signature.parameters.iter().any(|parameter| {
+                    !matches!(parameter.ty, Type::Endpoint(_)) && mentions(&parameter.ty, &[at])
+                })
+        };
         if listed && judged {
             for (generic, found) in generics.iter().zip(&found) {
                 let Some(Argument::Type(ty)) = found else {
                     continue;
                 };
+                if !ordinary(generic.at) {
+                    continue;
+                }
                 if !ty.any_part(&|part| matches!(part, Type::RollingWindow { .. }), &|_| {
                     false
                 }) {
