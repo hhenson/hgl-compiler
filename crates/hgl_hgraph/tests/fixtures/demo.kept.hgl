@@ -1,0 +1,4 @@
+module demo.kept
+export fn held<T>(value: T) -> T {
+    when valid(value) { return value }
+}

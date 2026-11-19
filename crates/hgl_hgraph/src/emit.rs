@@ -331,6 +331,12 @@ impl<'a> Function<'a> {
     /// written `T?`, and `value` is a value of it. A value that is the
     /// nullable's delta is hgraph's own already, `Null` or the value
     /// (TYPE-16).
+    ///
+    /// It asks whether `value` is a nullable's `delta<T?>`, and is not
+    /// `whole_value`, which asks whether `value` is the result's delta:
+    /// the two part at an `atomic<T?>` result, whose delta is the `T?`
+    /// a whole value has (`Type::delta`). `whole_value` calls such a
+    /// `T?` value a delta; here it is a value whose null is published.
     fn publishes_null(&self, value: &Expr) -> bool {
         self.signature
             .and_then(|signature| signature.result.as_ref())
@@ -2816,16 +2822,7 @@ impl Emitter<'_> {
         if holds_input {
             self.line(1, &format!("_input_woke = {input_woke}"));
         }
-        // An endpoint as the node's code names it: an input by its
-        // name, and the node's own output as hgraph's `_output`.
-        let endpoint = |local: usize| {
-            let declared = &body.locals[local];
-            if declared.kind == LocalKind::Inject {
-                "_output".to_string()
-            } else {
-                name(&declared.name)
-            }
-        };
+        let endpoint = |local: usize| endpoint_name(&body.locals[local]);
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
             // TIME-3: "A wake by the scheduler or alarm wakes the
@@ -4711,13 +4708,7 @@ impl Emitter<'_> {
                     // TIME-7: the runtime keeps what is published, and
                     // the hook may go on to change what it read it
                     // from: a copy, a nullable one among them.
-                    let value = self.copied(function, assigned, value);
-                    let value = self.bundled(function, assigned, value);
-                    if function.publishes_null(assigned) {
-                        self.published(value)
-                    } else {
-                        value
-                    }
+                    self.kept_publication(function, assigned, value)
                 } else {
                     let kept = self.kept(function, *local, assigned, value);
                     self.narrowed(function, &declared.ty, assigned, kept)
@@ -4927,13 +4918,7 @@ impl Emitter<'_> {
                 let value = self.expression(function, yielded);
                 // The runtime keeps what is published, and the source
                 // goes on after its `yield`.
-                let value = self.copied(function, yielded, value);
-                let value = self.bundled(function, yielded, value);
-                let value = if function.publishes_null(yielded) {
-                    self.published(value)
-                } else {
-                    value
-                };
+                let value = self.kept_publication(function, yielded, value);
                 self.line(depth, &format!("yield ({time}, {value})"));
             }
             // CTRL-15: in a graph "The condition of a `while` is an
@@ -5434,18 +5419,18 @@ impl Emitter<'_> {
                 declaration,
             } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
-                let read = self.place(function, *local);
                 // In a hook a temporal input is read through its
-                // payload: in a `when`, and in `stop` (TIME-5).
-                if matches!(function.mode, Mode::Node | Mode::Stop) && function.is_input(*local) {
-                    self.port_value(&function.locals[*local].ty, &read, value.at)
-                } else if matches!(function.mode, Mode::Node | Mode::Stop)
-                    && function.is_out(*local)
+                // payload: in a `when`, and in `stop` (TIME-5). So is
+                // `out` read whole: a struct's value is made from its
+                // bundle's fields (TYPE-9), as an input's is. The port
+                // holds a value of the declared type (`port_type`).
+                if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && let Some(port) = self.input_port(function, value)
                 {
-                    // `out` read whole: a struct's value is made from
-                    // its bundle's fields (TYPE-9), as an input's is.
-                    self.port_value(&function.locals[*local].ty, "_output", value.at)
-                } else if function.mode == Mode::Lifecycle && function.is_input(*local) {
+                    return self.port_value(function.port_type(value), &port, value.at);
+                }
+                let read = self.place(function, *local);
+                if function.mode == Mode::Lifecycle && function.is_input(*local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
@@ -5484,12 +5469,7 @@ impl Emitter<'_> {
                 if !given {
                     self.unsupported(value.at, "this endpoint read in `start` or `stop`");
                 }
-                // The node's own output is hgraph's `_output`.
-                let input = if endpoint.kind == LocalKind::Inject {
-                    "_output".to_string()
-                } else {
-                    name(&endpoint.name)
-                };
+                let input = endpoint_name(endpoint);
                 // The endpoint of what holds a window, itself or within
                 // (`windows_in`): an input's readiness is asked of its
                 // parameter (`window_inputs`), and `out`'s here.
@@ -6620,7 +6600,7 @@ impl Emitter<'_> {
                     // A key of a dictionary: the change of that key.
                     Type::Dict { .. } if taken + 1 == steps.len() => {
                         let key = self.expression(function, index);
-                        let published = self.published_to(&step.ty, value, written);
+                        let published = self.published_to(&step.ty, value.at, written);
                         return Some((format!("{port}.value"), format!("{{{key}: {published}}}")));
                     }
                     Type::Dict { .. } => {
@@ -6641,11 +6621,11 @@ impl Emitter<'_> {
             part = step;
         }
         if std::ptr::eq(part, place) {
-            let published = self.published_to(&place.ty, value, written);
+            let published = self.published_to(&place.ty, value.at, written);
             return Some((format!("{port}.value"), published));
         }
         let changed = self.changed_within(function, place, part, written)?;
-        let published = self.published_to(&part.ty, part, changed);
+        let published = self.published_to(&part.ty, part.at, changed);
         Some((format!("{port}.value"), published))
     }
 
@@ -7389,6 +7369,21 @@ impl Emitter<'_> {
 
     // ---- Lifting ----
 
+    /// What an assignment to `out` and a `yield` publish for `value`,
+    /// written `written` (TIME-7): the runtime keeps what is published
+    /// and the hook or the source goes on after it, so a copy where
+    /// something else holds the value (`copied`), given as `bundled`
+    /// gives it, and a null as hgraph's `Null` (`publishes_null`).
+    fn kept_publication(&mut self, function: &Function, value: &Expr, written: String) -> String {
+        let written = self.copied(function, value, written);
+        let written = self.bundled(function, value, written);
+        if function.publishes_null(value) {
+            self.published(written)
+        } else {
+            written
+        }
+    }
+
     /// What a node publishes for `value`, written `written`: a whole
     /// struct published to a temporal struct is given as each of its
     /// fields, as hgraph's bundle takes it (TYPE-9), and anything else,
@@ -7571,16 +7566,19 @@ impl Emitter<'_> {
         format!("_core.narrowed({written}, {bundle}, {})", tuple(&fields))
     }
 
-    /// What publishes `value`, written `written`, to a part of `out` of
-    /// the type `ty` (TIME-7): a whole value as `bundle_of` gives it, and
-    /// a null as hgraph's `Null` where `ty` publishes it whole. EXPR-3:
-    /// "The value is of the field's type", so a part takes a whole value
-    /// and no `delta<T>`, which the analyser rejects.
-    fn published_to(&mut self, ty: &Type, value: &Expr, written: String) -> String {
+    /// What publishes `written`, a whole value of the type `ty`, to a
+    /// part of `out` of that type or as a lifted node's result (TIME-7):
+    /// a whole value as `bundle_of` gives it, and a null as hgraph's
+    /// `Null` where `ty` publishes it whole. EXPR-3: "The value is of
+    /// the field's type", so a part takes a whole value and no
+    /// `delta<T>`, which the analyser rejects; a lifted function's
+    /// result is a value. `at` is where what is not written yet is
+    /// reported.
+    fn published_to(&mut self, ty: &Type, at: Location, written: String) -> String {
         if publishes_whole_null(ty) {
             return self.published(written);
         }
-        self.bundle_of(ty, value.at, written)
+        self.bundle_of(ty, at, written)
     }
 
     /// `written`, a whole value of `ty`, as a temporal value of `ty`
@@ -7604,22 +7602,8 @@ impl Emitter<'_> {
             // A fixed list's `TSL` takes a tuple of its elements, each
             // one's update as that position's own (TYPE-9): an element
             // that publishes whole and is not null is set by it.
-            Type::List { element, .. } => {
-                if whole_scalar(element) {
-                    return format!("_py.tuple({written})");
-                }
-                self.unsupported(
-                    at,
-                    "a whole list published where an element is temporal composite or nullable",
-                );
-                return written;
-            }
-            // A dictionary's `TSD` takes its keys' changes. A whole
-            // dictionary also removes each key it has not, which hgraph
-            // is not told here.
-            Type::Dict { .. } => {
-                self.unsupported(at, "a whole dictionary published to a temporal dictionary");
-                return written;
+            Type::List { element, .. } if whole_scalar(element) => {
+                return format!("_py.tuple({written})");
             }
             _ => {}
         }
@@ -7630,7 +7614,11 @@ impl Emitter<'_> {
                 kind: NamedKind::Struct,
                 ..
             } => !inherited(self.program, *module, *declaration),
-            Type::Tuple(_) => false,
+            // `whole_shape` reports a fixed list with an element that
+            // is composite or nullable, and a dictionary, whose `TSD`
+            // takes its keys' changes: a whole dictionary also removes
+            // each key it has not, which hgraph is not told here.
+            Type::Tuple(_) | Type::List { .. } | Type::Dict { .. } => false,
             _ => return written,
         };
         let Some(shape) = self.whole_shape(ty, at) else {
@@ -7990,11 +7978,9 @@ impl Emitter<'_> {
     /// `atomic<V>`'s field among them, which is read from its value.
     fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
-            ExprKind::Local(local) if function.is_input(*local) => {
-                Some(name(&function.locals[*local].name))
+            ExprKind::Local(local) if function.is_input(*local) || function.is_out(*local) => {
+                Some(endpoint_name(&function.locals[*local]))
             }
-            // The node's own output, hgraph's `_output`.
-            ExprKind::Local(local) if function.is_out(*local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
                 // An atomic input is one port of the whole value, read
                 // in a hook as that value (TYPE-9), and has no port of
@@ -8444,9 +8430,8 @@ impl Emitter<'_> {
             Lifts::Function(_) => call,
         };
         let call = match result {
-            Some(result) if publishes_whole_null(result) => self.published(call),
-            Some(result) => self.bundle_of(result, at, call),
-            _ => call,
+            Some(result) => self.published_to(result, at, call),
+            None => call,
         };
         let (decorator, after) = match (result, returns) {
             (Some(_), returns) => (
@@ -9780,6 +9765,11 @@ fn empty_struct(program: &Program, ty: &Type) -> bool {
 /// value that is no T and is a `delta<T>` is published as that change."
 /// A value of a struct is a T where T is an abstract struct it inherits
 /// from (TYPE-3), and where T publishes whole `delta<T>` is T itself.
+///
+/// It asks whether `value` is `ty`'s delta, and is not the test of
+/// `Function::publishes_null`, which asks whether it is a nullable's
+/// `delta<T?>`: the two part at an `atomic<T?>`, whose delta is the
+/// `T?` a whole value has, and which this calls a delta.
 fn whole_value(ty: &Type, value: &Expr) -> bool {
     value.ty == *ty || value.ty != Type::delta(ty.clone())
 }
@@ -9815,6 +9805,17 @@ fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Typ
         return None;
     };
     Some(read.members.iter().zip(program.field_types(ty)?).collect())
+}
+
+/// An endpoint of a node, an input or its `inject out`, as the node's
+/// code names it: an input by its name, and the node's own output as
+/// hgraph's `_output`.
+fn endpoint_name(endpoint: &Local) -> String {
+    if endpoint.kind == LocalKind::Inject {
+        "_output".to_string()
+    } else {
+        name(&endpoint.name)
+    }
 }
 
 /// What a value of `ty` holds, with the `atomic` taken off: TYPE-9's

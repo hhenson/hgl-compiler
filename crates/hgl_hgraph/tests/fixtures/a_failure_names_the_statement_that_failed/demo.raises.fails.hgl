@@ -1,0 +1,30 @@
+module demo.raises.fails
+const fn strict(a: f64, b: f64) -> f64 => a /{zero: .fail} b
+const fn next(value: i64) -> i64 => value + 1
+const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]
+test nothing_raised {
+    assert raises("numeric.division_by_zero") { strict(6.0, 2.0) }
+}
+test another_code {
+    assert raises("numeric.division_by_zero") { next(9223372036854775807) }
+}
+test nested_assertion {
+    assert raises("numeric.division_by_zero") {
+        assert strict(6.0, 2.0) == 4.0
+    }
+}
+# The inner assertion fails: it expects another code. What it lets
+# out has the code the outer one expects, and does not satisfy it.
+test nested_raises {
+    assert raises("numeric.division_by_zero") {
+        assert raises("value.missing_key") { strict(1.0, 0.0) }
+    }
+}
+# And one whose inner assertion holds goes on, and then fails as the
+# outer one expects.
+test nested_then_raised {
+    assert raises("numeric.division_by_zero") {
+        assert raises("value.missing_key") { size(["a": 1], "z") }
+        strict(1.0, 0.0)
+    }
+}

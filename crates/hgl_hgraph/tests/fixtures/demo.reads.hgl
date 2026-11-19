@@ -1,0 +1,12 @@
+module demo.reads
+use demo.constants::{scale, choose}
+const twice: i64 = scale * 2
+fn scaled(value: i64, const factor: i64) -> i64 {
+    when { return value * factor }
+}
+fn wired(value: i64) -> i64 => scaled(value, scale)
+test constants_are_imported {
+    assert twice == 4
+    assert choose(twice) == 11
+    assert eval(wired(value: [1, 2])) == [2, 4]
+}

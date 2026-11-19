@@ -1,0 +1,75 @@
+module demo.nullable
+
+fn publish_nullable(command: i64) -> i64? {
+    when {
+        if command == 0 { return null }
+        return command
+    }
+}
+
+fn read_back(value: i64?) -> i64 {
+    when {
+        if value == null { return -1 }
+        return value + 100
+    }
+}
+
+fn recorded(value: i64?) -> i64? {
+    when valid(value) && modified(value) { return delta_value(value) }
+}
+
+fn unwrapped(value: i64?) -> i64 {
+    when {
+        let change: delta<i64?> = delta_value(value)
+        if change.value == null { return 0 }
+        return 1
+    }
+}
+
+fn made(command: i64) -> i64? {
+    when {
+        if command == 0 { return delta<i64?>() }
+        return delta<i64?>(value: command)
+    }
+}
+
+fn through_out(command: i64) -> i64? {
+    inject out
+    when {
+        if command == 0 { out = null } else { out = command }
+    }
+}
+
+fn nothing_then_null() -> i64? {
+    yield 1us: null
+    yield 1us: 3
+}
+
+const fn or_zero(value: i64?) -> i64 => if value == null { 0 } else { value }
+const fn none_of(value: i64) -> i64? => if value == 0 { null } else { value }
+fn lifted_in(value: i64?) -> i64 => or_zero(value)
+fn lifted_out(value: i64) -> i64? => none_of(value)
+fn wired(command: i64) -> i64 => read_back(publish_nullable(command))
+
+const fn nulls(seen: list<tuple<datetime, delta<i64?>>>) -> i64 {
+    var count: i64 = 0
+    for entry in seen {
+        if entry[1].value == null { count += 1 }
+    }
+    return count
+}
+
+test nullable {
+    # A published null is a publication, and `_` is silence.
+    assert eval(publish_nullable(command: [7, 0, _, 0, 9])) == [7, null, _, null, 9]
+    assert eval(read_back(value: [null, _, 7, null, _])) == [-1, _, 107, -1]
+    assert eval(recorded(value: [null, _, 7, null, _])) == [null, _, 7, null]
+    assert eval(unwrapped(value: [null, 7])) == [0, 1]
+    assert eval(made(command: [0, 5])) == [null, 5]
+    assert eval(through_out(command: [0, 5, 0])) == [null, 5, null]
+    assert eval(nothing_then_null()) == [_, null, 3]
+    assert eval(lifted_in(value: [null, 3])) == [0, 3]
+    assert eval(lifted_out(value: [0, 3])) == [null, 3]
+    assert eval(wired(command: [0, 4])) == [-1, 104]
+    assert nulls(eval(publish_nullable(command: [7, 0, _, 0]))) == 2
+}

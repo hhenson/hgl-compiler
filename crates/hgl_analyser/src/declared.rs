@@ -27,7 +27,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::constant::fold;
 use crate::program::{Declaration, DeclarationKind, Program};
-use crate::read::{child, has_token, is_type, tokens};
+use crate::read::is_type;
+use crate::syntax::{child, has_token, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, FieldRef, GenericKind, Member,
     StructType, Type,
@@ -349,26 +350,7 @@ const APPLICATIONS: usize = 16;
 
 /// True when `ty` names a generic parameter, itself or inside it.
 pub(crate) fn names_parameter(ty: &Type) -> bool {
-    match ty {
-        Type::Parameter { .. } => true,
-        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-            Argument::Type(argument) => names_parameter(argument),
-            Argument::Constant(_) => false,
-        }),
-        Type::Tuple(elements) => elements.iter().any(names_parameter),
-        Type::List { element, .. } => names_parameter(element),
-        Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner) => names_parameter(inner),
-        Type::Dict { key, value } => names_parameter(key) || names_parameter(value),
-        Type::RollingWindow { value, .. } => names_parameter(value),
-        Type::Result { value, error } => names_parameter(value) || names_parameter(error),
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => false,
-    }
+    ty.any_part(&|part| matches!(part, Type::Parameter { .. }), &|_| false)
 }
 
 /// `ty` with each generic parameter in `map` replaced by the argument
@@ -482,27 +464,10 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
     if declared.is_empty() {
         return false;
     }
-    let inside = |inner: &Type| names_one_of(inner, declared);
-    match ty {
-        Type::Parameter { at, .. } => declared.contains(at),
-        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-            Argument::Type(argument) => inside(argument),
-            Argument::Constant(_) => false,
-        }),
-        Type::Tuple(elements) => elements.iter().any(inside),
-        Type::List { element, .. } => inside(element),
-        Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner) => inside(inner),
-        Type::Dict { key, value } => inside(key) || inside(value),
-        Type::RollingWindow { value, .. } => inside(value),
-        Type::Result { value, error } => inside(value) || inside(error),
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => false,
-    }
+    ty.any_part(
+        &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
+        &|_| false,
+    )
 }
 
 /// The most a type may weigh once arguments stand for its parameters.
@@ -566,7 +531,7 @@ pub(crate) fn substitute_within(ty: &Type, map: &[(Location, &Argument)]) -> Typ
 /// `atomic<...>` of a nullable type, `atomic<T?>`."
 ///
 /// `None` when the type, or what an `atomic<...>` holds, is not known.
-fn is_optional(ty: &Type) -> Option<bool> {
+pub(crate) fn is_optional(ty: &Type) -> Option<bool> {
     match ty {
         Type::Unknown => None,
         Type::Nullable(_) => Some(true),
