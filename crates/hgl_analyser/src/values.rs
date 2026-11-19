@@ -8490,7 +8490,12 @@ impl<'a> Typer<'a> {
         // the abstract struct `B`; it yields the same elements." Core
         // declares no candidate for it.
         if let Some(ty) = self.parent_list(operator, public, &explicit, &given, expected) {
-            let value = given.swap_remove(0).value;
+            // The value as `called` has an argument: read again where
+            // its first reading was taken back, so that the locals it
+            // declares are this reading's.
+            let value = given.swap_remove(0);
+            let converted = value.value.ty.clone();
+            let value = self.argument_value(value, &converted, "the value converted");
             return (ExprKind::ParentList(Box::new(value)), ty);
         }
         // The generic arguments the call writes, for a requirement to
@@ -9444,16 +9449,11 @@ impl<'a> Typer<'a> {
                 };
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let value = if given.retried {
-                    // Read where it stands, as the parameter's type.
-                    let value = self.expression(&given.node, Some(&parameter.ty));
-                    self.fit(value, &parameter.ty, &place)
-                } else {
-                    self.fit(given.value, &parameter.ty, &place)
-                };
+                let named = matches!(given.key, Key::Name(_));
+                let value = self.argument_value(given, &parameter.ty, &place);
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
-                if lifted && !parameter.constant && matches!(given.key, Key::Name(_)) {
+                if lifted && !parameter.constant && named {
                     self.configuration_input(form, &parameter.name, &value);
                 }
                 Some(hir::Argument {
@@ -10439,6 +10439,20 @@ impl<'a> Typer<'a> {
             form,
         };
         (kind, result.unwrap_or(Type::Unknown))
+    }
+
+    /// The argument `given` as the value of a parameter of type `ty`,
+    /// fitted to it (EXPR-5). One whose first reading was taken back
+    /// (`retried`) is read again where it stands, as that type: what
+    /// the first reading declared is gone, and the value read again
+    /// declares its own. `place` names the parameter for messages.
+    fn argument_value(&mut self, given: Given, ty: &Type, place: &str) -> Expr {
+        if given.retried {
+            let value = self.expression(&given.node, Some(ty));
+            self.fit(value, ty, place)
+        } else {
+            self.fit(given.value, ty, place)
+        }
     }
 
     /// The call of an operator for which no candidate is selected: its

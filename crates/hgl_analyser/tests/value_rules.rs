@@ -372,6 +372,69 @@ fn a_list_of_structs_converts_to_a_list_of_their_parent() {
     );
 }
 
+/// Core's OPS-6: the value a list of structs is converted from may be a
+/// block that declares locals, read first as itself and then where it
+/// stands, as an argument of a call is. What the typed body keeps is
+/// the second reading, with locals of its own: `item` is declared once,
+/// both elements read it, and `other`, declared after, is another
+/// local.
+#[test]
+fn a_converted_block_keeps_the_locals_it_declares() {
+    let checked = module(concat!(
+        "abstract struct Shape {}\n",
+        "struct Round : Shape { radius: f64 }\n",
+        "const fn widened() -> list<Shape> {\n",
+        "    let shapes = convert<list<Shape>>({\n",
+        "        let item = Round(radius: 1.0)\n",
+        "        [item, item]\n",
+        "    })\n",
+        "    let other = Round(radius: 2.0)\n",
+        "    return shapes\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE);
+    let body = body(&checked, "widened");
+    let names: Vec<String> = body
+        .locals
+        .iter()
+        .map(|local| format!("{}: {}", local.name, local.ty))
+        .collect();
+    assert_eq!(
+        names,
+        ["item: Round", "shapes: list<Shape>", "other: Round"]
+    );
+    let Stmt::Declare {
+        value: Some(shapes),
+        ..
+    } = &body.statements[0]
+    else {
+        panic!("`shapes` is declared first: {:?}", body.statements[0]);
+    };
+    let ExprKind::ParentList(converted) = &shapes.kind else {
+        panic!("a list converted: {shapes:?}");
+    };
+    let ExprKind::Block {
+        statements,
+        value: Some(last),
+    } = &converted.kind
+    else {
+        panic!("a block: {converted:?}");
+    };
+    let [Stmt::Declare { local: item, .. }] = statements.as_slice() else {
+        panic!("one local declared: {statements:?}");
+    };
+    assert_eq!(body.locals[*item].name, "item");
+    let ExprKind::Sequence(elements) = &last.kind else {
+        panic!("a sequence: {last:?}");
+    };
+    for element in elements {
+        assert!(
+            matches!(element.kind, ExprKind::Local(local) if local == *item),
+            "{element:?}"
+        );
+    }
+}
+
 /// Core's OPS-7: "A conversion is configured as division is (NUM-3,
 /// NUM-9). Options select how an `f64` is rounded to an `i64` and what
 /// a NaN becomes ... Its error policy is checked wherever it can be:
