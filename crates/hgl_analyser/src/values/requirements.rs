@@ -1171,6 +1171,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         generics: Vec::new(),
         parameters: Vec::new(),
         result: None,
+        reference: false,
     };
     // Each instance followed once, by what it is: its callee and its
     // arguments.
