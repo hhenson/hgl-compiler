@@ -141,9 +141,8 @@ def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
     capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
-def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
-    """CAP-4: "with a `datetime`, a wake then"."""
-    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
+# CAP-4: "with a `datetime`, a wake then".
+schedule_Scheduler_datetime_str__bool = schedule_Scheduler_duration_str__bool
 
 
 def fn_un_schedule(scheduler, tag):
@@ -165,8 +164,7 @@ def schedule_Alarm_duration(capability, at):
     _alarm(capability, at)
 
 
-def schedule_Alarm_datetime(capability, at):
-    _alarm(capability, at)
+schedule_Alarm_datetime = schedule_Alarm_duration
 
 
 def get_GlobalState_str(store, key):
@@ -385,16 +383,13 @@ def div__i64_i64(lhs, rhs, zero):
     return _divide(_div, lhs, rhs, zero)
 
 
-def div__f64_f64(lhs, rhs, zero):
-    return _divide(_div, lhs, rhs, zero)
+div__f64_f64 = div__i64_i64
 
 
-def div__i64_f64(lhs, rhs, zero):
-    return _divide(_div, lhs, rhs, zero)
+div__i64_f64 = div__i64_i64
 
 
-def div__f64_i64(lhs, rhs, zero):
-    return _divide(_div, lhs, rhs, zero)
+div__f64_i64 = div__i64_i64
 
 
 def floordiv__i64_i64(lhs, rhs, zero):
@@ -405,12 +400,10 @@ def floordiv__f64_f64(lhs, rhs, zero):
     return _divide(_floordiv, lhs, rhs, zero)
 
 
-def floordiv__i64_f64(lhs, rhs, zero):
-    return _divide(_floordiv, lhs, rhs, zero)
+floordiv__i64_f64 = floordiv__f64_f64
 
 
-def floordiv__f64_i64(lhs, rhs, zero):
-    return _divide(_floordiv, lhs, rhs, zero)
+floordiv__f64_i64 = floordiv__f64_f64
 
 
 def mod__i64_i64(lhs, rhs, zero):
@@ -421,12 +414,10 @@ def mod__f64_f64(lhs, rhs, zero):
     return _divide(_mod, lhs, rhs, zero)
 
 
-def mod__i64_f64(lhs, rhs, zero):
-    return _divide(_mod, lhs, rhs, zero)
+mod__i64_f64 = mod__f64_f64
 
 
-def mod__f64_i64(lhs, rhs, zero):
-    return _divide(_mod, lhs, rhs, zero)
+mod__f64_i64 = mod__f64_f64
 
 
 def neg__i64(value):
@@ -437,8 +428,7 @@ def neg__f64(value):
     return -value
 
 
-def eq__T_T(lhs, rhs):
-    return _equal(lhs, rhs)
+eq__T_T = _equal
 
 
 def ne__T_T(lhs, rhs):
@@ -482,16 +472,13 @@ def _compare(lhs, rhs):
     return "equivalent"
 
 
-def compare__T_T(lhs, rhs):
-    return _compare(lhs, rhs)
+compare__T_T = _compare
 
 
-def compare__i64_f64(lhs, rhs):
-    return _compare(lhs, rhs)
+compare__i64_f64 = compare__T_T
 
 
-def compare__f64_i64(lhs, rhs):
-    return _compare(lhs, rhs)
+compare__f64_i64 = compare__T_T
 
 
 def and__bool_bool(lhs, rhs):
@@ -546,12 +533,10 @@ def eq__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
     return _close(lhs, rhs, abs, rel)
 
 
-def eq__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return _close(lhs, rhs, abs, rel)
+eq__f64_f64_f64_f64 = eq__i64_i64_f64_f64
 
 
-def eq__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return _close(lhs, rhs, abs, rel)
+eq__i64_f64_f64_f64 = eq__i64_i64_f64_f64
 
 
 # NUM-4: "Configured `!=` is the complement under the same options."
@@ -559,44 +544,34 @@ def ne__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
     return not _close(lhs, rhs, abs, rel)
 
 
-def ne__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return not _close(lhs, rhs, abs, rel)
+ne__f64_f64_f64_f64 = ne__i64_i64_f64_f64
 
 
-def ne__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return not _close(lhs, rhs, abs, rel)
+ne__i64_f64_f64_f64 = ne__i64_i64_f64_f64
 
 
-def lt__i64_f64(lhs, rhs):
-    return lhs < rhs
+lt__i64_f64 = lt__T_T
 
 
-def lt__f64_i64(lhs, rhs):
-    return lhs < rhs
+lt__f64_i64 = lt__T_T
 
 
-def le__i64_f64(lhs, rhs):
-    return lhs <= rhs
+le__i64_f64 = le__T_T
 
 
-def le__f64_i64(lhs, rhs):
-    return lhs <= rhs
+le__f64_i64 = le__T_T
 
 
-def gt__i64_f64(lhs, rhs):
-    return lhs > rhs
+gt__i64_f64 = gt__T_T
 
 
-def gt__f64_i64(lhs, rhs):
-    return lhs > rhs
+gt__f64_i64 = gt__T_T
 
 
-def ge__i64_f64(lhs, rhs):
-    return lhs >= rhs
+ge__i64_f64 = ge__T_T
 
 
-def ge__f64_i64(lhs, rhs):
-    return lhs >= rhs
+ge__f64_i64 = ge__T_T
 
 
 def _microseconds(value):
@@ -670,8 +645,7 @@ def div__duration_i64(lhs, rhs, zero):
     return _divide(_div_duration, lhs, rhs, zero)
 
 
-def div__duration_f64(lhs, rhs, zero):
-    return _divide(_div_duration, lhs, rhs, zero)
+div__duration_f64 = div__duration_i64
 
 
 def div__duration_duration(lhs, rhs, zero):
@@ -707,10 +681,9 @@ def convert_i64_to_bool(value):
     return value != 0
 
 
-def convert_f64_to_bool(value):
-    """OPS-6: "False for zero, true otherwise; NaN is true". A NaN is
-    unequal to zero, as to everything."""
-    return value != 0
+# OPS-6: "False for zero, true otherwise; NaN is true". A NaN is
+# unequal to zero, as to everything.
+convert_f64_to_bool = convert_i64_to_bool
 
 
 def convert_bool_to_i64(value):
@@ -965,16 +938,13 @@ def sub__datetime_datetime(lhs, rhs):
     return _duration(_microseconds(lhs - rhs))
 
 
-def add__civil_datetime_duration(lhs, rhs):
-    return _shifted(lhs, rhs)
+add__civil_datetime_duration = add__datetime_duration
 
 
-def sub__civil_datetime_duration(lhs, rhs):
-    return _shifted(lhs, -rhs)
+sub__civil_datetime_duration = sub__datetime_duration
 
 
-def sub__civil_datetime_civil_datetime(lhs, rhs):
-    return _duration(_microseconds(lhs - rhs))
+sub__civil_datetime_civil_datetime = sub__datetime_datetime
 
 
 def add__date_time(lhs, rhs):
@@ -983,8 +953,7 @@ def add__date_time(lhs, rhs):
     return _datetime.datetime.combine(lhs, rhs)
 
 
-def sub__date_date(lhs, rhs):
-    return _duration(_microseconds(lhs - rhs))
+sub__date_date = sub__datetime_datetime
 
 
 def add__date_duration(lhs, rhs):

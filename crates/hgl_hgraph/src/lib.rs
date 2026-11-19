@@ -444,16 +444,30 @@ fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diag
 }
 
 /// True where the provider of core's natives defines the function
-/// `name`. What it defines is read from its text once: the name after
-/// each `def` at the start of a line, but for the private ones.
+/// `name`. What it defines is read from the natives' file once, the
+/// file of nothing else (`core_native.py`): at the start of a line, the
+/// name after each `def`, and the name a line `name = other` gives
+/// another function too, but for the private ones.
 pub(crate) fn provides(name: &str) -> bool {
+    /// True for text that is one Python name.
+    fn one_name(text: &str) -> bool {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    }
     // `LazyLock` works its value out the first time it is read, and
     // keeps it for every read after.
     static PROVIDED: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         CORE_NATIVE
             .lines()
-            .filter_map(|line| line.strip_prefix("def "))
-            .filter_map(|rest| rest.split('(').next())
+            .filter_map(|line| match line.strip_prefix("def ") {
+                Some(rest) => rest.split('(').next(),
+                None => line
+                    .split_once(" = ")
+                    .filter(|(name, other)| one_name(name) && one_name(other))
+                    .map(|(name, _)| name),
+            })
             .filter(|name| !name.starts_with('_'))
             .collect()
     });
