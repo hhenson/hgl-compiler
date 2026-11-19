@@ -55,6 +55,7 @@ from hgraph import (
     TSD as _TSD,
     TimeSeriesSchema as _TimeSeriesSchema,
     compute_node as _compute_node,
+    sink_node as _sink_node,
 )
 
 # `abs` is the name of an option of core's `eq_` and `ne_`, and so of a
@@ -133,6 +134,8 @@ def _equal(lhs, rhs):
     if isinstance(lhs, dict):
         return (
             isinstance(rhs, dict)
+            # A list's delta also holds its `size_modified` (see `ListDelta`).
+            and size_modified(lhs) == size_modified(rhs)
             and lhs.keys() == rhs.keys()
             and all(_equal(value, rhs[key]) for key, value in lhs.items())
         )
@@ -213,6 +216,47 @@ class ErrorContext:
         self.phase = phase
         self.evaluation_time = evaluation_time
 
+    # OPS-2: "`==` and `!=` compare two values of one type": two
+    # contexts are equal when their three parts are. With `__eq__` and
+    # no `__hash__`, Python makes the class unhashable, as `Error` is.
+    def __eq__(self, other):
+        return type(other) is ErrorContext and (self.node, self.phase, self.evaluation_time) == (
+            other.node,
+            other.phase,
+            other.evaluation_time,
+        )
+
+    def __repr__(self):
+        return f"context(node: {self.node!r}, phase: {self.phase!r}, evaluation_time: {self.evaluation_time!r})"
+
+
+# A frame of a traceback, with the name of the function it is in.
+_FRAME = _re.compile(r'\s*File ".*", line \d+, in (\S+)$')
+
+
+def _phase_of(failure):
+    """The phase hgraph's `NodeError` `failure` was met in (ERR-4): one
+    of `"evaluate"`, `"start"`, and `"stop"`.
+
+    hgraph captures a failure of the start or the stop of a child that
+    the evaluation of what it captures starts or stops, a branch of a
+    `switch_` that is selected or left, as it captures a failure of an
+    evaluation. The node's `start` and `stop` are the target's functions
+    `_start_name` and `_stop_name`, which no name of a program is
+    written as, and the first frame of the traceback is the function
+    hgraph called.
+    """
+    for line in failure.error_msg.splitlines():
+        frame = _FRAME.match(line)
+        if frame is not None:
+            called = frame.group(1)
+            if called.startswith("_start_"):
+                return "start"
+            if called.startswith("_stop_"):
+                return "stop"
+            return "evaluate"
+    return "evaluate"
+
 
 def error_of(failure, evaluation_time):
     """The `error` a capture gives for hgraph's `NodeError` `failure`,
@@ -222,17 +266,18 @@ def error_of(failure, evaluation_time):
     `HglError`). "On first graph failure, attach original node identity,
     phase, and evaluation time; propagation/capture preserve them": an
     error with no context of its own is given the failing node's, in
-    the phase hgraph captures, evaluation. Any other failure is an error
+    the phase it was met in (`_phase_of`). Any other failure is an error
     of the traceback's last line, with no code.
     """
     lines = failure.error_msg.rstrip().splitlines()
     written = next((line for line in reversed(lines) if line.startswith(_NOTE)), None)
     if written is None:
-        return Error(lines[-1] if lines else "", None, ErrorContext(failure.label, "evaluate", evaluation_time))
+        context = ErrorContext(failure.label, _phase_of(failure), evaluation_time)
+        return Error(lines[-1] if lines else "", None, context)
     written = _json.loads(written[len(_NOTE):])
     context = written.get("context")
     if context is None:
-        context = ErrorContext(failure.label, "evaluate", evaluation_time)
+        context = ErrorContext(failure.label, _phase_of(failure), evaluation_time)
     else:
         node, phase, at = context
         context = ErrorContext(node, phase, _datetime.datetime.fromisoformat(at))
@@ -247,6 +292,28 @@ def captured_error(failure: _TS[_NodeError], _clock: _EvaluationClock = None) ->
     but unmodified": hgraph's stream of the child's failures, each made
     an `error`."""
     return error_of(failure.value, _clock.evaluation_time)
+
+
+@_sink_node
+def _lifecycle_escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
+    """ERR-8: "Start/stop failures escape, including lifecycle work
+    triggered during evaluation". hgraph's `try_except` captures the
+    failure of a `start` or a `stop` it meets while it evaluates the
+    child: it is raised again here, with its error and the context of
+    its first failure, which says its phase. A capture around this one
+    meets the failure again, as this node's, and its context says the
+    phase again: each boundary lets it out."""
+    error = error_of(failure.value, _clock.evaluation_time)
+    if error.context.phase != "evaluate":
+        raise HglError(error.message, code=error.code, context=error.context)
+
+
+def captured(attempt):
+    """A capture: `attempt`, what hgraph's `try_except` gives, with what
+    lets the failures of the child's `start` and `stop` out of it
+    (`_lifecycle_escapes`) wired beside it (ERR-7, ERR-8)."""
+    _lifecycle_escapes(attempt.exception)
+    return attempt
 
 
 class Propagated(Exception):
@@ -274,6 +341,21 @@ def succeeded(result):
     if type(result) is Ok:
         return result.value
     raise HglError(result.error.message, code=result.error.code, context=result.error.context)
+
+
+@_compute_node
+def lifted_is_ok(value: _TS[Result]) -> _TS[bool]:
+    """ERR-3: "In composition a test of a connection is an ordinary
+    lifted call (FN-6): it gives a connection of `bool` and no fact":
+    `is_ok` of each result `value` publishes."""
+    return type(value.value) is Ok
+
+
+@_compute_node
+def lifted_is_err(value: _TS[Result]) -> _TS[bool]:
+    """`is_err` lifted over a connection of `result`, as `lifted_is_ok`
+    is (ERR-3, FN-6)."""
+    return type(value.value) is Err
 
 
 def member(enum, value):
@@ -444,6 +526,96 @@ def dict_delta(updated=None, removed=()):
     for key in removed:
         made[key] = _REMOVE
     return made
+
+
+class ListDelta(dict):
+    """A list's delta (the language's TYPE-16), as hgraph's delta of a
+    `TSL`: a `dict` of each position updated with its delta, and of each
+    removed with `REMOVE`. It also holds `size_modified`, "the new size
+    where the size changed, else null", which hgraph's `dict` has no
+    place for."""
+
+    size_modified = None
+
+    def __eq__(self, other):
+        # Two list deltas are one where their positions and their
+        # `size_modified` are; a plain `dict`'s is null.
+        return (
+            isinstance(other, dict)
+            and size_modified(self) == size_modified(other)
+            and dict.__eq__(self, other)
+        )
+
+    def __ne__(self, other):
+        return not self == other
+
+    __hash__ = None
+
+
+def list_delta(updated=None, removed=(), size_modified=None):
+    """A list's delta made from its properties (TYPE-16: "`updated`,
+    each changed position with its delta; `removed`, the positions that
+    lost their value ... and `size_modified`"). A property left out is
+    empty, or null for `size_modified`. What is updated is copied: the
+    program may go on changing the dictionary it was given in."""
+    made = ListDelta({} if updated is None else copied(updated))
+    for position in removed:
+        made[position] = _REMOVE
+    made.size_modified = size_modified
+    return made
+
+
+def whole_list(value):
+    """The delta a fixed list publishes for a whole value of it (the
+    language's TIME-7: "a value that is a T is published whole"), as a
+    trace's cell holds it (TST-5): each position updated with its
+    element."""
+    return list_delta(updated=dict(enumerate(value)))
+
+
+def size_modified(delta):
+    """The property `size_modified` of a list's delta (TYPE-16): the
+    new size, or null where the size did not change."""
+    return getattr(delta, "size_modified", None)
+
+
+def list_applied(output, delta):
+    """The whole list an unsized list publishes for `delta`, applied to
+    what it last published, `output`'s value (TYPE-16). "A delta written
+    with a smaller `size_modified` and no `removed` shrinks the list", and
+    one whose `removed` is the whole tail does too. This target writes an
+    unsized list as a whole tuple, which holds no position without a
+    value: a position removed short of the end, or one that growth leaves
+    with no value, is not written yet."""
+    held = list(output.value) if output.valid else []
+    gone = {position for position, change in delta.items() if _removes(change)}
+    size = size_modified(delta)
+    # TYPE-10: a size is "a count that is not negative". The catalogue
+    # has no execution code for one that is, so the failure has none,
+    # as an index outside a sequence has none (see `item`).
+    if size is not None and size < 0:
+        raise HglError(f"the size {size} of a list is negative: a size is a count that is not negative")
+    if size is None:
+        # Only a `removed` that is the whole tail shrinks the list.
+        size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
+    if any(position < size for position in gone):
+        raise NotImplementedError(
+            "the hgraph target does not write a position removed inside an unsized list yet"
+        )
+    made = held[:size]
+    for position in range(len(made), size):
+        if position not in delta:
+            raise NotImplementedError(
+                "the hgraph target does not write an unsized list grown with no value yet"
+            )
+        made.append(None)
+    for position, change in delta.items():
+        if not _removes(change):
+            if not 0 <= position < size:
+                raise HglError(f"the position {position} is outside a list of {size}")
+            # A whole tuple holds a null as `None`, not hgraph's `Null`.
+            made[position] = unpublished(change)
+    return tuple(made)
 
 
 def _removes(change):

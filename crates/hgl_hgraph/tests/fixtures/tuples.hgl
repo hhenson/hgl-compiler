@@ -33,9 +33,10 @@ fn whole_sum(pair: tuple<i64, i64>) -> i64 {
     }
 }
 
-# TIME-9: a tuple is valid once one position is.
-fn is_valid(probe: bool, pair: tuple<i64, i64>) -> bool {
-    when modified(probe) && valid([]) { return valid(pair) }
+# TIME-9: a tuple is valid once one position is, and all valid once
+# each is.
+fn is_valid(probe: bool, pair: tuple<i64, i64>) -> list<bool, 2> {
+    when modified(probe) && valid([]) { return [valid(pair), all_valid(pair)] }
 }
 
 # A tuple's delta read by position: null where the position is silent.
@@ -91,7 +92,7 @@ fn first_of_pair(a: i64, b: str) -> i64 => paired(a, b)[0]
 fn second_of_pair(a: i64, b: str) -> str => paired(a, b)[1]
 fn read_first(a: i64, b: str) -> i64 => first_of(paired(a, b))
 fn summed(a: i64, b: i64) -> i64 => whole_sum(two(a, b))
-fn valid_once(probe: bool, first: bool, value: i64) -> bool =>
+fn valid_once(probe: bool, first: bool, value: i64) -> list<bool, 2> =>
     is_valid(probe, set_one(first, value))
 fn changes_of(first: bool, value: i64) -> i64 => first_changes(set_one(first, value))
 fn first_set_of(value: i64) -> bool => first_set(maybe_first(value))
@@ -119,10 +120,10 @@ test a_tuple_ticks_by_its_positions {
     assert eval(read_first(a: [1, 2], b: ["x", _])) == [1, 2]
     assert eval(summed(a: [3, _, 4], b: [4, 5, _])) == [7, 8, 9]
     assert eval(valid_once(
-        probe: [true, true, true],
-        first: [_, true, _],
-        value: [_, 3, _],
-    )) == [false, true, true]
+        probe: [true, true, true, true],
+        first: [_, true, _, false],
+        value: [_, 3, _, 8],
+    )) == [[false, false], [true, false], [true, false], [true, true]]
     assert eval(changes_of(first: [true, false, true], value: [3, 4, 5])) == [3, -1, 5]
     assert eval(first_set_of(value: [1, -1, 2])) == [true, false, true]
     assert eval(nested_ask_of(bid: [1, 2], size: [3, _])) == [8, 9]
