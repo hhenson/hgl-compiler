@@ -822,6 +822,21 @@ fn a_nullable_constant_is_a_value_of_its_nullable_type() {
     );
 }
 
+/// GEN-6: "An option the call omits takes its candidate's default",
+/// read as a value of the option's type (EXPR-5): integer literals past
+/// 2^53 joined by `+` where an `f64` is expected are `f64` arithmetic.
+#[test]
+fn a_candidates_default_is_read_as_its_options_type() {
+    expect(
+        concat!(
+            "operator scaled(value: i64) -> i64\n",
+            "impl const fn scaled<const X: f64 = 9007199254740993 + 0>(value: i64) -> i64 => value\n",
+            "const fn uses() -> i64 => scaled(1)\n",
+        ),
+        &[],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

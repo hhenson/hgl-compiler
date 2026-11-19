@@ -9091,9 +9091,14 @@ impl<'a> Typer<'a> {
                     else {
                         return None;
                     };
-                    let read = self.typed_in(candidate.at.file, &default, None).ok()?;
-                    let fits =
-                        |ty: &Type| crate::constant::fit(read.clone(), Some(ty), program).is_ok();
+                    // Read as a value of each type, as it would be read
+                    // there (EXPR-5): `9007199254740993 + 0` of an
+                    // `f64` is that `f64`.
+                    let fits = |ty: &Type| {
+                        self.typed_in(candidate.at.file, &default, Some(ty))
+                            .and_then(|read| crate::constant::fit(read, Some(ty), program))
+                            .is_ok()
+                    };
                     (whole(resolved) && !fits(resolved)).then(|| !fits(declared))
                 });
                 match unfit {
