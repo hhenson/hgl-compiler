@@ -99,6 +99,32 @@ impl Emitter<'_> {
                     self.unsupported(value.at, "this endpoint read in `start` or `stop`");
                 }
                 let input = endpoint_name(endpoint);
+                // FN-16: "the endpoint operations take" a `ref`
+                // parameter, and `out` of a `ref` result, each hgraph's
+                // `REF`. TIME-10, proposed: its `valid` is where it
+                // designates something, its `modified` where its
+                // designation changed, and its `last_modified` when it
+                // last did, which are the `REF`'s own.
+                if function.designates(inputs[0]) {
+                    return match operation {
+                        EndpointOperation::Valid => format!("{input}.valid"),
+                        EndpointOperation::Modified => format!("{input}.modified"),
+                        EndpointOperation::LastModified => {
+                            format!("({input}.last_modified_time if {input}.valid else None)")
+                        }
+                        EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                        EndpointOperation::Activate => format!("{input}.make_active()"),
+                        EndpointOperation::Passivate => format!("{input}.make_passive()"),
+                        EndpointOperation::IsActive => format!("{input}.active"),
+                        other => {
+                            self.unsupported(
+                                value.at,
+                                &format!("`{}` of a `ref` parameter or result", other.name()),
+                            );
+                            "None".to_string()
+                        }
+                    };
+                }
                 // The endpoint of what holds a window, itself or within
                 // (`windows_in`): an input's readiness is asked of its
                 // parameter (`window_inputs`), and `out`'s here.
@@ -973,6 +999,58 @@ impl Emitter<'_> {
         }
     }
 
+    /// The reference `value` designates, a designation (`designates`)
+    /// given to a `ref` result by a `return` or `out =` (FN-16). Of a
+    /// `ref` parameter it is the reference its `REF` input holds, its
+    /// `value`; of a temporal input that is no `ref` parameter, and of a
+    /// position of a fixed list that is one, it is the reference the
+    /// hidden `REF` input the node is given beside it holds
+    /// (`Designated`). `None`, reported, for one not written yet.
+    pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<String> {
+        if let ExprKind::EndpointOf(local) = value.kind
+            && function.is_reference(local)
+        {
+            return Some(format!("{}.value", endpoint_name(&function.locals[local])));
+        }
+        match (designated(function, value), &value.kind) {
+            (Some((local, Designated::Whole)), _) => Some(format!(
+                "{}.value",
+                designated_name(&function.locals[local])
+            )),
+            (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
+                let ExprKind::Index { index, .. } = &child.kind else {
+                    return None;
+                };
+                let index = self.expression(function, index);
+                self.natives = true;
+                Some(format!(
+                    "_core.position_of({}, {index}).value",
+                    designated_name(&function.locals[local])
+                ))
+            }
+            _ => {
+                // hgraph gives a `REF` input of a list no reference of
+                // its child; a dictionary's absent key and an unsized
+                // list's position it does not hold have no port to
+                // refer to.
+                let rooted_at_reference = matches!(
+                    &value.kind,
+                    ExprKind::ChildEndpointOf(child)
+                        if matches!(child.place_root().kind, ExprKind::Local(local) if function.is_reference(local))
+                );
+                self.unsupported(
+                    value.at,
+                    if rooted_at_reference {
+                        "a child of a `ref` parameter designated"
+                    } else {
+                        "a designation of a child that is no position of a fixed list"
+                    },
+                );
+                None
+            }
+        }
+    }
+
     /// The endpoint of `child`, a child of a temporal input of the node
     /// (TIME-1), as hgraph has it: its own child of the input's,
     /// `parts[1]` as `_core.position_of(parts, 1)`, `quote.bid` as
@@ -1025,8 +1103,8 @@ impl Emitter<'_> {
         fn within(emitter: &Emitter<'_>, function: &Function, value: &Expr) -> bool {
             match &value.kind {
                 // The input, or `out`, is a collection (TIME-9): an
-                // `atomic<V>`, a `T?` and a `ref<T>` have no child, as the
-                // analyser has it. TIME-7: `out` read holds what it
+                // `atomic<V>` and a `T?` have no child, as the analyser
+                // has it. TIME-7: `out` read holds what it
                 // published, each part by its own port.
                 ExprKind::Local(local) => {
                     (function.is_input(*local) || function.is_out(*local))
@@ -1151,6 +1229,13 @@ impl Emitter<'_> {
         };
         if !given {
             self.unsupported(at, "this endpoint read in `start` or `stop`");
+            return "None".to_string();
+        }
+        // hgraph's `REF` input holds one reference, and gives none of a
+        // child (FN-16: "A `ref` parameter and its children ... are
+        // endpoints").
+        if matches!(child.place_root().kind, ExprKind::Local(local) if function.designates(local)) {
+            self.unsupported(at, "an endpoint of a child of a `ref` parameter or result");
             return "None".to_string();
         }
         let Some(port) = self.child_port(function, child) else {

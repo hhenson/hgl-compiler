@@ -25,6 +25,14 @@ impl Emitter<'_> {
             // SOURCE-1: "A temporal `fn` whose body has a `yield` is a
             // source".
             Some(Phase::Node) if yields(&body.statements) => {
+                // SOURCE-1 has a source take no temporal input, and FN-16
+                // a node mark its result `ref`: a source's is not written.
+                if signature.reference {
+                    self.unsupported(
+                        module.declarations[index].at,
+                        "a `ref` result of a source",
+                    );
+                }
                 self.source(index, python, signature, body)
             }
             Some(Phase::Node) => self.node(index, python, signature, body),
@@ -144,6 +152,10 @@ impl Emitter<'_> {
             || signature.result.as_ref().is_some_and(|result| {
                 whole_dictionary(result) && returns_whole(&body.statements, result)
             });
+        // TIME-10: "A designation published again unchanged is no tick":
+        // a `ref` result is published where it designates what it did not
+        // (`_core.designation`), which it reads from `_output`.
+        let has_out = has_out || signature.reference;
         let output = has_out.then(|| {
             let annotation = match &result {
                 Some(result) => output_annotation(result),
@@ -227,8 +239,15 @@ impl Emitter<'_> {
         // does (TIME-3: "the node is dormant"), and its `start` and
         // `stop` run as any node's.
         let hidden = inputs.is_empty();
+        // FN-16: each input that is no `ref` parameter and that the node
+        // designates, given to the node a second time as a hidden `REF`
+        // input, after its own (`Designated`). The node is then written
+        // under another name too, and the graph of the function's own
+        // name gives it each such input twice.
+        let designations = self.designated_inputs(&function, body);
+        let exposing = hidden || !designations.is_empty();
         let exposed = python;
-        let node_name = if hidden {
+        let node_name = if exposing {
             format!("_node_{python}")
         } else {
             python.to_string()
@@ -237,6 +256,16 @@ impl Emitter<'_> {
         // The function's own parameters, as the graph that stands for
         // a node with a hidden input takes them.
         let declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
+        let designated_parameters: Vec<String> = designations
+            .iter()
+            .map(|(local, annotation)| {
+                format!("{}: {annotation}", designated_name(&body.locals[*local]))
+            })
+            .collect();
+        parameters.splice(
+            signature.parameters.len()..signature.parameters.len(),
+            designated_parameters,
+        );
         // TIME-9: what says that the scheduler or the alarm woke the
         // node. A scheduler's wake is due "whether or not a temporal
         // input has ticked". An alarm's is told from the inputs: it
@@ -352,10 +381,13 @@ impl Emitter<'_> {
             options.push("active=()".to_string());
             options.push("valid=()".to_string());
         } else {
-            if active.len() != inputs.len() && !handlers.is_empty() {
+            // A hidden `REF` input wakes the node at no time, and need
+            // not be valid: its inputs are named where it has one.
+            let named = !designations.is_empty();
+            if (named || active.len() != inputs.len()) && !handlers.is_empty() {
                 options.push(format!("active={}", names(&active)));
             }
-            if valid.len() != inputs.len() && !handlers.is_empty() {
+            if (named || valid.len() != inputs.len()) && !handlers.is_empty() {
                 options.push(format!("valid={}", names(&valid)));
             }
         }
@@ -432,7 +464,14 @@ impl Emitter<'_> {
                         inputs: Some(inputs),
                     } if inputs.as_slice() == [local])
                 });
-                match self.precise_valid(ty, &endpoint(local)) {
+                // A `ref` parameter's `valid` is its `REF`'s own
+                // (TIME-10, proposed): it designates something.
+                let precise = if function.is_reference(local) {
+                    None
+                } else {
+                    self.precise_valid(ty, &endpoint(local))
+                };
+                match precise {
                     Some(precise) if !all_valid => guards.push(precise),
                     _ if !valid.contains(&local) => {
                         guards.push(format!("{}.valid", endpoint(local)));
@@ -452,7 +491,11 @@ impl Emitter<'_> {
                     let mut publications = Vec::new();
                     for &local in selected.as_deref().unwrap_or(&inputs) {
                         let input = endpoint(local);
-                        let valid = self.valid_test(&body.locals[local].ty, &input);
+                        let valid = if function.is_reference(local) {
+                            format!("{input}.valid")
+                        } else {
+                            self.valid_test(&body.locals[local].ty, &input)
+                        };
                         publications.push(if handler.required.contains(&local) {
                             format!("{input}.modified")
                         } else {
@@ -509,13 +552,21 @@ impl Emitter<'_> {
             self.unheld(signature);
             self.block(&stop_hook, stop, 1);
         }
-        if hidden {
+        if exposing {
             // The graph a call names: the node, given the constant its
-            // hidden input is never woken by.
-            let mut given = vec!["_begin=_hg.const(True)".to_string()];
+            // hidden input is never woken by, or each input it designates
+            // a second time.
+            let mut given = Vec::new();
+            if hidden {
+                given.push("_begin=_hg.const(True)".to_string());
+            }
             given.extend(signature.parameters.iter().map(|parameter| {
                 let python = name(&parameter.name);
                 format!("{python}={python}")
+            }));
+            given.extend(designations.iter().map(|(local, _)| {
+                let input = &body.locals[*local];
+                format!("{}={}", designated_name(input), name(&input.name))
             }));
             self.line(0, "");
             self.line(0, "");
@@ -527,6 +578,73 @@ impl Emitter<'_> {
             let gives = if publishes { "return " } else { "" };
             self.line(1, &format!("{gives}{python}({})", given.join(", ")));
         }
+    }
+
+    /// Each temporal input of the node `function` whose body is `body`
+    /// that is no `ref` parameter and that a `return` to its `ref`
+    /// result, or an `out =` of it, designates (FN-16: "A parameter that
+    /// is not `ref` may be designated too"), with the annotation of the
+    /// hidden `REF` input the node is given for it (`Designated`): hgraph
+    /// makes a reference only from a `REF` input, and the input itself
+    /// stays the one the body reads and subscribes to. The input whole
+    /// is `REF` of its type, and a position of a fixed list a `TSL` of
+    /// `REF`s, which hgraph binds to the list's own positions. One
+    /// designated both ways is reported.
+    fn designated_inputs(&mut self, function: &Function, body: &Body) -> Vec<(usize, String)> {
+        use hgl_analyser::hir::{Node, walk_statement_nodes};
+        let mut found: Vec<(usize, Designated, Location)> = Vec::new();
+        walk_statement_nodes(&body.statements, &mut |node| {
+            let value = match node {
+                Node::Statement(Stmt::Return {
+                    value: Some(value), ..
+                }) => value,
+                Node::Statement(Stmt::Assign { local, value, .. }) if function.is_out(*local) => {
+                    value
+                }
+                _ => return,
+            };
+            if let Some((local, how)) = designated(function, value) {
+                found.push((local, how, value.at));
+            }
+        });
+        let mut inputs: Vec<(usize, String)> = Vec::new();
+        let mut kinds: Vec<(usize, Designated)> = Vec::new();
+        for (local, how, at) in found {
+            match kinds.iter().find(|(seen, _)| *seen == local) {
+                Some((_, before)) if *before == how => continue,
+                Some(_) => {
+                    self.unsupported(at, "an input designated whole and by a position in one node");
+                    continue;
+                }
+                None => kinds.push((local, how)),
+            }
+            let ty = function.locals[local].ty.clone();
+            let annotation = match (how, &ty) {
+                (Designated::Whole, _) => self
+                    .annotation(&ty, true, at)
+                    .map(|annotation| designating(&annotation)),
+                (
+                    Designated::Position,
+                    Type::List {
+                        element,
+                        size: Some(size),
+                    },
+                ) => match &size.value {
+                    ConstantValue::Int(count) if *count > 0 => self
+                        .child_annotation(&ty, element, at)
+                        .map(|child| format!("_hg.TSL[{}, _hg.Size[{count}]]", designating(&child))),
+                    _ => {
+                        self.unsupported(at, &format!("a designation of a position of `{ty}`"));
+                        None
+                    }
+                },
+                (Designated::Position, _) => None,
+            };
+            if let Some(annotation) = annotation {
+                inputs.push((local, annotation));
+            }
+        }
+        inputs
     }
 
     /// Writes, in a node's `start`, the first value of each of its

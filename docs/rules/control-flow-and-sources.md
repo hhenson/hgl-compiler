@@ -72,12 +72,13 @@ transpiler: partial
 analyser: partial
 
 - In a loop that makes one child for each member, an assignment to a `var` declared outside it and a `return` are rejected (`loop.carried`)
-- Left: the traversal forms `elements`, `keys`, `values` and `items`; no implicit crossing of a reference
+- Iteration over a `ref` parameter reads it, and is `ref.read` (FN-16)
+- Left: the traversal forms `elements`, `keys`, `values` and `items`
 
 transpiler: partial
 
 - hgraph: in a node's hooks a `for` over a temporal input reads its current value, a list's in index order; a loop that makes a child for each member carries nothing and infers no reduction
-- Left: `elements`, `keys`, `values` and `items` (with the analyser); a reference
+- Left: `elements`, `keys`, `values` and `items` (with the analyser)
 
 ## CTRL-9
 

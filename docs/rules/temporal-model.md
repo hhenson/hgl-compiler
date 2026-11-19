@@ -97,6 +97,7 @@ analyser: partial
 - `out` is read in a `when` and in `stop`, not in a `state`'s or a `cache`'s initialiser, and written only in a `when`, and a `return` with a value stands in neither `start` nor `stop` (`out.lifecycle`)
 - A field or an element of `out` is assigned in a `when` as `out` is (EXPR-3)
 - What a `return` in a hook, an assignment to `out` and a source's `yield` publish is a complete value of the result or its `delta<T>` (TYPE-16), as core's cases relay a set with `return delta_value(input)`
+- A `ref` result takes no value: a `return` to it, and `out =` of it, names an endpoint, which it designates, and `out` of it is as a `ref` parameter is (FN-16)
 
 transpiler: partial
 
@@ -149,7 +150,13 @@ transpiler: partial
 
 ## TIME-10
 
+analyser: done
+
+- A `ref` parameter's `valid`, `modified` and `last_modified` are endpoint operations as any input's are (FN-16)
+
 transpiler: partial
 
-- hgraph: a `REF` input ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `REF` output, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
-- Left: a route kept to a removed child; a designation published again unchanged, which hgraph ticks
+- hgraph: a `ref` parameter, a `REF` input, ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `ref` result, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
+- A designation published again unchanged is no tick: a node does not publish the reference its result holds (`_core.designation`, `_core.designate`)
+- Proposed, and as hgraph has it: a `ref` parameter's `valid` is true where it designates something, `modified` where its designation changed, and `last_modified` is when it last did, each the `REF`'s own
+- Left: a route kept to a removed child

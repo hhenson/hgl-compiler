@@ -567,11 +567,12 @@ impl<'a> Emitter<'a> {
             };
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
-                // target": a lifted function given a reference takes an
-                // ordinary input of what it designates, as the analyser
-                // admitted it (`Type::followed`): every reference and a
-                // `?` that marks omission removed.
-                Some(ty) => Bound::Input(ty.followed()),
+                // target": a lifted function given a `ref` result takes
+                // an ordinary input of its type (FN-16), which hgraph
+                // binds to what it designates. A `?` that marks omission
+                // is no part of it, as the analyser admitted it
+                // (`Type::omission_removed`).
+                Some(ty) => Bound::Input(ty.omission_removed().clone()),
                 None => Bound::Configuration(argument.value.ty.clone()),
             };
             let value = self.expression(function, &argument.value);

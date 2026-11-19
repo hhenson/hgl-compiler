@@ -5,18 +5,20 @@ struct Quote {
     ask: i64
 }
 
-# TYPE-12: a `ref<T>` input is given the designation, and a node that
-# returns one re-points what follows it.
-fn pick(use_left: bool, left: ref<i64>, right: ref<i64>) -> ref<i64> {
+# FN-16: a `ref` parameter is given a connection, which it designates,
+# and a node that returns one to its `ref` result re-points what
+# follows it.
+fn pick(use_left: bool, ref left: i64, ref right: i64) -> ref i64 {
     when {
         if use_left { return left }
         return right
     }
 }
 
-# TIME-10: a reference ticks on a changed designation, not on every
-# tick of its target.
-fn designations(target: ref<i64>) -> i64 {
+# TIME-10: a reference ticks where its designation changes, not at
+# every tick of its target, and a designation published again unchanged
+# is no tick (END-10).
+fn designations(ref target: i64) -> i64 {
     state seen: i64 = 0
     when {
         seen = seen + 1
@@ -24,21 +26,22 @@ fn designations(target: ref<i64>) -> i64 {
     }
 }
 
-# A designation passed through a node: bound to a `let`, published again.
-fn kept(target: ref<i64>) -> ref<i64> {
+# A designation passed through a node.
+fn kept(ref target: i64) -> ref i64 {
     when {
-        let held = target
-        return held
+        if valid(target) && modified(target) { return target }
     }
 }
 
-fn checked(target: ref<i64>) -> bool {
+# FN-16: the endpoint operations take a `ref` parameter. TIME-10, as
+# hgraph has it: it is valid where it designates something, and
+# modified where its designation changed.
+fn checked(ref target: i64) -> bool {
     when modified(target) { return valid(target) }
 }
 
-# GEN-11: a generic input given a reference follows its target; a
-# `ref<T>` pattern binds the type under it; a requested output binds
-# its variable whole.
+# GEN-11: a generic binds from the type of the connection it is given,
+# at a `ref` parameter as at any other.
 fn ticks<T>(value: T) -> i64 {
     state seen: i64 = 0
     when {
@@ -47,7 +50,7 @@ fn ticks<T>(value: T) -> i64 {
     }
 }
 
-fn ref_ticks<T>(value: ref<T>) -> i64 {
+fn ref_ticks<T>(ref value: T) -> i64 {
     state seen: i64 = 0
     when {
         seen = seen + 1
@@ -57,6 +60,32 @@ fn ref_ticks<T>(value: ref<T>) -> i64 {
 
 fn same<T>(value: T) -> T {
     when { return value }
+}
+
+# FN-16: a `ref` result designates the element its `return` names of a
+# list that is no `ref` parameter, which is not read: its reader follows
+# the element, and the node is not woken by the element's ticks.
+fn route(idx: i64, items: list<i64, 3>) -> ref i64 {
+    when modified(idx) { return items[idx] }
+}
+
+# FN-16, proposed: `out = items[idx]` designates as the `return` does.
+fn route_out(idx: i64, items: list<i64, 3>) -> ref i64 {
+    inject out
+    when modified(idx) { out = items[idx] }
+}
+
+# An input that is no `ref` parameter, designated whole.
+fn hold(flag: bool, value: i64) -> ref i64 {
+    when modified(flag) { return value }
+}
+
+fn set_one(slot: i64, reading: i64) -> list<i64, 3> {
+    when { return delta<list<i64, 3>>(updated: [slot: reading]) }
+}
+
+fn follow(item: i64) -> i64 {
+    when { return item }
 }
 
 const fn doubled(value: i64) -> i64 => value * 2
@@ -156,18 +185,22 @@ fn repointed(use_left: bool, left: i64, right: i64) -> i64 => designations(pick(
 fn kept_of(use_left: bool, left: i64, right: i64) -> i64 => kept(pick(use_left, left, right))
 fn checked_of(use_left: bool, left: i64, right: i64) -> bool => checked(pick(use_left, left, right))
 fn doubled_of(use_left: bool, left: i64, right: i64) -> i64 => doubled(pick(use_left, left, right))
-fn designated(left: ref<i64>) -> i64 => left
-fn as_reference(left: i64) -> ref<i64> => left
+# A graph passes a `ref` result on as the connection of `i64` it is.
+fn passed_on(value: i64) -> i64 => value
 fn through_graphs(use_left: bool, left: i64, right: i64) -> i64 =>
-    designated(pick(use_left, as_reference(left), right))
-# A graph's `if` returns a reference where its result is the type under it.
-fn branched(flag: bool, left: ref<i64>, right: i64) -> i64 => if flag { left } else { right }
-fn branched_of(flag: bool, left: i64, right: i64) -> i64 => branched(flag, left, right)
+    passed_on(pick(use_left, passed_on(left), right))
+# A graph's `if` selects a `ref` result as any connection.
+fn branched(flag: bool, left: i64, right: i64) -> i64 => if flag { left } else { right }
+fn branched_of(flag: bool, left: i64, right: i64) -> i64 => branched(flag, pick(true, left, left), right)
 fn generic_follows(use_left: bool, left: i64, right: i64) -> i64 => ticks(pick(use_left, left, right))
 fn generic_designates(use_left: bool, left: i64, right: i64) -> i64 =>
     ref_ticks(pick(use_left, left, right))
-fn requested(left: i64) -> ref<i64> => same(left)
-fn requested_ticks(left: i64) -> i64 => ref_ticks(requested(left))
+fn requested_ticks(left: i64) -> i64 => ref_ticks(same(left))
+fn routed(idx: i64, slot: i64, reading: i64) -> i64 => follow(route(idx, set_one(slot, reading)))
+fn routed_out(idx: i64, slot: i64, reading: i64) -> i64 =>
+    follow(route_out(idx, set_one(slot, reading)))
+fn held(flag: bool, value: i64) -> i64 => follow(hold(flag, value))
+fn held_designations(flag: bool, value: i64) -> i64 => designations(hold(flag, value))
 
 fn sampled_of(value: i64, probe: bool) -> i64 => sample(value, probe)
 fn woken(value: i64) -> i64 => counted(value)
@@ -191,18 +224,14 @@ fn whole_asks(bid: i64, ask: i64) -> i64 => whole_ask(snapshot(bid, ask))
 fn changed_copy_of(a: i64) -> i64 => changed_copy(tripled(a))
 fn bids(value: i64, bid: i64, ask: i64) -> i64 => bid_or(value, snapshot(bid, ask))
 fn bids_left_out(value: i64) -> i64 => bid_or(value)
-# A lifted helper given a reference that may be left out follows it:
-# the analyser and the target take it as one type (`Type::followed`).
-fn twice(left: ref<i64>?) -> i64 => doubled(left)
-fn twice_of(use_left: bool, left: i64, right: i64) -> i64 => twice(pick(use_left, left, right))
-fn optional(target: ref<i64>?) -> i64 => target
-fn optional_of(use_left: bool, left: i64, right: i64) -> i64 => optional(pick(use_left, left, right))
 fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
 
 test a_reference_ticks_on_a_changed_designation {
     assert eval(followed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 10, 11]
     assert eval(repointed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, _, 2, _]
+    assert eval(repointed(use_left: [true, true, false, _], left: [1, _, _, 4], right: [2, _, _, _])) ==
         [1, _, 2, _]
     assert eval(kept_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 10, 11]
@@ -219,8 +248,21 @@ test a_reference_ticks_on_a_changed_designation {
     assert eval(generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, _, 2, _]
     assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
-    assert eval(optional_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [1, 2, 10]
-    assert eval(twice_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) == [2, 4, 20]
+}
+
+test a_ref_result_designates_what_its_return_names {
+    assert eval(routed(
+        idx:     [ 1,  _,  _, 2,  _,  0],
+        slot:    [ 1,  1,  0, _,  2,  0],
+        reading: [20, 21, 10, _, 30, 11],
+    )) ==        [20, 21,  _, _, 30, 11]
+    assert eval(routed_out(
+        idx:     [ 1,  _,  _, 2,  _,  0],
+        slot:    [ 1,  1,  0, _,  2,  0],
+        reading: [20, 21, 10, _, 30, 11],
+    )) ==        [20, 21,  _, _, 30, 11]
+    assert eval(held(flag: [true, _, true], value: [1, 2, 3])) == [1, 2, 3]
+    assert eval(held_designations(flag: [true, _, true], value: [1, 2, 3])) == [1, _, _]
 }
 
 test a_signal_wakes_its_node {

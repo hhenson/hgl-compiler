@@ -282,6 +282,10 @@ pub mod codes {
     /// A payload read under manual admission that no guard dominates
     /// (TIME-4).
     pub const PAYLOAD_UNGUARDED: &str = "payload.unguarded";
+    /// The value or the `delta_value` of a `ref` parameter, of a child
+    /// of one, or of `out` of a `ref` result, read (FN-16). The
+    /// catalogue's row is proposed.
+    pub const REF_READ: &str = "ref.read";
     /// The dormant-node warning: `modified([])` in a node that injects
     /// neither `scheduler` nor `alarm`, or whose `start` does not use
     /// the one it injects (TIME-3). It does not reject the source.
@@ -310,9 +314,9 @@ pub mod codes {
     /// A name in a type position is not a type (UNIT-10, GEN-2,
     /// GEN-13).
     pub const TYPE_NOT_A_TYPE: &str = "type.not_a_type";
-    /// A `rolling_window`, `ref`, `atomic` or `signal` where only an
-    /// ordinary value type may stand, under a `?` included (TYPE-12,
-    /// TYPE-14 and the grammar's `value_type`).
+    /// A `rolling_window`, `atomic` or `signal` where only an ordinary
+    /// value type may stand, under a `?` included (TYPE-12, TYPE-14 and
+    /// the grammar's `value_type`).
     pub const TYPE_NOT_ORDINARY: &str = "type.not_ordinary";
     /// `delta<T>` of a T that has no delta (TYPE-16).
     pub const DELTA_UNSUPPORTED_SHAPE: &str = "delta.unsupported_shape";
@@ -432,6 +436,10 @@ pub mod codes {
     /// candidate, or one of a capability's type or `endpoint<T>`
     /// (FN-15).
     pub const PARAMETER_VAR: &str = "parameter.var";
+    /// `ref` on a parameter or the result of what is no node: a value
+    /// function, a graph or an operator (FN-16). The catalogue's row is
+    /// proposed.
+    pub const REF_POSITION: &str = "ref.position";
     /// A value function calls a temporal function (FN-4).
     pub const CALL_ROLE: &str = "call.role";
     /// An abstract struct is constructed (TYPE-3).

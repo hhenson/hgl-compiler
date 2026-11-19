@@ -87,7 +87,9 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "out.lifecycle"),
     (Category::Phase, "input.lifecycle"),
     (Category::Phase, "payload.unguarded"),
+    (Category::Phase, "ref.read"),
     (Category::Phase, "endpoint.argument"),
+    (Category::Type, "schedule.non_positive_duration"),
     (Category::Phase, "scheduled.lifecycle"),
     (Category::Phase, "connection.as_constant"),
     (Category::Type, "generic.invalid_application"),
@@ -136,6 +138,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Type, "argument.constant"),
     (Category::Type, "argument.place"),
     (Category::FunctionKind, "parameter.var"),
+    (Category::FunctionKind, "ref.position"),
     (Category::FunctionKind, "call.role"),
     (Category::Type, "return.missing"),
     (Category::Type, "switch.duplicate_label"),
@@ -189,7 +192,9 @@ pub fn contains(category: Category, code: &str) -> bool {
 /// Every execution code of the catalogue, in the specification's
 /// order: a failure of a running program that has a stable code. An
 /// `assert raises("code")` names one (TST-10). "The source and
-/// execution catalogs are disjoint."
+/// execution catalogs are disjoint", the chapter says, and yet it lists
+/// `schedule.non_positive_duration`, a proposed code, in both (TIME-8):
+/// it is here and among the source codes, as the chapter has it.
 pub const EXECUTION_CODES: &[&str] = &[
     "value.missing_key",
     "value.unset_read",
@@ -200,6 +205,7 @@ pub const EXECUTION_CODES: &[&str] = &[
     "tenor.mixed_units",
     "convert.invalid",
     "yield.negative_duration",
+    "schedule.non_positive_duration",
     "yield.non_increasing_time",
     "eval.input_delta_profile",
     "run.end_and_length",

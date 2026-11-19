@@ -1145,6 +1145,27 @@ def child_delta(port, shape=None):
     return port.delta_value
 
 
+def designation(output, reference):
+    """What a node publishes to its `ref` result, `output`, for
+    `reference`, the designation a `return` names (the language's FN-16):
+    the reference, or nothing where the result holds it already. TIME-10:
+    "A designation published again unchanged is no tick, and wakes no
+    subscriber", and core's END-10: "A publication of the designation it
+    holds is no tick". hgraph's reference output would tick for it, and
+    a `ref` parameter given it would be modified."""
+    if output.valid and output.value == reference:
+        return None
+    return reference
+
+
+def designate(output, reference):
+    """`out = items[idx]` of a `ref` result (the language's FN-16,
+    proposed): `output` designates what `reference` does, and does not
+    tick where it does already (`designation`)."""
+    if not (output.valid and output.value == reference):
+        output.value = reference
+
+
 def checked_child(port, read):
     """The read of a child known only when it runs, `parts[i]` (TIME-1):
     `read` of its endpoint `port`. "A child that is not valid fails it

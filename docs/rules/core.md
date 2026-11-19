@@ -404,6 +404,28 @@ transpiler: partial
 
 - hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed list and `_core.list_position` of an unsized one (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a position an unsized list does not hold, before it publishes, while it is short or after a shrink, is a child that is not valid, as an absent key is; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
 
+## END-9
+
+analyser: planned
+
+- `all_valid` of a window (TIME-9 now admits one)
+
+transpiler: planned
+
+- A window valid once it holds a value and all valid at its minimum, of a tick count or of a duration's span; a value held at an age of its maximum and dropped by the next arrival, which ticks nothing for an exit; its value, a `list<V>` oldest first, read only where it is all valid (`value.unset_read`)
+
+## END-10
+
+analyser: done
+
+- A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
+
+transpiler: partial
+
+- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included, and the node is not woken by that endpoint's ticks; a designation the result holds already is not published again
+- Proposed, and as hgraph has it: `modified`, `valid` and `last_modified` of a `ref` parameter ask of its designation
+- Left, reported: what FN-16's entry lists
+
 ## CAP-1
 
 analyser: done

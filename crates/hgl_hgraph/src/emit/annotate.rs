@@ -96,17 +96,6 @@ impl Emitter<'_> {
                 format!("{inner} | None")
             });
         }
-        // TYPE-12: "`ref<T>` designates an endpoint, not an ordinary
-        // payload type": hgraph's `REF` of the temporal T, whose value
-        // is a reference to an output. TIME-10: "A reference ticks on
-        // changed designation, not every target tick", as a `REF`
-        // input ticks when the reference it is given changes, and not
-        // when what it points at publishes.
-        if temporal && let Type::Ref(target) = ty {
-            let target = self.annotation(target, true, at)?;
-            self.hgraph = true;
-            return Some(format!("_hg.REF[{target}]"));
-        }
         // TYPE-12: "`signal` is a complete temporal input constraint
         // with no readable payload": hgraph's `SIGNAL`, an input bound
         // to any output, which ticks when it does and holds no value.
@@ -206,14 +195,14 @@ impl Emitter<'_> {
         child: &Type,
         at: Location,
     ) -> Option<String> {
-        // A reference as a child, and a field that may be left out
-        // because its type is no ordinary value (TYPE-14), are not
-        // written yet. Nor is a struct with no field, a `TS` of its class
+        // A field that may be left out because its type is no ordinary
+        // value (TYPE-14) is not written yet. Nor is a struct with no
+        // field, a `TS` of its class
         // (`struct_annotation`): the delta of a composite that holds one
         // would give it a struct's delta, which it does not take.
         let under = child.omission_removed();
         let omittable = matches!(child, Type::Nullable(_)) && !matches!(under, Type::Nullable(_));
-        if matches!(under, Type::Ref(_)) || omittable || empty_struct(self.program, child) {
+        if omittable || empty_struct(self.program, child) {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -507,12 +496,24 @@ impl Emitter<'_> {
             }
             let annotation =
                 self.annotation_or_object(&parameter.ty, !parameter.constant, parameter.at);
+            let annotation = if parameter.reference {
+                designating(&annotation)
+            } else {
+                annotation
+            };
             parameters.push(format!("{}: {annotation}", name(&parameter.name)));
         }
         let result = signature
             .result
             .as_ref()
-            .and_then(|result| self.annotation(result, true, declaration.at));
+            .and_then(|result| self.annotation(result, true, declaration.at))
+            .map(|result| {
+                if signature.reference {
+                    designating(&result)
+                } else {
+                    result
+                }
+            });
         (parameters, result)
     }
 
@@ -522,7 +523,9 @@ impl Emitter<'_> {
     /// valid (TIME-3). A graph only wires one.
     pub(super) fn window_inputs(&mut self, signature: &Signature) {
         for parameter in &signature.parameters {
-            if !parameter.constant {
+            // A `ref` parameter is not read (FN-16), its readiness least
+            // of all.
+            if !parameter.constant && !parameter.reference {
                 self.readable_window(&parameter.ty, parameter.at);
             }
         }
@@ -597,7 +600,9 @@ impl Emitter<'_> {
 /// stays as it is. hgraph has no `TSL_OUT`: a list's is its `TSL` given
 /// to `TS_OUT`, which takes a time-series type as it is.
 pub(super) fn output_annotation(result: &str) -> String {
-    if result.starts_with("_hg.TSL[") {
+    // hgraph has no `REF_OUT` either: a reference's output is its `REF`
+    // given to `TS_OUT`.
+    if result.starts_with("_hg.TSL[") || result.starts_with("_hg.REF[") {
         return format!("_hg.TS_OUT[{result}]");
     }
     let kind = ["TSS", "TSB", "TSD", "TSW"]
@@ -605,6 +610,21 @@ pub(super) fn output_annotation(result: &str) -> String {
         .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
         .unwrap_or("TS");
     result.replacen(&format!("{kind}["), &format!("{kind}_OUT["), 1)
+}
+
+/// The annotation of a `ref` parameter or a `ref` result whose type is
+/// annotated `annotation` (FN-16): hgraph's `REF` of it. A `REF` input
+/// is bound to the output it is given and holds a reference to it,
+/// which ticks where the reference changes and not where the target
+/// publishes (TIME-10); an ordinary input bound to a `REF` output
+/// follows its target. An annotation that is no time-series type, the
+/// `_py.object` of one not written, stays as it is.
+pub(super) fn designating(annotation: &str) -> String {
+    if annotation.starts_with("_hg.") {
+        format!("_hg.REF[{annotation}]")
+    } else {
+        annotation.to_string()
+    }
 }
 
 /// The Python type of a scalar this target writes, `int` for `i64`,

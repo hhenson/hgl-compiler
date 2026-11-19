@@ -169,20 +169,18 @@ transpiler: partial
 
 parser: done
 
-- `endpoint<T>` is a type of one argument, written as `ref<T>` is
+- `endpoint<T>` is a type of one argument; `ref` starts no type, so `ref<f64>`, `list<ref<f64>>` and `ref<ref<f64>>` are syntax errors
 
-analyser: partial
+analyser: done
 
-- `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
-- In a graph a function's input of `ref<T>` takes a connection of `T`, one of `T` a `ref<T>` (TIME-10), as a graph's result does, and a `signal` any connection
-- A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`); a hook gives a `ref` to no value function (`type.not_ordinary`)
-- Left: a `ref` in a tuple or a struct a hook builds; a reference given to an operator's call in a graph
+- `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
+- `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
+- A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 
 transpiler: partial
 
-- hgraph: `ref<T>` is a `REF` of the temporal T, whose value a node returns to re-point what follows it, and `signal` a `SIGNAL`
-- A graph passes a connection across a reference as it is, and a lifted input given a `ref<T>` is one of T
-- Left: a reference as a child of a temporal composite; a pack of signals; a struct connection given across a reference to a struct it inherits from
+- hgraph: `signal` is a `SIGNAL`, and a `ref` parameter or result a `REF` of its type (FN-16)
+- Left: a pack of signals
 
 ## TYPE-13
 
@@ -225,7 +223,7 @@ analyser: partial
 analyser: partial
 
 - `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
-- A `ref` and a `signal` have none (`delta.unsupported_shape`)
+- A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not

@@ -131,7 +131,7 @@ fn every_form_of_type_is_read() {
         "    i: datetime, j: duration, k: civil_datetime, l: timezone, m: zoned_datetime,\n",
         "    n: zoned_time) {}\n",
         "fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
-        "    e: rolling_window<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>,\n",
+        "    e: rolling_window<f64, 5m>, ref f: f64, g: signal, h: atomic<Quote>,\n",
         "    i: result<f64, error>, j: error, k: delta<set<f64>>, l: T, m: f64?)\n",
         "    -> list<dict<str, Box<Quote>>> {}\n",
         "fn named(a: Quote, b: Box<i64>, c: Side, d: Handle) {}\n",
@@ -145,7 +145,7 @@ fn every_form_of_type_is_read() {
     assert_eq!(
         signature(&checked, "shapes"),
         "<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>, \
-         e: rolling_window<f64, 5m>, f: ref<f64>, g: signal, h: atomic<Quote>, i: result<f64, error>, \
+         e: rolling_window<f64, 5m>, ref f: f64, g: signal, h: atomic<Quote>, i: result<f64, error>, \
          j: error, k: delta<set<f64>>, l: T, m: f64?) -> list<dict<str, Box<Quote>>>"
     );
     assert_eq!(
@@ -657,27 +657,28 @@ fn a_generic_application_is_known_by_its_arguments() {
 
 /// The grammar gives `value_type` to a set's element, a dictionary's
 /// key, a window's value, an atomic payload and a result's payloads, and
-/// `rolling_window`, `ref`, `atomic` and `signal` are not value types. TYPE-12:
-/// "`ref<T>` ... is excluded from const values, atomic payloads, keys,
-/// and window values."
+/// `rolling_window`, `atomic` and `signal` are not value types. TYPE-12:
+/// "An ordinary value type is written with no `rolling_window`,
+/// `atomic`, or `signal` at any depth: `set<list<rolling_window<f64,
+/// 5>>>` rejects." `ref` is no type at all, and the parser rejects it.
 #[test]
 fn a_part_that_is_a_value_is_an_ordinary_value_type() {
     let checked = module(concat!(
         "struct Quote { bid: f64 }\n",
         // What may hold an endpoint or a temporal shape.
-        "fn good(a: list<ref<f64>>, b: dict<str, ref<f64>>, c: tuple<ref<f64>, atomic<Quote>>,\n",
-        "    d: dict<str, rolling_window<f64, 5>>, e: ref<list<f64>>, f: delta<rolling_window<f64, 5>>,\n",
+        "fn good(a: list<atomic<Quote>>, b: dict<str, atomic<Quote>>, c: tuple<signal, atomic<Quote>>,\n",
+        "    d: dict<str, rolling_window<f64, 5>>, ref e: list<f64>, f: delta<rolling_window<f64, 5>>,\n",
         "    g: set<tuple<i64, list<str>>>, h: atomic<dict<str, list<Quote>>>) {}\n",
-        "fn sets(a: set<ref<f64>>, b: set<rolling_window<f64, 5>>, c: set<atomic<Quote>>) {}\n",
-        "fn keys(a: dict<ref<str>, f64>, b: dict<atomic<Quote>, f64>) {}\n",
-        "fn windows(a: rolling_window<ref<f64>, 5>, b: rolling_window<rolling_window<f64, 5>, 5>) {}\n",
-        "fn payloads(a: atomic<ref<f64>>, b: atomic<atomic<Quote>>) {}\n",
-        "fn results(a: result<ref<f64>, error>, b: result<f64, rolling_window<f64, 5>>) {}\n",
+        "fn sets(a: set<signal>, b: set<rolling_window<f64, 5>>, c: set<atomic<Quote>>) {}\n",
+        "fn keys(a: dict<signal, f64>, b: dict<atomic<Quote>, f64>) {}\n",
+        "fn windows(a: rolling_window<signal, 5>, b: rolling_window<rolling_window<f64, 5>, 5>) {}\n",
+        "fn payloads(a: atomic<signal>, b: atomic<atomic<Quote>>) {}\n",
+        "fn results(a: result<signal, error>, b: result<f64, rolling_window<f64, 5>>) {}\n",
         // A value is made of values, however deep.
-        "fn deep(a: set<list<tuple<i64, ref<f64>>>>, b: atomic<dict<str, signal>>) {}\n",
+        "fn deep(a: set<list<rolling_window<f64, 5>>>, b: atomic<dict<str, signal>>) {}\n",
         // And so through the arguments of a generic type.
         "struct Box<T> { value: T }\n",
-        "fn boxed(a: atomic<Box<ref<i64>>>, b: set<Box<list<rolling_window<f64, 5>>>>, c: Box<ref<i64>>) {}\n",
+        "fn boxed(a: atomic<Box<signal>>, b: set<Box<list<rolling_window<f64, 5>>>>, c: Box<atomic<Quote>>) {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -701,7 +702,7 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`ref<f64>` is not an ordinary value type, and a set's element is one"
+        "`signal` is not an ordinary value type, and a set's element is one"
     );
     assert_eq!(
         checked.findings[6].message,
@@ -716,15 +717,16 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
 /// The grammar gives `value_type` to a `const` parameter (FN-1), a
 /// generic value parameter (GEN-13: "a value parameter of ordinary type
 /// V") and the domain of an operator's properties (GEN-9). TYPE-12:
-/// `ref` and `signal` are no const value. A value function's parameters
-/// are ordinary values, with a default or without (FN-1).
+/// `signal` is no const value, and a `ref` parameter no `const` one: the
+/// parser takes no `const` after the mark (FN-16). A value function's
+/// parameters are ordinary values, with a default or without (FN-1).
 #[test]
 fn constant_configuration_is_an_ordinary_value_type() {
     let checked = module(concat!(
-        "fn good(value: ref<f64>, const depth: i64, const names: list<str> = []) {}\n",
+        "fn good(ref value: f64, const depth: i64, const names: list<str> = []) {}\n",
         "const fn defaults(value: f64, factor: f64 = 2.0, window: rolling_window<f64, 5> = []) -> f64 => 1.0\n",
-        "fn constants(const a: ref<f64>, const b: signal, const c: atomic<i64>) {}\n",
-        "fn generic<const N: ref<i64>>(value: f64) {}\n",
+        "fn constants(const a: atomic<Quote>, const b: signal, const c: atomic<i64>) {}\n",
+        "fn generic<const N: signal>(value: f64) {}\n",
         "operator add<T>(left: T, right: T) -> T\n",
         "    properties<i64, rolling_window<i64, 5>> { associative }\n",
     ));
@@ -746,7 +748,7 @@ fn constant_configuration_is_an_ordinary_value_type() {
     );
     assert_eq!(
         checked.findings[4].message,
-        "`ref<i64>` is not an ordinary value type, and a generic value parameter is one"
+        "`signal` is not an ordinary value type, and a generic value parameter is one"
     );
 }
 
@@ -762,7 +764,7 @@ fn signal_is_the_whole_type_of_an_input() {
         "native fn pulse(tick: signal)\n",
         "fn output() -> signal {}\n",
         "struct Field { tick: signal }\n",
-        "fn nested(a: list<signal>, b: ref<signal>, c: tuple<i64, signal>, d: dict<str, signal>) {}\n",
+        "fn nested(a: list<signal>, b: atomic<signal>, c: tuple<i64, signal>, d: dict<str, signal>) {}\n",
         // FN-8: each argument a positional pack captures is an input.
         "fn packed(ticks: ...signal) {}\n",
         // Neither a local nor an anonymous function's parameter is an
@@ -801,17 +803,17 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         "const fn good(b: list<f64?>, a: f64?, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
         // On the whole type of an input `?` follows any type: the
         // argument may be omitted.
-        "fn inputs(a: ref<f64>?, b: signal?, c: rolling_window<f64, 5>?, d: atomic<i64>?, e: list<ref<f64>>?) {}\n",
+        "fn inputs(ref a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: atomic<i64>?, e: list<signal>?) {}\n",
         // Not in a result, a local's annotation, a part of another
         // type, a value function's parameter or a `const` one.
-        "fn output() -> ref<f64>? {}\n",
+        "fn output() -> signal? {}\n",
         "fn body() {\n    let window: rolling_window<f64, 5>? = make()\n}\n",
-        "fn parts(a: list<ref<f64>?>, b: dict<str, rolling_window<f64, 5>?>) {}\n",
+        "fn parts(a: list<signal?>, b: dict<str, rolling_window<f64, 5>?>) {}\n",
         "const fn values(a: rolling_window<f64, 5>?) -> i64 => 1\n",
-        "fn configured(const a: ref<f64>?) {}\n",
+        "fn configured(const a: signal?) {}\n",
         // As what a set's element must be, and as a key that takes no
         // `?`.
-        "fn once(a: set<ref<f64>?>) {}\n",
+        "fn once(a: set<signal?>) {}\n",
         // On the whole type of a field it makes the field optional; a
         // `signal` is no field with it or without.
         "struct Fields {\n    last: atomic<i64>?\n    window: rolling_window<f64, 5>?\n    tick: signal?\n}\n",
@@ -833,7 +835,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     );
     assert_eq!(
         checked.findings[0].message,
-        "`ref<f64>` is not an ordinary value type, and what `?` is applied to is one"
+        "`signal` is not an ordinary value type, and what `?` is applied to is one"
     );
     assert_eq!(
         checked.findings[5].message,
@@ -842,7 +844,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     assert_eq!(
         signature(&checked, "inputs"),
         // TYPE-9: `atomic<i64>` is `i64`.
-        "(a: ref<f64>?, b: signal?, c: rolling_window<f64, 5>?, d: i64?, e: list<ref<f64>>?)"
+        "(ref a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: i64?, e: list<signal>?)"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
@@ -1198,12 +1200,12 @@ fn any_parameter_but_a_pack_may_have_a_default() {
 fn a_value_functions_signature_is_of_ordinary_values() {
     let checked = module(concat!(
         "const fn good(a: list<f64?>, b: dict<str, f64>, c: tuple<i64, str>?, rest: ...f64) -> set<str> => []\n",
-        "const fn parameters(a: ref<f64>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
-        "const fn nested(a: list<ref<f64>>, rest: ...ref<f64>) -> i64 => 1\n",
-        "const fn gives() -> ref<f64> => make()\n",
+        "const fn parameters(a: atomic<Quote>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
+        "const fn nested(a: list<signal>, rest: ...atomic<Quote>) -> i64 => 1\n",
+        "const fn gives() -> signal => make()\n",
         "native const fn native_value(a: rolling_window<f64, 5>) -> atomic<i64>\n",
         // A temporal function takes and gives them all.
-        "fn temporal(a: ref<f64>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> ref<f64> {}\n",
+        "fn temporal(ref a: f64, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> ref f64 {\n    when { return a }\n}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -1227,7 +1229,7 @@ fn a_value_functions_signature_is_of_ordinary_values() {
     );
     assert_eq!(
         checked.findings[6].message,
-        "`ref<f64>` is not an ordinary value type, and the result of a value function is one"
+        "`signal` is not an ordinary value type, and the result of a value function is one"
     );
 }
 

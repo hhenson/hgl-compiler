@@ -684,6 +684,11 @@ pub struct Parameter {
     /// True when it is marked `var`: a call gives it a place, which the
     /// call assigns (FN-15).
     pub var: bool,
+    /// True when it is marked `ref`: a node's temporal parameter that
+    /// is an endpoint and not a value, given a connection of its type,
+    /// which it designates (FN-16). The mark is a mode, "and no part of
+    /// the type (TYPE-12)": `ty` is the T after it.
+    pub reference: bool,
     /// Its type. For a pack, the type after `...` or inside `...{ }`.
     pub ty: Type,
     /// What kind of pack it is, when it is one (FN-8).
@@ -844,6 +849,9 @@ impl fmt::Display for Parameter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.constant {
             f.write_str("const ")?;
+        }
+        if self.reference {
+            f.write_str("ref ")?;
         }
         write!(f, "{}: ", self.name)?;
         match self.pack {
