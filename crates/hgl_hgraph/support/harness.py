@@ -256,11 +256,13 @@ def _held_by(published: _hg.TIME_SERIES_TYPE, _clock: _hg.EvaluationClock = None
     if published.valid and published.modified:
         try:
             held = _holding["read"](published)
-        except _core.NotWhole:
+        except _core.HglError as failure:
             # A required part that is not valid leaves no whole value (the
-            # owner's decision on hgl_spec issue 126): a cell written whole
-            # is not equal to what is held, and a delta is compared as
-            # recorded.
+            # owner's decision on hgl_spec issue 126; the provider's
+            # `unset_read`): a cell written whole is not equal to what is
+            # held, and a delta is compared as recorded.
+            if failure.code != "value.unset_read":
+                raise
             held = _UNREADABLE
         _holding["held"][_clock.evaluation_time] = held
 

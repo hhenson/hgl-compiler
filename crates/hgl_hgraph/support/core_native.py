@@ -798,25 +798,6 @@ def entry_child(port, key):
     return port[key]
 
 
-class NotWhole(Exception):
-    """A value held that has no whole value: a part of a struct, a tuple
-    or a fixed list that is required is not valid. The owner's decision on
-    hgl_spec issue 126: "A whole read of a struct, a tuple or a fixed list
-    needs `all_valid`", which "ignores a child whose type is optional"."""
-
-
-def held_part(port, read, optional):
-    """A part of a value held whole, `read` of its port where it is valid.
-    One that is not valid is null where its type is optional ("An optional
-    child that is not valid, in the whole value, is null"), and leaves no
-    whole value where it is required (`NotWhole`)."""
-    if not port.valid:
-        if optional:
-            return None
-        raise NotWhole()
-    return read(port)
-
-
 def child_modified(port):
     """`modified` of a child's endpoint (END-8): whether it published in
     this cycle, held to its being valid, as an input's is (END-4)."""
@@ -861,7 +842,14 @@ def checked_child_result(port, read):
     `value.unset_read`"."""
     if not port.valid:
         return Err(Error("the child read is not valid", code="value.unset_read"))
-    return Ok(read(port))
+    try:
+        return Ok(read(port))
+    except HglError as failure:
+        # A part of the child that is not valid, where the child is read
+        # whole (see `unset_read`), is the same error.
+        if failure.code != "value.unset_read":
+            raise
+        return Err(Error("a part of the child read is not valid", code="value.unset_read"))
 
 
 def whole_item(port, index):
@@ -924,6 +912,24 @@ def removed(delta):
     """The property `removed` of a dictionary's delta (TYPE-16): the set
     of each key removed."""
     return frozenset(key for key, change in delta.items() if _removes(change))
+
+
+def only_value(published, struct):
+    """What a temporal struct with no field, `struct`, publishes: its
+    one value. A whole value of it and its delta, which has no property
+    (the language's TYPE-16), publish it alike, so that a publication
+    ticks, and the struct is valid once one has (TIME-9: "A published
+    empty list or dictionary has no element and is valid")."""
+    return published if isinstance(published, struct) else struct()
+
+
+def unset_read():
+    """The read of a part of a temporal struct or tuple that has not
+    published, where a value of it is needed: it fails, with the code
+    the language catalogues, `value.unset_read` ("Executed operation
+    requires an unset ordinary payload"), and no value is made up. The
+    compiler reads an optional part that has not published as null."""
+    raise HglError("a part that has not published is read", code="value.unset_read")
 
 
 def bundled(value, shape=None):

@@ -5687,8 +5687,8 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
             "added=_py.frozenset((joined,)), tp=_py.int)\n",
         ),
-        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0], _hold=lambda _port: _py.frozenset(_port.value)), [])):\n",
-        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3], _hold=lambda _port: _py.frozenset(_port.value)), [",
+        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [])):\n",
+        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [",
     ] {
         assert!(
             python.contains(expected),
@@ -6071,6 +6071,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("references.hgl", REFERENCES));
     files.push(("tuples.hgl", TUPLES));
     files.push(("tuples_names.hgl", TUPLES_NAMES));
+    files.push(("struct_review.hgl", STRUCT_REVIEW));
     files.push(("validity.hgl", VALIDITY));
     files.extend(MODULES);
     files.extend(NESTED);
@@ -6293,6 +6294,12 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
     let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_copy_points/__init__.py");
+    let saved = format!(
+        "            _state.saved = Ticket(id={}, size={}, price={})\n",
+        part("current[\"id\"]"),
+        part("current[\"size\"]"),
+        part("current[\"price\"]")
+    );
     for expected in [
         // A struct of two scalars is a value; one of three, one with a
         // `str`, one another inherits from, and one of structs are not.
@@ -6374,7 +6381,7 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        _core.raise_if_failed(_given[0])\n",
         ),
         // No copy: a struct read whole from its bundle is made anew.
-        "            _state.saved = Ticket(id=current[\"id\"].value, size=current[\"size\"].value, price=current[\"price\"].value)\n",
+        saved.as_str(),
         // A copy: a result that may be the function's own `var` or its
         // parameter, a constant or what a loop over one gives.
         "def pick(p, flag):\n    mine = [0]\n    x = (mine if flag else p)\n    return _core.copied(x)\n",
@@ -6735,8 +6742,8 @@ fn a_window_is_hgraphs_tsw() {
         format!("_hg.TSL[{small}, _hg.Size[2]]"),
         format!("_hg.TSD[_py.str, {small}]"),
         format!("_hg.TSB[\"_0\": {small}, \"_1\": _hg.TS[_py.float]]"),
-        "    return book[\"last\"].value\n".to_string(),
-        "    return pair[\"_1\"].value\n".to_string(),
+        format!("    return {}\n", part("book[\"last\"]")),
+        format!("    return {}\n", part("pair[\"_1\"]")),
         "_core.changed(book.delta_value, \"prices\")".to_string(),
         "    return arrived(prices=booked(price=price)[\"prices\"])\n".to_string(),
         "    return arrived_two(prices=slots(slot=slot, price=price)[1])\n".to_string(),
@@ -8262,11 +8269,19 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
             "_output: _hg.TSB_OUT[{}] = None",
             &quote["_hg.TSB[".len()..quote.len() - 1]
         ),
-        "    return _core.sub__i64_i64(lhs=quote[\"ask\"].value, rhs=quote[\"bid\"].value)".to_string(),
-        "    held = Quote(bid=quote[\"bid\"].value, ask=quote[\"ask\"].value)".to_string(),
+        format!(
+            "    return _core.sub__i64_i64(lhs={}, rhs={})",
+            part("quote[\"ask\"]"),
+            part("quote[\"bid\"]")
+        ),
+        format!(
+            "    held = Quote(bid={}, ask={})",
+            part("quote[\"bid\"]"),
+            part("quote[\"ask\"]")
+        ),
         "    bid = _core.changed(quote.delta_value, \"bid\")".to_string(),
         format!("\"quote\": {quote}, \"size\": _hg.TS[_py.int]"),
-        "    return order[\"quote\"][\"bid\"].value".to_string(),
+        format!("    return {}", part("order[\"quote\"][\"bid\"]")),
         "-> _hg.TS[Quote]:".to_string(),
         "    return quote.value.ask".to_string(),
         "    return moved(is_bid=is_bid, price=price)[\"ask\"]".to_string(),
@@ -8275,9 +8290,16 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
             .to_string(),
         // A source's yield, and a lifted helper's argument and result.
         "    yield (_dt.timedelta(microseconds=1), _core.bundled(Quote(bid=1, ask=2)))".to_string(),
-        "    return width(quote=Quote(bid=quote[\"bid\"].value, ask=quote[\"ask\"].value))".to_string(),
-        "    return _core.bundled(widened(quote=Quote(bid=quote[\"bid\"].value, ask=quote[\"ask\"].value)))"
-            .to_string(),
+        format!(
+            "    return width(quote=Quote(bid={}, ask={}))",
+            part("quote[\"bid\"]"),
+            part("quote[\"ask\"]")
+        ),
+        format!(
+            "    return _core.bundled(widened(quote=Quote(bid={}, ask={})))",
+            part("quote[\"bid\"]"),
+            part("quote[\"ask\"]")
+        ),
     ] {
         assert!(
             python.contains(&expected),
@@ -8310,10 +8332,11 @@ fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
     assert_eq!(emitted.reported, ["m.hgl:6:19 target.unsupported"]);
 }
 
-/// CTRL-13 and TYPE-9: an ordinary struct in a branch of a graph's `if`
-/// would be a constant of the class, which is no bundle: reported.
+/// CTRL-13 and TYPE-9: an ordinary fixed list or dictionary of structs
+/// in a branch of a graph's `if` would be a constant published whole,
+/// which is not written for composite elements: reported.
 #[test]
-fn an_ordinary_struct_branch_of_a_graph_is_not_written_yet() {
+fn an_ordinary_list_of_structs_branch_of_a_graph_is_not_written_yet() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -8321,12 +8344,32 @@ fn an_ordinary_struct_branch_of_a_graph_is_not_written_yet() {
             "struct Quote {\n",
             "    bid: i64\n",
             "}\n",
-            "fn quoted(bid: i64) -> Quote {\n",
-            "    when { return Quote(bid: bid) }\n",
+            "fn quoted(bid: i64) -> list<Quote, 1> {\n",
+            "    when { return delta<list<Quote, 1>>(updated: [0: delta<Quote>(bid: bid)]) }\n",
             "}\n",
-            "const fn fixed() -> Quote => Quote(bid: 0)\n",
-            "fn chosen(take: bool, bid: i64) -> Quote {\n",
+            "const fn fixed() -> list<Quote, 1> => [Quote(bid: 0)]\n",
+            "fn chosen(take: bool, bid: i64) -> list<Quote, 1> {\n",
             "    if take { return quoted(bid) }\n",
+            "    return fixed()\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:11:12 target.unsupported"]);
+    // A dictionary of structs as a branch's constant would be given each
+    // struct whole, where its `TSD`'s children take their fields.
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote {\n",
+            "    bid: i64\n",
+            "}\n",
+            "fn quoted(key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    when { return delta<dict<str, Quote>>(updated: [key: delta<Quote>(bid: bid)]) }\n",
+            "}\n",
+            "const fn fixed() -> dict<str, Quote> => [\"a\": Quote(bid: 0)]\n",
+            "fn chosen(take: bool, key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    if take { return quoted(key, bid) }\n",
             "    return fixed()\n",
             "}\n",
         ),
@@ -8841,8 +8884,12 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         // TYPE-9, TYPE-10, TYPE-16: a tuple.
         format!("-> {pair}:\n    return _core.bundled((a.value, b.value,), (None, None,))"),
         "    only_first = (value.value, None,)".to_string(),
-        "    return pair[\"_0\"].value".to_string(),
-        "    held = (pair[\"_0\"].value, pair[\"_1\"].value,)".to_string(),
+        format!("    return {}", part("pair[\"_0\"]")),
+        format!(
+            "    held = ({}, {},)",
+            part("pair[\"_0\"]"),
+            part("pair[\"_1\"]")
+        ),
         "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)".to_string(),
         "_core.positions(parts.delta_value, (None, (None, None,),))".to_string(),
         "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
@@ -8859,7 +8906,10 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
             "{\"value\": _hg.TS[_py.int]})]:"
         )
         .to_string(),
-        "    whole = _core.applied(Box, \"i64\")(value=held[\"value\"].value)".to_string(),
+        format!(
+            "    whole = _core.applied(Box, \"i64\")(value={})",
+            part("held[\"value\"]")
+        ),
         "{\"value\": {\"bid\": None, \"ask\": None}})".to_string(),
         "-> _hg.TS[_core.applied(Box, \"i64\")]:".to_string(),
         // TYPE-3: an abstract struct and the structs below it.
@@ -8874,19 +8924,27 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
         "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))".to_string(),
         // TIME-7: `out` assigned by part, and read back.
-        "    _output[\"ask\"].value = _core.add__i64_i64(lhs=_output[\"bid\"].value, rhs=1)"
-            .to_string(),
+        format!(
+            "    _output[\"ask\"].value = _core.add__i64_i64(lhs={}, rhs=1)",
+            part("_output[\"bid\"]")
+        ),
         "        _output[\"quote\"].value = _core.bundled(Quote(bid=bid.value, ask=bid.value))"
             .to_string(),
         "        _output[\"quote\"][\"ask\"].value = ".to_string(),
-        "    _output[\"_0\"].value = _core.mul__i64_i64(lhs=_output[\"_1\"].value, rhs=2)"
-            .to_string(),
+        format!(
+            "    _output[\"_0\"].value = _core.mul__i64_i64(lhs={}, rhs=2)",
+            part("_output[\"_1\"]")
+        ),
         "        _output[\"price\"].value = _core.published(None)".to_string(),
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]] = None".to_string(),
         "    _output[1].value = ".to_string(),
         "    _output.value = {key.value: value.value}".to_string(),
         "    _output.value = _core.with_field(_output.value, ask=".to_string(),
-        "    whole = Quote(bid=_output[\"bid\"].value, ask=_output[\"ask\"].value)".to_string(),
+        format!(
+            "    whole = Quote(bid={}, ask={})",
+            part("_output[\"bid\"]"),
+            part("_output[\"ask\"]")
+        ),
     ] {
         assert!(
             python.contains(&expected),
@@ -9115,6 +9173,47 @@ fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
     );
 }
 
+/// How a hook reads a required part of a temporal struct or tuple, the
+/// port `port`: its value where it is valid, and `value.unset_read`
+/// where it is not.
+fn part(port: &str) -> String {
+    format!("({port}.value if {port}.valid else _core.unset_read())")
+}
+
+/// TYPE-9 and TIME-9: a part of a struct or a tuple that has not
+/// published, read alone or whole; an ordinary composite as a graph
+/// branch's constant (FN-3); and a struct with no field.
+const STRUCT_REVIEW: &str = include_str!("fixtures/struct_review.hgl");
+
+/// A part read in a hook is its port's value where it is valid: a
+/// required one fails with `value.unset_read` where it is not (an
+/// interim reading of hhenson/hgl_spec#126), and an optional one is
+/// null. A composite branch's constant is told its time-series type. A
+/// struct with no field is a `TS` of its class, whose publication is
+/// its one value.
+#[test]
+fn a_part_not_published_and_a_composite_constant_are_written() {
+    let emitted = emit(&[("struct_review.hgl", STRUCT_REVIEW)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_struct_review/__init__.py");
+    for expected in [
+        "    return _core.add__i64_i64(lhs=(quote[\"ask\"].value if quote[\"ask\"].valid else _core.unset_read()), rhs=1)",
+        "    price = (level[\"price\"].value if level[\"price\"].valid else None)",
+        "    held = ((pair[\"_0\"].value if pair[\"_0\"].valid else _core.unset_read()), (pair[\"_1\"].value if pair[\"_1\"].valid else _core.unset_read()),)",
+        "_hg.const(_core.bundled(fixed_pair(), (None, None,)), tp=_hg.TSB[\"_0\": _hg.TS[_py.int], \"_1\": _hg.TS[_py.str]])",
+        "_hg.const(_py.tuple(fixed_list()), tp=_hg.TSL[_hg.TS[_py.int], _hg.Size[2]])",
+        "_hg.const(fixed_tags(), tp=_hg.TSS[_py.int])",
+        "def emptied(a: _hg.TS[_py.int]) -> _hg.TS[Empty]:\n    return _core.only_value(Empty(), Empty)",
+        "    _output.value = _core.only_value(_core.struct_delta(), Empty)",
+        "    return _py.tuple([e.valid, e.all_valid, (e.modified and e.valid)])",
+    ] {
+        assert!(
+            python.contains(expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
 /// A collection's child (TIME-1, TIME-4, TIME-9, END-8, ERR-14), trace
 /// cells written whole or as a delta (TST-5, TST-9), the list's delta
 /// (TYPE-16), and what a node publishes to its own `out` (TIME-7).
@@ -9136,13 +9235,13 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
         "    if _core.position_of(parts, 1).valid:\n".to_string(),
         "    if parts.all_valid:\n".to_string(),
         "    if quote[\"ask\"].valid:\n".to_string(),
-        "    return _core.checked_child(_core.position_of(parts, slot.value), lambda _port: _port.value)\n".to_string(),
-        "    return _core.checked_child_result(_core.position_of(parts, slot.value), lambda _port: _port.value)\n".to_string(),
+        "    return _core.checked_child(_core.position_of(parts, slot.value), lambda _port: (_port.value if _port.valid else _core.unset_read()))\n".to_string(),
+        "    return _core.checked_child_result(_core.position_of(parts, slot.value), lambda _port: (_port.value if _port.valid else _core.unset_read()))\n".to_string(),
         "    if _core.child_modified(_core.position_of(parts, 0)):\n".to_string(),
         "        return _core.child_delta(_core.position_of(parts, 1))\n".to_string(),
         "    return _core.entry_port(prices, \"B\").valid\n".to_string(),
         "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)\n".to_string(),
-        "_hold=lambda _port: [_core.held_part(_child0, lambda _held0: _held0.value, False) for _child0 in _port]), [_harness.whole([1, 2]), _harness.whole([5, 6])]".to_string(),
+        "_hold=lambda _port: (_py.list(_port.value) if _port.all_valid else _core.unset_read())), [_harness.whole([1, 2]), _harness.whole([5, 6])]".to_string(),
         "    return _core.dict_replaced(_output, _py.dict(book.value))\n".to_string(),
         format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
         "    _output.value = {key.value: value.value}\n".to_string(),

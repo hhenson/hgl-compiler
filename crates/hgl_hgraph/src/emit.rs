@@ -1928,10 +1928,16 @@ impl Emitter<'_> {
     fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
         // A reference as a child, and a field that may be left out
         // because its type is no ordinary value (TYPE-14), are not
-        // written yet.
+        // written yet. Nor is a struct with no field, a `TS` of its class
+        // (`struct_annotation`): the delta of a composite that holds one
+        // would give it a struct's delta, which it does not take.
         let under = child.omission_removed();
         let omittable = matches!(child, Type::Nullable(_)) && !matches!(under, Type::Nullable(_));
-        if growing_list(child) || matches!(under, Type::Ref(_)) || omittable {
+        if growing_list(child)
+            || matches!(under, Type::Ref(_))
+            || omittable
+            || empty_struct(self.program, child)
+        {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -2120,6 +2126,19 @@ impl Emitter<'_> {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         };
+        // A struct with no field: hgraph's bundle with no field is never
+        // valid and never ticks, where TIME-9 has "a published empty
+        // collection" valid and all valid. Its one value is published
+        // whole, as a `TS` of its class (`empty_struct`). An abstract
+        // one's value would be of a struct below it.
+        if read.members.is_empty() {
+            if is_abstract {
+                self.unsupported(at, &format!("the type `{ty}`"));
+                return None;
+            }
+            self.hgraph = true;
+            return Some(format!("_hg.TS[{class}]"));
+        }
         let mut fields = Vec::new();
         for (member, field) in read.members.iter().zip(&types) {
             let field = self.child_annotation(ty, field, at)?;
@@ -4578,21 +4597,12 @@ impl Emitter<'_> {
                     && self.in_case > 0
                     && !self.connects(function, returned)
                 {
-                    // A struct's connection is a bundle (TYPE-9), and a
-                    // constant of the class is no bundle.
-                    if matches!(
-                        returned.ty,
-                        Type::Named {
-                            kind: NamedKind::Struct,
-                            ..
-                        }
-                    ) {
-                        self.unsupported(
-                            returned.at,
-                            "an ordinary struct as a branch's connection",
-                        );
-                    }
-                    format!("_hg.const({value})")
+                    let ty = function
+                        .signature
+                        .and_then(|signature| signature.result.as_ref())
+                        .unwrap_or(&returned.ty)
+                        .clone();
+                    self.constant_connection(&ty, returned.at, value)
                 } else {
                     value
                 };
@@ -5572,7 +5582,7 @@ impl Emitter<'_> {
                     && self.reads_child(function, value) =>
             {
                 match self.child_port(function, value, true) {
-                    Some(port) => self.port_value(&value.ty, &port, value.at),
+                    Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
                         self.unsupported(value.at, "this read of a child");
                         "None".to_string()
@@ -5697,7 +5707,7 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && let Some(port) = self.input_port(function, value)
                 {
-                    return self.port_value(&value.ty, &port, value.at);
+                    return self.part_value(&value.ty, &port, value.at);
                 }
                 let Some(field) = field_of(self.program, whole, *member) else {
                     // A property of a delta.
@@ -5773,7 +5783,7 @@ impl Emitter<'_> {
                     && matches!(base.ty, Type::Tuple(_))
                     && let Some(port) = self.input_port(function, value) =>
             {
-                self.port_value(&value.ty, &port, value.at)
+                self.part_value(&value.ty, &port, value.at)
             }
             ExprKind::Index { base, index } => {
                 let Some(read) = element_read(&base.ty) else {
@@ -6378,9 +6388,9 @@ impl Emitter<'_> {
     /// assigns the port of `ask`, `_output["ask"].value = 1`, which
     /// publishes that field alone, and `out` read after it holds it. A
     /// dictionary's entry is published as the change of that key,
-    /// `{key: value}`. A part that is assigned whole publishes whole, a
-    /// struct's fields each, and a `delta<T>` publishes that change, as
-    /// an assignment to `out` does. A place inside a part that
+    /// `{key: value}`. A part is assigned a whole value of its type
+    /// (EXPR-3), which publishes whole, a struct's fields each. A place
+    /// inside a part that
     /// publishes whole, a field of an `atomic<Quote>` or an element of
     /// an unsized list, gives that part a new value with the place
     /// changed, published whole.
@@ -7263,9 +7273,67 @@ impl Emitter<'_> {
             return format!("_core.dict_replaced(_output, {written})");
         }
         match result {
+            // A struct with no field publishes its one value, for a
+            // whole value and for its delta alike (`empty_struct`).
+            Some(result) if empty_struct(self.program, result) => {
+                self.bundle_of(result, value.at, written)
+            }
             Some(result) if whole_value(result, value) => self.bundle_of(result, value.at, written),
             _ => written,
         }
+    }
+
+    /// `written`, an ordinary value of `ty` known where the graph is
+    /// built, wired as a constant connection (FN-3: "an ordinary value
+    /// in a branch is then wired as a constant").
+    ///
+    /// hgraph's `const` infers a `TS` of the whole value, and a composite's
+    /// connection is no `TS` (TYPE-9): a struct's and a tuple's is a
+    /// bundle, a fixed list's a `TSL`, a set's a `TSS`, a dictionary's a
+    /// `TSD`. So a composite's constant is told its time-series type, and
+    /// is given as that type publishes a whole value (`bundle_of`): a
+    /// struct's fields, a tuple's positions, a list's elements. A set and
+    /// a dictionary of values that publish whole are given as they are,
+    /// which a constant's one publication takes whole: it has no earlier
+    /// members or keys, and a null entry is hgraph's `Null`. A dictionary
+    /// of composites is reported.
+    fn constant_connection(&mut self, ty: &Type, at: Location, written: String) -> String {
+        let composite = matches!(
+            ty,
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } | Type::Tuple(_)
+                | Type::List { .. }
+                | Type::Set(_)
+                | Type::Dict { .. }
+        );
+        if !composite {
+            return format!("_hg.const({written})");
+        }
+        let Some(tp) = self.annotation(ty, true, at) else {
+            return "None".to_string();
+        };
+        let whole = match ty {
+            // A dictionary's composite value would be given its child's
+            // update, a struct's fields, which is not written here.
+            Type::Dict { value, .. } if !publishes_whole(value) => {
+                self.unsupported(
+                    at,
+                    "an ordinary dictionary of composites as a branch's connection",
+                );
+                return "None".to_string();
+            }
+            // A null entry is published as hgraph's `Null`: `None` would
+            // leave its child unset.
+            Type::Dict { value, .. } if is_nullable(value) => {
+                self.natives = true;
+                format!("{{_key: _core.published(_entry) for _key, _entry in ({written}).items()}}")
+            }
+            Type::Set(_) | Type::Dict { .. } => written,
+            _ => self.bundle_of(ty, at, written),
+        };
+        format!("_hg.const({whole}, tp={tp})")
     }
 
     /// `value`, written `written` in a graph, where a connection of the
@@ -7337,13 +7405,11 @@ impl Emitter<'_> {
     }
 
     /// What publishes `value`, written `written`, to a part of `out` of
-    /// the type `ty` (TIME-7): a whole value as `bundle_of` gives it, a
-    /// null as hgraph's `Null` where `ty` publishes it whole, and a
-    /// `delta<ty>` as it is.
+    /// the type `ty` (TIME-7): a whole value as `bundle_of` gives it, and
+    /// a null as hgraph's `Null` where `ty` publishes it whole. EXPR-3:
+    /// "The value is of the field's type", so a part takes a whole value
+    /// and no `delta<T>`, which the analyser rejects.
     fn published_to(&mut self, ty: &Type, value: &Expr, written: String) -> String {
-        if !whole_value(ty, value) {
-            return written;
-        }
         if publishes_whole_null(ty) {
             return self.published(written);
         }
@@ -7354,6 +7420,15 @@ impl Emitter<'_> {
     /// publishes it: a struct's fields as hgraph's bundle takes them
     /// (TYPE-9), and any other value as it is.
     fn bundle_of(&mut self, ty: &Type, at: Location, written: String) -> String {
+        // A struct with no field is a `TS` of its class: what it publishes
+        // is its one value, made by the provider of whatever is published,
+        // a whole value or a delta, which has no property.
+        if empty_struct(self.program, ty)
+            && let Some(class) = self.struct_class(ty)
+        {
+            self.natives = true;
+            return format!("_core.only_value({written}, {class})");
+        }
         match ty {
             // An unsized list's tick is the whole list, as a tuple that
             // is made of it: hgraph keeps no list the program goes on
@@ -7511,6 +7586,12 @@ impl Emitter<'_> {
         if growing_list(ty) {
             self.unsupported(at, "the delta of an unsized list");
             return "None".to_string();
+        }
+        // TYPE-16: a struct's delta has "a property for each field": one
+        // with no field has none, and its delta is the empty one.
+        if empty_struct(self.program, ty) {
+            self.natives = true;
+            return "_core.struct_delta()".to_string();
         }
         match self.delta_shape(ty, at) {
             Some(shape) => {
@@ -7737,7 +7818,7 @@ impl Emitter<'_> {
             self.unsupported(at, "this read of a child");
             return "None".to_string();
         };
-        let value = self.port_value(&read.ty, "_port", at);
+        let value = self.part_value(&read.ty, "_port", at);
         let of = if result {
             "checked_child_result"
         } else {
@@ -7816,9 +7897,12 @@ impl Emitter<'_> {
             Type::List { element, .. } if publishes_whole(element) => {
                 return format!("_py.list({port}.value)");
             }
+            // An element of composites is read as a part is
+            // (`part_value_at`): each of its own required parts where it is
+            // valid, and an optional one null where it is not.
             Type::List { element, .. } => {
                 let child = format!("_child{depth}");
-                let read = self.port_value_at(element, &child, depth + 1, at);
+                let read = self.part_value_at(element, &child, depth + 1, at);
                 return format!("[{read} for {child} in {port}]");
             }
             // TYPE-9: "dictionaries to keyed children". A dictionary's
@@ -7845,7 +7929,7 @@ impl Emitter<'_> {
                     .enumerate()
                     .map(|(index, element)| {
                         let child = format!("{port}[{}]", string(&position(index)));
-                        self.port_value_at(element, &child, depth, at)
+                        self.part_value_at(element, &child, depth, at)
                     })
                     .collect();
                 return format!("({},)", reads.join(", "));
@@ -7883,11 +7967,52 @@ impl Emitter<'_> {
             .map(|(member, field_ty)| {
                 let field = name(&member.name);
                 let child = format!("{port}[{}]", string(&field));
-                let read = self.port_value_at(field_ty, &child, depth, at);
+                let read = self.part_value_at(field_ty, &child, depth, at);
                 format!("{field}={read}")
             })
             .collect();
         format!("{class}({})", fields.join(", "))
+    }
+
+    /// What a part of a temporal struct or tuple holds, the port `port`
+    /// of a field or a position of the type `ty`, read alone, `quote.ask`,
+    /// or as its composite is read whole, `let held = quote`.
+    ///
+    /// A part that has not published has no value to give, and none is
+    /// made up. The owner's decision so far, on hhenson/hgl_spec issue
+    /// 126, is that a whole read needs each required part valid, and
+    /// that a part whose type is optional may not be, and is then null
+    /// in the whole value; how the language says so is open there. Until
+    /// it says, this target reads a required part that is not valid as a
+    /// failure where the read runs, with the catalogued
+    /// `value.unset_read` ("Executed operation requires an unset
+    /// ordinary payload"), and an optional part that is not valid as
+    /// null. A fixed list of required elements that publish whole is held
+    /// to each of them (`all_valid`); any other part to its own `valid`,
+    /// and a struct's, a tuple's or a list's parts each in turn.
+    fn part_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
+        self.part_value_at(ty, port, 0, at)
+    }
+
+    /// `part_value` of a port read inside `depth` comprehensions.
+    fn part_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
+        let read = self.port_value_at(ty, port, depth, at);
+        // A fixed list of required elements that publish whole is read
+        // whole from its `TSL`, so it is held to each of them. One of
+        // composites reads each element as a part, whose own optional
+        // parts may be invalid.
+        let ready = match ty {
+            Type::List {
+                element,
+                size: Some(_),
+            } if publishes_whole(element) && !is_nullable(element) => "all_valid",
+            _ => "valid",
+        };
+        if publishes_whole_null(ty) {
+            return format!("({read} if {port}.{ready} else None)");
+        }
+        self.natives = true;
+        format!("({read} if {port}.{ready} else _core.unset_read())")
     }
 
     /// The name of the field of the tuple position that `index` names
@@ -8639,88 +8764,6 @@ impl Emitter<'_> {
         format!("_harness.evaluate({})", given.join(", "))
     }
 
-    /// What the harness reads as the value a result of `ty` holds whole,
-    /// from its port `port` (`held_reader`), read inside `depth` parts.
-    ///
-    /// This follows the owner's decision on hhenson/hgl_spec#126 ("confirm
-    /// he second re: optional entries"), ahead of the pinned text: "A
-    /// whole read of a struct, a tuple or a fixed list needs `all_valid`",
-    /// which "ignores a child whose type is optional", and "An optional
-    /// child that is not valid, in the whole value, is null". So each part
-    /// of one is read where it is valid, and where it is not, a part whose
-    /// type is `T?` is null and any other part leaves no whole value: the
-    /// provider's `held_part` raises `NotWhole`, and no cell written whole
-    /// equals what is held. "A dictionary and a growing list hold what
-    /// they hold", and are read as `port_value` reads them.
-    fn held_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
-        let held = format!("_held{depth}");
-        let part = |emitter: &mut Self, part_ty: &Type, part_port: String| {
-            let read = emitter.held_value_at(part_ty, &held, depth + 1, at);
-            format!(
-                "_core.held_part({part_port}, lambda {held}: {read}, {})",
-                if is_nullable(part_ty) {
-                    "True"
-                } else {
-                    "False"
-                }
-            )
-        };
-        match ty {
-            Type::Tuple(elements) => {
-                let reads: Vec<String> = elements
-                    .iter()
-                    .enumerate()
-                    .map(|(index, element)| {
-                        part(
-                            self,
-                            element,
-                            format!("{port}[{}]", string(&position(index))),
-                        )
-                    })
-                    .collect();
-                self.natives = true;
-                format!("({},)", reads.join(", "))
-            }
-            Type::List {
-                element,
-                size: Some(_),
-            } => {
-                let child = format!("_child{depth}");
-                let read = part(self, element, child.clone());
-                self.natives = true;
-                format!("[{read} for {child} in {port}]")
-            }
-            Type::Named {
-                module,
-                declaration,
-                kind: NamedKind::Struct,
-                ..
-            } if !inherited(self.program, *module, *declaration) => {
-                let program = self.program;
-                let (Some(Detail::Struct(read)), Some(class)) = (
-                    program.modules[*module].details.get(*declaration),
-                    self.struct_class(ty),
-                ) else {
-                    return self.port_value_at(ty, port, depth, at);
-                };
-                let types = program.field_types(ty).unwrap_or_default();
-                let fields: Vec<String> = read
-                    .members
-                    .iter()
-                    .zip(&types)
-                    .map(|(member, field_ty)| {
-                        let field = name(&member.name);
-                        let child = format!("{port}[{}]", string(&field));
-                        format!("{field}={}", part(self, field_ty, child))
-                    })
-                    .collect();
-                self.natives = true;
-                format!("{class}({})", fields.join(", "))
-            }
-            _ => self.port_value_at(ty, port, depth, at),
-        }
-    }
-
     /// True where each part of a whole value of `ty`, an element, a
     /// field or an entry, publishes whole: a scalar, an enum or a
     /// nullable one. A list's element is not nullable: hgraph's whole
@@ -8767,7 +8810,11 @@ impl Emitter<'_> {
         ) {
             return None;
         }
-        let read = self.held_value_at(ty, "_port", 0, at);
+        // A struct, a tuple or a fixed list is read whole as a part is
+        // (`part_value`): each required part where it is valid, an
+        // optional one null where it is not, and no whole value, the
+        // failure `value.unset_read`, where a required part is not valid.
+        let read = self.part_value(ty, "_port", at);
         Some(format!("_hold=lambda _port: {read}"))
     }
 
@@ -9504,6 +9551,24 @@ fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
 /// True for a type written `T?` (TYPE-14).
 fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
+}
+
+/// True for a concrete struct with no field, `struct Empty {}`, which
+/// this target writes as a temporal `TS` of its class
+/// (`Emitter::struct_annotation`).
+fn empty_struct(program: &Program, ty: &Type) -> bool {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return false;
+    };
+    matches!(program.modules[*module].details.get(*declaration),
+        Some(Detail::Struct(read)) if read.members.is_empty())
+        && !inherited(program, *module, *declaration)
 }
 
 /// True where `value` is published to a place of the type `ty` as a
