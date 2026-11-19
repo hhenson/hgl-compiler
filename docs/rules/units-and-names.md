@@ -106,7 +106,7 @@ analyser: partial
 - It is read by its name wherever a value is, and is a constant expression (FN-1) and a compile-time constant (GEN-8)
 - Where a size or a generic value argument needs its value, an `i64` or a `duration` written with literals, other constants and `+`, `-`, `*` is followed to it
 - One whose value depends on itself is `constant.cycle`: through another constant, the definition a call selected, an operator's candidate a symbol or a name selected, or a default a call leaves to be read
-- Left: the value of any other constant where one is needed; a `switch` label's value; a struct's field default counts for a construction that gives the field
+- Left: the value of any other constant where one is needed; a struct's field default counts for a construction that gives the field
 
 transpiler: done
 

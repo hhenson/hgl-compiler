@@ -84,13 +84,12 @@ parser: done
 
 - `.member` read as an expression where an operand is due
 
-analyser: partial
+analyser: done
 
 - Numbering from zero or the number written; numbers are integers no two members share; overflow rejected
-- in a value function a member is of its enum, and `.member` is given its enum by the type its place expects
+- A member is of its enum, and `.member` is given its enum by the type its place expects
 - A call of the enum's name constructs a member from an `i64` or a `str`, one argument by position; a constant that is no member's number or name is `member.unknown`
 - A construction from a constant that names a member is read as that member: a `switch` label, a `const` argument and a generic value argument take it as they take `Side.buy`
-- Left: a `switch` label by its selector; temporal bodies
 
 transpiler: partial
 
