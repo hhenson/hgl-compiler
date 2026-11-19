@@ -230,6 +230,9 @@ pub enum Stmt {
         hook: Hook,
         /// The condition of a `when`, when it has one.
         condition: Option<Expr>,
+        /// What a `when`'s header asks of its node, as the analyser
+        /// reads it; `None` for a `start` and a `stop`.
+        header: Option<Header>,
         /// Its statements. A temporal parameter is read there as a
         /// value of its declared type (FN-3).
         body: Vec<Stmt>,
@@ -312,6 +315,41 @@ pub enum Stmt {
         /// Where it is written.
         at: Location,
     },
+}
+
+/// What a `when` header asks of its node (TIME-3, TIME-4), read once by
+/// the analyser, which judges the handler's reads by it, and given to
+/// the stages after it. TIME-3: "A selector sets subscription or
+/// admission when it stands alone in the header or appears as a
+/// top-level conjunct. Selectors under negation or disjunction leave
+/// the default in place."
+#[derive(Debug, Clone, PartialEq)]
+pub struct Header {
+    /// The inputs whose tick wakes the handler: those its `modified`
+    /// selectors name, `modified()` every temporal input and
+    /// `modified([])` none; every temporal input where it writes none.
+    pub subscribed: Vec<LocalId>,
+    /// True where the header writes a `modified` selector.
+    pub selects: bool,
+    /// What the handler requires to be valid: what its `valid`
+    /// selectors name, the temporal inputs and `out`, `valid()` every
+    /// temporal input and `valid([])` none. With no `valid` selector,
+    /// every temporal input, but for a header that is `scheduled()`
+    /// alone, which requires none. Of these, the temporal inputs are
+    /// what the handler admits.
+    pub required: Vec<LocalId>,
+    /// True where `scheduled()` stands alone or as a top-level
+    /// conjunct: a wake by the node's scheduler or alarm runs it.
+    pub scheduled: bool,
+    /// Where `modified([])` stands beside a `modified` selector that
+    /// names inputs, each a top-level conjunct: the specification does
+    /// not say what the two ask together.
+    pub beside: Option<Location>,
+    /// What is checked when the handler runs, as positions among the
+    /// condition's conjuncts ([`Expr::conjuncts`]): each that is no
+    /// selector, and each `modified` selector but `modified([])`, a
+    /// guard on a publication of what it names.
+    pub conditions: Vec<usize>,
 }
 
 /// One `case label: statements` of a `switch`.
@@ -1283,6 +1321,32 @@ pub fn walk_statement_nodes<'a>(statements: &'a [Stmt], visit: &mut dyn FnMut(No
                 }
             }
         }
+    }
+}
+
+impl Expr {
+    /// The top-level conjuncts of a condition, left to right: each side
+    /// of an `&&` in turn, at any depth, and the condition itself where
+    /// it is no `&&`.
+    pub fn conjuncts(&self) -> Vec<&Expr> {
+        let mut conjuncts = Vec::new();
+        // A list of what is still to split stands in for recursion; the
+        // right side is pushed first so that the left is split first.
+        let mut to_do = vec![self];
+        while let Some(part) = to_do.pop() {
+            match &part.kind {
+                ExprKind::Binary {
+                    operator: BinaryOperator::And,
+                    left,
+                    right,
+                } => {
+                    to_do.push(right);
+                    to_do.push(left);
+                }
+                _ => conjuncts.push(part),
+            }
+        }
+        conjuncts
     }
 }
 

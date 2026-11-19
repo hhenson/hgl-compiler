@@ -649,6 +649,14 @@ branch that returns to the end of its block. A read with none is
 itself rejected says nothing sure of what it admits, and its body's
 reads are not judged.
 
+The header is read once, before it is typed, into the `hir::Header` of
+its `Stmt::Hook`: the inputs whose tick wakes the handler, what it
+requires valid (the inputs it admits, and `out` where `valid(out)` names
+it), whether a wake of the scheduler or alarm runs it, and which
+conjuncts of its condition are checked when it runs. The analyser judges
+the handler's reads by it; a transpiler reads it and works none of it
+out again.
+
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
 

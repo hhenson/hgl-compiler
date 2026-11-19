@@ -1379,24 +1379,14 @@ impl<'a> Typer<'a> {
         // and one that sets it admits what its `valid` selectors name.
         // Either holds for the whole header, whatever order its
         // conjuncts are written in, and for the body.
-        if hook == Hook::When {
-            // TIME-3: "A header that is `scheduled()` alone is the
-            // exception: it requires no input to be valid, as one that
-            // writes `valid([])` does". `modified([])` alone has no such
-            // exception, and the default stands.
-            let alone = header
-                .as_ref()
-                .is_some_and(|header| self.scheduled_alone(header));
-            let admitted = header
-                .as_ref()
-                .and_then(|header| self.admission(header))
-                .unwrap_or_else(|| {
-                    if alone {
-                        Vec::new()
-                    } else {
-                        self.temporal_inputs()
-                    }
-                });
+        let read = (hook == Hook::When).then(|| self.header(header.as_ref()));
+        if let Some((read, _)) = &read {
+            let admitted: Vec<LocalId> = read
+                .required
+                .iter()
+                .copied()
+                .filter(|&local| self.is_temporal_input(local))
+                .collect();
             self.present.extend(admitted.into_iter().map(Fact::Valid));
         }
         let reported = self.diagnostics.len();
@@ -1427,9 +1417,28 @@ impl<'a> Typer<'a> {
         };
         self.present.truncate(frame);
         self.hook = before;
+        // What is checked when the handler runs: each conjunct of the
+        // typed condition that is no selector the header read (CTRL-9:
+        // the condition is what stands before the body).
+        let header = read.map(|(mut read, selectors)| {
+            read.conditions = condition
+                .as_ref()
+                .map(|condition| {
+                    condition
+                        .conjuncts()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, conjunct)| !selectors.contains(&conjunct.at))
+                        .map(|(position, _)| position)
+                        .collect()
+                })
+                .unwrap_or_default();
+            read
+        });
         Stmt::Hook {
             hook,
             condition,
+            header,
             body,
             at,
         }
@@ -1448,111 +1457,178 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// True when a `when` header is `scheduled()` alone, in parentheses
-    /// or not: the language's selector (TIME-9), and no call of a
-    /// declaration a module or a local binds under that name.
-    fn scheduled_alone(&self, header: &SyntaxNode) -> bool {
-        match header.kind() {
-            SyntaxKind::ParenExpr => header
-                .children()
-                .next()
-                .is_some_and(|inner| self.scheduled_alone(&inner)),
-            SyntaxKind::CallExpr => header
-                .children()
-                .next()
-                .filter(|callee| callee.kind() == SyntaxKind::NameExpr)
-                .and_then(|callee| name_token(&callee))
-                .is_some_and(|name| name.text() == "scheduled" && self.is_the_languages(&name)),
-            _ => false,
-        }
-    }
-
-    /// The inputs a `when` header admits by its own `valid` selectors;
-    /// `None` when it has none, and the default stands.
+    /// What a `when` header asks of its node, read from what it is
+    /// written as before it is typed, for the handler's reads are
+    /// judged by it: see [`hir::Header`]. With it, where each selector
+    /// it consumed is written; the condition's other conjuncts are
+    /// checked when the handler runs. `header` is `None` for a `when`
+    /// with no header.
     ///
     /// TIME-3: "A selector sets subscription or admission when it
     /// stands alone in the header or appears as a top-level conjunct.
     /// Selectors under negation or disjunction leave the default in
-    /// place." A selector is the language's `valid`: a name a
-    /// declaration binds is a call of that declaration, and no selector
-    /// (TIME-9).
-    fn admission(&self, header: &SyntaxNode) -> Option<Vec<LocalId>> {
-        match header.kind() {
-            SyntaxKind::ParenExpr => self.admission(&header.children().next()?),
-            SyntaxKind::BinaryExpr
-                if tokens(header).any(|token| token.kind() == SyntaxKind::AmpAmp) =>
-            {
-                // Every selector among the conjuncts adds what it names.
-                let sets: Vec<Vec<LocalId>> = header
-                    .children()
-                    .filter_map(|operand| self.admission(&operand))
-                    .collect();
-                (!sets.is_empty()).then(|| sets.concat())
-            }
-            // `valid(a)`, and the same written with its generic
-            // argument, `valid<i64>(a)`, which is the selector it is
-            // without one (TIME-9).
-            SyntaxKind::CallExpr
-            | SyntaxKind::TypedConstructor
-            | SyntaxKind::UndecidedConstructor => {
-                let name = match header.kind() {
-                    SyntaxKind::CallExpr => {
-                        let callee = header.children().next()?;
-                        match callee.kind() {
-                            SyntaxKind::NameExpr => name_token(&callee)?,
-                            _ => return None,
-                        }
-                    }
-                    _ if child(header, SyntaxKind::QualifiedName).is_none() => name_token(header)?,
-                    _ => return None,
-                };
-                // GEN-14: a form that reads two ways is the call only
-                // where the resolver decided so.
-                if header.kind() == SyntaxKind::UndecidedConstructor {
-                    let at = self.at(header);
-                    let call =
-                        self.module.decisions.iter().any(|decision| {
-                            decision.at == at && decision.constructor == Some(true)
-                        });
-                    if !call {
-                        return None;
-                    }
-                }
-                if name.text() != "valid" || !self.is_the_languages(&name) {
-                    return None;
-                }
-                let list = child(header, SyntaxKind::ArgList)?;
-                let arguments = endpoint_arguments(&list);
-                if arguments.is_empty() {
-                    // `valid()`: every temporal input.
-                    return Some(self.temporal_inputs());
-                }
-                // TIME-4: `valid(parts[1])`, of a child, is a guard: "a
-                // `when` header that has the test alone or as a top-level
-                // conjunct guards its body". It names no input, and the
-                // default admission stands with it.
-                let of_child = arguments.iter().any(|entry| {
-                    matches!(entry.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr)
-                });
-                if of_child {
-                    return None;
-                }
-                // TIME-3: "`valid(a, b)` requires both named inputs,
-                // and similarly for more inputs ... `valid([])` requires
-                // no inputs to be valid." What names no input, the `[]`
-                // among them, admits nothing here, and any other is
-                // reported where the header is read.
-                Some(
-                    arguments
-                        .iter()
-                        .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
-                        .filter_map(|entry| self.local_of(entry))
-                        .filter(|local| self.is_temporal_input(*local))
-                        .collect(),
-                )
-            }
-            _ => None,
+    /// place." A selector is the language's: a name a declaration
+    /// binds is a call of that declaration, and no selector (TIME-9).
+    fn header(&self, header: Option<&SyntaxNode>) -> (hir::Header, Vec<Location>) {
+        let mut conjuncts = Vec::new();
+        if let Some(header) = header {
+            header_conjuncts(header, &mut conjuncts);
         }
+        let inputs = self.temporal_inputs();
+        // Every selector among the conjuncts adds what it names:
+        // `valid(a) && valid(b)` requires both. One with no argument
+        // names every input, and `valid([])` none. With no selector of
+        // a kind, its default stands.
+        let add = |set: &mut Option<Vec<LocalId>>, named: &Option<Vec<LocalId>>| {
+            let set = set.get_or_insert_with(Vec::new);
+            for &local in named.as_deref().unwrap_or(&inputs) {
+                if !set.contains(&local) {
+                    set.push(local);
+                }
+            }
+        };
+        let mut subscribed: Option<Vec<LocalId>> = None;
+        let mut required: Option<Vec<LocalId>> = None;
+        let mut scheduled = false;
+        // TIME-3: "The empty selection `modified([])` subscribes to no
+        // input and selects a wake from the node's scheduler or alarm",
+        // and `modified(a)` "requires a publication on" `a`. Where both
+        // stand, which of the two runs the handler is not settled.
+        let mut empty: Option<Location> = None;
+        let mut names = false;
+        let mut selectors = Vec::new();
+        let mut alone = false;
+        for conjunct in &conjuncts {
+            let at = self.at(conjunct);
+            match self.selector(conjunct) {
+                Some((EndpointOperation::Modified, named)) => {
+                    add(&mut subscribed, &named);
+                    // TIME-3: scheduling and modification are distinct.
+                    // An explicit guard still checks its publications;
+                    // the empty selector listens for a scheduled wake
+                    // instead.
+                    if named.as_ref().is_some_and(Vec::is_empty) {
+                        empty = empty.or(Some(at));
+                        selectors.push(at);
+                    } else {
+                        names = true;
+                    }
+                }
+                Some((EndpointOperation::Valid, named)) => {
+                    add(&mut required, &named);
+                    selectors.push(at);
+                }
+                // The node says what `scheduled()` is: it depends on
+                // which of the scheduler and the alarm it injects.
+                Some((EndpointOperation::Scheduled, _)) => {
+                    scheduled = true;
+                    // TIME-3: "A header that is `scheduled()` alone is
+                    // the exception: it requires no input to be valid,
+                    // as one that writes `valid([])` does".
+                    // `modified([])` alone has no such exception, and
+                    // the default stands.
+                    alone = conjuncts.len() == 1;
+                    selectors.push(at);
+                }
+                _ => {}
+            }
+        }
+        let read = hir::Header {
+            selects: subscribed.is_some(),
+            subscribed: subscribed.unwrap_or_else(|| inputs.clone()),
+            required: required.unwrap_or_else(|| if alone { Vec::new() } else { inputs.clone() }),
+            scheduled,
+            beside: empty.filter(|_| names),
+            conditions: Vec::new(),
+        };
+        (read, selectors)
+    }
+
+    /// The selector a conjunct of a `when` header is, with what it
+    /// names: `None` for no argument, which names every temporal input
+    /// (TIME-3); the temporal inputs and `out` it names by their names,
+    /// none for `valid([])` and `modified([])`. `None` for what is no
+    /// selector: a call that is no `valid`, `modified` or `scheduled` of
+    /// the language, and one of a child, `valid(parts[1])`, which is a
+    /// guard and names no input (TIME-4).
+    fn selector(&self, conjunct: &SyntaxNode) -> Option<(EndpointOperation, Option<Vec<LocalId>>)> {
+        // `valid(a)`, and the same written with its generic argument,
+        // `valid<i64>(a)`, which is the selector it is without one
+        // (TIME-9).
+        let name = match conjunct.kind() {
+            SyntaxKind::CallExpr => {
+                let callee = conjunct.children().next()?;
+                match callee.kind() {
+                    SyntaxKind::NameExpr => name_token(&callee)?,
+                    _ => return None,
+                }
+            }
+            SyntaxKind::TypedConstructor | SyntaxKind::UndecidedConstructor
+                if child(conjunct, SyntaxKind::QualifiedName).is_none() =>
+            {
+                name_token(conjunct)?
+            }
+            _ => return None,
+        };
+        // GEN-14: a form that reads two ways is the call only where the
+        // resolver decided so.
+        if conjunct.kind() == SyntaxKind::UndecidedConstructor {
+            let at = self.at(conjunct);
+            let call = self
+                .module
+                .decisions
+                .iter()
+                .any(|decision| decision.at == at && decision.constructor == Some(true));
+            if !call {
+                return None;
+            }
+        }
+        let operation = match name.text() {
+            "valid" => EndpointOperation::Valid,
+            "modified" => EndpointOperation::Modified,
+            "scheduled" => EndpointOperation::Scheduled,
+            _ => return None,
+        };
+        if !self.is_the_languages(&name) {
+            return None;
+        }
+        if operation == EndpointOperation::Scheduled {
+            return Some((operation, None));
+        }
+        let list = child(conjunct, SyntaxKind::ArgList)?;
+        let arguments = endpoint_arguments(&list);
+        if arguments.is_empty() {
+            // `valid()` and `modified()`: every temporal input.
+            return Some((operation, None));
+        }
+        // TIME-4: `valid(parts[1])`, of a child, is a guard: "a `when`
+        // header that has the test alone or as a top-level conjunct
+        // guards its body". It names no input, and the default
+        // admission stands with it.
+        let of_child = arguments
+            .iter()
+            .any(|entry| matches!(entry.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr));
+        if of_child {
+            return None;
+        }
+        // TIME-3: "`valid(a, b)` requires both named inputs, and
+        // similarly for more inputs ... `valid([])` requires no inputs
+        // to be valid." What names no input, the `[]` among them, names
+        // nothing here, and any other is reported where the header is
+        // read.
+        let named = arguments
+            .iter()
+            .filter(|entry| entry.kind() == SyntaxKind::NameExpr)
+            .filter_map(|entry| self.local_of(entry))
+            .filter(|&local| self.is_temporal_input(local) || self.is_out(local))
+            .collect();
+        Some((operation, Some(named)))
+    }
+
+    /// True when `local` is the node's `inject out` (TIME-7).
+    fn is_out(&self, local: LocalId) -> bool {
+        let declared = &self.locals[local];
+        declared.kind == LocalKind::Inject && declared.name == "out"
     }
 
     /// A read of a temporal input's payload in a node.
@@ -15328,6 +15404,26 @@ fn endpoint_argument(node: &SyntaxNode) -> SyntaxNode {
         named = inner;
     }
     named
+}
+
+/// The top-level conjuncts of a `when` header, left to right, into
+/// `into`: the header itself, or each side of an `&&` in turn, through
+/// parentheses (TIME-3: "when it stands alone in the header or appears
+/// as a top-level conjunct").
+fn header_conjuncts(header: &SyntaxNode, into: &mut Vec<SyntaxNode>) {
+    let header = ungrouped(header.clone());
+    if header.kind() == SyntaxKind::BinaryExpr
+        && tokens(&header).any(|token| token.kind() == SyntaxKind::AmpAmp)
+    {
+        for operand in header
+            .children()
+            .filter(|part| part.kind() != SyntaxKind::OperatorConfig)
+        {
+            header_conjuncts(&operand, into);
+        }
+    } else {
+        into.push(header);
+    }
 }
 
 /// The arguments of the endpoint operation whose list is `list`, each
