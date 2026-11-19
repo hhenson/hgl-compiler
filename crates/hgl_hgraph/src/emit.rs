@@ -115,6 +115,7 @@ pub(crate) fn module(
         switched: 0,
         bound: Vec::new(),
         in_case: 0,
+        scheduled: None,
         candidates: BTreeSet::new(),
         propagates: false,
         given_back: Vec::new(),
@@ -748,6 +749,11 @@ struct Emitter<'a> {
     /// How many branch graphs of a `switch_` enclose what is being
     /// written: a `return` of an ordinary value there is a constant.
     in_case: usize,
+    /// While the `when`s of a node that injects a scheduler or an alarm
+    /// are written, what `scheduled()` is there (TIME-9): the name what
+    /// woke the node is held under where the node is entered. `None`
+    /// elsewhere, `start` and `stop` among them.
+    scheduled: Option<String>,
     /// The Python names of the candidates the module has written.
     candidates: BTreeSet<String>,
     /// True once the value function being written has a `?`: a
@@ -2077,16 +2083,13 @@ impl Emitter<'_> {
         }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
-        if !handlers.is_empty() && active.is_empty() && timer.is_none() {
-            // TIME-3: with no scheduler and no alarm "nothing wakes it:
-            // the node is dormant".
-            self.unsupported(declaration.at, "a node that no input wakes");
-        }
         // hgraph takes no node without an input. One with none, which
         // its scheduler or its alarm wakes, is given one it is never
         // woken by: the node is written under another name, and a graph
-        // of the function's own name gives it a constant.
-        let hidden = inputs.is_empty() && timer.is_some();
+        // of the function's own name gives it a constant. So is one
+        // with handlers and neither: TIME-3, "nothing wakes it: the
+        // node is dormant".
+        let hidden = inputs.is_empty() && (timer.is_some() || !handlers.is_empty());
         let exposed = python;
         let node_name = if hidden {
             format!("_node_{python}")
@@ -2161,7 +2164,29 @@ impl Emitter<'_> {
         // handler has none before it, and reads it in place.
         let timed = |handler: &Handler| handler.scheduled || handler.subscribed.is_empty();
         let several = handlers.len() > 1;
-        let holds_timer = several && timer.is_some() && handlers.iter().any(timed);
+        // TIME-9: `scheduled()` read as a bool, under a negation or a
+        // disjunction in a header or in a handler's body, is what woke
+        // the node: "a wake asked of the scheduler is due in this
+        // evaluation". It is read once, where the node is entered, as
+        // the handlers' guards are, so a handler that asks again under
+        // the tag that is due does not change it.
+        let mut asks = false;
+        for handler in &handlers {
+            let mut visit = |part: &Expr| {
+                asks |= matches!(
+                    part.kind,
+                    ExprKind::Endpoint {
+                        operation: EndpointOperation::Scheduled,
+                        ..
+                    }
+                );
+            };
+            for condition in &handler.conditions {
+                condition.walk(&mut visit);
+            }
+            hgl_analyser::hir::walk_statements(handler.body, &mut visit);
+        }
+        let holds_timer = timer.is_some() && (asks || (several && handlers.iter().any(timed)));
         let holds_input = several
             && timer.is_some()
             && handlers
@@ -2233,6 +2258,7 @@ impl Emitter<'_> {
         self.unheld(signature);
         if let (true, Some(woke)) = (holds_timer, &timer_woke) {
             self.line(1, &format!("_timer_woke = {woke}"));
+            self.scheduled = Some("_timer_woke".to_string());
         }
         if holds_input {
             self.line(1, &format!("_input_woke = {input_woke}"));
@@ -2258,12 +2284,9 @@ impl Emitter<'_> {
             if timed(handler) {
                 match &timer_guard {
                     Some(woke) => guards.push(woke.clone()),
-                    None => {
-                        if !active.is_empty() {
-                            self.unsupported(declaration.at, "a handler that no input wakes");
-                        }
-                        continue;
-                    }
+                    // With neither, "nothing wakes it": the handler is
+                    // never run, and is not written.
+                    None => continue,
                 }
             } else if timer.is_some() && !handler.selects {
                 guards.push(input_guard.clone());
@@ -2308,6 +2331,8 @@ impl Emitter<'_> {
                 self.block(&function, handler.body, 2);
             }
         }
+        // `start` and `stop` are no evaluation a wake is due in.
+        self.scheduled = None;
         if self.text.len() == before {
             self.line(1, "pass");
         }
@@ -2435,9 +2460,12 @@ impl Emitter<'_> {
                 Stmt::Inject { local, at } => {
                     let injected = &body.locals[*local].name;
                     match capability(injected) {
-                        // A source is resumed by hgraph's scheduler,
-                        // which is the one a node is given: a source
-                        // that injects one of its own is not written.
+                        // SOURCE-1: a source injects "not `out`,
+                        // `scheduler`, or `alarm`: `yield time: value`
+                        // writes its output and sets its next
+                        // evaluation". The analyser rejects one
+                        // (`source.statement`); hgraph's scheduler,
+                        // the one a node is given, resumes a source.
                         Some(_) if matches!(injected.as_str(), "scheduler" | "alarm") => {
                             self.unsupported(
                                 *at,
@@ -4174,6 +4202,22 @@ impl Emitter<'_> {
                     }
                 }
             }
+            // TIME-9: `scheduled()` as a bool, where it sets no
+            // subscription (TIME-3: "Selectors under negation or
+            // disjunction leave the default in place"): what woke the
+            // node, as `node` holds it where the node is entered. In
+            // `start` and `stop` no wake is due, and the rule says
+            // nothing of it there.
+            ExprKind::Endpoint {
+                operation: EndpointOperation::Scheduled,
+                ..
+            } => match (function.mode, &self.scheduled) {
+                (Mode::Node, Some(woke)) => woke.clone(),
+                _ => {
+                    self.unsupported(value.at, "`scheduled()` outside a `when`");
+                    "None".to_string()
+                }
+            },
             // The language widens a literal and no connection (EXPR-5),
             // so what is widened here is known where the graph is
             // built. Python's `float` would act on a port.
