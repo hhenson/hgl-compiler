@@ -1109,17 +1109,6 @@ pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     else {
         return None;
     };
-    match callee {
-        Callee::Function {
-            module,
-            declaration,
-            ..
-        }
-        | Callee::Candidate {
-            module,
-            declaration,
-            ..
-        } => Some((*module, *declaration, arguments)),
-        _ => None,
-    }
+    let (module, declaration) = callee.declaration()?;
+    Some((module, declaration, arguments))
 }

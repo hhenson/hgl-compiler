@@ -555,7 +555,7 @@ impl Emitter<'_> {
                     found.push((*at, true));
                 }
                 Node::Statement(Stmt::AssignPlace { place, at, .. }) => {
-                    if matches!(place_root(place).kind, ExprKind::Local(local) if out(local)) {
+                    if matches!(place.place_root().kind, ExprKind::Local(local) if out(local)) {
                         found.push((*at, true));
                     }
                 }
