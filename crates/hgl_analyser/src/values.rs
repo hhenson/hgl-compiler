@@ -489,9 +489,6 @@ struct Typer<'a> {
     initializing: bool,
     /// True while a node's `cache`'s initializer is read (TIME-1).
     caching: bool,
-    /// True while the body of an anonymous function written in a node
-    /// is read (FN-14): what it reads is checked where it is written.
-    anonymous: bool,
     /// How many requirements deep a candidate's condition is being
     /// tested: see [`REQUIRING`].
     requiring: u32,
@@ -565,7 +562,6 @@ impl<'a> Typer<'a> {
             undriven: Vec::new(),
             initializing: false,
             caching: false,
-            anonymous: false,
             requiring: 0,
             identities: HashMap::new(),
             candidates: HashMap::new(),
@@ -1541,14 +1537,7 @@ impl<'a> Typer<'a> {
     /// Reports a use of the node's output where TIME-7 has none: "`out`
     /// is read in a `when` and in `stop`, and written only in a `when`:
     /// `start` neither reads nor writes it".
-    ///
-    /// In an anonymous function's body `out` is a capture, which the
-    /// resolver reports (`name.captured`, FN-14), and is not reported
-    /// again here.
     fn out_lifecycle(&mut self, at: Location, message: String) {
-        if self.anonymous {
-            return;
-        }
         self.diagnostics.emit(
             error(Category::Phase, codes::OUT_LIFECYCLE, at, message, "TIME-7").with_note(
                 "a node that publishes when the graph starts schedules itself in `start` and \
@@ -2045,21 +2034,6 @@ impl<'a> Typer<'a> {
 
     fn statement(&mut self, node: &SyntaxNode) -> Stmt {
         match node.kind() {
-            // CTRL-5: "Return targets the enclosing HGL function": in an
-            // anonymous function's body, that function. What it returns
-            // is given its type by the accepting form (FN-7), which is
-            // not read: its value is read for what it reads itself.
-            SyntaxKind::ReturnStmt if self.anonymous => {
-                let value = node
-                    .children()
-                    .next()
-                    .map(|value| self.expression(&value, Some(&Type::Unknown)));
-                self.returned = true;
-                Stmt::Return {
-                    value,
-                    at: self.at(node),
-                }
-            }
             SyntaxKind::LocalDecl => self.local(node),
             // FN-9: "A graph injects `global_state` and no other, and
             // uses it where the graph is built". An `inject` of any
@@ -3650,16 +3624,26 @@ impl<'a> Typer<'a> {
     /// evaluation.
     ///
     /// The function's parameters and result take their types from its
-    /// accepting form (FN-7), which is not read: a parameter is of the
-    /// type written for it, or of none known, and what the body
-    /// declares, assigns or proves is taken back. What it reports
-    /// stands.
+    /// accepting form (FN-7), which is not read, and so do its `return`
+    /// and its `?` (CTRL-5, ERR-5). A parameter is of the type written
+    /// for it, or of none known. What the body declares, assigns or
+    /// proves is taken back, and of what the walk reports only the
+    /// reads of the node's inputs stand: the rest would depend on those
+    /// types, and is not judged here.
     fn anonymous_reads(&mut self, function: &SyntaxNode) {
+        /// The reports of a read of a node's input where nothing admits
+        /// it (TIME-1, TIME-4, TIME-5).
+        const READS: [&str; 4] = [
+            codes::PAYLOAD_UNGUARDED,
+            codes::INPUT_LIFECYCLE,
+            codes::STATE_INPUT_READ,
+            codes::local::CACHE_INPUT_READ,
+        ];
         if !(self.hook.is_some() || self.initializing || self.caching) {
             return;
         }
         let mark = self.mark();
-        let before = std::mem::replace(&mut self.anonymous, true);
+        let undriven = self.undriven.len();
         let parameters = child(function, SyntaxKind::ParamList)
             .into_iter()
             .flat_map(|list| list.children())
@@ -3683,12 +3667,17 @@ impl<'a> Typer<'a> {
             _ => None,
         });
         if let Some(body) = body {
-            self.flow(&body, Some(&Type::Unknown), true);
+            self.flow(&body, Some(&Type::Unknown), false);
         }
-        self.anonymous = before;
-        let reported = self.diagnostics.as_slice()[mark.diagnostics..].to_vec();
+        let reads: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
+            .iter()
+            .filter(|diagnostic| READS.contains(&diagnostic.code.as_str()))
+            .cloned()
+            .collect();
         self.take_back(mark, false);
-        for diagnostic in reported {
+        // A `modified([])` of the body is no selector of the node's.
+        self.undriven.truncate(undriven);
+        for diagnostic in reads {
             self.diagnostics.emit(diagnostic);
         }
     }
@@ -3873,10 +3862,7 @@ impl<'a> Typer<'a> {
         // and is not retained". An injected capability other than `out`,
         // which is the node's result, and a parameter of a capability's
         // type are both one.
-        // A capability an anonymous function uses is a capture, which
-        // is reported as one (`name.captured`, FN-14).
         if self.is_capability(local)
-            && !self.anonymous
             && let Some(how) = self.retained(node)
         {
             self.diagnostics.emit(
@@ -7233,13 +7219,8 @@ impl<'a> Typer<'a> {
             .map_or(self.at(node), |mark| Location::new(self.file, mark.span()));
         let operand = self.expression(&operand, None);
         let value_function = self.declaration.kind.role() == Some(Role::Value);
-        // In an anonymous function's body `?` leaves that function
-        // (CTRL-5), a value function whose result its accepting form
-        // gives (FN-7), which is not read: neither where it stands nor
-        // what it returns is judged against the node.
-        let anonymous = self.anonymous;
         // Where it stands, when that is a place nothing propagates from.
-        let forbidden = if value_function || anonymous {
+        let forbidden = if value_function {
             None
         } else if self.graph {
             Some("in composition: a graph wires its failures, and has none to leave by")
@@ -7283,7 +7264,7 @@ impl<'a> Typer<'a> {
                 return (ExprKind::Propagate(Box::new(operand)), Type::Unknown);
             }
         };
-        if forbidden.is_none() && whole(&failure) && !anonymous {
+        if forbidden.is_none() && whole(&failure) {
             if value_function {
                 // "Failure returns the same E as Err."
                 match &self.signature.result {

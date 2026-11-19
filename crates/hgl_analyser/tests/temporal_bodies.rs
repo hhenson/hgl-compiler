@@ -213,15 +213,24 @@ fn an_anonymous_function_reads_under_the_admission_where_it_is_written() {
     );
 }
 
-/// CTRL-5: "Return targets the enclosing HGL function", and `?` leaves
-/// it (ERR-5): in an anonymous function's body that is the anonymous
-/// function, whose result its accepting form gives (FN-7). Its `return`
-/// and its `?` are judged against neither the node's result nor its
-/// hook, in a `when`, in `start` or in `stop`. `out` it uses is a
-/// capture (`name.captured`, FN-14), and is reported as that alone.
+/// FN-7: "Anonymous functions obtain their parameter/result context from
+/// their accepting form", which is not read: their reads of the node's
+/// inputs are judged (TIME-1), and nothing that depends on that context.
+/// CTRL-5: "Return targets the enclosing HGL function", and `?` leaves it
+/// (ERR-5): neither is judged against the node's result or hook, in a
+/// `when`, in `start` or in `stop`. A result written `-> Base` takes the
+/// branches of an `if` that are two of its children (TYPE-3). `out` a
+/// body uses is a capture, reported as one (`name.captured`, FN-14).
 #[test]
-fn an_anonymous_function_returns_from_itself() {
+fn an_anonymous_function_is_judged_for_its_reads_alone() {
     let checked = module(concat!(
+        "abstract struct Base {\n",
+        "    id: i64\n",
+        "}\n",
+        "struct Left : Base {\n",
+        "}\n",
+        "struct Right : Base {\n",
+        "}\n",
         "fn hooked(value: i64) -> i64 {\n",
         "    inject out\n",
         "    start {\n",
@@ -232,6 +241,7 @@ fn an_anonymous_function_returns_from_itself() {
         "    when {\n",
         "        let each = fn(x: result<i64, str>) -> result<i64, str> { let n = x?\n",
         "            return ok(n + value) }\n",
+        "        let pick = fn(c: bool, a: Left, b: Right) -> Base => if c { a } else { b }\n",
         "        return value\n",
         "    }\n",
         "    stop {\n",
@@ -240,7 +250,7 @@ fn an_anonymous_function_returns_from_itself() {
         "    }\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:7:31 name/name.captured FN-14"]);
+    assert_eq!(checked.summary(), ["m.hgl:14:31 name/name.captured FN-14"]);
 }
 
 /// TIME-7: "`out` is read in a `when` and in `stop` ... `start` neither
