@@ -7,17 +7,11 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, check, module};
 use hgl_analyser::{Detail, GenericKind};
 
 /// No findings.
 const NONE: [&str; 0] = [];
-
-/// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
-/// so the text given starts on line 2.
-fn module(text: &str) -> Checked {
-    check(&[("m.hgl", &format!("module m\n{text}"))])
-}
 
 /// The message of each finding, in order.
 fn messages(checked: &Checked) -> Vec<&str> {

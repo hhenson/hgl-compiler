@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{Checked, check};
+use common::{Checked, check, locals};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -49,23 +49,6 @@ const CORE: &str = concat!(
 /// `m`. The `module` line is added, so the text given starts on line 2.
 fn module(text: &str) -> Checked {
     check(&[("core.hgl", CORE), ("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The locals of the function `name` of module `m`, as `local: type`.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index]
-        .as_ref()
-        .expect("it has a body")
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
 }
 
 /// TIME-8: "`inject` binds each of the others to a local of its
