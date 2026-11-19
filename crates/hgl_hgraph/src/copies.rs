@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use hgl_analyser::hir::{Body, Callee, Expr, ExprKind, Local, Node, Stmt, walk_statement_nodes};
 use hgl_analyser::{Detail, LocalKind, NamedKind, Program, Scalar, Type};
 
-use crate::emit::{inherited, place_root};
+use crate::emit::inherited;
 
 /// What one body's `let`s and loop names are bound to.
 #[derive(Clone, Default)]
@@ -540,7 +540,7 @@ pub(crate) fn is_place(locals: &[Local], local: usize) -> bool {
 
 /// The place a written place is inside: `rows` for `rows[0].orders`.
 pub(crate) fn place_of(locals: &[Local], place: &Expr) -> Option<usize> {
-    match place_root(place).kind {
+    match place.place_root().kind {
         ExprKind::Local(local) if is_place(locals, local) => Some(local),
         _ => None,
     }
@@ -551,24 +551,14 @@ pub(crate) fn place_of(locals: &[Local], place: &Expr) -> Option<usize> {
 /// copies what it was given before it returns it. A native function of
 /// core's may give a part of what it is given.
 fn gives_its_own(program: &Program, callee: &Callee) -> bool {
-    match callee {
-        Callee::Function {
-            module,
-            declaration,
-            ..
-        }
-        | Callee::Candidate {
-            module,
-            declaration,
-            ..
-        } => program.modules[*module]
+    // A call of what is not known, with no declaration, may be one that
+    // gives a part of what it is given.
+    callee.declaration().is_some_and(|(module, declaration)| {
+        program.modules[module]
             .bodies
-            .get(*declaration)
-            .is_some_and(Option::is_some),
-        // A call of what is not known: it may be one that gives a part
-        // of what it is given.
-        Callee::Required { .. } | Callee::Unread => false,
-    }
+            .get(declaration)
+            .is_some_and(Option::is_some)
+    })
 }
 
 /// True where `statements` change the place `place`: assign it or a
@@ -593,22 +583,12 @@ pub(crate) fn changes(
         }) => {
             // The signature of what is called, where it is known. A call
             // of what is not known may take any argument as a place.
-            let signature = match callee {
-                Callee::Function {
-                    module,
-                    declaration,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    ..
-                } => match program.modules[*module].details.get(*declaration) {
+            let signature = callee.declaration().and_then(|(module, declaration)| {
+                match program.modules[module].details.get(declaration) {
                     Some(Detail::Callable(signature)) => Some(signature),
                     _ => None,
-                },
-                Callee::Required { .. } | Callee::Unread => None,
-            };
+                }
+            });
             for argument in arguments {
                 let var = match (signature, argument.parameter) {
                     (Some(signature), Some(parameter)) => signature

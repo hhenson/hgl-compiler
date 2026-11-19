@@ -50,7 +50,6 @@ mod node;
 use node::*;
 
 mod places;
-pub(crate) use places::place_root;
 use places::*;
 
 mod calls;
@@ -1324,7 +1323,7 @@ impl<'a> Emitter<'a> {
             } => {
                 // TIME-7: a part of `out` is assigned through its port
                 // (`assigned_to_out`).
-                let root = place_root(place);
+                let root = place.place_root();
                 let to_out = matches!(root.kind, ExprKind::Local(local) if function.is_out(local));
                 // EXPR-3: "A compound assignment reads the place
                 // first". The place is written once, so each index of

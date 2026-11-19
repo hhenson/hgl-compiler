@@ -1492,27 +1492,17 @@ impl Emitter<'_> {
             return "None".to_string();
         }
         let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    generics,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    generics,
-                    ..
-                },
-            arguments,
-            ..
+            callee, arguments, ..
         } = &call.kind
         else {
             self.unsupported(at, "this capture");
             return "None".to_string();
         };
-        let (module, declaration) = (*module, *declaration);
+        let Some((module, declaration)) = callee.declaration() else {
+            self.unsupported(at, "this capture");
+            return "None".to_string();
+        };
+        let generics = callee.generics();
         let declared = &program.modules[module].declarations[declaration];
         let bodied = matches!(
             declared.kind,
@@ -1617,26 +1607,15 @@ impl Emitter<'_> {
         let at = call.at;
         let program = self.program;
         let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    generics,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    generics,
-                    ..
-                },
+            callee: called,
             arguments,
             ..
         } = &call.kind
         else {
             return None;
         };
-        let callee = (*module, *declaration);
+        let callee = called.declaration()?;
+        let generics = called.generics();
         let declared = &program.modules[callee.0].declarations[callee.1];
         let Some(Detail::Callable(signature)) = program.modules[callee.0].details.get(callee.1)
         else {
@@ -1906,7 +1885,7 @@ fn assigned_outside(statements: &[Stmt]) -> Vec<usize> {
         Node::Statement(Stmt::For { names, .. }) => declared.extend(names),
         Node::Statement(Stmt::Assign { local, .. }) => assigned.push(*local),
         Node::Statement(Stmt::AssignPlace { place, .. }) => {
-            if let ExprKind::Local(local) = place_root(place).kind {
+            if let ExprKind::Local(local) = place.place_root().kind {
                 assigned.push(local);
             }
         }

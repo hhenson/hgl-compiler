@@ -122,7 +122,7 @@ def _shown(value, core):
         return f"ok({_shown(value.value, core)})"
     if kind.__name__ == "Err" and hasattr(value, "error"):
         return f"err({_shown(value.error, core)})"
-    if hasattr(value, "added") and hasattr(value, "removed"):
+    if core._is_set_delta(value):
         # A set's delta: what the publication added and what it removed.
         added, removed = _shown(set(value.added), core), _shown(set(value.removed), core)
         return f"delta(added: {added}, removed: {removed})"
