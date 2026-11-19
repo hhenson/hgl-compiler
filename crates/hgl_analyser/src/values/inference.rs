@@ -762,10 +762,18 @@ pub(super) fn infer(
         (Type::Set(pattern), Type::Set(actual))
         | (Type::Endpoint(pattern), Type::Endpoint(actual))
         | (Type::Atomic(pattern), Type::Atomic(actual))
-        | (Type::Delta(pattern), Type::Delta(actual))
-        | (Type::Trace { cell: pattern, .. }, Type::Trace { cell: actual, .. }) => {
-            infer(pattern, actual, generics, found)
-        }
+        | (Type::Delta(pattern), Type::Delta(actual)) => infer(pattern, actual, generics, found),
+        // A generic target's trace has its parameter's own type as its
+        // cell, and a tuple's trace the tuple it is of (TST-5,
+        // `Type::trace_cell`): `tuple<T, T>` is found from it.
+        (Type::Trace { cell: pattern, .. }, Type::Trace { cell: actual, .. }) => match &**actual {
+            Type::Delta(of)
+                if matches!(**of, Type::Tuple(_)) && !matches!(**pattern, Type::Delta(_)) =>
+            {
+                infer(pattern, of, generics, found)
+            }
+            _ => infer(pattern, actual, generics, found),
+        },
         // TYPE-9: "For non-composite S, `atomic<S>` normalizes to S
         // before matching". An `atomic<T>` given a value of a type that
         // is its own atomic says that `T` is that type.
