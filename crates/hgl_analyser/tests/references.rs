@@ -1,16 +1,16 @@
 //! The analyser against the rules on references, signals and atomics:
-//! what a graph gives across a reference boundary and to a `signal`,
-//! what a generic is inferred to be from a reference, and what a hook
-//! reads of each (TYPE-9, TYPE-12, TIME-10, GEN-11). Each test cites its
-//! rule.
+//! `ref` as a mode of a node's parameter and of its result (FN-16), what
+//! a graph gives a `ref` parameter and a `signal`, what a generic is
+//! inferred to be at one (GEN-11, GEN-12), and what a hook reads of each
+//! (TYPE-9, TYPE-12, TIME-10). Each test cites its rule.
 //!
 //! A finding is written `file:line:column category/code rule`.
 
 mod common;
 
 use common::{Checked, body, module};
-use hgl_analyser::hir::{Callee, Expr, ExprKind, walk_statements};
-use hgl_analyser::{Argument, Scalar, Type};
+use hgl_analyser::hir::{Callee, Expr, ExprKind, Stmt, walk_statements};
+use hgl_analyser::{Argument, Detail, Scalar, Type};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -49,9 +49,59 @@ fn instances(checked: &Checked, name: &str) -> Vec<String> {
     found
 }
 
+/// The signature of the function `name`, as HGL writes it.
+fn signature(checked: &Checked, name: &str) -> String {
+    let module = &checked.modules()[0];
+    let index = module
+        .declarations
+        .iter()
+        .position(|declaration| declaration.name == name)
+        .expect("the function is declared");
+    match &module.details[index] {
+        Detail::Callable(signature) => signature.to_string(),
+        other => panic!("{name} is no callable: {other:?}"),
+    }
+}
+
+/// Every value a `return` in the body of `name` is given, as the kind
+/// of expression it is.
+fn returned(checked: &Checked, name: &str) -> Vec<String> {
+    fn visit(statements: &[Stmt], found: &mut Vec<String>) {
+        for statement in statements {
+            match statement {
+                Stmt::Return {
+                    value: Some(value), ..
+                } => found.push(match &value.kind {
+                    ExprKind::EndpointOf(_) => format!("endpoint of {}", value.ty),
+                    ExprKind::ChildEndpointOf(_) => format!("child endpoint of {}", value.ty),
+                    _ => format!("value of {}", value.ty),
+                }),
+                Stmt::Hook { body, .. } => visit(body, found),
+                Stmt::Expr(Expr {
+                    kind:
+                        ExprKind::If {
+                            then, otherwise, ..
+                        },
+                    ..
+                }) => {
+                    for branch in [Some(&**then), otherwise.as_deref()].into_iter().flatten() {
+                        if let ExprKind::Block { statements, .. } = &branch.kind {
+                            visit(statements, found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut found = Vec::new();
+    visit(&body(checked, name).statements, &mut found);
+    found
+}
+
 /// The nodes the tests below give connections to.
 const NODES: &str = concat!(
-    "fn pick(use_left: bool, left: ref<i64>, right: ref<i64>) -> ref<i64> {\n",
+    "fn pick(use_left: bool, ref left: i64, ref right: i64) -> ref i64 {\n",
     "    when {\n",
     "        if use_left { return left }\n",
     "        return right\n",
@@ -65,18 +115,17 @@ const NODES: &str = concat!(
     "}\n",
 );
 
-/// TYPE-12: "`ref<T>` designates an endpoint, not an ordinary payload
-/// type", so a graph gives a `ref<T>` input a connection of `T`, which
-/// it designates. TIME-10: "Ordinary followers observe the selected
-/// target": a `ref<T>` is given to an input of `T`, a lifted value
-/// function's among them, and returned where a graph's result is `T`,
-/// from a branch of an `if` or a `switch` too. TYPE-14: the `?` of
-/// `ref<i64>?` marks an input that may be left out, and is no part of
-/// what it designates.
-/// TYPE-12: "`signal` is a complete temporal input constraint with no
-/// readable payload": any connection is given to one.
+/// FN-16: "The mark is a mode, as `var` is (FN-15), and no part of the
+/// type (TYPE-12): a caller and the type checker see the T after it. A
+/// connection of T is given to a `ref` parameter, and a `ref` result is
+/// a connection of T to whoever reads it." So a graph gives a `ref`
+/// parameter a connection of its type, a lifted value function and an
+/// ordinary input take a `ref` result as one of its type, and a graph
+/// returns one, from a branch of an `if` or a `switch` too. TYPE-12:
+/// "`signal` is a complete temporal input constraint with no readable
+/// payload": any connection is given to one.
 #[test]
-fn a_graph_gives_a_connection_across_a_reference_and_to_a_signal() {
+fn a_graph_gives_a_connection_to_a_ref_parameter_and_takes_a_ref_result() {
     let checked = module(&format!(
         "{NODES}{}",
         concat!(
@@ -88,91 +137,325 @@ fn a_graph_gives_a_connection_across_a_reference_and_to_a_signal() {
             "fn followed(use_left: bool, left: i64, right: i64) -> i64 => pick(use_left, left, right)\n",
             "fn given(use_left: bool, left: i64, right: i64) -> i64 => plain(pick(use_left, left, right))\n",
             "fn lifted(use_left: bool, left: i64, right: i64) -> i64 => doubled(pick(use_left, left, right))\n",
-            "fn designated(left: i64) -> ref<i64> => left\n",
-            "fn passed(left: ref<i64>) -> ref<i64> => left\n",
+            "fn constant(right: i64) -> i64 => pick(true, 1, right)\n",
             "fn woken(value: i64) -> i64 => counted(value)\n",
             "fn woken_by_struct(bid: i64) -> i64 => counted(quoted(bid))\n",
-            "fn woken_by_reference(left: ref<i64>) -> i64 => counted(left)\n",
+            "fn woken_by_reference(use_left: bool, left: i64) -> i64 => counted(pick(use_left, left, left))\n",
             "fn passed_on(tick: signal) -> i64 => counted(tick)\n",
-            "fn branched(flag: bool, left: ref<i64>, right: i64) -> i64 => if flag { left } else { right }\n",
-            "fn optional(target: ref<i64>?) -> i64 => target\n",
-            "fn optional_passed(target: ref<i64>?) -> ref<i64> => target\n",
-            "fn switched(flag: bool, left: ref<i64>, right: ref<i64>) -> i64 {\n",
+            "fn branched(flag: bool, left: i64, right: i64) -> i64 =>\n",
+            "    if flag { pick(flag, left, right) } else { right }\n",
+            "fn switched(flag: bool, left: i64, right: i64) -> i64 {\n",
             "    switch flag {\n",
-            "        case true: { return left }\n",
+            "        case true: { return pick(flag, left, right) }\n",
             "        default: { return right }\n",
             "    }\n",
             "}\n",
         )
     ));
     assert_eq!(checked.summary(), NONE);
+    assert_eq!(
+        signature(&checked, "pick"),
+        "(use_left: bool, ref left: i64, ref right: i64) -> ref i64"
+    );
 }
 
-/// What composition gives across a reference stays a connection of the
-/// type it is: a reference is no `signal`, a `signal` is read by no
-/// ordinary input, and an ordinary value is given neither (TYPE-12).
+/// FN-16: a caller sees the T after the mark, so what a graph gives a
+/// `ref` parameter, and what a `ref` result is given to, is held to that
+/// type as any connection is (EXPR-5): a `ref` mark is no `signal`, and
+/// a `signal` is given to no `ref` parameter (TYPE-12).
 #[test]
-fn a_reference_and_a_signal_take_only_what_their_rules_admit() {
+fn a_ref_parameter_and_a_signal_take_only_what_their_types_admit() {
     let checked = module(&format!(
         "{NODES}{}",
         concat!(
-            "fn wider(left: f64) -> ref<i64> => left\n",
+            "fn wider(use_left: bool, left: f64, right: i64) -> i64 => pick(use_left, left, right)\n",
             "fn from_signal(tick: signal) -> i64 => plain(tick)\n",
-            "fn as_reference(tick: signal) -> ref<i64> => tick\n",
-            "fn constant_designated() -> i64 => pick(true, 1, 2)\n",
-            "fn constant_signal() -> i64 => counted(1)\n",
+            "fn designated(tick: signal) -> i64 => pick(true, tick, 1)\n",
+            "fn named(use_left: bool) -> str => pick(use_left, 1, 2)\n",
         )
     ));
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:14:36 type/type.mismatch EXPR-5",
+            "m.hgl:14:74 type/type.mismatch EXPR-5",
             "m.hgl:15:46 type/type.mismatch EXPR-5",
-            "m.hgl:16:46 type/type.mismatch EXPR-5",
-            "m.hgl:17:47 type/type.mismatch EXPR-5",
-            "m.hgl:17:50 type/type.mismatch EXPR-5",
-            "m.hgl:18:40 type/type.mismatch EXPR-5",
+            "m.hgl:16:50 type/type.mismatch EXPR-5",
+            "m.hgl:17:36 type/type.mismatch EXPR-5",
         ]
     );
 }
 
-/// GEN-11: "Argument inference removes reference boundaries recursively
-/// from an otherwise unbound generic; such an input observes values. An
-/// explicit ref pattern binds its underlying type. A stated resolution
-/// preserves its reference boundaries. A requested output binds a whole
-/// output variable as requested".
+/// FN-16: "A node (FN-2, NATIVE-3) may mark a temporal parameter `ref`
+/// ... A value function, a graph, and an operator mark none, and a mark
+/// there rejects: an operator gives the parameters every candidate
+/// takes, and a candidate that is a node marks its own ... Proposed: ...
+/// a mark on what is no node with `ref.position`." The language's own
+/// rejections: `const fn scale(ref value: f64) -> f64` (FN-1), and
+/// `ref idx: i64` on a graph.
 #[test]
-fn inference_removes_a_reference_from_a_generic_that_is_not_one() {
+fn only_a_node_marks_a_parameter_or_its_result_ref() {
+    let checked = module(concat!(
+        "const fn scale(ref value: f64) -> f64 => value\n",
+        "const fn gives(value: f64) -> ref f64 => value\n",
+        "fn routed(ref idx: i64, items: list<f64, 3>) -> f64 => items[0]\n",
+        "fn designated(idx: i64) -> ref i64 => idx\n",
+        "operator watch<T>(ref value: T) -> i64\n",
+        "impl const fn watch(ref value: i64) -> i64 => 1\n",
+        "impl fn watch(ref value: f64) -> i64 {\n",
+        "    when { return 1 }\n",
+        "}\n",
+        "native const fn measured(ref value: f64) -> f64\n",
+        "native fn wired(ref value: f64) -> ref f64\n",
+        "native fn wired(ref value: f64) -> ref f64 {}\n",
+        "native fn nodal(ref value: f64) -> ref f64\n",
+        "native fn nodal(ref value: f64) -> ref f64 { when; }\n",
+        "fn held(ref value: f64) -> ref f64 {\n",
+        "    when { return value }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:2:16 function-kind/ref.position FN-16",
+            "m.hgl:3:31 function-kind/ref.position FN-16",
+            "m.hgl:4:11 function-kind/ref.position FN-16",
+            "m.hgl:5:28 function-kind/ref.position FN-16",
+            "m.hgl:6:19 function-kind/ref.position FN-16",
+            "m.hgl:7:21 function-kind/ref.position FN-16",
+            "m.hgl:11:26 function-kind/ref.position FN-16",
+            "m.hgl:13:17 function-kind/ref.position FN-16",
+            "m.hgl:13:36 function-kind/ref.position FN-16",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`scale` is a value function, and only a node marks a parameter or its result `ref`"
+    );
+}
+
+/// FN-16: "A `ref` parameter and its children, `xs[i]` and `quote.bid`,
+/// are endpoints, not values: the endpoint operations take them
+/// (TIME-9), `delta_value` aside ... A read of the value or of the
+/// `delta_value` of one rejects when the program is compiled. Proposed:
+/// that read rejects with the code `ref.read`". EXPR-7: "A structural
+/// projection of a `ref` parameter selects its child and reads no
+/// payload ... an atomic projection of one, `quote.bid` of `ref quote:
+/// atomic<Quote>`, reads its payload and rejects". CTRL-8: "Iteration
+/// reads what it traverses, so over a `ref` parameter it rejects".
+/// TIME-10, proposed: `valid`, `modified` and `last_modified` of one ask
+/// of its designation.
+#[test]
+fn a_ref_parameter_is_an_endpoint_and_no_value() {
+    let checked = module(concat!(
+        "struct Quote {\n",
+        "    bid: i64\n",
+        "    ask: i64\n",
+        "}\n",
+        "const fn doubled(value: i64) -> i64 => value * 2\n",
+        "fn observed(ref price: i64, ref xs: list<i64, 3>, ref quote: Quote, idx: i64) -> bool {\n",
+        "    when valid(idx) {\n",
+        "        let seen = last_modified(price)\n",
+        "        if valid(xs[idx]) && modified(quote.bid) && all_valid(xs) { return is_active(price) }\n",
+        "        return valid(price) && modified(price) && valid(xs[0]) && seen != null\n",
+        "    }\n",
+        "}\n",
+        "fn read(ref price: i64, ref xs: list<i64, 3>, ref snap: atomic<Quote>) -> i64 {\n",
+        "    when {\n",
+        "        let held = price\n",
+        "        var total: i64 = xs[0] + doubled(price)\n",
+        "        for x in xs { total += x }\n",
+        "        return delta_value(price) + delta_value(xs[1]) + snap.bid + total\n",
+        "    }\n",
+        "    stop {\n",
+        "        if valid(price) { let last = price }\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:16:20 phase/ref.read FN-16",
+            "m.hgl:17:26 phase/ref.read FN-16",
+            "m.hgl:17:42 phase/ref.read FN-16",
+            "m.hgl:18:18 phase/ref.read FN-16",
+            "m.hgl:19:16 phase/ref.read FN-16",
+            "m.hgl:19:49 phase/ref.read FN-16",
+            "m.hgl:19:58 phase/ref.read FN-16",
+            "m.hgl:22:38 phase/ref.read FN-16",
+        ]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "`price` is a `ref` parameter, an endpoint whose value is not read"
+    );
+}
+
+/// FN-16: "A `return` to a `ref` result is given an expression that
+/// names an endpoint: a temporal input of the node, `ref` or not, or a
+/// child of one, `items[idx]` ... No payload is read, so nothing needs
+/// admitting (TIME-1), and a child is an endpoint whether or not it is
+/// valid. A value that names no endpoint rejects there
+/// (`type.mismatch`). A parameter that is not `ref` may be designated
+/// too, and a body may both read and designate it." TIME-7: "A `ref`
+/// result takes no value". The language's rejection: `return items[0] *
+/// 2.0` to `fn first(items: list<f64, 3>) -> ref f64`.
+#[test]
+fn a_ref_result_is_given_an_endpoint_it_designates() {
+    let checked = module(concat!(
+        "fn route<T>(idx: i64, items: list<T, 3>) -> ref T {\n",
+        "    when modified(idx) { return items[idx] }\n",
+        "}\n",
+        "fn passed(flag: bool, ref low: f64, high: f64) -> ref f64 {\n",
+        "    when {\n",
+        "        if high > 0.0 { return high }\n",
+        "        return low\n",
+        "    }\n",
+        "}\n",
+        "fn first(items: list<f64, 3>) -> ref f64 {\n",
+        "    when all_valid(items) { return items[0] * 2.0 }\n",
+        "}\n",
+        "fn constant(flag: bool) -> ref f64 {\n",
+        "    when { return 1.0 }\n",
+        "}\n",
+        "fn wider(value: i64) -> ref f64 {\n",
+        "    when { return value }\n",
+        "}\n",
+        "fn state_given(value: f64) -> ref f64 {\n",
+        "    state last: f64 = 0.0\n",
+        "    when { return last }\n",
+        "}\n",
+        "fn quiet(value: f64) -> ref f64 {\n",
+        "    when { return }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:36 type/type.mismatch FN-16",
+            "m.hgl:15:19 type/type.mismatch FN-16",
+            "m.hgl:18:19 type/type.mismatch EXPR-5",
+            "m.hgl:22:19 type/type.mismatch FN-16",
+        ]
+    );
+    assert_eq!(returned(&checked, "route"), ["child endpoint of T"]);
+    assert_eq!(
+        returned(&checked, "passed"),
+        ["endpoint of f64", "endpoint of f64"]
+    );
+    assert_eq!(
+        checked.findings[0].message,
+        "a `ref` result takes an endpoint: a temporal input of `first`, or a child of one"
+    );
+}
+
+/// FN-16, proposed: "`out = items[idx]` designates as `return items[idx]`
+/// does, and is rejected where the `return` would be; otherwise `out` of
+/// a `ref` result is as a `ref` parameter is: the endpoint operations
+/// take it, `delta_value` aside, and a read of its value rejects."
+#[test]
+fn out_of_a_ref_result_designates_and_is_no_value() {
+    let checked = module(concat!(
+        "fn route(idx: i64, items: list<f64, 3>) -> ref f64 {\n",
+        "    inject out\n",
+        "    when modified(idx) {\n",
+        "        out = items[idx]\n",
+        "        if valid(out) && modified(out) { out = items[0] }\n",
+        "    }\n",
+        "}\n",
+        "fn read(idx: i64, items: list<f64, 3>) -> ref f64 {\n",
+        "    inject out\n",
+        "    when {\n",
+        "        let held = out\n",
+        "        out = 2.0\n",
+        "        let change = delta_value(out)\n",
+        "    }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:12:20 phase/ref.read FN-16",
+            "m.hgl:13:15 type/type.mismatch FN-16",
+            "m.hgl:14:22 phase/ref.read FN-16",
+        ]
+    );
+}
+
+/// GEN-11: "No type holds a reference (TYPE-12), so argument inference
+/// removes none: a generic binds from the type of the connection it is
+/// given, at a `ref` parameter as at any other (FN-16). `ref low: T`
+/// given a connection of `f64` binds T to `f64`, and so does `value: T`
+/// given a `ref` result of `f64`". GEN-12: "a `ref` mark adds no
+/// priority": the candidate that is more specific is selected, marked or
+/// not.
+#[test]
+fn a_generic_binds_from_the_connection_at_a_ref_parameter_as_anywhere() {
     let checked = module(&format!(
         "{NODES}{}",
         concat!(
             "fn ticks<T>(value: T) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn designations<T>(value: ref<T>) -> i64 {\n",
+            "fn designations<T>(ref value: T) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "fn same<T>(value: T) -> T {\n",
             "    when { return value }\n",
             "}\n",
+            "operator watch<T>(value: T) -> i64\n",
+            "impl fn watch<T>(ref value: T) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "impl fn watch(value: i64) -> i64 {\n",
+            "    when { return 2 }\n",
+            "}\n",
             "fn followed(use_left: bool, left: i64, right: i64) -> i64 => ticks(pick(use_left, left, right))\n",
-            "fn listed(left: list<ref<i64>, 2>) -> i64 => ticks(left)\n",
+            "fn listed(left: list<i64, 2>) -> i64 => designations(left)\n",
             "fn designated(use_left: bool, left: i64, right: i64) -> i64 => designations(pick(use_left, left, right))\n",
             "fn designated_value(left: i64) -> i64 => designations(left)\n",
-            "fn stated(left: ref<i64>) -> i64 => ticks<ref<i64>>(left)\n",
-            "fn requested(left: i64) -> ref<i64> => same(left)\n",
+            "fn stated(left: i64) -> i64 => designations<i64>(left)\n",
+            "fn requested(left: i64) -> i64 => designations(same(left))\n",
+            "fn watched(left: i64) -> i64 => watch(left)\n",
         )
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(instances(&checked, "followed"), ["ticks<i64>"]);
-    assert_eq!(instances(&checked, "listed"), ["ticks<list<i64, 2>>"]);
+    assert_eq!(
+        instances(&checked, "listed"),
+        ["designations<list<i64, 2>>"]
+    );
     assert_eq!(instances(&checked, "designated"), ["designations<i64>"]);
     assert_eq!(
         instances(&checked, "designated_value"),
         ["designations<i64>"]
     );
-    assert_eq!(instances(&checked, "stated"), ["ticks<ref<i64>>"]);
-    assert_eq!(instances(&checked, "requested"), ["same<ref<i64>>"]);
+    assert_eq!(instances(&checked, "stated"), ["designations<i64>"]);
+    assert_eq!(
+        instances(&checked, "requested"),
+        ["designations<i64>", "same<i64>"]
+    );
+    let mut candidate = None;
+    walk_statements(&body(&checked, "watched").statements, &mut |value| {
+        if let ExprKind::Call {
+            callee:
+                Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                },
+            ..
+        } = &value.kind
+        {
+            candidate = Some((*module, *declaration));
+        }
+    });
+    let (module, declaration) = candidate.expect("`watch` selects a candidate");
+    // The candidate of `i64`, which is not marked, over the generic one,
+    // which is.
+    match &checked.program.modules[module].details[declaration] {
+        Detail::Callable(selected) => assert_eq!(selected.to_string(), "(value: i64) -> i64"),
+        other => panic!("no callable: {other:?}"),
+    }
 }
 
 /// TYPE-12: "`signal` is a complete temporal input constraint with no
@@ -204,42 +487,6 @@ fn a_signal_has_no_payload_and_no_default_but_null() {
             "m.hgl:2:41 type/type.mismatch TYPE-12",
             "m.hgl:11:20 type/type.not_ordinary TYPE-12",
             "m.hgl:15:38 type/type.not_ordinary TYPE-12",
-        ]
-    );
-}
-
-/// TYPE-12: "`ref<T>` designates an endpoint, not an ordinary payload
-/// type". In a hook a reference input is the designation: returned, and
-/// given to an endpoint operation. A value function's parameters are
-/// ordinary value types (FN-1), so one written as a generic parameter,
-/// and an operator's value candidate, take none.
-#[test]
-fn a_hook_returns_a_reference_and_gives_it_to_no_value_function() {
-    let checked = module(concat!(
-        "const fn keep<T>(value: T) -> T => value\n",
-        "fn kept(target: ref<i64>) -> ref<i64> {\n",
-        "    when {\n",
-        "        let held = target\n",
-        "        if valid(target) && modified(target) { return held }\n",
-        "    }\n",
-        "}\n",
-        "fn given(target: ref<i64>) -> ref<i64> {\n",
-        "    when { return keep(target) }\n",
-        "}\n",
-        "fn compared(target: ref<i64>, other: ref<i64>) -> bool {\n",
-        "    when { return target == other }\n",
-        "}\n",
-        "fn added(target: ref<i64>) -> i64 {\n",
-        "    when { return target + 1 }\n",
-        "}\n",
-    ));
-    assert_eq!(
-        checked.summary(),
-        [
-            "m.hgl:10:24 type/type.not_ordinary TYPE-12",
-            "m.hgl:13:19 type/type.not_ordinary TYPE-12",
-            "m.hgl:13:29 type/type.not_ordinary TYPE-12",
-            "m.hgl:16:26 operator/operator.no_candidate OPS-1",
         ]
     );
 }
@@ -288,26 +535,17 @@ fn a_hook_reads_an_atomic_input_as_its_whole_value() {
 }
 
 /// TYPE-14: the `?` of a type that is no ordinary value marks omission,
-/// and TIME-10 and GEN-11: a follower observes the type with every
-/// reference removed. The analyser admits a follower by
-/// `Type::followed`, and a target writes its input by the same method.
+/// and is no part of what the input is given or publishes. The analyser
+/// admits a connection by `Type::omission_removed`, and a target writes
+/// the input by the same method.
 #[test]
-fn a_follower_observes_the_type_under_its_references_and_omission() {
+fn the_question_mark_of_an_input_that_may_be_left_out_is_removed() {
     let integer = Type::Scalar(Scalar::I64);
-    let reference = |ty: Type| Type::Ref(Box::new(ty));
     let optional = |ty: Type| Type::Nullable(Box::new(ty));
-    assert_eq!(optional(reference(integer.clone())).followed(), integer);
-    assert_eq!(reference(reference(integer.clone())).followed(), integer);
-    assert_eq!(
-        optional(reference(optional(integer.clone()))).followed(),
-        optional(integer.clone())
-    );
-    assert_eq!(
-        optional(integer.clone()).followed(),
-        optional(integer.clone())
-    );
     assert_eq!(Type::Signal.omission_removed(), &Type::Signal);
     assert_eq!(optional(Type::Signal).omission_removed(), &Type::Signal);
+    let atomic = Type::Atomic(Box::new(Type::Tuple(vec![integer.clone()])));
+    assert_eq!(optional(atomic.clone()).omission_removed(), &atomic);
     assert_eq!(
         optional(integer.clone()).omission_removed(),
         &optional(integer)

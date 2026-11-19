@@ -31,6 +31,7 @@ transpiler: partial
 - hgraph: a `duration` is a `timedelta`, a count of whole microseconds, as a value, as a constant and as what a connection ticks; its literal is written by its count
 - A `date`, a `time`, a `datetime` and a `civil_datetime` are Python's `date`, `time` and `datetime`, written by the parts the literal has; an instant is a `datetime` in UTC that names no zone, as hgraph has them, and one written with another offset is moved to UTC
 - A `timezone`, a `zoned_datetime` and a `zoned_time` are the provider's frozen dataclasses: a zone by its name, so aliases are distinct, and a zoned datetime its UTC instant and zone, equal where both are
+- Left, reported: core's `eq_` and `ne_` of two zoned datetimes, with the option `utc` (OPS-2), which `==`, `!=` and `=={utc: true}` of two select
 - Each is a value, configuration and a temporal value
 - Left: a literal instant outside the years 1 to 9999 in UTC, which is reported: a Python `datetime` holds no other
 
@@ -156,6 +157,7 @@ transpiler: partial
 analyser: partial
 
 - Size kind and bounds (`rolling_window.size_kind`, `rolling_window.size_bounds`) of sizes read by the one reader (`constant`): literals, generic value parameters, constants of a module and constant expressions of those, a duration and an `i64` multiplied in either order among them; a size of a type other than `i64` or `duration` is of the wrong kind; an omitted minimum is the maximum in identity
+- `all_valid` takes a window (TIME-9), and a window's value read in a hook, and given to a value function in composition, is a `list<V>` (FN-12, END-9)
 - Left: a size computed by a call, or from a generic parameter, whose kind and bounds are not checked
 
 transpiler: partial
@@ -163,27 +165,25 @@ transpiler: partial
 - hgraph: a window of a scalar or an enum is a `TSW` of `WindowSize[n]` ticks or of a `timedelta`, one size where no minimum is written, and `TSW_OUT` for `out`
 - A value published to it, and its `delta_value`, is the value that arrived (TYPE-16); `valid`, `modified` and `last_modified` are the `TSW`'s; an eval's replay and record are core's for the window
 - A window within a struct, a tuple, a fixed list or a dictionary is that one's child, wired by its port in a graph, and that value's validity is its children's
-- Core gives a window no readiness contract (FN-12), so a value that holds one, at any depth, is read as an input or as `out` only where each window it holds has a minimum of one tick, ready at its first value under any reading
-- Left, reported: such a read where a window's minimum is more than one tick or a duration; what a window holds, which no core operation reads, whole or within another value; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
+- A value that holds one, at any depth, is read as an input or as `out` only where each window it holds has a minimum of one tick, all valid at its first value; a window input so read in a hook is the `list<V>` it holds, oldest first (`_core.window_values`)
+- Left, reported: such a read where a window's minimum is more than one tick or a duration, whose readiness END-9 gives; a window's value within another value, and given to a lifted helper; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
 
 ## TYPE-12
 
 parser: done
 
-- `endpoint<T>` is a type of one argument, written as `ref<T>` is
+- `endpoint<T>` is a type of one argument; `ref` starts no type, so `ref<f64>`, `list<ref<f64>>` and `ref<ref<f64>>` are syntax errors
 
-analyser: partial
+analyser: done
 
-- `ref` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
-- In a graph a function's input of `ref<T>` takes a connection of `T`, one of `T` a `ref<T>` (TIME-10), as a graph's result does, and a `signal` any connection
-- A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`); a hook gives a `ref` to no value function (`type.not_ordinary`)
-- Left: a `ref` in a tuple or a struct a hook builds; a reference given to an operator's call in a graph
+- `ref` is no type but a mark of a node's parameter and result, whose type is the T after it (FN-16); a graph gives a `ref` parameter of T a connection of T
+- `rolling_window`, `atomic` and `signal` kept out of keys, payloads, window values, constant configuration and value functions; `signal` only as a temporal function's input; `endpoint<T>` only as the whole type of a native value function's parameter (`endpoint.position`)
+- A `signal` takes no default but `null` (`type.mismatch`), and a hook gives it to an endpoint operation and reads it nowhere else (`type.not_ordinary`)
 
 transpiler: partial
 
-- hgraph: `ref<T>` is a `REF` of the temporal T, whose value a node returns to re-point what follows it, and `signal` a `SIGNAL`
-- A graph passes a connection across a reference as it is, and a lifted input given a `ref<T>` is one of T
-- Left: a reference as a child of a temporal composite; a pack of signals; a struct connection given across a reference to a struct it inherits from
+- hgraph: `signal` is a `SIGNAL`, and a `ref` parameter or result a `REF` of its type (FN-16)
+- Left: a pack of signals
 
 ## TYPE-13
 
@@ -226,7 +226,7 @@ analyser: partial
 analyser: partial
 
 - `delta<T>` is what the table gives for T, where it is written and where a generic parameter is replaced: T itself, the V of an atomic or a window, a tuple of each position's delta under a `?`, and a type of its own for a nullable, a list, a set, a dictionary and a struct
-- A `ref` and a `signal` have none (`delta.unsupported_shape`)
+- A `signal` has none (`delta.unsupported_shape`); a `ref` parameter's `delta_value` is not read (`ref.read`, FN-16)
 - Each delta that is a type of its own has its properties: a set's `added` and `removed`, a list's `updated`, `removed` and `size_modified`, a dictionary's `updated` and `removed`, a nullable's `value`, a struct's one for each field; none is assigned (`binding.immutable`)
 - It is constructed by them, by name, each a value of the property's type; a name that is none and one given twice are rejected (`delta.argument_name`, `delta.duplicate_argument`)
 - A `delta<V>` is a value where a `delta<V?>` is expected, and null is not

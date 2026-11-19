@@ -151,6 +151,11 @@ def _equal(lhs, rhs):
             and lhs.keys() == rhs.keys()
             and all(_equal(value, rhs[key]) for key, value in lhs.items())
         )
+    # A key or a position removed is one change, however hgraph marks it:
+    # a delta made here removes a key with `REMOVE_IF_EXISTS` (`dict_delta`),
+    # and one hgraph publishes with `REMOVE`.
+    if _removes(lhs) or _removes(rhs):
+        return _removes(lhs) and _removes(rhs)
     return lhs == rhs
 
 
@@ -625,10 +630,14 @@ def dict_delta(updated=None, removed=()):
     TYPE-16: "`updated`, a `dict<K, delta<V>>` of each key added or
     changed with its delta, and `removed`, a `set<K>`"), as hgraph's
     delta of a `TSD`: one `dict` of each key updated with its delta, and
-    of each removed with `REMOVE`. A property left out is empty. What is
-    updated is copied: the program may go on changing the dictionary it
-    was given in."""
-    return _marked({} if updated is None else copied(updated), removed)
+    of each removed with `REMOVE_IF_EXISTS`: "A `removed` that names a key
+    a dictionary does not hold is ignored, and is no failure" (TYPE-16).
+    A property left out is empty. What is updated is copied: the program
+    may go on changing the dictionary it was given in."""
+    changes = {} if updated is None else copied(updated)
+    for key in removed:
+        changes[key] = _REMOVE_IF_EXISTS
+    return changes
 
 
 def _marked(changes, removed):
@@ -1143,6 +1152,35 @@ def child_delta(port, shape=None):
     if not _child_valid(port, shape):
         raise _unset(port)
     return port.delta_value
+
+
+def window_values(port):
+    """A window's value read in a hook (the language's TYPE-11): "a
+    `list<V>` of the values held, oldest first". hgraph's `TSW` holds them
+    as an array, each made the Python value it is."""
+    values = port.value
+    return list(values.tolist() if hasattr(values, "tolist") else values)
+
+
+def designation(output, reference):
+    """What a node publishes to its `ref` result, `output`, for
+    `reference`, the designation a `return` names (the language's FN-16):
+    the reference, or nothing where the result holds it already. TIME-10:
+    "A designation published again unchanged is no tick, and wakes no
+    subscriber", and core's END-10: "A publication of the designation it
+    holds is no tick". hgraph's reference output would tick for it, and
+    a `ref` parameter given it would be modified."""
+    if output.valid and output.value == reference:
+        return None
+    return reference
+
+
+def designate(output, reference):
+    """`out = items[idx]` of a `ref` result (the language's FN-16,
+    proposed): `output` designates what `reference` does, and does not
+    tick where it does already (`designation`)."""
+    if not (output.valid and output.value == reference):
+        output.value = reference
 
 
 def checked_child(port, read):

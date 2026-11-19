@@ -7,6 +7,7 @@ use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::endpoints::endpoint_argument;
 use super::fit::{accepts_float, is_integer_literal, open};
 use super::{Fact, Typer, children};
 use crate::hir::{self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt};
@@ -624,6 +625,131 @@ impl<'a> Typer<'a> {
             .any(|string| decode_string(string.text()).is_ok_and(|value| value == code))
     }
 
+    /// What a `return` to a `ref` result of type `result`, or `out =` of
+    /// one, is given at `node`. FN-16: "A `return` to a `ref` result is
+    /// given an expression that names an endpoint: a temporal input of
+    /// the node, `ref` or not, or a child of one, `items[idx]`. The
+    /// result designates the logical endpoint that path names ... No
+    /// payload is read, so nothing needs admitting (TIME-1), and a child
+    /// is an endpoint whether or not it is valid. A value that names no
+    /// endpoint rejects there (`type.mismatch`)." TIME-7: "A `ref`
+    /// result takes no value". Core's END-10: "A `ref` result designates
+    /// the endpoint its `return` names, a child of an input among them,
+    /// `items[idx]`, valid or not".
+    ///
+    /// The endpoint is of the result's type, as what a `return` gives is
+    /// (FN-7, EXPR-5). A value is read for what it reports of itself, a
+    /// read of a `ref` parameter among them, and is reported as no
+    /// endpoint where it reports nothing.
+    pub(super) fn designation(&mut self, node: &SyntaxNode, result: &Type) -> Expr {
+        let at = self.at(node);
+        let named = endpoint_argument(node);
+        let reported = self.diagnostics.len();
+        let endpoint = match self.child_endpoint(&named) {
+            Some(found) => found.map(|child| {
+                let ty = child.ty.clone();
+                Expr {
+                    kind: ExprKind::ChildEndpointOf(Box::new(child)),
+                    ty,
+                    at,
+                }
+            }),
+            None => (named.kind() == SyntaxKind::NameExpr)
+                .then(|| self.local_of(&named))
+                .flatten()
+                .filter(|&local| self.is_temporal_input(local))
+                .map(|local| Expr {
+                    kind: ExprKind::EndpointOf(local),
+                    ty: self.locals[local].ty.omission_removed().clone(),
+                    at,
+                }),
+        };
+        if let Some(endpoint) = endpoint {
+            self.conforms(&endpoint.ty, result, at, "the function's result");
+            return endpoint;
+        }
+        if self.diagnostics.len() == reported {
+            let value = self.expression(node, Some(result));
+            if self.diagnostics.len() == reported {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        value.at,
+                        format!(
+                            "a `ref` result takes an endpoint: a temporal input of `{}`, or a \
+                             child of one",
+                            self.declaration.name
+                        ),
+                        "FN-16",
+                    )
+                    .with_note(
+                        "the result designates what the `return` names, `return items[idx]`, \
+                         and publishes no value",
+                    ),
+                );
+            }
+        }
+        Expr {
+            kind: ExprKind::Unread,
+            ty: Type::Unknown,
+            at,
+        }
+    }
+
+    /// True when `local` is a temporal parameter of the node marked `ref`
+    /// (FN-16): an endpoint, "not a value".
+    pub(super) fn is_reference(&self, local: LocalId) -> bool {
+        self.signature
+            .parameters
+            .get(local)
+            .is_some_and(|parameter| !parameter.constant && parameter.reference)
+    }
+
+    /// True when `local` is an endpoint whose value is not read: a `ref`
+    /// parameter, or `out` of a `ref` result. FN-16, proposed:
+    /// "otherwise `out` of a `ref` result is as a `ref` parameter is".
+    pub(super) fn designates(&self, local: LocalId) -> bool {
+        self.is_reference(local) || (Some(local) == self.out && self.signature.reference)
+    }
+
+    /// Reports, at `at`, a read in a hook of the value of `local`, an
+    /// endpoint whose value is not read (`designates`), or of its
+    /// `delta_value` where `delta` is true; `child` is the child of it
+    /// read, as written, where one is. FN-16: "A read of the value or
+    /// of the `delta_value` of one rejects when the program is compiled.
+    /// Proposed: that read rejects with the code `ref.read`".
+    pub(super) fn ref_read(
+        &mut self,
+        local: LocalId,
+        child: Option<&str>,
+        delta: bool,
+        at: Location,
+    ) {
+        let name = &self.locals[local].name;
+        let what = if self.is_reference(local) {
+            format!("the `ref` parameter `{name}`")
+        } else {
+            "`out` of a `ref` result".to_string()
+        };
+        let read = if delta { "`delta_value`" } else { "value" };
+        let message = match child {
+            Some(child) => {
+                format!("`{child}` is a child of {what}, an endpoint whose {read} is not read")
+            }
+            None if self.is_reference(local) => {
+                format!("`{name}` is a `ref` parameter, an endpoint whose {read} is not read")
+            }
+            None => format!("`out` is a `ref` result, an endpoint whose {read} is not read"),
+        };
+        self.diagnostics.emit(
+            error(Category::Phase, codes::REF_READ, at, message, "FN-16").with_note(format!(
+                "the endpoint operations take it, `valid({name})`, and a `return` to a `ref` \
+                 result designates it"
+            )),
+        );
+    }
+
     /// Reports a read of a `signal` input's payload in a hook. TYPE-12:
     /// "`signal` is a complete temporal input constraint with no
     /// readable payload": it is given to an endpoint operation, as
@@ -632,7 +758,8 @@ impl<'a> Typer<'a> {
     pub(super) fn signal_read(&mut self, local: LocalId, at: Location) {
         let signal = matches!(self.locals[local].ty.omission_removed(), Type::Signal);
         let hook = matches!(self.hook, Some(Hook::When | Hook::Stop));
-        if !signal || !self.is_temporal_input(local) || !hook {
+        // A `ref` one is reported as a `ref` parameter (`ref_read`).
+        if !signal || !self.is_temporal_input(local) || !hook || self.is_reference(local) {
             return;
         }
         self.diagnostics.emit(

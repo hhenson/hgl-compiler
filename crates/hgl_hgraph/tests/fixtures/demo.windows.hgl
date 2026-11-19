@@ -192,3 +192,32 @@ test a_window_within_a_value_is_its_child {
     assert eval(field_flow(price: [1.0, -1.0, 2.0])) == [1.0, _, 2.0]
     assert eval(element_flow(slot: [0, 1, 1], price: [1.0, 2.0, 3.0])) == [_, 2.0, 3.0]
 }
+
+# TYPE-11, END-9: a window's value, read in a hook, is a `list<V>` of the
+# values held, oldest first; one of a minimum of one tick is all valid at
+# its first value.
+const fn summed(values: list<f64>) -> f64 {
+    var sum: f64 = 0.0
+    for value in values { sum += value }
+    return sum
+}
+
+fn held_values(price: f64) -> rolling_window<f64, 3, 1> {
+    when { return price }
+}
+
+fn window_sum(prices: rolling_window<f64, 3, 1>) -> f64 {
+    when all_valid(prices) { return summed(prices) }
+}
+
+fn window_list(prices: rolling_window<f64, 3, 1>) -> list<f64> {
+    when { return prices }
+}
+
+fn summed_window(price: f64) -> f64 => window_sum(held_values(price))
+fn listed_window(price: f64) -> list<f64> => window_list(held_values(price))
+
+test a_windows_value_is_the_list_it_holds {
+    assert eval(summed_window(price: [1.0, 2.0, 3.0, 4.0])) == [1.0, 3.0, 6.0, 9.0]
+    assert eval(listed_window(price: [1.0, _, 2.0])) == [[1.0], _, [1.0, 2.0]]
+}

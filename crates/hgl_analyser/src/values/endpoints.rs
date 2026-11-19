@@ -222,9 +222,11 @@ impl<'a> Typer<'a> {
                 self.input_lifecycle(at, &input);
             }
         }
-        // TIME-9: "`all_valid` takes only a collection; another
-        // endpoint is rejected (`endpoint.argument`)". A collection is
-        // "a list, a tuple, a struct and a dictionary".
+        // TIME-9: "`all_valid` takes only a collection or a window;
+        // another endpoint is rejected (`endpoint.argument`)". A
+        // collection is "a list, a tuple, a struct and a dictionary", and
+        // "A window is valid and all valid as TYPE-11 has it": core's
+        // END-9, "`all_valid(x)` where it holds at least its minimum".
         if operation == EndpointOperation::AllValid
             && let Some(inputs) = &inputs
         {
@@ -239,6 +241,7 @@ impl<'a> Typer<'a> {
                             kind: NamedKind::Struct,
                             ..
                         }
+                        | Type::RollingWindow { .. }
                         | Type::Parameter { .. }
                         | Type::Unknown
                 );
@@ -248,10 +251,15 @@ impl<'a> Typer<'a> {
                             Category::Phase,
                             codes::ENDPOINT_ARGUMENT,
                             self.at(given),
-                            format!("`all_valid` takes a collection, and `{ty}` is none"),
+                            format!(
+                                "`all_valid` takes a collection or a window, and `{ty}` is neither"
+                            ),
                             "TIME-9",
                         )
-                        .with_note("a collection is a list, a tuple, a struct or a dictionary"),
+                        .with_note(
+                            "a collection is a list, a tuple, a struct or a dictionary; a window \
+                             is a `rolling_window`",
+                        ),
                     );
                 }
             }
@@ -281,16 +289,20 @@ impl<'a> Typer<'a> {
             // cycle, a `delta<T>` for an endpoint of T (the language's
             // TYPE-16). For a scalar it is the value published".
             EndpointOperation::DeltaValue => {
-                let of = inputs
+                let input = inputs.as_ref().and_then(|inputs| inputs.first()).copied();
+                let of = input.map(|input| self.locals[input].ty.clone());
+                // TYPE-16: "`signal`: None". An input that may be left
+                // out is its shape under a `?`.
+                let none = of
                     .as_ref()
-                    .and_then(|inputs| inputs.first())
-                    .map(|input| self.locals[*input].ty.clone());
-                // TYPE-16: "`ref<V>`, `signal`: None". An input that
-                // may be left out is its shape under a `?`.
-                let none = of.as_ref().is_some_and(|of| {
-                    matches!(not_null(Some(of)), Some(Type::Ref(_) | Type::Signal))
-                });
-                if none {
+                    .is_some_and(|of| matches!(not_null(Some(of)), Some(Type::Signal)));
+                // FN-16: "the endpoint operations take them (TIME-9),
+                // `delta_value` aside ... A read of the value or of the
+                // `delta_value` of one rejects".
+                if let Some(input) = input.filter(|&input| self.designates(input)) {
+                    self.ref_read(input, None, true, at);
+                    Type::Unknown
+                } else if none {
                     self.diagnostics.emit(
                         error(
                             Category::Shape,
@@ -302,10 +314,7 @@ impl<'a> Typer<'a> {
                             ),
                             "TYPE-16",
                         )
-                        .with_note(
-                            "a `ref` designates an endpoint and a `signal` has no payload: \
-                             neither publishes a value of its own",
-                        ),
+                        .with_note("a `signal` has no payload, and publishes no value of its own"),
                     );
                     Type::Unknown
                 } else {

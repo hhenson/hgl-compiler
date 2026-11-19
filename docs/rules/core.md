@@ -144,6 +144,7 @@ transpiler: partial
 
 - hgraph: `==` and `!=` of two structs compare the class, which is one for each application of a generic struct, and then every field; of two lists, tuples and dictionaries, part by part; a value that holds a NaN is not equal to itself
 - Left: the order of the temporal scalars
+- Left, reported: the candidates of `eq_` and `ne_` for two zoned datetimes, with `utc`
 
 ## OPS-3
 
@@ -222,7 +223,7 @@ transpiler: partial
 
 transpiler: done
 
-- hgraph: a duration times an `f64`, and a duration divided by an `i64` or an `f64`, is the exact result rounded to a microsecond, a tie to the even one; a duration result outside the signed 64-bit range of microseconds, a duration times or divided by an infinity or a NaN, and an instant result outside the years 1 to 9999, is `numeric.out_of_range`; a `date` with a duration is the `civil_datetime` that far from the start of the date
+- hgraph: a duration times an `f64`, and a duration divided by an `i64` or an `f64`, is the exact result rounded to a microsecond, a tie to the even one; a duration result outside the signed 64-bit range of microseconds, a duration times or divided by an infinity or a NaN, and an instant result outside the years 1 to 9999, is `numeric.out_of_range`; a `date` with a duration is the `civil_datetime` that far from the start of the date; a `zoned_datetime` with a duration is its instant moved, in its zone (OPS-1)
 
 ## LIST-1
 
@@ -350,6 +351,7 @@ transpiler: partial
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
+- A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure
 
 ## END-4
 
@@ -387,22 +389,47 @@ transpiler: done
 
 analyser: done
 
-- `all_valid` is an endpoint operation on a list, tuple, struct or dictionary (TIME-9)
+- `all_valid` is an endpoint operation on a list, tuple, struct, dictionary or window (TIME-9)
 
-transpiler: done
+transpiler: partial
 
 - hgraph: `valid` of a fixed list, a tuple or a struct is true once any child is, and `all_valid` once every one is
 - A list's, fixed or unsized, and a value's that holds one, is the provider's (`_core.valid_of`): false again once every position has lost its value, true for a published empty list, where hgraph's `TSL` stays valid
+- Left, reported: `all_valid` of a value with an optional child beside another, which hgraph's asks and END-7 does not
 
 ## END-8
 
-analyser: done
+analyser: partial
 
 - A collection's child is an endpoint, valid or not: `valid`, `modified`, `delta_value` and `last_modified` take it, and `all_valid` where it is a collection; its value and delta are read where it is admitted (TIME-1); a read at an index known only when it runs is `CheckedChild` (ERR-14)
+- Left: a struct, a tuple or a fixed list read whole is admitted only where it is all valid, which core's rejection case `quote_without_admission` checks and is listed as not yet rejected
 
 transpiler: partial
 
 - hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed list and `_core.list_position` of an unsized one (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a position an unsized list does not hold, before it publishes, while it is short or after a shrink, is a child that is not valid, as an absent key is; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
+
+## END-9
+
+analyser: partial
+
+- `all_valid` takes a window, and its value is read in a hook, and given to a value function in composition, as a `list<V>` (TYPE-11, FN-12)
+
+transpiler: partial
+
+- hgraph: a window of ticks whose minimum is one is valid and all valid at its first value, its `TSW`'s own, and read in a hook as the `list<V>` it holds, oldest first
+- Left, reported: the readiness of a window whose minimum is more than one tick or a duration, all valid at its minimum or at a span of it, and its value's read failing before (`value.unset_read`); a window given to a lifted helper
+
+## END-10
+
+analyser: done
+
+- A `ref` parameter of T is given a connection of T, and a `ref` result designates what its `return` names, a child of an input valid or not, read as `EndpointOf` or `ChildEndpointOf` with no payload read (FN-16)
+
+transpiler: partial
+
+- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included, and the node is not woken by that endpoint's ticks; a designation the result holds already is not published again
+- Proposed, and as hgraph has it: `modified`, `valid` and `last_modified` of a `ref` parameter ask of its designation
+- Left, reported: what FN-16's entry lists
 
 ## CAP-1
 
@@ -440,11 +467,12 @@ analyser: done
 
 - A scheduler's three properties, `is_scheduled_now` among them; `schedule` with a `duration` or a `datetime`, a `tag` and `on_wall_clock`; `un_schedule`, with a tag or without, and `reset`
 
-transpiler: done
+transpiler: partial
 
 - hgraph: as a node is entered each wake due then is taken from hgraph's scheduler (`_core.Wake`), which holds it until the node has run: it is delivered and no longer pending, so `is_scheduled`, `next_scheduled_time` (null where none is pending) and `un_schedule` with no tag see only the wakes to come, and `is_scheduled_now` holds through the evaluation, as `scheduled()` does
 - `schedule` with a `duration` or a `datetime`, a tag and `on_wall_clock`, `un_schedule` with a tag or without, and `reset` are hgraph's; a tag is kept with a mark before it, so the empty tag is a tag
-- A wake asked for the current evaluation time or before, at which no cycle can still run (CRUN-3), is not delivered: CAP-4 does not say
+- A wake asked for at a `datetime` before the current evaluation time is dropped, with no failure; a zero duration in `start` wakes the node's first evaluation
+- Left, reported: a duration that may not be more than zero outside `start`, which fails the call (TIME-8)
 - Every node with no temporal input is given one that never wakes it, since hgraph takes no node without an input
 
 ## CAP-5
@@ -454,10 +482,11 @@ analyser: done
 - An alarm has no property, and a node injects it or `scheduler` (TIME-8)
 - `schedule` on it takes a `duration` or a `datetime`, and neither a tag nor a clock
 
-transpiler: done
+transpiler: partial
 
 - hgraph: an alarm's one wake is kept under a tag of its own in hgraph's scheduler, and asking again keeps the earlier of the one pending and the one asked for; the wake being delivered is taken as a scheduler's is (CAP-4)
-- One asked for the current evaluation time or before is not delivered, as a scheduler's is not, and the one pending stays: CAP-5 does not say
+- One asked for at a `datetime` before the current evaluation time is dropped, as a scheduler's is, and the one pending stays; a zero duration in `start` wakes the node's first evaluation
+- Left, reported: a duration that may not be more than zero outside `start` (CAP-4)
 
 ## CAP-6
 

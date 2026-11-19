@@ -11,7 +11,9 @@
 //!   result payload, and the type of constant configuration are ordinary
 //!   value types (TYPE-12 and the grammar's `value_type`);
 //! * `signal` stands only as the whole type of an input (TYPE-12), and
-//!   `?` is not applied to `ref<T>` or `signal` (TYPE-14);
+//!   `?` is not applied to `signal` (TYPE-14);
+//! * a parameter and a result marked `ref` are recorded as marked: the
+//!   mark is a mode, and no part of the type (TYPE-12, FN-16);
 //! * a list's size is a count (TYPE-10), and a window's sizes are of one
 //!   kind and in bounds (TYPE-11).
 //!
@@ -423,7 +425,6 @@ pub(crate) fn is_type(kind: SyntaxKind) -> bool {
             | SyntaxKind::SetType
             | SyntaxKind::DictType
             | SyntaxKind::RollingWindowType
-            | SyntaxKind::RefType
             | SyntaxKind::EndpointType
             | SyntaxKind::SignalType
             | SyntaxKind::AtomicType
@@ -754,18 +755,24 @@ impl Reader<'_> {
                 at: self.at(name.span()),
                 constant,
                 var: has_token(&parameter, SyntaxKind::KwVar),
+                // FN-16: "`ref low: f64` ... The mark is a mode".
+                reference: has_token(&parameter, SyntaxKind::KwRef),
                 ty,
                 pack,
                 has_default,
             });
         }
-        let result = child(node, SyntaxKind::ReturnType)
-            .and_then(|result| type_child(&result))
+        let written = child(node, SyntaxKind::ReturnType);
+        let result = written
+            .as_ref()
+            .and_then(type_child)
             .map(|written| self.outermost(&written));
         Signature {
             generics: self.generics.clone(),
             parameters,
             result,
+            // FN-16: "and its result, `-> ref f64`".
+            reference: written.is_some_and(|written| has_token(&written, SyntaxKind::KwRef)),
         }
     }
 
@@ -1098,10 +1105,6 @@ impl Reader<'_> {
             }
             SyntaxKind::DictType => self.dict(node, position),
             SyntaxKind::RollingWindowType => self.rolling_window(node, position),
-            SyntaxKind::RefType => {
-                self.ordinary(node, position, true);
-                Type::Ref(Box::new(self.inner(node, Position::PLAIN)))
-            }
             SyntaxKind::EndpointType => {
                 self.endpoint(node);
                 Type::Endpoint(Box::new(self.inner(node, Position::PLAIN)))
@@ -1125,15 +1128,14 @@ impl Reader<'_> {
     }
 
     /// Reports `node`, which is no ordinary value type, where only one
-    /// may stand. `endpoint` is true for `ref` and `signal`.
-    fn ordinary(&mut self, node: &SyntaxNode, position: Position, endpoint: bool) {
+    /// may stand. `signal` is true for `signal`.
+    fn ordinary(&mut self, node: &SyntaxNode, position: Position, signal: bool) {
         let Some((what, place_rule)) = position.value else {
             return;
         };
-        // TYPE-12 says where `ref` and `signal` may not stand. For the
-        // others, and under a `?`, the place's own rule asks for an
-        // ordinary value.
-        let rule = if endpoint && place_rule != "TYPE-14" {
+        // TYPE-12 says where `signal` may not stand. For the others, and
+        // under a `?`, the place's own rule asks for an ordinary value.
+        let rule = if signal && place_rule != "TYPE-14" {
             "TYPE-12"
         } else {
             place_rule
@@ -1149,9 +1151,7 @@ impl Reader<'_> {
                 ),
                 rule,
             )
-            .with_note(
-                "`rolling_window`, `ref`, `atomic` and `signal` are not ordinary value types",
-            ),
+            .with_note("`rolling_window`, `atomic` and `signal` are not ordinary value types"),
         );
     }
 
@@ -1322,8 +1322,8 @@ impl Reader<'_> {
                 ..position
             },
             // Anywhere else the whole of what `?` is applied to is an
-            // ordinary value type: `list<ref<f64>>?` is no more one
-            // than `ref<f64>?`.
+            // ordinary value type: `list<signal>?` is no more one than
+            // `signal?`.
             None => Position::value("what `?` is applied to", "TYPE-14"),
         };
         Type::Nullable(Box::new(self.type_(&base, base_position)))
@@ -1644,8 +1644,8 @@ impl Reader<'_> {
         // The arguments are read whatever the name is, so that what is
         // wrong inside them is reported.
         // Where an ordinary value type is required, the arguments of a
-        // generic type are held to it too: a `Box<ref<f64>>` is no more
-        // an ordinary value than a `list<ref<f64>>` is.
+        // generic type are held to it too: a `Box<atomic<Quote>>` is no
+        // more an ordinary value than a `list<atomic<Quote>>` is.
         let arguments = list.as_ref().map_or(Vec::new(), |list| {
             self.arguments(
                 list,
@@ -2746,7 +2746,7 @@ impl Reader<'_> {
 
     /// `delta<T>` as it is written (TYPE-16): what the table gives for
     /// T, or the delta itself where it is a type of its own or T is not
-    /// yet known. "`ref<V>`, `signal`: None: `delta.unsupported_shape`".
+    /// yet known. "`signal`: None: `delta.unsupported_shape`".
     fn delta(&mut self, node: &SyntaxNode) -> Type {
         // What the delta is of, under a `?`.
         let mut of = type_child(node);
@@ -2756,8 +2756,7 @@ impl Reader<'_> {
         {
             of = type_child(inner);
         }
-        let none =
-            of.filter(|of| matches!(of.kind(), SyntaxKind::RefType | SyntaxKind::SignalType));
+        let none = of.filter(|of| of.kind() == SyntaxKind::SignalType);
         if let Some(of) = none {
             self.diagnostics.emit(
                 error(
@@ -2767,15 +2766,8 @@ impl Reader<'_> {
                     format!("`{}` has no delta", text_of(&of)),
                     "TYPE-16",
                 )
-                .with_note(
-                    "a `ref` designates an endpoint and a `signal` has no payload: neither \
-                     publishes a value of its own",
-                ),
+                .with_note("a `signal` has no payload, and publishes no value of its own"),
             );
-            // What the `ref` is of is still read, for what it reports.
-            if of.kind() == SyntaxKind::RefType {
-                self.inner(&of, Position::PLAIN);
-            }
             return Type::Unknown;
         }
         Type::delta(self.inner(node, Position::PLAIN))

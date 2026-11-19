@@ -407,7 +407,7 @@ fn raised_twice(bid: i64) -> Quote {
 }
 
 fn level_set(level: Level) -> bool {
-    when all_valid(level) { return level.price != null }
+    when valid(level.price) && valid(level.count) { return level.price != null }
 }
 
 fn raised_whole(bid: i64) -> i64 => width(raised(bid))

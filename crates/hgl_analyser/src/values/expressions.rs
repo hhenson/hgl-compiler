@@ -8,7 +8,7 @@ use hgl_diagnostics::Category;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 
 use super::control::{Outcome, branch_is_null, branch_takes_its_type};
-use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open};
+use super::fit::{accepts_float, is_integer_literal, not_null, nullable, open, window_value};
 use super::{Fact, Typer, children};
 use crate::hir::{
     BinaryOperator, EndpointOperation, Expr, ExprKind, Hook, LocalId, UnaryOperator, Value,
@@ -334,8 +334,24 @@ impl<'a> Typer<'a> {
             // child named as an endpoint, `valid(parts[1])`, is not read.
             let child = self.reads_children() && self.continues_chain(node, &self.locals[local].ty);
             if !child && self.naming != Some(at) {
-                self.payload_read(local, at);
+                // FN-16: "A `ref` parameter and its children ... are
+                // endpoints, not values". A child of one is reported where
+                // it is read (`child_read`).
+                if self.is_reference(local) && self.reads_children() {
+                    self.ref_read(local, None, false, at);
+                } else {
+                    self.payload_read(local, at);
+                }
             }
+        }
+        // FN-16, proposed: "a read of its value rejects", of `out` of a
+        // `ref` result, a part of it among them.
+        if Some(local) == self.out
+            && self.signature.reference
+            && self.reads_children()
+            && self.naming != Some(at)
+        {
+            self.ref_read(local, None, false, at);
         }
         self.signal_read(local, at);
         // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
@@ -407,12 +423,14 @@ impl<'a> Typer<'a> {
         // atomic input's payload, and `out`'s, is that whole V, an
         // ordinary value. TYPE-14: the `?` of an input whose type is
         // no ordinary value marks one that may be left out, and no
-        // null: what a hook reads of `atomic<Quote>?` is a `Quote`, and
-        // of `ref<f64>?` a `ref<f64>` (`Type::omission_removed`).
+        // null: what a hook reads of `atomic<Quote>?` is a `Quote`
+        // (`Type::omission_removed`). TYPE-11: a window's value, "read
+        // in a hook ... is a `list<V>` of the values held, oldest first".
         let endpoint = self.is_temporal_input(local) || Some(local) == self.out;
         let ty = if self.hook.is_some() && endpoint {
             match ty.omission_removed() {
                 Type::Atomic(payload) => (**payload).clone(),
+                window @ Type::RollingWindow { .. } => window_value(window),
                 under => under.clone(),
             }
         } else {

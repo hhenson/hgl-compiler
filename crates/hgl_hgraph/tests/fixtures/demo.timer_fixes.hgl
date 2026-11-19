@@ -1,14 +1,13 @@
 module demo.timer_fixes
 
-# CAP-4 and CAP-5 say nothing of a wake asked for a time no cycle can
-# still run at: the current evaluation time, or before it (core's CRUN-3).
-# Neither the scheduler nor the alarm delivers it, and the wake pending
-# stays.
-fn alarm_now(value: i64) -> i64 {
+# CAP-4 and CAP-5: a wake asked for at a `datetime` before the current
+# evaluation time is dropped: there is no wake, and no failure, and the
+# wake pending stays.
+fn alarm_now(value: i64, const at: datetime) -> i64 {
     inject alarm
     start { schedule(alarm, 2s) }
     when modified(value) {
-        schedule(alarm, 0s)
+        schedule(alarm, at)
         return value
     }
     when scheduled() { return 0 }
@@ -26,7 +25,6 @@ fn scheduler_now(value: i64, const at: datetime) -> i64 {
     inject scheduler
     start { schedule(scheduler, 2s) }
     when modified(value) {
-        schedule(scheduler, 0s)
         schedule(scheduler, at)
         return value
     }
@@ -141,9 +139,9 @@ fn alarm_earliest() -> i64 {
 }
 
 test a_wake_that_is_not_ahead_is_not_delivered {
-    assert eval(alarm_now(value: [0s: 1, 1s: 2]), RunConfig(length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
+    assert eval(alarm_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z, length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
     assert eval(alarm_past(value: [1, 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z)) == [1, 2]
-    assert eval(scheduler_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
+    assert eval(scheduler_now(value: [0s: 1, 1s: 2], at: @2000-01-01T00:00:00Z), RunConfig(start: @2026-01-01T00:00:00Z, length: 3s)) == [0s: 1, 1s: 2, 2s: 0]
 }
 
 test a_node_with_no_input_and_no_handler_starts {

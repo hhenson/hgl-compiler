@@ -509,7 +509,7 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// function_signature = "(", [ parameters ], ")", [ "->", type ] ;
+    /// function_signature = "(", [ parameters ], ")", [ "->", [ "ref" ], type ] ;
     /// parameters = parameter, { ",", parameter }, [ "," ] ;
     /// ```
     fn signature(&mut self) {
@@ -530,11 +530,20 @@ impl Parser<'_> {
         }
         // LEX-5: a result arrow may start a line.
         if self.at(Arrow) && !self.nl() {
-            self.return_type();
+            self.start(ReturnType);
+            self.bump();
+            // FN-16: "and its result, `-> ref f64`". The mark is a mode
+            // of the result, no part of its type; which functions may
+            // take it is for the analyser.
+            self.eat(KwRef);
+            self.type_();
+            self.finish();
         }
     }
 
-    /// `"->", type`
+    /// `"->", type`: the result of an anonymous function or of a
+    /// constraint call, which takes no `ref` (FN-16 gives the mark to a
+    /// declared function's result alone).
     pub(crate) fn return_type(&mut self) {
         self.start(ReturnType);
         self.bump();
@@ -555,7 +564,7 @@ impl Parser<'_> {
     }
 
     /// ```text
-    /// parameter = IDENTIFIER, ":", type, [ "=", const_expression ]
+    /// parameter = [ "ref" ], IDENTIFIER, ":", type, [ "=", const_expression ]
     ///           | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ]
     ///           | "var", IDENTIFIER, ":", value_type
     ///           | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
@@ -571,13 +580,19 @@ impl Parser<'_> {
     /// FN-15: a `var` parameter is `"var", IDENTIFIER, ":", value_type`,
     /// and no more: it is no pack and has no default, so neither is
     /// read after one, and what is written there is not expected.
+    ///
+    /// FN-16: a `ref` parameter is `"ref"`, a name, a type and an
+    /// optional default: "A `ref` parameter is neither `const` nor a
+    /// pack", so no `const` and no `...` is read after the mark. Which
+    /// functions may take it is for the analyser.
     fn parameter(&mut self) {
         let var = self.at(KwVar);
-        if !self.at(Ident) && !var {
+        let reference = self.at(KwRef);
+        if !self.at(Ident) && !var && !reference {
             return;
         }
         self.start(Param);
-        if var {
+        if var || reference {
             self.bump();
             if !self.at(Ident) {
                 self.expected("a parameter's name");
@@ -591,7 +606,7 @@ impl Parser<'_> {
         }
         self.bump();
         if self.eat(Colon) {
-            if !var && self.eat(Ellipsis) {
+            if !var && !reference && self.eat(Ellipsis) {
                 // FN-8: a pack takes any number of arguments. `...T` is a
                 // positional pack; `...{T}` a named one.
                 if self.at(LBrace) {

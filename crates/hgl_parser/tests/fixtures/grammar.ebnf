@@ -56,9 +56,9 @@ delta_arguments = delta_argument, { ",", delta_argument }, [ "," ] ;
 delta_argument = member_name, ":", expression ;
 # functions-and-phases.md
 function_decl = { warning_annotation, NL }, [ "export" | "impl" ], [ "const" ], "fn", callable_name, [ generic_parameters ], function_signature, [ requires_clause ], function_body ;
-function_signature = "(", [ parameters ], ")", [ "->", type ] ;
+function_signature = "(", [ parameters ], ")", [ "->", [ "ref" ], type ] ;
 parameters = parameter, { ",", parameter }, [ "," ] ;
-parameter = IDENTIFIER, ":", type, [ "=", const_expression ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | "var", IDENTIFIER, ":", value_type | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
+parameter = [ "ref" ], IDENTIFIER, ":", type, [ "=", const_expression ] | "const", IDENTIFIER, ":", value_type, [ "=", const_expression ] | "var", IDENTIFIER, ":", value_type | [ "const" ], IDENTIFIER, ":", pack, [ "=", const_expression ] ;
 pack = "...", type, [ cardinality ] | "...", "{", type, "}", [ cardinality ] ;
 function_body = "=>", expression | block ;
 function_expr = "fn", "(", [ lambda_parameters ], ")", [ "->", type ], ( "=>", expression | block ) ;
@@ -118,7 +118,7 @@ gap = { ? U+0020 or U+0009 ? } ;
 error_category = ? a source category of the diagnostic catalog ? ;
 # types-and-values.md
 type = type_base, [ "?" ] ;
-type_base = scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_window_type | ref_type | "signal" | endpoint_type | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
+type_base = scalar_type | named_type | tuple_type | list_type | set_type | dict_type | rolling_window_type | "signal" | endpoint_type | "atomic", "<", value_type, ">" | result_type | "error" | delta_type ;
 value_type = value_type_base, [ "?" ] ;
 value_type_base = scalar_type | named_type | value_tuple_type | value_list_type | set_type | value_dict_type | result_type | "error" | delta_type ;
 scalar_type = "bool" | "i64" | "f64" | "str" | "bytes" | "any" | "date" | "time" | "datetime" | "duration" | "civil_datetime" | "timezone" | "zoned_datetime" | "zoned_time" | "tenor" ;
@@ -132,7 +132,6 @@ set_type = "set", "<", value_type, ">" ;
 dict_type = "dict", "<", value_type, ",", type, ">" ;
 value_dict_type = "dict", "<", value_type, ",", value_type, ">" ;
 rolling_window_type = "rolling_window", "<", value_type, ",", const_expression, [ ",", const_expression ], ">" ;
-ref_type = "ref", "<", type, ">" ;
 endpoint_type = "endpoint", "<", type, ">" ;
 result_type = "result", "<", value_type, ",", value_type, ">" ;
 delta_type = "delta", "<", type, ">" ;

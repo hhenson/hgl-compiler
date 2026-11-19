@@ -1,4 +1,0 @@
-module m
-const fn doubled(value: i64) -> i64 => value * 2
-fn twice(left: ref<ref<i64>>) -> i64 => doubled(left)
-fn optional(left: ref<i64>?) -> i64 => doubled(left)

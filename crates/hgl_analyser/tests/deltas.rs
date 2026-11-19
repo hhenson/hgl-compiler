@@ -31,15 +31,15 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
         "    l: delta<set<str>>, m: delta<dict<str, f64>>, n: delta<Quote>,\n",
         "    o: delta<delta<set<str>>>,\n",
         ") -> i64 => 1\n",
-        // `ref` and `signal` have none.
-        "const fn none(a: delta<signal>, b: delta<ref<f64>>, c: delta<signal?>) -> i64 => 1\n",
+        // A `signal` has none; `ref` is no type, and the parser
+        // rejects `delta<ref<f64>>`.
+        "const fn none(a: delta<signal>, c: delta<signal?>) -> i64 => 1\n",
     ));
     assert_eq!(
         checked.summary(),
         [
             "m.hgl:15:18 shape/delta.unsupported_shape TYPE-16",
             "m.hgl:15:36 shape/delta.unsupported_shape TYPE-16",
-            "m.hgl:15:56 shape/delta.unsupported_shape TYPE-16",
         ]
     );
     assert_eq!(
@@ -374,8 +374,9 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
         "fn wrong_pairs(first: f64) -> tuple<f64, f64> {\n",
         "    when { return (first, \"a\") }\n",
         "}\n",
-        // A `signal` and a `ref` publish nothing of their own.
-        "fn ticked(probe: signal, pointer: ref<f64>) -> bool {\n",
+        // A `signal` publishes nothing of its own, and the `delta_value`
+        // of a `ref` parameter is not read (FN-16).
+        "fn ticked(probe: signal, ref pointer: f64) -> bool {\n",
         "    when {\n",
         "        let first = delta_value(probe)\n",
         "        let second = delta_value(pointer)\n",
@@ -390,7 +391,7 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
             "m.hgl:36:15 type/type.mismatch EXPR-5",
             "m.hgl:47:27 type/type.mismatch EXPR-5",
             "m.hgl:51:21 shape/delta.unsupported_shape TYPE-16",
-            "m.hgl:52:22 shape/delta.unsupported_shape TYPE-16",
+            "m.hgl:52:22 phase/ref.read FN-16",
         ]
     );
     assert_eq!(locals(&checked, "relay")[2..], ["change: delta<set<str>>"]);

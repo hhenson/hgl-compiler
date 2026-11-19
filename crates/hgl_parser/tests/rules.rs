@@ -2833,6 +2833,63 @@ fn a_var_parameter_is_a_mark_a_name_and_a_type() {
     assert!(!rejected(Entry::Declarations, "const fn f(const var count: i64) {}").is_empty());
 }
 
+// ---- FN-16, TYPE-12 ----
+
+/// FN-16: "A node (FN-2, NATIVE-3) may mark a temporal parameter `ref`,
+/// `ref low: f64`, and its result, `-> ref f64`." The grammar has
+/// `[ "ref" ], IDENTIFIER, ":", type, [ "=", const_expression ]` and
+/// `"->", [ "ref" ], type`: the mark stands before the name, and before
+/// the result's type, each a token of the node it marks.
+#[test]
+fn ref_marks_a_parameter_and_a_result() {
+    assert_eq!(
+        declarations("fn pick(flag: bool, ref low: f64) -> ref f64 => low"),
+        "FnDecl[\"fn\" \"pick\" ParamList[\"(\" \
+         Param[\"flag\" \":\" ScalarType[\"bool\"]] \",\" \
+         Param[\"ref\" \"low\" \":\" ScalarType[\"f64\"]] \")\"] \
+         ReturnType[\"->\" \"ref\" ScalarType[\"f64\"]] \
+         ArrowBody[\"=>\" NameExpr[\"low\"]]]"
+    );
+    // A default is read after one, as the production has it; which
+    // functions take the mark is for the analyser.
+    declarations("fn f(ref low: f64 = 1.0) -> ref f64 => low");
+    declarations("native fn route<T>(idx: i64, ref items: list<T, 3>) -> ref T");
+    // "A `ref` parameter is neither `const` nor a pack": no `const` and
+    // no `...` is read after the mark.
+    assert!(!rejected(Entry::Declarations, "fn f(ref rest: ...f64) {}").is_empty());
+    assert!(!rejected(Entry::Declarations, "fn f(ref const low: f64) {}").is_empty());
+    assert!(!rejected(Entry::Declarations, "fn f(const ref low: f64) {}").is_empty());
+    assert!(!rejected(Entry::Declarations, "fn f(ref var low: f64) {}").is_empty());
+    // `ref` is a reserved word, and names no parameter (LEX-9).
+    assert!(!rejected(Entry::Declarations, "fn f(ref: f64) {}").is_empty());
+    // An anonymous function's parameter and result take no mark.
+    assert!(!rejected(Entry::Statements, "let f = fn(ref x: f64) => x").is_empty());
+    assert!(!rejected(Entry::Statements, "let f = fn(x: f64) -> ref f64 => x").is_empty());
+}
+
+/// TYPE-12: "`ref` is no type ... `ref<T>` is not written, so a
+/// reference is no element of a collection, field of a struct, key,
+/// window value, atomic payload, const value, or target of another
+/// reference, and `list<ref<f64>>` and `ref<ref<f64>>` are syntax
+/// errors."
+#[test]
+fn ref_starts_no_type() {
+    assert_eq!(
+        rejected(Entry::Declarations, "fn f(low: ref<f64>) {}"),
+        ["- 1:11: expected a type, found `ref`"]
+    );
+    for text in [
+        "fn f(values: list<ref<f64>>) {}",
+        "fn f(ref low: ref<f64>) {}",
+        "fn f() -> ref<f64> {}",
+        "fn f() -> ref ref f64 {}",
+        "struct S { target: ref<f64> }",
+    ] {
+        assert!(!rejected(Entry::Declarations, text).is_empty(), "{text}");
+    }
+    assert!(!rejected(Entry::Statements, "let x: ref<f64> = y").is_empty());
+}
+
 // ---- LEX-28, TYPE-17 ----
 
 /// LEX-28: a tenor literal is one token, and an expression of its own.
