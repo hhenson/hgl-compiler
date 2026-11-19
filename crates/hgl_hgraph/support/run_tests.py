@@ -32,13 +32,13 @@ import sys
 import threading
 import traceback
 
+# What this driver shares with the other, from beside it: Python put
+# this script's directory first on its path.
+import _driver
+
 # How long a test that has passed its limit is given to end, once its
 # run was asked to stop.
 _GRACE = 5.0
-
-
-def _escape(text):
-    return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _described(error):
@@ -114,36 +114,28 @@ def _run(module_name, function_name, limit, say, number):
         module = importlib.import_module(module_name)
         function = getattr(module, function_name)
     except Exception as error:
-        say("unloaded", number, _escape(_described(error)))
+        say("unloaded", number, _driver.escape(_described(error)))
         return
 
     def give_up(failure):
         # The test's thread cannot be ended, and what it holds may be
         # another test's too: the interpreter ends here.
-        say("failed", number, failure[0], _escape(failure[1]))
+        say("failed", number, failure[0], _driver.escape(failure[1]))
         os._exit(3)
 
     failure = _called(function) if limit is None else _bounded(function, limit, give_up)
     if failure is None:
         say("passed", number)
     else:
-        say("failed", number, failure[0], _escape(failure[1]))
+        say("failed", number, failure[0], _driver.escape(failure[1]))
 
 
 def main(directory, plan, results):
-    # Python puts this script's directory first on its path. The
-    # program is found from the output directory and nowhere else.
-    own = os.path.dirname(os.path.abspath(__file__))
-    sys.path[:] = [entry for entry in sys.path if os.path.abspath(entry or ".") != own]
-    sys.path.insert(0, directory)
+    _driver.find_program(directory)
     with open(plan, encoding="utf-8") as file:
         tests = [line.split(" ") for line in file.read().splitlines() if line]
     with open(results, "w", encoding="utf-8") as out:
-
-        def say(*parts):
-            out.write(" ".join(str(part) for part in parts) + "\n")
-            out.flush()
-
+        say = _driver.recorder(out)
         for number, (module_name, function_name, limit) in enumerate(tests):
             say("start", number)
             _run(module_name, function_name, None if limit == "-" else float(limit), say, number)

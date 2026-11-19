@@ -1800,6 +1800,8 @@ program is
 written to a temporary directory, or to the one `--keep DIR` names, and
 the interpreter is started once, with `-B` so that it writes no
 bytecode files, on a driver the target carries, `_hgl/_run_tests.py`.
+It and the application's driver import what they share,
+`_hgl/_driver.py`, written beside them.
 
 | File in the directory | Written by | Holds |
 | --- | --- | --- |
