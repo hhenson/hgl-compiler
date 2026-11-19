@@ -132,6 +132,9 @@ pub(crate) struct Typed {
     ty: Option<Type>,
     /// How its place may still give it a type.
     open: Open,
+    /// Of a list or a tuple read with no type expected of its elements:
+    /// each element as it was read, for its place to give a type later.
+    parts: Vec<Typed>,
 }
 
 /// How a constant read with no type expected may still take its
@@ -158,6 +161,7 @@ impl Typed {
             value,
             ty,
             open: Open::No,
+            parts: Vec::new(),
         }
     }
 
@@ -320,6 +324,35 @@ pub(crate) fn fit(
         }
         _ => {}
     }
+    // A list or a tuple read before its place's type was known: each
+    // element is given its type now, as it would have been as it was
+    // read (EXPR-5): `[1]` given to a `list<f64>` is `[1.0]`.
+    let read = match (&read.value, expected) {
+        (ConstantValue::List(values), Type::List { element, .. })
+            if !read.parts.is_empty() && read.parts.len() == values.len() =>
+        {
+            let values = read
+                .parts
+                .into_iter()
+                .map(|part| fit(part, Some(element), program))
+                .collect::<Result<Vec<ConstantValue>, Fault>>()?;
+            Typed::of(ConstantValue::List(values), Some(expected.clone()))
+        }
+        (ConstantValue::Tuple(values), Type::Tuple(elements))
+            if !read.parts.is_empty()
+                && read.parts.len() == values.len()
+                && elements.len() == values.len() =>
+        {
+            let values = read
+                .parts
+                .into_iter()
+                .zip(elements)
+                .map(|(part, element)| fit(part, Some(element), program))
+                .collect::<Result<Vec<ConstantValue>, Fault>>()?;
+            return Ok(ConstantValue::Tuple(values));
+        }
+        _ => read,
+    };
     // TYPE-10: "Size participates in identity": a list of another
     // length than the size expected is no value of it.
     if let (
@@ -452,6 +485,7 @@ fn value(
                     value: ConstantValue::Member(member.text().to_string()),
                     ty: None,
                     open: Open::Member,
+                    parts: Vec::new(),
                 }),
             }
         }
@@ -592,6 +626,7 @@ fn literal_constant(node: &SyntaxNode, expected: Option<&Type>) -> Result<Typed,
             value: ConstantValue::Int(value),
             ty: Some(Type::Scalar(Scalar::I64)),
             open: Open::Integer,
+            parts: Vec::new(),
         }),
         value => Ok(Typed::scalar(value.into(), scalar)),
     }
@@ -705,22 +740,17 @@ fn module_constant(scope: &Scope, key: (usize, usize)) -> Result<Typed, Fault> {
         .unwrap_or(Err(Fault::Reported))
 }
 
-/// The constants of modules the expression of the constant `key` names,
-/// at any depth inside it.
+/// The constants of modules the constant `key` names, in its type or
+/// its expression, at any depth inside them.
 fn names_constants(scope: &Scope, (module, declaration): (usize, usize)) -> Vec<(usize, usize)> {
     let program = scope.program;
     let unit = &program.modules[module];
     let declared = &unit.declarations[declaration];
     let file = unit.files[declared.file].file;
-    let written = crate::read::type_child(&declared.syntax);
-    let Some(expression) = declared
+    // Its type and its expression: a size in its type may name one
+    // too.
+    declared
         .syntax
-        .children()
-        .find(|child| Some(child) != written.as_ref())
-    else {
-        return Vec::new();
-    };
-    expression
         .descendants()
         .filter(|node| matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType))
         .filter_map(|node| {
@@ -757,9 +787,9 @@ fn constant_expression(
     let written = crate::read::type_child(&declared.syntax);
     let ty = match unit.details.get(declaration) {
         Some(Detail::Constant(ty)) => Some(ty.clone()),
-        _ => written
-            .as_ref()
-            .and_then(|written| written_type(written, program, file, scope.binding)),
+        _ => written.as_ref().and_then(|written| {
+            written_type(written, program, file, scope.binding, scope.constants)
+        }),
     };
     // What is not worked out here is held as the constant it is: the
     // same as itself, and not known beside any other.
@@ -806,9 +836,16 @@ pub(crate) fn written_type<'s>(
     program: &Program,
     file: FileId,
     binding: &dyn Fn(FileId, u32) -> Option<&'s Binding>,
+    constants: &Constants,
 ) -> Option<Type> {
     let part = |node: &SyntaxNode| -> Option<Type> {
-        written_type(&crate::read::type_child(node)?, program, file, binding)
+        written_type(
+            &crate::read::type_child(node)?,
+            program,
+            file,
+            binding,
+            constants,
+        )
     };
     match node.kind() {
         SyntaxKind::ScalarType => {
@@ -821,16 +858,17 @@ pub(crate) fn written_type<'s>(
                 .children()
                 .find(|child| !crate::read::is_type(child.kind()))
                 .map(|size| {
-                    let constants = Constants::default();
                     // A closure, so that what it gives lives as long as
-                    // this reading needs and no longer.
+                    // this reading needs and no longer. The constants
+                    // being followed are shared, so that one whose type
+                    // names itself, `const A: list<i64, A>`, ends.
                     let binding = |file: FileId, offset: u32| binding(file, offset);
                     let scope = Scope {
                         program,
                         file,
                         binding: &binding,
                         parameter: &|_| None,
-                        constants: &constants,
+                        constants,
                     };
                     let value = read(&size, Some(&Type::Scalar(Scalar::I64)), &scope)
                         .unwrap_or(ConstantValue::Unknown);
@@ -847,7 +885,7 @@ pub(crate) fn written_type<'s>(
         SyntaxKind::TupleType => node
             .children()
             .filter(|child| crate::read::is_type(child.kind()))
-            .map(|element| written_type(&element, program, file, binding))
+            .map(|element| written_type(&element, program, file, binding, constants))
             .collect::<Option<Vec<Type>>>()
             .map(Type::Tuple),
         SyntaxKind::NamedType => {
@@ -1054,6 +1092,7 @@ fn sequence(
     };
     let mut values = Vec::new();
     let mut types = Vec::new();
+    let mut parts = Vec::new();
     for entry in node.children() {
         if entry.kind() == SyntaxKind::SequencePair {
             return Ok(Typed::unevaluated(None));
@@ -1062,7 +1101,10 @@ fn sequence(
         types.push(read.ty.clone());
         values.push(match element {
             Some(element) => fit(read, Some(element), scope.program)?,
-            None => read.value,
+            None => {
+                parts.push(read.clone());
+                read.value
+            }
         });
     }
     let ty = element.cloned().or_else(|| {
@@ -1072,13 +1114,16 @@ fn sequence(
             .all(|ty| ty.as_ref() == Some(&first))
             .then_some(first)
     });
-    Ok(Typed::of(
-        ConstantValue::List(values),
-        ty.map(|element| Type::List {
-            element: Box::new(element),
-            size: None,
-        }),
-    ))
+    Ok(Typed {
+        parts,
+        ..Typed::of(
+            ConstantValue::List(values),
+            ty.map(|element| Type::List {
+                element: Box::new(element),
+                size: None,
+            }),
+        )
+    })
 }
 
 /// `(a, b)`: a tuple of constants.
@@ -1095,10 +1140,14 @@ fn tuple(
     };
     let mut values = Vec::new();
     let mut types = Vec::new();
+    let mut parts = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         let element = elements.map(|elements| &elements[index]);
         let read = value(entry, element, scope, depth + 1)?;
         types.push(read.ty.clone());
+        if element.is_none() {
+            parts.push(read.clone());
+        }
         values.push(fit(read, element, scope.program)?);
     }
     let ty = match elements {
@@ -1108,7 +1157,10 @@ fn tuple(
             .collect::<Option<Vec<Type>>>()
             .map(Type::Tuple),
     };
-    Ok(Typed::of(ConstantValue::Tuple(values), ty))
+    Ok(Typed {
+        parts,
+        ..Typed::of(ConstantValue::Tuple(values), ty)
+    })
 }
 
 // ---- Symbols ----
@@ -1166,6 +1218,7 @@ fn unary(
                 value: ConstantValue::Int(i64::MIN),
                 ty: Some(Type::Scalar(Scalar::I64)),
                 open: Open::Integer,
+                parts: Vec::new(),
             },
         });
     }
@@ -1181,6 +1234,7 @@ fn unary(
             Open::Integer => Open::Integer,
             _ => Open::No,
         },
+        parts: Vec::new(),
     })
 }
 
@@ -1275,7 +1329,12 @@ fn binary(
         ) if exact(&left.value) && exact(&right.value) && exact(&value) => Open::Integer,
         _ => Open::No,
     };
-    Ok(Typed { value, ty, open })
+    Ok(Typed {
+        value,
+        ty,
+        open,
+        parts: Vec::new(),
+    })
 }
 
 /// An integer literal as the `f64` it is where one is expected.
@@ -1444,6 +1503,18 @@ pub(crate) fn combined(
         (Op::NotEqual, V::Int(_), V::Float(_)) | (Op::NotEqual, V::Float(_), V::Int(_)) => {
             ordered(left, right).map(|order| V::Bool(order.is_ne()))
         }
+        // OPS-2: "`==` and `!=` compare two values of one type"; two of
+        // two types have no candidate, and are not worked out here.
+        (Op::Equal | Op::NotEqual, _, _)
+            if std::mem::discriminant(left) != std::mem::discriminant(right) =>
+        {
+            None
+        }
+        (Op::Equal | Op::NotEqual, V::Temporal(left), V::Temporal(right))
+            if temporal_type(left) != temporal_type(right) =>
+        {
+            None
+        }
         (Op::Equal, _, _) => left.same(right).map(V::Bool),
         (Op::NotEqual, _, _) => left.same(right).map(|same| V::Bool(!same)),
         (Op::And, V::Bool(left), V::Bool(right)) => Some(V::Bool(*left && *right)),
@@ -1478,6 +1549,9 @@ pub(crate) fn combined(
                 })
             })
         }
+        // The one remainder `checked_rem` cannot give, of the least
+        // `i64` by -1, is 0, which is an `i64`.
+        (Op::Modulo, V::Int(_), V::Int(-1)) => Some(V::Int(0)),
         (Op::Modulo, V::Int(left), V::Int(right)) => left.checked_rem(*right).map(|remainder| {
             // `%` of Rust's has the dividend's sign: the divisor's is
             // wanted.
@@ -1594,13 +1668,17 @@ fn float(value: f64) -> Option<ConstantValue> {
     (!value.is_nan()).then_some(ConstantValue::Float(value))
 }
 
-/// The order of two numbers, or of two durations (OPS-2). `None` for
-/// two values of any other type.
+/// The order of two numbers, two durations, two strings or two bools
+/// (OPS-2). `None` for two values of any other type.
 fn ordered(left: &ConstantValue, right: &ConstantValue) -> Option<std::cmp::Ordering> {
     match (left, right) {
         (ConstantValue::Int(left), ConstantValue::Int(right))
         | (ConstantValue::Duration(left), ConstantValue::Duration(right)) => Some(left.cmp(right)),
         (ConstantValue::Float(left), ConstantValue::Float(right)) => left.partial_cmp(right),
+        // A string by its characters, which is the order of their
+        // UTF-8 bytes; `false` before `true`.
+        (ConstantValue::Str(left), ConstantValue::Str(right)) => Some(left.cmp(right)),
+        (ConstantValue::Bool(left), ConstantValue::Bool(right)) => Some(left.cmp(right)),
         (ConstantValue::Int(whole), ConstantValue::Float(real)) => Some(mixed(*whole, *real)),
         (ConstantValue::Float(real), ConstantValue::Int(whole)) => {
             Some(mixed(*whole, *real).reverse())
@@ -2254,5 +2332,8 @@ mod tests {
         assert_eq!(divided(-7, -3), text("2", "-1"));
         assert_eq!(divided(7, 3), text("2", "1"));
         assert_eq!(divided(7, 0), (None, None));
+        // The least `i64` floor-divided by -1 does not fit; its remainder
+        // is 0.
+        assert_eq!(divided(i64::MIN, -1), (None, Some("0".to_string())));
     }
 }

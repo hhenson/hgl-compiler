@@ -499,7 +499,15 @@ fn every_spelling_of_one_value_is_one_constant() {
         ),
         (
             "bool",
-            &["true", "(true)", "!false", "YES", "1 < 2"],
+            &[
+                "true",
+                "(true)",
+                "!false",
+                "YES",
+                "1 < 2",
+                "\"a\" < \"b\"",
+                "false < true",
+            ],
             "false",
         ),
         (
@@ -755,6 +763,43 @@ fn integer_division_and_mixed_comparison_are_exact() {
              const fn b(x: BBox<9007199254740993 == 9007199254740992.0>) -> BBox<true> => x\n"
         ),
         &["5 type.mismatch", "6 type.mismatch"],
+    );
+}
+
+/// A constant's type may name a constant, as a list's size: the one
+/// reader follows it with the constants it is following, so that one
+/// whose type names itself is `constant.cycle` and ends (UNIT-13). A
+/// list an operator's option is given is read as a value of the type
+/// the candidate declares (GEN-6, EXPR-5): `[1]` of a `list<f64>` is
+/// `[1.0]`. OPS-2: "`==` and `!=` compare two values of one type", so
+/// `1m == 60` is no constant this compiler works out.
+#[test]
+fn a_constant_in_a_type_an_option_and_an_equality_are_read_in_context() {
+    let checked = module("const A: list<i64, A> = []\n");
+    assert!(
+        found(&checked).contains(&"2 constant.cycle".to_string()),
+        "{}",
+        checked.report
+    );
+    let shared = concat!(
+        "const B: list<i64, C> = [1]\n",
+        "const C: i64 = 1\n",
+        "struct Sized<const X: list<i64, 1>> { v: i64 }\n",
+        "struct BBox<const F: bool> { v: i64 }\n",
+        "operator pick(value: i64) -> i64\n",
+        "impl const fn pick<const X: list<f64> = [2.0]>(value: i64) -> i64 requires X == [1.0] => value\n",
+        "const fn s(x: Sized<B>) -> i64 => 1\n",
+    );
+    expect(
+        &format!("{shared}const fn a() -> i64 => pick(1, X: [1])\n"),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => pick(1, X: [2])\n\
+             const fn b(x: BBox<1m == 60>) -> i64 => 1\n"
+        ),
+        &["9 operator.no_candidate", "10 generic.argument_constant"],
     );
 }
 

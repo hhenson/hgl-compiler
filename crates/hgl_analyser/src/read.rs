@@ -2454,7 +2454,13 @@ impl Reader<'_> {
             .iter()
             .map(|(parameter, _, form)| match form {
                 Form::Value => type_child(parameter).and_then(|written| {
-                    crate::constant::written_type(&written, self.program, file, &binding)
+                    crate::constant::written_type(
+                        &written,
+                        self.program,
+                        file,
+                        &binding,
+                        &self.constants,
+                    )
                 }),
                 Form::Plain | Form::Pack(..) => None,
             })
