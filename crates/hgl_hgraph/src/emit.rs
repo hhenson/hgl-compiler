@@ -8332,10 +8332,11 @@ impl Emitter<'_> {
 
     /// True where each part of a whole value of `ty`, an element, a
     /// field or an entry, publishes whole: a scalar, an enum or a
-    /// nullable one.
+    /// nullable one. A list's element is not nullable: hgraph's whole
+    /// tuple of a list holds no null (see `bundle_of`).
     fn parts_publish_whole(&self, ty: &Type) -> bool {
         match ty {
-            Type::List { element, .. } => publishes_whole(element),
+            Type::List { element, .. } => publishes_whole(element) && !is_nullable(element),
             Type::Set(_) => true,
             Type::Dict { value, .. } => publishes_whole(value),
             Type::Named {

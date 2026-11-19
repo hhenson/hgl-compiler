@@ -8794,7 +8794,7 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 /// cannot publish (TYPE-10, TIME-9); an endpoint of an unsized list's
 /// element, a whole tuple here (TIME-1); an assignment inside a child of
 /// a node's `out` (TIME-7); and a trace cell written whole whose parts
-/// are composites (TST-5, TST-9).
+/// are composites, or a list's that are nullable (TST-5, TST-9).
 #[test]
 fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     let emitted = emit(&[(
@@ -8816,11 +8816,11 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "}\n",
             "struct Inner { value: i64 }\n",
             "struct Outer { inner: Inner }\n",
-            "fn relay(outer: Outer, book: dict<str, dict<str, i64>>) -> i64 {\n",
+            "fn relay(outer: Outer, book: dict<str, dict<str, i64>>, nulls: list<i64?, 2>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
             "test nested_cells {\n",
-            "    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [[\"a\": [\"b\": 1]]])) == [1]\n",
+            "    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [[\"a\": [\"b\": 1]]], nulls: [[null, 3]])) == [1]\n",
             "}\n",
         ),
     )]);
@@ -8833,6 +8833,7 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:13:12 target.unsupported",
             "m.hgl:21:31 target.unsupported",
             "m.hgl:21:70 target.unsupported",
+            "m.hgl:21:96 target.unsupported",
         ]
     );
 }

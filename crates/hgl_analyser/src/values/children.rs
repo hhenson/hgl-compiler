@@ -241,10 +241,21 @@ impl Typer<'_> {
     /// read is then the child, and that read is judged where the child
     /// is (`child_read`): the collection is not read whole.
     pub(super) fn continues_chain(&self, node: &SyntaxNode, ty: &Type) -> bool {
-        let Some(parent) = node.parent() else {
+        // "Parentheses select grouping" (EXPR-1): `(parts)[1]` reads a
+        // child of `parts` as `parts[1]` does.
+        let mut current = node.clone();
+        let mut parent = node.parent();
+        while let Some(grouping) = parent
+            .as_ref()
+            .filter(|parent| parent.kind() == SyntaxKind::ParenExpr)
+        {
+            current = grouping.clone();
+            parent = grouping.parent();
+        }
+        let Some(parent) = parent else {
             return false;
         };
-        if parent.children().next().as_ref() != Some(node) {
+        if parent.children().next().as_ref() != Some(&current) {
             return false;
         }
         match parent.kind() {
@@ -374,7 +385,10 @@ impl Typer<'_> {
             return None;
         }
         let mut root = named.clone();
-        while matches!(root.kind(), SyntaxKind::IndexExpr | SyntaxKind::MemberExpr) {
+        while matches!(
+            root.kind(),
+            SyntaxKind::IndexExpr | SyntaxKind::MemberExpr | SyntaxKind::ParenExpr
+        ) {
             root = root.children().next()?;
         }
         if root.kind() != SyntaxKind::NameExpr {

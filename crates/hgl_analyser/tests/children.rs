@@ -340,3 +340,22 @@ fn a_constant_of_a_module_names_a_child_when_compiled() {
         ["m.hgl:4:19 phase/payload.unguarded TIME-1"]
     );
 }
+
+/// EXPR-1: "Parentheses select grouping": a child named in parentheses
+/// is the child named without them, as an endpoint and as a read
+/// (TIME-1).
+#[test]
+fn a_child_in_parentheses_is_the_same_child() {
+    let checked = module(concat!(
+        "fn grouped(parts: list<i64, 2>, grid: list<list<i64, 2>, 2>) -> i64 {\n",
+        "    when {\n",
+        "        if valid((parts)[1]) && valid((grid[0])[1]) { return (parts)[1] + (grid[0])[1] }\n",
+        "        return 0\n",
+        "    }\n",
+        "}\n",
+        "fn unguarded(parts: list<i64, 2>) -> i64 {\n",
+        "    when { return (parts)[1] }\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), ["m.hgl:9:19 phase/payload.unguarded TIME-1"]);
+}
