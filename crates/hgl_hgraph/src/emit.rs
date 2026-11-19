@@ -6072,7 +6072,7 @@ impl Emitter<'_> {
                 {
                     continue;
                 }
-                if let Some(value) = self.left_out(callee, index, parameter) {
+                if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                     // A node keeps a default of its configuration as it
                     // keeps one given (`kept_configuration`).
                     let value = if kept[index] {
@@ -6845,34 +6845,46 @@ impl Emitter<'_> {
             if given || parameter.pack.is_some() {
                 continue;
             }
-            // UNIT-8: a temporal input written `T?` with no default may
-            // be left out, "an input that is then never valid".
-            let temporal = self.program.modules[callee.0].declarations[callee.1]
-                .kind
-                .role()
-                == Some(Role::Temporal);
-            if temporal
-                && !parameter.constant
-                && !parameter.has_default
-                && matches!(parameter.ty, Type::Nullable(_))
-            {
-                let instances = self.instances;
-                let instance = instances
-                    .instanced(self.program, callee.0, callee.1)
-                    .then(|| instances.find(self.program, callee, generics))
-                    .flatten();
-                let ty = instance
-                    .and_then(|instance| instance.signature.parameters.get(index))
-                    .map_or(&parameter.ty, |parameter| &parameter.ty);
-                let never = self.never_valid(ty, parameter.at);
-                written.push(format!("{}={never}", name(&parameter.name)));
-                continue;
-            }
-            if let Some(value) = self.left_out(callee, index, parameter) {
+            if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                 written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
             }
         }
         written.join(", ")
+    }
+
+    /// What a call of the function `callee`, with `generics`, binds
+    /// parameter `index` to when it leaves it out: every call of a
+    /// function by name, captured or not, asks this. UNIT-8: a temporal
+    /// input written `T?` with no default may be left out, "an input
+    /// that is then never valid" (`never_valid`); any other parameter
+    /// takes what `left_out` gives it.
+    fn left_out_of_call(
+        &mut self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+        index: usize,
+        parameter: &Parameter,
+    ) -> Option<String> {
+        let temporal = self.program.modules[callee.0].declarations[callee.1]
+            .kind
+            .role()
+            == Some(Role::Temporal);
+        if !temporal
+            || parameter.constant
+            || parameter.has_default
+            || !matches!(parameter.ty, Type::Nullable(_))
+        {
+            return self.left_out(callee, index, parameter);
+        }
+        let instances = self.instances;
+        let instance = instances
+            .instanced(self.program, callee.0, callee.1)
+            .then(|| instances.find(self.program, callee, generics))
+            .flatten();
+        let ty = instance
+            .and_then(|instance| instance.signature.parameters.get(index))
+            .map_or(&parameter.ty, |parameter| &parameter.ty);
+        Some(self.never_valid(ty, parameter.at))
     }
 
     /// What a temporal input of `ty` left out is bound to (UNIT-8: "an

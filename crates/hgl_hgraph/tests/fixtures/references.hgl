@@ -157,6 +157,11 @@ fn woken_by_reference(use_left: bool, left: i64, right: i64) -> i64 =>
 fn passed_signal(tick: signal) -> i64 => counted(tick)
 fn passed(value: i64) -> i64 => passed_signal(value)
 fn left_out(value: i64) -> i64 => maybe_sampled(value)
+# A captured call leaves the input out as a call does (ERR-7).
+fn left_out_captured(value: i64) -> i64 {
+    let boundary = capture(maybe_sampled, value)
+    return boundary.value
+}
 fn given(value: i64, probe: bool) -> i64 => maybe_sampled(value, probe)
 
 fn width_of(bid: i64, ask: i64) -> i64 => snapshot_width(snapshot(bid, ask))
@@ -205,6 +210,7 @@ test a_signal_wakes_its_node {
         [1, 2, 3, 4]
     assert eval(passed(value: [1, 2])) == [1, 2]
     assert eval(left_out(value: [1, 2])) == [-1, -2]
+    assert eval(left_out_captured(value: [1, 2])) == [-1, -2]
     assert eval(given(value: [1, 2, _], probe: [_, true, true])) == [-1, 2, 2]
 }
 

@@ -8770,7 +8770,8 @@ const REFERENCES: &str = include_str!("fixtures/references.hgl");
 /// a lifted node's among them, to what a reference designates. A
 /// generic input given a reference is written for the type under it.
 /// A `signal?` left out is bound to an output that never ticks
-/// (UNIT-8). A hook reads an atomic input as its whole value.
+/// (UNIT-8), by a call and a captured one alike. A hook reads an atomic
+/// input as its whole value.
 #[test]
 fn a_reference_is_a_ref_and_a_signal_a_signal() {
     let emitted = emit(&[("references.hgl", REFERENCES)]);
@@ -8793,6 +8794,9 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
         format!("def _inst_ref_ticks__i64(value: {reference}, "),
         "    return _inst_same__ref_i64_(value=left)".to_string(),
         "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))".to_string(),
+        // A captured call binds what it leaves out as a call does.
+        "        return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
+            .to_string(),
         "    return width(quote=quote.value)".to_string(),
         "    held = quote.value\n".to_string(),
         "    return quote.delta_value.ask".to_string(),
