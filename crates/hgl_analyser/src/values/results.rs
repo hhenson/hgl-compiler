@@ -5,7 +5,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::{BOOL, CapturedOutput, Fact, Typer, arguments_of, not_null, nullable, open, whole};
+use super::calls::arguments_of;
+use super::{BOOL, CapturedOutput, Fact, Typer, not_null, nullable, open, whole};
 use crate::hir::{Callee, ErrorPart, Expr, ExprKind, Hook, ValueCategory};
 use crate::program::Role;
 use crate::syntax::{child, name_token, tokens};

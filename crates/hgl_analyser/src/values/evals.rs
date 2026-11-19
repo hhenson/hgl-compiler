@@ -7,7 +7,8 @@ use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::{BOOL, Called, Typer, arguments_of, open, written_null};
+use super::calls::arguments_of;
+use super::{BOOL, Called, Typer, open, written_null};
 use crate::hir::{
     self, BinaryOperator, Body, Expr, ExprKind, Hook, Run, Stmt, Value, ValueCategory,
 };
