@@ -445,6 +445,37 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Reports the generic arguments written on `scheduled<...>()`, at
+    /// `node` with its name `name`. TIME-9: "`scheduled()` is the
+    /// handler selector", and core declares no function of the name: it
+    /// has no generic parameter for a call to give one to (GEN-8: "A
+    /// call may supply its generic arguments as a generic constructor
+    /// does"). The read pass keeps no arguments for a name no
+    /// declaration binds, so they are counted as written.
+    pub(super) fn scheduled_generics(&mut self, node: &SyntaxNode, name: &SyntaxToken) {
+        let given = child(node, SyntaxKind::GenericArgs).map_or(0, |list| {
+            list.children()
+                .filter(|argument| argument.kind() != SyntaxKind::Error)
+                .count()
+        });
+        if given == 0 {
+            return;
+        }
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::GENERIC_ARGUMENT_COUNT,
+                Location::new(self.file, name.span()),
+                format!(
+                    "`{}` takes no generic arguments and is given {given}",
+                    name.text()
+                ),
+                "GEN-8",
+            )
+            .with_note("`scheduled()` is the handler selector, and asks the node's own wake"),
+        );
+    }
+
     /// The argument of an `endpoint<T>` parameter (TIME-9): "A call
     /// gives an `endpoint<T>` parameter a temporal input of the
     /// enclosing node by its name, or `out`, and nothing else".
