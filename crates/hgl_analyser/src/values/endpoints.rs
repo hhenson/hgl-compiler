@@ -1,0 +1,489 @@
+//! The endpoint operations, `valid(input)`, `modified(input)` and the
+//! rest, and the argument of an `endpoint<T>` parameter: each names a
+//! temporal input of the node, or `out`, and does not read it (TIME-9).
+//! Part of the typing pass ([`super`]); a child of a collection named as
+//! an endpoint is read in [`super::children`].
+
+use hgl_diagnostics::{Category, Location};
+use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
+
+use super::{BOOL, Fact, Typer, arguments_of, children, not_null, nullable, whole};
+use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LocalId};
+use crate::program::LocalKind;
+use crate::syntax::ungrouped;
+use crate::types::{Argument, CallArguments, NamedKind, Scalar, Type};
+use crate::{codes, error};
+
+impl<'a> Typer<'a> {
+    /// An operation on an endpoint (TIME-9): "Elsewhere each takes a
+    /// temporal input of the enclosing function by its name, or `out`".
+    /// `valid` and `modified` are also the selectors of a `when` header
+    /// (TIME-3): "`modified()` subscribes to all temporal inputs;
+    /// `modified(a, b)` subscribes to both named inputs, and similarly
+    /// for more inputs ... `valid()` requires all temporal inputs to be
+    /// valid; `valid(a, b)` requires both named inputs, and similarly
+    /// for more inputs ... `valid([])` requires no inputs to be valid."
+    pub(super) fn endpoint(
+        &mut self,
+        operation: EndpointOperation,
+        name: &SyntaxToken,
+        list: &SyntaxNode,
+    ) -> (ExprKind, Type) {
+        let at = Location::new(self.file, name.span());
+        let arguments = endpoint_arguments(list);
+        // How many it takes: a selector may stand with none, and with
+        // as many inputs as it names (TIME-3: "`modified(a, b)`
+        // subscribes to both named inputs, and similarly for more
+        // inputs").
+        let (fewest, most) = match operation {
+            EndpointOperation::Scheduled => (0, 0),
+            EndpointOperation::Valid | EndpointOperation::Modified => (0, usize::MAX),
+            _ => (1, 1),
+        };
+        if arguments.len() < fewest {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_MISSING,
+                at,
+                format!("`{}` is given no endpoint: it takes one", operation.name()),
+                "TIME-9",
+            ));
+        }
+        for surplus in arguments.iter().skip(most) {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::ARGUMENT_UNEXPECTED,
+                self.at(surplus),
+                format!(
+                    "`{}` takes {}, and this is one more",
+                    operation.name(),
+                    if most == 0 {
+                        "no argument"
+                    } else {
+                        "one endpoint"
+                    }
+                ),
+                "TIME-9",
+            ));
+        }
+        // The endpoints named, each by its name. `valid([])` and
+        // `modified([])` name none (TIME-3); any other sequence is no
+        // endpoint, and is reported as one.
+        let none = matches!(
+            operation,
+            EndpointOperation::Valid | EndpointOperation::Modified
+        ) && matches!(arguments.as_slice(), [only]
+                if only.kind() == SyntaxKind::SequenceExpr && only.children().next().is_none());
+        // TIME-3: "`modified([])` subscribes to no input: it stands
+        // only in a node that injects `scheduler` or `alarm` and
+        // schedules a wake on it in `start`, which is then what wakes
+        // the handler."
+        if none && operation == EndpointOperation::Modified {
+            // The selector: `modified([])`, its name to its `)`.
+            let selector = list.parent().map_or(at, |call| self.at(&call));
+            // Once, where an argument is read a second time for the
+            // candidate it is given to.
+            if !self.undriven.contains(&selector) {
+                self.undriven.push(selector);
+            }
+        }
+        // TIME-9: "`scheduled()` is the handler selector for a wake by
+        // the node's scheduler or alarm ... A node that injects neither
+        // rejects it". With a scheduler it is the scheduler's
+        // `is_scheduled_now`, and with an alarm it holds where no
+        // temporal input has ticked: with neither it asks nothing.
+        if operation == EndpointOperation::Scheduled {
+            let wakes = self.locals.iter().any(|local| {
+                local.kind == LocalKind::Inject
+                    && (local.name == "scheduler" || local.name == "alarm")
+            });
+            if !wakes {
+                // The selector: `scheduled()`, its name to its `)`.
+                let selector = list.parent().map_or(at, |call| self.at(&call));
+                self.diagnostics.emit(
+                    error(
+                        Category::Injectable,
+                        codes::INJECT_NO_SCHEDULER,
+                        selector,
+                        "`scheduled()` asks the node's scheduler or its alarm, and this node \
+                         injects neither"
+                            .to_string(),
+                        "TIME-9",
+                    )
+                    .with_note("`inject scheduler` or `inject alarm` gives the node one"),
+                );
+            }
+        }
+        // TIME-9, END-8: "A child of a collection is an endpoint whether
+        // or not it is valid: `valid`, `modified`, `delta_value` and
+        // `last_modified` take it, and `all_valid` where it is a
+        // collection". It is given alone; `is_active`, `activate` and
+        // `passivate` "operate on direct temporal inputs".
+        if let [only] = arguments.as_slice()
+            && matches!(
+                operation,
+                EndpointOperation::Valid
+                    | EndpointOperation::AllValid
+                    | EndpointOperation::Modified
+                    | EndpointOperation::DeltaValue
+                    | EndpointOperation::LastModified
+            )
+        {
+            let reported = self.diagnostics.len();
+            if let Some(found) = self.child_endpoint(only) {
+                return self.child_operation(operation, at, only, found, reported);
+            }
+        }
+        let inputs: Option<Vec<LocalId>> = if arguments.is_empty() || most == 0 {
+            None
+        } else if none {
+            Some(Vec::new())
+        } else {
+            Some(
+                arguments
+                    .iter()
+                    .take(most)
+                    .filter_map(|entry| self.endpoint_named(operation, entry))
+                    .collect(),
+            )
+        };
+        // TIME-5: `start` "gives none to an endpoint operation".
+        if self.hook == Some(Hook::Start)
+            && let Some(inputs) = &inputs
+        {
+            let given: Vec<String> = inputs
+                .iter()
+                .filter(|input| Some(**input) != self.out)
+                .map(|input| self.locals[*input].name.clone())
+                .collect();
+            for input in given {
+                self.input_lifecycle(at, &input);
+            }
+        }
+        // TIME-9: "`all_valid` takes only a collection; another
+        // endpoint is rejected (`endpoint.argument`)". A collection is
+        // "a list, a tuple, a struct and a dictionary".
+        if operation == EndpointOperation::AllValid
+            && let Some(inputs) = &inputs
+        {
+            for (input, given) in inputs.iter().zip(&arguments) {
+                let ty = &self.locals[*input].ty;
+                let collection = matches!(
+                    ty,
+                    Type::List { .. }
+                        | Type::Tuple(_)
+                        | Type::Dict { .. }
+                        | Type::Named {
+                            kind: NamedKind::Struct,
+                            ..
+                        }
+                        | Type::Parameter { .. }
+                        | Type::Unknown
+                );
+                if !collection {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Phase,
+                            codes::ENDPOINT_ARGUMENT,
+                            self.at(given),
+                            format!("`all_valid` takes a collection, and `{ty}` is none"),
+                            "TIME-9",
+                        )
+                        .with_note("a collection is a list, a tuple, a struct or a dictionary"),
+                    );
+                }
+            }
+        }
+        let writes = operation == EndpointOperation::Invalidate;
+        if let (Some(inputs), Some(out)) = (&inputs, self.out)
+            && inputs.contains(&out)
+        {
+            match self.hook {
+                Some(Hook::Start) => self.out_lifecycle(
+                    at,
+                    "`out` is neither read nor written in `start`".to_string(),
+                ),
+                Some(Hook::Stop) if writes => {
+                    self.out_lifecycle(at, "`out` is read in `stop`, and not written".to_string());
+                }
+                _ => {}
+            }
+        }
+        let ty = match operation {
+            EndpointOperation::Valid
+            | EndpointOperation::AllValid
+            | EndpointOperation::Modified
+            | EndpointOperation::Scheduled
+            | EndpointOperation::IsActive => BOOL,
+            // END-3: "`delta_value(x)` returns what `x` published this
+            // cycle, a `delta<T>` for an endpoint of T (the language's
+            // TYPE-16). For a scalar it is the value published".
+            EndpointOperation::DeltaValue => {
+                let of = inputs
+                    .as_ref()
+                    .and_then(|inputs| inputs.first())
+                    .map(|input| self.locals[*input].ty.clone());
+                // TYPE-16: "`ref<V>`, `signal`: None". An input that
+                // may be left out is its shape under a `?`.
+                let none = of.as_ref().is_some_and(|of| {
+                    matches!(not_null(Some(of)), Some(Type::Ref(_) | Type::Signal))
+                });
+                if none {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Shape,
+                            codes::DELTA_UNSUPPORTED_SHAPE,
+                            at,
+                            format!(
+                                "`{}` has no delta",
+                                of.as_ref().map_or(String::new(), ToString::to_string)
+                            ),
+                            "TYPE-16",
+                        )
+                        .with_note(
+                            "a `ref` designates an endpoint and a `signal` has no payload: \
+                             neither publishes a value of its own",
+                        ),
+                    );
+                    Type::Unknown
+                } else {
+                    of.map_or(Type::Unknown, Type::delta)
+                }
+            }
+            // END-6: a `datetime?`.
+            EndpointOperation::LastModified => nullable(Type::Scalar(Scalar::Datetime)),
+            EndpointOperation::Invalidate
+            | EndpointOperation::Activate
+            | EndpointOperation::Passivate => Type::Unknown,
+        };
+        (ExprKind::Endpoint { operation, inputs }, ty)
+    }
+
+    /// The generic arguments written on an endpoint operation, held to
+    /// what the operation is: core declares each with one type, the
+    /// type the endpoint holds, `valid<T>(input: endpoint<T>)` (TIME-9).
+    pub(super) fn endpoint_generics(
+        &mut self,
+        name: &SyntaxToken,
+        given: Option<&CallArguments>,
+        kind: &ExprKind,
+    ) {
+        let Some(given) = given else {
+            return;
+        };
+        let [(at, argument)] = given.arguments.as_slice() else {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::GENERIC_ARGUMENT_COUNT,
+                Location::new(self.file, name.span()),
+                format!(
+                    "`{}` takes 1 generic argument and is given {}",
+                    name.text(),
+                    given.arguments.len()
+                ),
+                "GEN-8",
+            ));
+            return;
+        };
+        let held = match argument {
+            Argument::Type(held) => held,
+            Argument::Constant(_) => {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::GENERIC_ARGUMENT_KIND,
+                    *at,
+                    format!(
+                        "`{}` takes the type its endpoint holds, and this is a value",
+                        name.text()
+                    ),
+                    "GEN-14",
+                ));
+                return;
+            }
+        };
+        // A child that holds another type is no endpoint of the one
+        // written either (EXPR-5).
+        if let ExprKind::ChildEndpoint { child, .. } = kind {
+            if whole(held) && whole(&child.ty) && child.ty != *held {
+                self.diagnostics.emit(error(
+                    Category::Type,
+                    codes::TYPE_MISMATCH,
+                    *at,
+                    format!(
+                        "`{}<{held}>` takes an endpoint of `{held}`, and this child holds `{}`",
+                        name.text(),
+                        child.ty
+                    ),
+                    "EXPR-5",
+                ));
+            }
+            return;
+        }
+        let ExprKind::Endpoint {
+            inputs: Some(inputs),
+            ..
+        } = kind
+        else {
+            return;
+        };
+        // An input that holds another type is no endpoint of the one
+        // written (EXPR-5). What is not known has been reported.
+        let other: Vec<String> = inputs
+            .iter()
+            .map(|input| &self.locals[*input])
+            .filter(|input| whole(held) && whole(&input.ty) && input.ty != *held)
+            .map(|input| format!("`{}` holds `{}`", input.name, input.ty))
+            .collect();
+        if !other.is_empty() {
+            self.diagnostics.emit(error(
+                Category::Type,
+                codes::TYPE_MISMATCH,
+                *at,
+                format!(
+                    "`{}<{held}>` takes an endpoint of `{held}`, and {}",
+                    name.text(),
+                    other.join(" and ")
+                ),
+                "EXPR-5",
+            ));
+        }
+    }
+
+    /// The argument of an `endpoint<T>` parameter (TIME-9): "A call
+    /// gives an `endpoint<T>` parameter a temporal input of the
+    /// enclosing node by its name, or `out`, and nothing else".
+    ///
+    /// The input is named and not read: its payload may be invalid, and
+    /// the function is given the endpoint to ask. In a graph or a value
+    /// function there is no enclosing node, and nothing to give.
+    pub(super) fn endpoint_given(&mut self, node: &SyntaxNode) -> Expr {
+        let at = self.at(node);
+        let named = endpoint_argument(node);
+        // TIME-9: "a child of one, `parts[1]`, `quote.bid` or
+        // `parts[i]`", in a hook.
+        let reported = self.diagnostics.len();
+        if self.hook.is_some()
+            && let Some(found) = self.child_endpoint(&named)
+        {
+            if let Some(child) = found {
+                self.child_in_start(at, &child);
+                let ty = Type::Endpoint(Box::new(child.ty.clone()));
+                return Expr {
+                    kind: ExprKind::ChildEndpointOf(Box::new(child)),
+                    ty,
+                    at,
+                };
+            }
+            if self.diagnostics.len() != reported {
+                return Expr {
+                    kind: ExprKind::Unread,
+                    ty: Type::Unknown,
+                    at,
+                };
+            }
+        }
+        let local = (named.kind() == SyntaxKind::NameExpr)
+            .then(|| self.local_of(&named))
+            .flatten()
+            .filter(|&local| {
+                self.hook.is_some() && (self.is_temporal_input(local) || Some(local) == self.out)
+            });
+        let Some(local) = local else {
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::ENDPOINT_ARGUMENT,
+                    at,
+                    "an `endpoint<T>` parameter takes a temporal input of the node by its \
+                     name, or `out`"
+                        .to_string(),
+                    "TIME-9",
+                )
+                .with_note(if self.hook.is_some() {
+                    "a state, a `const` parameter and an expression have no endpoint"
+                } else {
+                    "an endpoint is given in a node's hook: a graph and a value function have \
+                     no input of their own to give"
+                }),
+            );
+            return Expr {
+                kind: ExprKind::Unread,
+                ty: Type::Unknown,
+                at,
+            };
+        };
+        Expr {
+            kind: ExprKind::EndpointOf(local),
+            ty: Type::Endpoint(Box::new(self.locals[local].ty.clone())),
+            at,
+        }
+    }
+
+    /// The endpoint an argument of an endpoint operation names: a
+    /// temporal parameter of the node, or its injected `out`. Any other
+    /// is reported (`endpoint.argument`).
+    fn endpoint_named(
+        &mut self,
+        operation: EndpointOperation,
+        node: &SyntaxNode,
+    ) -> Option<LocalId> {
+        let local = match node.kind() {
+            SyntaxKind::NameExpr => self.local_of(node),
+            _ => None,
+        };
+        // TIME-9: only direct inputs have a subscription to change.
+        let input_only = matches!(
+            operation,
+            EndpointOperation::Activate | EndpointOperation::Passivate
+        );
+        match local {
+            Some(local)
+                if self.is_temporal_input(local) || (!input_only && Some(local) == self.out) =>
+            {
+                Some(local)
+            }
+            _ => {
+                self.diagnostics.emit(error(
+                    Category::Phase,
+                    codes::ENDPOINT_ARGUMENT,
+                    self.at(node),
+                    format!(
+                        "`{}` takes a temporal input of `{}` by its name{}",
+                        operation.name(),
+                        self.declaration.name,
+                        if input_only { "" } else { ", or `out`" }
+                    ),
+                    "TIME-9",
+                ));
+                // Read for what it reports itself. The argument is
+                // rejected already, so what it reads of an input is not
+                // judged as well (ERR-9).
+                let frame = self.present.len();
+                let inputs = self.temporal_inputs();
+                self.present.extend(inputs.iter().copied().map(Fact::Valid));
+                self.present
+                    .extend(inputs.into_iter().map(children::all_valid_fact));
+                self.expression(node, Some(&Type::Unknown));
+                self.present.truncate(frame);
+                None
+            }
+        }
+    }
+}
+
+/// An argument of an endpoint operation or an `endpoint<T>` parameter as
+/// every check reads it: EXPR-1, "Parentheses select grouping", so
+/// `valid((quote.bid))` names what `valid(quote.bid)` does, and grouping
+/// never changes what an argument is, its admission or its guard.
+pub(super) fn endpoint_argument(node: &SyntaxNode) -> SyntaxNode {
+    ungrouped(node.clone())
+}
+
+/// The arguments of the endpoint operation whose list is `list`, each
+/// as `endpoint_argument` reads it.
+pub(super) fn endpoint_arguments(list: &SyntaxNode) -> Vec<SyntaxNode> {
+    arguments_of(list)
+        .into_iter()
+        .map(|(_, value)| endpoint_argument(&value))
+        .collect()
+}

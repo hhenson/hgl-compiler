@@ -7,7 +7,8 @@ use hgl_diagnostics::{Category, Location};
 use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::{Fact, Typer, accepts_float, children, endpoint_arguments, is_integer_literal, open};
+use super::endpoints::endpoint_arguments;
+use super::{Fact, Typer, accepts_float, children, is_integer_literal, open};
 use crate::hir::{self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, name_token, tokens, ungrouped};
