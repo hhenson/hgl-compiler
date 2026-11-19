@@ -2816,16 +2816,7 @@ impl Emitter<'_> {
         if holds_input {
             self.line(1, &format!("_input_woke = {input_woke}"));
         }
-        // An endpoint as the node's code names it: an input by its
-        // name, and the node's own output as hgraph's `_output`.
-        let endpoint = |local: usize| {
-            let declared = &body.locals[local];
-            if declared.kind == LocalKind::Inject {
-                "_output".to_string()
-            } else {
-                name(&declared.name)
-            }
-        };
+        let endpoint = |local: usize| endpoint_name(&body.locals[local]);
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
             // TIME-3: "A wake by the scheduler or alarm wakes the
@@ -5434,18 +5425,18 @@ impl Emitter<'_> {
                 declaration,
             } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
-                let read = self.place(function, *local);
                 // In a hook a temporal input is read through its
-                // payload: in a `when`, and in `stop` (TIME-5).
-                if matches!(function.mode, Mode::Node | Mode::Stop) && function.is_input(*local) {
-                    self.port_value(&function.locals[*local].ty, &read, value.at)
-                } else if matches!(function.mode, Mode::Node | Mode::Stop)
-                    && function.is_out(*local)
+                // payload: in a `when`, and in `stop` (TIME-5). So is
+                // `out` read whole: a struct's value is made from its
+                // bundle's fields (TYPE-9), as an input's is. The port
+                // holds a value of the declared type (`port_type`).
+                if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && let Some(port) = self.input_port(function, value)
                 {
-                    // `out` read whole: a struct's value is made from
-                    // its bundle's fields (TYPE-9), as an input's is.
-                    self.port_value(&function.locals[*local].ty, "_output", value.at)
-                } else if function.mode == Mode::Lifecycle && function.is_input(*local) {
+                    return self.port_value(function.port_type(value), &port, value.at);
+                }
+                let read = self.place(function, *local);
+                if function.mode == Mode::Lifecycle && function.is_input(*local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
                     read
@@ -5484,12 +5475,7 @@ impl Emitter<'_> {
                 if !given {
                     self.unsupported(value.at, "this endpoint read in `start` or `stop`");
                 }
-                // The node's own output is hgraph's `_output`.
-                let input = if endpoint.kind == LocalKind::Inject {
-                    "_output".to_string()
-                } else {
-                    name(&endpoint.name)
-                };
+                let input = endpoint_name(endpoint);
                 // The endpoint of what holds a window, itself or within
                 // (`windows_in`): an input's readiness is asked of its
                 // parameter (`window_inputs`), and `out`'s here.
@@ -7990,11 +7976,9 @@ impl Emitter<'_> {
     /// `atomic<V>`'s field among them, which is read from its value.
     fn input_port(&self, function: &Function, value: &Expr) -> Option<String> {
         match &value.kind {
-            ExprKind::Local(local) if function.is_input(*local) => {
-                Some(name(&function.locals[*local].name))
+            ExprKind::Local(local) if function.is_input(*local) || function.is_out(*local) => {
+                Some(endpoint_name(&function.locals[*local]))
             }
-            // The node's own output, hgraph's `_output`.
-            ExprKind::Local(local) if function.is_out(*local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
                 // An atomic input is one port of the whole value, read
                 // in a hook as that value (TYPE-9), and has no port of
@@ -9815,6 +9799,17 @@ fn fields_of<'p>(program: &'p Program, ty: &Type) -> Option<Vec<(&'p Member, Typ
         return None;
     };
     Some(read.members.iter().zip(program.field_types(ty)?).collect())
+}
+
+/// An endpoint of a node, an input or its `inject out`, as the node's
+/// code names it: an input by its name, and the node's own output as
+/// hgraph's `_output`.
+fn endpoint_name(endpoint: &Local) -> String {
+    if endpoint.kind == LocalKind::Inject {
+        "_output".to_string()
+    } else {
+        name(&endpoint.name)
+    }
 }
 
 /// What a value of `ty` holds, with the `atomic` taken off: TYPE-9's
