@@ -150,7 +150,8 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
             Callee::Function {
                 module,
                 declaration,
-                ..
+                generics,
+                requirements,
             },
         arguments,
         ..
@@ -162,21 +163,44 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
-    let own = signature.generics.is_empty();
+    // A generic target's parameters as this call takes them (GEN-2).
+    let instance = if generics.is_empty() {
+        None
+    } else {
+        program.instance(*module, *declaration, generics, requirements)
+    };
+    // Where the target's own types are known, its inputs and result are
+    // of them; otherwise they are read back from the traces.
+    let known = signature.generics.is_empty() || instance.is_some();
+    let parameters = instance
+        .as_ref()
+        .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
-            let parameter = signature.parameters.get(argument.parameter?)?;
+            let parameter = parameters.get(argument.parameter?)?;
             // Only an argument that is a trace is replayed.
             let payload = trace_payload(&argument.value.ty)?;
-            let ty = if own { parameter.ty.clone() } else { payload };
-            Some((parameter.name.clone(), ty))
+            // TYPE-16: a window's delta is "V: the value that arrived",
+            // so a trace of one is a trace of V: the window is the
+            // parameter's.
+            let windowed = matches!(parameter.ty, Type::RollingWindow { .. });
+            Some((
+                parameter.name.clone(),
+                if known || windowed {
+                    parameter.ty.clone()
+                } else {
+                    payload
+                },
+            ))
         })
         .collect();
-    let result = if own {
-        signature.result.clone()
-    } else {
-        trace_payload(eval)
+    // The call's own type is the result as this call has it.
+    let windowed = matches!(call.ty, Type::RollingWindow { .. });
+    let result = match &signature.result {
+        None => None,
+        Some(_) if known || windowed => Some(call.ty.clone()),
+        Some(_) => trace_payload(eval),
     };
     Some(Wiring { inputs, result })
 }
