@@ -9,7 +9,8 @@ use hgl_source::FileId;
 
 use super::candidates::{Given, Key, Wanted};
 use super::inference::{fixed, mentions, placed, unsaid};
-use super::{REQUIRING, Requested, Typer, from_place, open, unreadable, whole};
+use super::operators::{Requested, from_place, unreadable};
+use super::{REQUIRING, Typer, open, whole};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program, Role};
