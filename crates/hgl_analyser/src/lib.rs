@@ -460,7 +460,7 @@ pub mod codes {
     /// Codes local to this compiler: the specification rejects what
     /// they report and its catalogue has no row for it. Each is
     /// proposed to the specification, and is replaced by the catalogued
-    /// code when one is agreed. There is none at present.
+    /// code when one is agreed.
     pub mod local {
         /// A node's `cache` initializer reads a temporal input (TIME-1):
         /// a cache is initialized on every start, before any input has
@@ -472,9 +472,19 @@ pub mod codes {
         /// declaration it documents (SDOC-3). Local: the catalogue has
         /// no row for it.
         pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
+        /// A source's `return` has a value (SOURCE-4).
+        pub const SOURCE_RETURN_VALUE: &str = "source.return_value";
+        /// A source's `yield` stands inside a block or an `if` whose
+        /// value is used (SOURCE-4).
+        pub const YIELD_IN_VALUE: &str = "yield.in_value";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 2] = [CACHE_INPUT_READ, DOC_UNKNOWN_KEY];
+        pub const ALL: [&str; 4] = [
+            CACHE_INPUT_READ,
+            DOC_UNKNOWN_KEY,
+            SOURCE_RETURN_VALUE,
+            YIELD_IN_VALUE,
+        ];
     }
 }
 

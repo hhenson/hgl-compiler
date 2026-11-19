@@ -9215,3 +9215,23 @@ fn a_part_not_published_and_a_composite_constant_are_written() {
         );
     }
 }
+
+// ---- Analyser value rules ----
+
+/// Core's OPS-6: "`convert<list<B>>(values)` is admitted too, where
+/// `values` is a `list<A>` and the struct `A` inherits from the abstract
+/// struct `B`". The analyser admits it; the target does not write it
+/// yet, and reports it where it is written.
+#[test]
+fn a_list_of_structs_converted_to_their_parent_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "abstract struct Shape {}\n",
+            "struct Round : Shape { radius: f64 }\n",
+            "export const fn widened(values: list<Round>) -> list<Shape> => convert<list<Shape>>(values)\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:4:64 target.unsupported"]);
+}

@@ -643,6 +643,7 @@ fn children<'a>(value: &'a Expr, into: &mut Vec<&'a Expr>) {
         }
         ExprKind::Unary { operand: inner, .. }
         | ExprKind::Widen(inner)
+        | ExprKind::ParentList(inner)
         | ExprKind::EnumFrom { value: inner, .. }
         | ExprKind::Field { base: inner, .. }
         | ExprKind::Tagged { payload: inner, .. }
