@@ -24,10 +24,10 @@ fn own(price: f64) -> Full {
     }
 }
 fn whole(book: Book) -> Book {
-    when { return book }
+    when all_valid(book) { return book }
 }
 fn bound(book: Book) -> f64 {
-    when {
+    when all_valid(book) {
         let copy = book
         return copy.last
     }

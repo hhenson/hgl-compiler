@@ -87,6 +87,24 @@ fn collection(ty: &Type) -> bool {
     )
 }
 
+/// True where a value of `ty`, a temporal input or a child of one, is
+/// read whole only where its `all_valid` holds. TIME-1: "A read of a
+/// struct, a tuple or a fixed list whole, `return quote`, requires
+/// `all_valid` of it ... A dictionary and an unsized list hold what they
+/// hold: a read of one whole requires its `valid` and no more." An
+/// `atomic<V>` holds whole values, and has no child (TYPE-9).
+pub(super) fn read_whole_all_valid(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Tuple(_)
+            | Type::List { size: Some(_), .. }
+            | Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            }
+    )
+}
+
 impl Typer<'_> {
     /// True in a hook that reads a temporal input's payload where it is
     /// admitted: a `when`, and `stop` (TIME-4, TIME-5). `start` reads no
@@ -337,7 +355,8 @@ impl Typer<'_> {
                 }
             }
             Some(Child::Named(path)) => {
-                self.admit_child(path, node, value.at);
+                let whole = read_whole_all_valid(&value.ty);
+                self.admit_child(path, node, value.at, whole);
                 Expr {
                     ty: window_value(&value.ty),
                     ..value
@@ -348,18 +367,47 @@ impl Typer<'_> {
 
     /// Reports the read of the child `path`, written at `node` and
     /// standing at `at`, where nothing admits it (TIME-1: "one that is
-    /// not admitted rejects (`payload.unguarded`)").
-    fn admit_child(&mut self, path: ChildPath, node: &SyntaxNode, at: Location) {
-        let admitted = self.present.contains(&Fact::ChildValid(path.clone()))
-            || self.present.contains(&Fact::AllValid(path.parent()));
-        if admitted {
-            return;
-        }
+    /// not admitted rejects (`payload.unguarded`)"). Where `whole`, the
+    /// child is a struct, a tuple or a fixed list read whole, which only
+    /// its own `all_valid` admits (TIME-1: "`return rows[0]`, for `rows:
+    /// list<Quote, 2>`, requires `all_valid(rows[0])`, which
+    /// `all_valid(rows)`, one level deep, does not give").
+    fn admit_child(&mut self, path: ChildPath, node: &SyntaxNode, at: Location, whole: bool) {
         let written = node.text().to_string();
         let parent = node
             .children()
             .next()
             .map_or_else(String::new, |base| base.text().to_string());
+        if whole {
+            if self.present.contains(&Fact::AllValid(path.clone())) {
+                return;
+            }
+            self.diagnostics.emit(
+                error(
+                    Category::Phase,
+                    codes::PAYLOAD_UNGUARDED,
+                    at,
+                    format!(
+                        "`{written}` is read whole here, and may not be all valid: a struct, a \
+                         tuple or a fixed list is read whole where its `all_valid` holds"
+                    ),
+                    "TIME-1",
+                )
+                .with_note(format!(
+                    "`all_valid({written})` admits it; `all_valid({parent})` is one level deep, \
+                     and `valid({written})` is true once any of its children is"
+                )),
+            );
+            // One report for one child on a path.
+            self.present.push(Fact::ChildValid(path.clone()));
+            self.present.push(Fact::AllValid(path));
+            return;
+        }
+        let admitted = self.present.contains(&Fact::ChildValid(path.clone()))
+            || self.present.contains(&Fact::AllValid(path.parent()));
+        if admitted {
+            return;
+        }
         self.diagnostics.emit(
             error(
                 Category::Phase,
@@ -508,7 +556,7 @@ impl Typer<'_> {
             && let Some(path) = self.tested_child(&child)
         {
             let named = super::endpoint_argument(given);
-            self.admit_child(path, &named, child.at);
+            self.admit_child(path, &named, child.at, false);
         }
         let ty = match operation {
             // END-3: "`delta_value(x)` returns what `x` published this
