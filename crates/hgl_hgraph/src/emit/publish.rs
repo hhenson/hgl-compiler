@@ -83,10 +83,30 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.dict_replaced(_output, {written})");
         }
+        // TYPE-16, TIME-7: a struct's or a tuple's delta that holds an
+        // unsized list's delta is published through the node's output,
+        // each list's size counted from what it holds (`published_into`),
+        // as a list's own is. A source's node publishes what its
+        // statements yield so when it is due.
+        let parts = result.and_then(|result| list_parts_shape(self.program, result));
+        if let (Some(result), Some(shape)) = (result, &parts)
+            && !whole_value(result, value)
+            && !empty_struct(self.program, result)
+        {
+            if function.mode == Mode::Source {
+                return written;
+            }
+            self.natives = true;
+            return format!("_core.published_into(_output, {written}, {shape})");
+        }
         // An unsized list in a whole value ticks through its own port of
-        // the node's output (`_whole_list`); a source's generator has
-        // none.
-        let port = (function.mode == Mode::Node).then_some("_output");
+        // the node's output (`_whole_list`); a source's statements leave
+        // that to its node, when the value is due (`DEFERRED`).
+        let port = match function.mode {
+            Mode::Node => Some("_output"),
+            Mode::Source if parts.is_some() => Some("_core.DEFERRED"),
+            _ => None,
+        };
         match result {
             // A struct with no field publishes its one value, for a
             // whole value and for its delta alike (`empty_struct`).

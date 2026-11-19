@@ -35,9 +35,11 @@ from hgraph import (
     REMOVE_IF_EXISTS as _REMOVE_IF_EXISTS,
     K as _K,
     SCALAR as _SCALAR,
+    SIZE as _SIZE,
     TIME_SERIES_TYPE as _TIME_SERIES_TYPE,
     TS as _TS,
     TSD as _TSD,
+    TSL as _TSL,
     TSLDelta as _TSLDelta,
     TS_OUT as _TS_OUT,
     TimeSeriesSchema as _TimeSeriesSchema,
@@ -692,16 +694,26 @@ def _whole_list(value, port):
 
     An empty list published where the list holds none, or holds no value
     yet, would not tick (`_ticked`), so `port`, the list's port of the
-    node's output, is made to: with no port it is not written."""
-    if not value:
+    node's output, is made to: with no port, assigned to an entry of a
+    dictionary `out` or a position of a list `out`, which
+    `assigned_to_out` names once, it is not written. A source's
+    statements give `DEFERRED`: its node publishes the value through its
+    port when it is due (`published_into`)."""
+    if not value and port is not DEFERRED:
         if port is None:
             raise NotImplementedError(
-                "the hgraph target does not write an empty unsized list inside a value a source "
-                "yields or a dictionary's entry holds yet"
+                "the hgraph target does not write an empty unsized list assigned to an entry "
+                "or a list's position of `out` yet"
             )
         if len(port) == 0:
             _ticked(port)
     return tuple(value)
+
+
+# The port a source's statements bundle a value with (`bundled`): they make
+# it before it is due, and its node publishes it through its own port then
+# (`published_into`).
+DEFERRED = object()
 
 
 def list_replaced(port, value):
@@ -731,10 +743,11 @@ def list_applied(port, delta):
     between hold no value and are not valid", as hgraph's `TSL` grows.
 
     A negative position fails, as an index outside a list does (EXPR-3).
-    Neither rule says what an entry at or past a size written with it is,
-    nor a removed position the list never held: hgraph fails the run for
-    the first and drops the second, so each is not written. A delta that
-    changes nothing hgraph sees still ticks (`_ticked`)."""
+    An entry at or past a size written with it contradicts the delta, and
+    fails (the owner's decision on hhenson/hgl_spec#124). A removed
+    position the list does not hold lost no value, and is ignored (the
+    owner's decision there). A delta that changes nothing hgraph sees
+    still ticks (`_ticked`)."""
     held = _held_size(port)
     changes = updated(delta)
     gone = removed(delta)
@@ -748,14 +761,14 @@ def list_applied(port, delta):
         size = max(held + written, 0)
     else:
         size = written
-    if written is not None and any(position >= size for position in changes):
-        raise NotImplementedError(
-            "the hgraph target does not write an updated position at or past the size "
-            "a list's delta gives it yet"
-        )
-    if any(position >= max(held, size) for position in gone):
-        raise NotImplementedError(
-            "the hgraph target does not write a removed position past an unsized list's end yet"
+    # The owner's decision on hhenson/hgl_spec#124: an entry at or past the
+    # size written with it is "a failure it contradicts itself". No
+    # catalogued code is one for it, so the failure has none, as an index
+    # outside a list's has none.
+    beyond = [position for position in changes if written is not None and position >= size]
+    if beyond:
+        raise HglError(
+            f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
     if size == held and not changes:
         _ticked(port)
@@ -763,10 +776,11 @@ def list_applied(port, delta):
 
 
 def list_published(port, published):
-    """What a source publishes to its unsized list at `port` for what it
-    yielded, `published`: a list's delta (`list_applied`) or a whole
-    list (`list_replaced`). The source's statements make it before its
-    time is due, and it is applied to the list as the list is then."""
+    """What is published to the unsized list at `port` for `published`,
+    made before it is due: a list's delta (`list_applied`) or a whole
+    list (`list_replaced`), applied to the list as the list is then. A
+    source's statements make what it yields so, and so is a part of a
+    composite's delta made (`published_into`)."""
     if isinstance(published, dict):
         return list_applied(port, published)
     # A whole list of what a generic replay is given, whose type the
@@ -781,6 +795,72 @@ def list_published(port, published):
     return list_replaced(port, published)
 
 
+def published_into(port, value, shape):
+    """What is published through `port`, a node's output, for `value`, a
+    whole value bundled (`bundled`) or a delta, of a struct or a tuple
+    that holds an unsized list, or of the list itself (TIME-7): each list
+    in it as `list_published` makes it, counted from the size it holds
+    (TYPE-16), and every other part as it is.
+
+    `shape` is what the compiler wrote for where the lists are: `"list"`
+    for one, a `dict` of the fields that hold one for a struct, a tuple
+    of each position's for a tuple, and `None` for a part that holds
+    none. A struct's value and its delta are each a `dict` of its fields,
+    a tuple's each a tuple, a null where a position did not change."""
+    if value is None or shape is None:
+        return value
+    if shape == "list":
+        return list_published(port, value)
+    if isinstance(shape, dict):
+        return {field: published_into(port[field], part, shape.get(field)) for field, part in value.items()}
+    return tuple(
+        published_into(port[position(index)], part, within)
+        for index, (part, within) in enumerate(zip(value, shape))
+    )
+
+
+def _emptied(port, shape):
+    """Drops each position of each unsized list `shape` names in what
+    `port` holds (`invalidated`)."""
+    if shape is None:
+        return
+    if shape == "list":
+        if len(port) > 0:
+            port.value = _TSLDelta({}, size_modified=0)
+        return
+    parts = shape.items() if isinstance(shape, dict) else ((position(index), part) for index, part in enumerate(shape))
+    for key, part in parts:
+        _emptied(port[key], part)
+
+
+def invalidated(port, shape):
+    """`invalidate(out)` of an output that holds an unsized list (END-4:
+    "Invalidation clears validity, modification, payload, and delta").
+    hgraph's unbounded `TSL` keeps its positions when it is invalidated,
+    and the next delta read would name them removed: each list is emptied
+    first, which no one reads, since the list is not valid after.
+    `shape` is as `published_into` has it."""
+    _emptied(port, shape)
+    port.invalidate()
+
+
+def list_position(port, index):
+    """The endpoint of an unsized list's position `index`, hgraph's child
+    of the list's port. TIME-1: "A child of a collection ... is an
+    endpoint whether or not it is valid": a position the list does not
+    hold, before it publishes, while it is short, or after a shrink drops
+    it (TYPE-16), is a child that is not valid, as a dictionary's absent
+    key is (`entry_port`). A negative index is no position: "An index
+    outside a list fails where it is evaluated" (EXPR-3)."""
+    if port is _ABSENT_ENTRY:
+        return port
+    if index < 0:
+        _index(index, _held_size(port))
+    if index >= _held_size(port):
+        return _ABSENT_ENTRY
+    return port[index]
+
+
 def list_child(port, index):
     """The port of the position `index` of an unsized list's port, which
     a part of `out` is assigned through (the language's TIME-7). An index
@@ -791,16 +871,31 @@ def list_child(port, index):
     return port[index]
 
 
-def list_value(port):
-    """A temporal list of elements that publish whole and are not null,
-    read whole at its port, a fixed list or an unsized one: a Python list
-    of its elements, made anew. A position that is not valid leaves no
-    whole value (the owner's decision on hhenson/hgl_spec#126 so far, as
-    `unset_read` has it): a list grown past a gap, or with a position
-    removed, is read whole only once each position is valid again."""
-    if not port.all_valid:
+# What `list_value` is given where a list's element type has no value
+# for a position that is not set.
+_NO_HOLE = object()
+
+
+def list_value(port, hole=_NO_HOLE):
+    """A temporal list of elements that publish whole, read whole at its
+    port, a fixed list or an unsized one: a Python list of its elements,
+    made anew. The one reading of a list whole: a hook's, a lifted value
+    function's argument and a trace cell's held value.
+
+    The language's TIME-1 (the owner's decision on hhenson/hgl_spec#124):
+    a position of an unsized list that holds no value, a gap or one
+    removed, reads as the element type's value for "not set" where the
+    type has one, `hole`, NaN for an `f64`; an optional element reads
+    null, of a fixed list too (TYPE-15); and the read fails where there is
+    none, as for an `i64` (`unset_read`). A list that is not valid by its
+    own `valid` (`valid_of`) has no whole value either."""
+    if port.all_valid:
+        return list(port.value)
+    if hole is _NO_HOLE or not valid_of(port, ("list", None)):
         unset_read()
-    return list(port.value)
+    return [
+        child.value if child.valid else hole for child in (port[index] for index in range(len(port)))
+    ]
 
 
 def list_within(delta, size):
@@ -903,7 +998,36 @@ def _removes(change):
     return change is _REMOVE or change is _REMOVE_IF_EXISTS
 
 
-@_compute_node
+@_compute_node(valid=("index",))
+def position_in(
+    values: _TSL[_TS[_SCALAR], _SIZE], index: _TS[int], _output: _TS_OUT[_SCALAR] = None
+) -> _TS[_SCALAR]:
+    """`values[index]` in a graph: the child of an unsized list that
+    `index` selects (the language's TYPE-9, "lists to child positions";
+    EXPR-7, "Structural projection selects a child connection"). TIME-1:
+    "A child of a collection ... is an endpoint whether or not it is
+    valid": a position the list does not hold, or that lost its value, is
+    a child that is not valid, and nothing is published for it; hgraph's
+    own `getitem_` fails the run where the list no longer holds it. It
+    publishes where the index ticks or the selected child does; where the
+    child goes or loses its value, what it published before is
+    invalidated (END-4). It runs where the list is not valid, invalidated
+    whole among them, and requires only the index valid. A negative index
+    fails, as an index outside a list does (EXPR-3)."""
+    selected = index.value
+    if selected < 0:
+        _index(selected, _held_size(values))
+    child = values[selected] if selected < _held_size(values) else None
+    if child is None or not child.valid:
+        if _output.valid:
+            _output.invalidate()
+        return None
+    if index.modified or child.modified or not _output.valid:
+        # A child that holds a null publishes it (see `published`).
+        return published(child.value)
+
+
+@_compute_node(valid=("key",))
 def entry_of(
     dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K], _output: _TS[_SCALAR] = None
 ) -> _TS[_SCALAR]:
@@ -916,9 +1040,11 @@ def entry_of(
     strict read is of an ordinary or atomic dictionary, and not this.
     It publishes where the key ticks or the selected child does, so
     another child's tick is silent; where the selected child is gone or
-    is not valid, what it published before is invalidated (END-4)."""
+    is not valid, what it published before is invalidated (END-4). It
+    runs where the dictionary is not valid, invalidated whole among them,
+    and requires only the key valid."""
     selected = key.value
-    child = dictionary[selected] if selected in dictionary.keys() else None
+    child = dictionary[selected] if dictionary.valid and selected in dictionary.keys() else None
     if child is None or not child.valid:
         if _output.valid:
             _output.invalidate()
@@ -1155,7 +1281,9 @@ def bundled(value, shape=None, port=None):
 
     `port` is the port of the output the value is published to, where
     the node has one: an unsized list in the value is made to tick
-    through its own (`_whole_list`)."""
+    through its own (`_whole_list`). A source's statements give
+    `DEFERRED`, and its node publishes the value through its port when
+    it is due (`published_into`)."""
     if shape is None:
         # Each field publishes whole.
         shape = dict.fromkeys(value._hgl_fields)
@@ -1167,7 +1295,10 @@ def _bundled(value, shape, port):
         return published(value)
     if shape == "list":
         return _whole_list(value, port)
-    within = (lambda key: None) if port is None else (lambda key: port[key])
+    if port is None or port is DEFERRED:
+        within = lambda key: port  # noqa: E731
+    else:
+        within = lambda key: port[key]  # noqa: E731
     if isinstance(shape, dict):
         return {field: _bundled(getattr(value, field), part, within(field)) for field, part in shape.items()}
     if isinstance(shape, tuple):
