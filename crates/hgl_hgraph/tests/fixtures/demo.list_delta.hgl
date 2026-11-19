@@ -76,7 +76,8 @@ test the_delta_read_says_what_changed {
     ]
     # The empty list published first, and again: relayed, the second is a
     # delta that names no change where the relay's list is valid, and is
-    # no tick (TIME-7 on the specification's main, hhenson/hgl_spec#124).
+    # no tick (TIME-7: "Where it is valid the delta changes nothing, and
+    # is no tick").
     assert eval(relay_of(command: [99, 99])) == [delta<list<i64>>(), _]
 }
 

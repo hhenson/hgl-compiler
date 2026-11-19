@@ -81,9 +81,8 @@ impl Emitter<'_> {
         // set is "published as that change", and TYPE-16: "A `removed`
         // that names a key a dictionary does not hold is ignored, and is
         // no failure, as one that names a member a set does not hold is."
-        // TIME-7 on the specification's `main` (hhenson/hgl_spec#124): a
-        // delta that names no change "ticks only where it changes
-        // validity". The provider publishes it on the node's `_output`
+        // TIME-7: "A delta that names no change ... ticks only where it
+        // changes validity". The provider publishes it on the node's `_output`
         // (`entries_published`).
         if function.mode == Mode::Node
             && let Some(result) = result

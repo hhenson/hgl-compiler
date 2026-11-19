@@ -1,0 +1,435 @@
+module demo.pins2_wave3
+
+# ---- When two compile-time constants are the same (UNIT-13) ----
+
+# GEN-13's accepted declaration fragments, and `reciprocal` with
+# `requires k == 0.0` added.
+struct Scaled<const k: f64> { value: f64 }
+const fn reciprocal<const k: f64>() -> f64 => 1.0 / k
+const fn zero_reciprocal<const k: f64>() -> f64 requires k == 0.0 => 1.0 / k
+
+const NAN: f64 = 0.0 / 0.0
+
+# GEN-13: "`reciprocal<1>()` and `reciprocal<1.0>()` call one instance.
+# `reciprocal<0.0>()` is positive infinity and `reciprocal<-0.0>()`
+# negative infinity, whichever is called first. With `requires k == 0.0`
+# added, `reciprocal` admits both of those calls (GEN-3)." OPS-6: "the
+# infinities are `inf` and `-inf`".
+const fn reciprocals() -> list<str, 4> => [
+    convert<str>(reciprocal<-0.0>()),
+    convert<str>(reciprocal<0.0>()),
+    convert<str>(zero_reciprocal<-0.0>()),
+    convert<str>(zero_reciprocal<0.0>()),
+]
+
+fn reciprocals_in_a_node(tick: i64) -> list<str, 4> {
+    when { return [convert<str>(reciprocal<0.0>()), convert<str>(reciprocal<-0.0>()), convert<str>(reciprocal<1>()), convert<str>(reciprocal<1.0>())] }
+}
+
+test the_reciprocal_of_each_zero_is_its_own_infinity {
+    assert reciprocals() == ["-inf", "inf", "-inf", "inf"]
+    assert reciprocal<1>() == reciprocal<1.0>()
+    assert eval(reciprocals_in_a_node(tick: [1])) == [["inf", "-inf", "1.0", "1.0"]]
+}
+
+# GEN-13: "`Scaled<1>`, `Scaled<1.0>` and `Scaled<1.00>` are one type";
+# GEN-1: "Repeated parameters require equivalent types or one constant
+# (UNIT-13)".
+const fn both_scaled(a: Scaled<1>, b: Scaled<1.0>) -> list<Scaled<1.00>, 2> => [a, b]
+
+const fn scaled_sum<const k: f64>(a: Scaled<k>, b: Scaled<k>) -> f64 => k + a.value + b.value
+
+test scaled_of_one_however_written_is_one_type {
+    assert both_scaled(Scaled<1.00>(value: 2.0), Scaled<1>(value: 3)) == [
+        Scaled<1.0>(value: 2.0),
+        Scaled<1.0>(value: 3.0),
+    ]
+    assert scaled_sum(Scaled<1>(value: 2.0), Scaled<1.00>(value: 3.0)) == 6.0
+}
+
+# UNIT-13: "any two NaNs, `0.0 / 0.0` among them, are one constant", and
+# "the `datetime`s `@2026-09-03T09:30Z` and `@2026-09-03T10:30+01:00`,
+# one instant".
+const fn either_nan(x: Scaled<NAN>) -> Scaled<0.0 / 0.0> => x
+
+const fn instant<const t: datetime>() -> datetime => t
+
+test any_two_nans_are_one_constant_and_one_instant_is_one {
+    assert either_nan(Scaled<-(0.0 / 0.0)>(value: 1.0)).value == 1.0
+    assert instant<@2026-09-03T09:30Z>() == instant<@2026-09-03T10:30+01:00>()
+}
+
+# EXPR-5: "`let x: f64 = 1` binds `1.0` (UNIT-13)", as its text shows
+# (OPS-6: "always with a `.` or an exponent").
+const fn bound_one() -> str {
+    let x: f64 = 1
+    return convert<str>(x)
+}
+
+fn bound_one_in_a_node(tick: i64) -> str {
+    when {
+        let x: f64 = 1
+        return convert<str>(x)
+    }
+}
+
+test an_integer_bound_as_an_f64_is_its_float {
+    assert bound_one() == "1.0"
+    assert eval(bound_one_in_a_node(tick: [1])) == ["1.0"]
+}
+
+# UNIT-9: "`= 1` and `= 1.0` of an `f64` field are one default."
+abstract struct Low { x: f64 = 1 }
+abstract struct High { x: f64 = 1.0 }
+struct Both : Low, High { y: i64 }
+
+test one_default_written_two_ways_is_one_default {
+    assert convert<str>(Both(y: 1).x) == "1.0"
+}
+
+# ---- When a delta that names no change ticks (TIME-7) ----
+
+# TIME-7: "A struct, a tuple and a `list<V, N>` are valid where a child
+# is (TIME-9), and such a delta of one, `delta<Quote>()`, sets no child:
+# it changes no validity, and is never a tick." Its worked example: "The
+# `Quote` above written `delta<Quote>()` sets no field: one that is not
+# valid stays so, and nothing ticks." Core's END-3: "Such a delta of a
+# struct, a tuple or a `list<V, N>` sets no child and changes no validity
+# (END-7): it is never a tick." 0 writes a delta that names no change,
+# 1 sets a child, and any other step invalidates.
+struct Quote {
+    bid: f64
+    ask: f64
+}
+
+fn publish_quote(step: i64) -> Quote {
+    inject out
+    when {
+        if step == 0 { return delta<Quote>() }
+        if step == 1 { out = delta<Quote>(bid: 1.0) }
+        if step == 2 { invalidate(out) }
+    }
+}
+
+fn quote_woken(quote: Quote) -> bool {
+    when valid([]) { return valid(quote) }
+}
+
+fn quote_watched(step: i64) -> bool => quote_woken(publish_quote(step))
+
+fn publish_pair(step: i64) -> tuple<i64, i64> {
+    inject out
+    when {
+        if step == 0 { return (null, null) }
+        if step == 1 { return (1, null) }
+        invalidate(out)
+    }
+}
+
+fn pair_woken(pair: tuple<i64, i64>) -> bool {
+    when valid([]) { return valid(pair) }
+}
+
+fn pair_watched(step: i64) -> bool => pair_woken(publish_pair(step))
+
+fn publish_slots(step: i64) -> list<i64, 2> {
+    inject out
+    when {
+        if step == 0 { return delta<list<i64, 2>>() }
+        if step == 1 { return delta<list<i64, 2>>(updated: [0: 1]) }
+        invalidate(out)
+    }
+}
+
+fn slots_woken(slots: list<i64, 2>) -> bool {
+    when valid([]) { return valid(slots) }
+}
+
+fn slots_watched(step: i64) -> bool => slots_woken(publish_slots(step))
+
+test a_delta_of_a_struct_a_tuple_or_a_fixed_list_that_names_no_change_is_never_a_tick {
+    assert eval(quote_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
+    assert eval(publish_quote(step: [0, 1, 0])) == [_, delta<Quote>(bid: 1.0)]
+    assert eval(pair_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
+    assert eval(slots_watched(step: [0, 1, 0, 2, 0])) == [_, true, _, false]
+    # From a trace's cell (TST-5: "as such a `return` is").
+    assert eval(quote_woken(quote: [delta<Quote>(), delta<Quote>(ask: 2.0), delta<Quote>()])) == [_, true]
+}
+
+# TIME-9: "A published empty list or dictionary, or one that a delta
+# naming no change makes valid (TIME-7), has no element and is valid."
+# Core's END-3: "it makes the endpoint valid, empty and modified, and
+# `delta_value` returns that delta". END-5: "A delta that names no change,
+# written where the endpoint is valid, is no publication (END-3): it marks
+# nothing modified, moves no `last_modified` (END-6), and notifies no
+# subscriber." 0 writes a delta that names no change, 1 a delta that
+# changes, and any other step invalidates. The reader is woken by `probe`
+# at each cycle.
+fn publish_readings(step: i64) -> list<i64> {
+    inject out
+    when {
+        if step == 0 { return delta<list<i64>>() }
+        if step == 1 { return delta<list<i64>>(updated: [0: 1]) }
+        invalidate(out)
+    }
+}
+
+fn publish_book(step: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if step == 0 { return delta<dict<str, i64>>() }
+        if step == 1 { return delta<dict<str, i64>>(updated: ["a": 1]) }
+        invalidate(out)
+    }
+}
+
+fn publish_members(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 0 { return delta<set<i64>>() }
+        if step == 1 { return delta<set<i64>>(added: [1]) }
+        invalidate(out)
+    }
+}
+
+const fn reading_count(readings: list<i64>) -> i64 {
+    var count: i64 = 0
+    for reading in readings { count += 1 }
+    return count
+}
+
+const fn entry_count(prices: dict<str, i64>) -> i64 {
+    var count: i64 = 0
+    for key, price in prices { count += 1 }
+    return count
+}
+
+const fn member_count(members: set<i64>) -> i64 {
+    var count: i64 = 0
+    for member in members { count += 1 }
+    return count
+}
+
+fn readings_seen(probe: bool, readings: list<i64>) -> list<i64, 3> {
+    when modified(probe) && valid(readings) {
+        let all = if all_valid(readings) { 1 } else { 0 }
+        let changed = if modified(readings) { 1 } else { 0 }
+        return [all, changed, reading_count(readings)]
+    }
+}
+
+fn book_seen(probe: bool, prices: dict<str, i64>) -> list<i64, 3> {
+    when modified(probe) && valid(prices) {
+        let all = if all_valid(prices) { 1 } else { 0 }
+        let changed = if modified(prices) { 1 } else { 0 }
+        return [all, changed, entry_count(prices)]
+    }
+}
+
+fn members_seen(probe: bool, members: set<i64>) -> list<i64, 2> {
+    when modified(probe) && valid(members) {
+        let changed = if modified(members) { 1 } else { 0 }
+        return [changed, member_count(members)]
+    }
+}
+
+fn readings_seen_of(probe: bool, step: i64) -> list<i64, 3> => readings_seen(probe, publish_readings(step))
+fn book_seen_of(probe: bool, step: i64) -> list<i64, 3> => book_seen(probe, publish_book(step))
+fn members_seen_of(probe: bool, step: i64) -> list<i64, 2> => members_seen(probe, publish_members(step))
+
+test a_delta_that_makes_a_collection_valid_makes_it_empty_and_modified {
+    assert eval(readings_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+        [1, 1, 0], [1, 0, 0], [1, 1, 1], _, [1, 1, 0],
+    ]
+    assert eval(book_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+        [1, 1, 0], [1, 0, 0], [1, 1, 1], _, [1, 1, 0],
+    ]
+    assert eval(members_seen_of(probe: [true, true, true, true, true], step: [0, 0, 1, 2, 0])) == [
+        [1, 0], [0, 0], [1, 1], _, [1, 0],
+    ]
+    # The delta read where it makes the value valid is that delta.
+    assert eval(publish_readings(step: [0, 0, 2, 0])) == [delta<list<i64>>(), _, _, delta<list<i64>>()]
+}
+
+fn readings_stamp(probe: bool, readings: list<i64>) -> datetime? {
+    when modified(probe) { return last_modified(readings) }
+}
+
+fn book_stamp(probe: bool, prices: dict<str, i64>) -> datetime? {
+    when modified(probe) { return last_modified(prices) }
+}
+
+fn members_stamp(probe: bool, members: set<i64>) -> datetime? {
+    when modified(probe) { return last_modified(members) }
+}
+
+fn readings_stamp_of(probe: bool, step: i64) -> datetime? => readings_stamp(probe, publish_readings(step))
+fn book_stamp_of(probe: bool, step: i64) -> datetime? => book_stamp(probe, publish_book(step))
+fn members_stamp_of(probe: bool, step: i64) -> datetime? => members_stamp(probe, publish_members(step))
+
+test a_delta_that_names_no_change_moves_no_last_modified {
+    assert eval(readings_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+        earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
+    ]
+    assert eval(book_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+        earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
+    ]
+    assert eval(members_stamp_of(probe: [true, true, true, true], step: [0, 0, 1, 0])) == [
+        earliest_start, earliest_start, earliest_start + 2us, earliest_start + 2us,
+    ]
+}
+
+# TST-5: "A cell that is a delta naming no change is a tick only where it
+# makes the value valid, as such a `return` is (TIME-7): given to a valid
+# input it wakes no reader, and where the result is valid a cycle that
+# writes only such a delta is `_` in the expectation."
+fn members_woken(members: set<i64>) -> bool {
+    when valid([]) { return valid(members) }
+}
+
+fn readings_woken(readings: list<i64>) -> bool {
+    when valid([]) { return valid(readings) }
+}
+
+fn relay_members(members: set<i64>) -> set<i64> {
+    when { return delta_value(members) }
+}
+
+fn relay_readings(readings: list<i64>) -> list<i64> {
+    when { return delta_value(readings) }
+}
+
+test a_cell_that_names_no_change_wakes_no_reader_where_the_input_is_valid {
+    assert eval(members_woken(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])])) == [true, _, true]
+    assert eval(readings_woken(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])])) == [true, _, true]
+    assert eval(relay_members(members: [delta<set<i64>>(), delta<set<i64>>(), delta<set<i64>>(added: [1])])) == [
+        delta<set<i64>>(),
+        _,
+        delta<set<i64>>(added: [1]),
+    ]
+    assert eval(relay_readings(readings: [delta<list<i64>>(), delta<list<i64>>(), delta<list<i64>>(updated: [0: 1])])) == [
+        delta<list<i64>>(),
+        _,
+        delta<list<i64>>(updated: [0: 1], size_modified: 1),
+    ]
+}
+
+# TIME-7: "A value published whole, the same again or empty, is no delta,
+# and ticks as any publication does". A whole set published the same
+# again, not empty, is left: hgraph's `TSS` does not tick for it.
+fn publish_whole(step: i64) -> list<i64> {
+    inject out
+    when {
+        if step == 0 { return [] }
+        if step == 1 { return [1, 2] }
+        invalidate(out)
+    }
+}
+
+fn whole_book(step: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if step == 0 { return [] }
+        if step == 1 { return ["a": 1] }
+        invalidate(out)
+    }
+}
+
+fn whole_woken(values: list<i64>) -> bool {
+    when valid([]) { return valid(values) }
+}
+
+fn whole_book_woken(prices: dict<str, i64>) -> bool {
+    when valid([]) { return valid(prices) }
+}
+
+fn whole_watched(step: i64) -> bool => whole_woken(publish_whole(step))
+fn whole_book_watched(step: i64) -> bool => whole_book_woken(whole_book(step))
+
+test a_value_published_whole_the_same_again_ticks {
+    assert eval(whole_watched(step: [0, 0, 1, 1])) == [true, true, true, true]
+    assert eval(whole_book_watched(step: [0, 0, 1, 1])) == [true, true, true, true]
+}
+
+# TIME-7 within a tuple and a struct that hold an unsized list: "Where it
+# is valid the delta changes nothing, and is no tick", for the list and
+# for a dictionary or a set beside it, and "Where a `list<V>`, a
+# dictionary or a set is not valid ... it makes the value valid and
+# empty, and ticks". A tuple's delta that sets no position sets no child
+# and is never a tick. TYPE-16: "A `removed` that names a key a
+# dictionary does not hold is ignored, and is no failure", and proposed
+# in TIME-7, such a delta "names no change". 0 writes a delta that names
+# no change to the dictionary or the set, 1 sets the list's first
+# position, 2 removes what is not held, 3 writes a delta that names no
+# change to the list, 4 sets no position, and any other step
+# invalidates.
+fn publish_listed_book(step: i64) -> tuple<list<i64>, dict<str, i64>> {
+    inject out
+    when {
+        if step == 0 { return (null, delta<dict<str, i64>>()) }
+        if step == 1 { return (delta<list<i64>>(updated: [0: 1]), null) }
+        if step == 2 { return (null, delta<dict<str, i64>>(removed: ["z"])) }
+        if step == 3 { return (delta<list<i64>>(), null) }
+        if step == 4 { return (null, null) }
+        invalidate(out)
+    }
+}
+
+fn listed_book_woken(pair: tuple<list<i64>, dict<str, i64>>) -> list<bool, 3> {
+    when valid([]) { return [valid(pair), valid(pair[0]), valid(pair[1])] }
+}
+
+fn listed_book_watched(step: i64) -> list<bool, 3> => listed_book_woken(publish_listed_book(step))
+
+fn publish_listed_members(step: i64) -> tuple<list<i64>, set<i64>> {
+    inject out
+    when {
+        if step == 0 { return (null, delta<set<i64>>()) }
+        if step == 1 { return (delta<list<i64>>(updated: [0: 1]), null) }
+        if step == 2 { return (null, delta<set<i64>>(removed: [9])) }
+        if step == 3 { return (delta<list<i64>>(), null) }
+        if step == 4 { return (null, null) }
+        invalidate(out)
+    }
+}
+
+fn listed_members_woken(pair: tuple<list<i64>, set<i64>>) -> list<bool, 3> {
+    when valid([]) { return [valid(pair), valid(pair[0]), valid(pair[1])] }
+}
+
+fn listed_members_watched(step: i64) -> list<bool, 3> => listed_members_woken(publish_listed_members(step))
+
+struct Shelf {
+    items: list<i64>
+    tags: set<i64>
+}
+
+fn publish_shelf(step: i64) -> Shelf {
+    inject out
+    when {
+        if step == 0 { return delta<Shelf>(tags: delta<set<i64>>()) }
+        if step == 1 { return delta<Shelf>(items: delta<list<i64>>(updated: [0: 1])) }
+        if step == 2 { return delta<Shelf>(tags: delta<set<i64>>(removed: [9])) }
+        if step == 3 { return delta<Shelf>(items: delta<list<i64>>()) }
+        if step == 4 { return delta<Shelf>() }
+        invalidate(out)
+    }
+}
+
+fn shelf_woken(shelf: Shelf) -> list<bool, 3> {
+    when valid([]) { return [valid(shelf), valid(shelf.items), valid(shelf.tags)] }
+}
+
+fn shelf_watched(step: i64) -> list<bool, 3> => shelf_woken(publish_shelf(step))
+
+test a_delta_that_names_no_change_beside_an_unsized_list_ticks_only_where_it_makes_a_child_valid {
+    assert eval(listed_book_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+        _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
+    ]
+    assert eval(listed_members_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+        _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
+    ]
+    assert eval(shelf_watched(step: [4, 1, 0, 0, 2, 3, 4, 5, 3])) == [
+        _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
+    ]
+}

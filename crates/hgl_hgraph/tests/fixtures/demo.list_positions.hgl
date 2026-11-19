@@ -95,9 +95,10 @@ test a_runtime_read_past_the_list_fails_with_its_code {
 }
 
 # TYPE-16: a removed position the list never held: nothing is lost and
-# nothing fails, as for a dictionary's absent key. Proposed in TIME-7 on
-# the specification's main (hhenson/hgl_spec#124): such a delta names no
-# change, and where the list is valid is no tick.
+# nothing fails, as for a dictionary's absent key. Proposed in TIME-7:
+# "a delta whose every entry is ignored, the removal of a key, a member
+# or a position that is not held (TYPE-16), names no change", and where
+# the list is valid is no tick.
 fn relayed(values: list<i64>) -> list<i64> {
     when { return delta_value(values) }
 }
