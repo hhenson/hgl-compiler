@@ -519,6 +519,200 @@ fn a_const_fn_is_given_a_trace_as_the_list_of_its_publications() {
     assert_eq!(trace.ty.to_string(), "trace of i64");
 }
 
+/// TST-5: "Each cell is one cycle's publication, written as a `return`
+/// is (TIME-7) ... a T, published whole, or a `delta<T>` (TYPE-16),
+/// published as that change. A list, a tuple, a struct and a dictionary
+/// are each written either way". TIME-7: "a value that is a T is
+/// published whole ... A value that is no T and is a `delta<T>` is
+/// published as that change." So a tuple written in a cell is the whole
+/// tuple where it is a T: `(2, null)` of a `tuple<i64, i64?>` holds a
+/// published null, and `(1, [1, 2, 3])` a whole list. Where it is no T,
+/// `(null, 3)` of a `tuple<i64, i64>`, it is the tuple's delta. An
+/// expectation's cells are read the same. TST-16: a trace given to a
+/// `const fn` is "for a result type T a `list<tuple<datetime,
+/// delta<T>>>`".
+#[test]
+fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
+    let checked = module(concat!(
+        "fn second_null(pair: tuple<i64, i64?>) -> bool {\n",
+        "    when valid(pair[1]) { return pair[1] == null }\n",
+        "}\n",
+        "const fn digits(values: list<i64>) -> i64 => 0\n",
+        "fn second_digits(pair: tuple<i64, list<i64>>) -> i64 => digits(pair[1])\n",
+        "fn first_of(pair: tuple<i64, i64>) -> i64 => pair[0]\n",
+        "fn pair_out(command: i64) -> tuple<i64, list<i64>> {\n",
+        "    when { return (command, [1, 2, 3]) }\n",
+        "}\n",
+        "fn pair_of(command: i64) -> tuple<i64, i64?> {\n",
+        "    when { return (command, null) }\n",
+        "}\n",
+        "const fn pairs_seen(published: list<tuple<datetime, delta<tuple<i64, i64?>>>>) -> i64 => 0\n",
+        "test cells {\n",
+        "    assert eval(second_null(pair: [(1, 5), (2, null)])) == [false, true]\n",
+        "    assert eval(second_digits(pair: [(1, [1, 2, 3]), (2, [1])])) == [0, 0]\n",
+        "    assert eval(second_digits(pair: [\n",
+        "        (1, [1]),\n",
+        "        (null, delta<list<i64>>(size_modified: -1)),\n",
+        "    ])) == [0, 0]\n",
+        "    assert eval(first_of(pair: [(1, 2), (null, 3)])) == [1, _]\n",
+        "    assert eval(pair_out(command: [7])) == [(7, [1, 2, 3])]\n",
+        "    assert eval(pair_of(command: [7, 8])) == [(7, null), (null, 9)]\n",
+        "    let count = pairs_seen(eval(pair_of(command: [7])))\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    // The type of each cell that is a tuple, in the order written.
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let mut cells = Vec::new();
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |expression| {
+        if let ExprKind::Trace(written) = &expression.kind {
+            cells.extend(
+                written
+                    .iter()
+                    .filter_map(|cell| cell.value.as_ref())
+                    .map(|value| value.ty.to_string())
+                    .filter(|ty| ty.starts_with("tuple")),
+            );
+        }
+    });
+    assert_eq!(
+        cells,
+        [
+            // Whole, a null among them.
+            "tuple<i64, i64?>",
+            "tuple<i64, i64?>",
+            "tuple<i64, list<i64>>",
+            "tuple<i64, list<i64>>",
+            // Whole, then the delta.
+            "tuple<i64, list<i64>>",
+            "tuple<i64?, delta<list<i64>>?>",
+            "tuple<i64, i64>",
+            "tuple<i64?, i64?>",
+            // An expectation's: whole, and whole then the delta.
+            "tuple<i64, list<i64>>",
+            "tuple<i64, i64?>",
+            "tuple<i64?, delta<i64?>?>",
+        ]
+    );
+    assert_eq!(locals(&checked, "cells"), ["count: i64"]);
+}
+
+/// TST-5: a cell of a trace given to a parameter is "written as a
+/// `return` is", the parameter's type T saying which a cell is. A
+/// generic target's parameters of types written out are the same with
+/// its generic arguments in place (GEN-2): a tuple's trace there is a
+/// trace of that tuple, so a trace an earlier eval gave is taken, and a
+/// cell written as a T is read whole. A tuple that names a generic
+/// parameter, `tuple<T, T>`, is found from a trace an eval gave as from
+/// one written out (GEN-2: "Resolve every needed generic from actual
+/// inputs"), and its cells are then read as any tuple's are. An
+/// `atomic<tuple<A, B>>` publishes whole (TYPE-9), its cell the tuple
+/// itself, generic target or not.
+#[test]
+fn a_tuple_trace_is_given_to_a_generic_target() {
+    let checked = module(concat!(
+        "fn two(command: i64) -> tuple<i64, i64> {\n",
+        "    when { return (command, command) }\n",
+        "}\n",
+        "fn consume<T>(pair: tuple<i64, i64?>, const tag: T) -> i64 {\n",
+        "    when all_valid(pair) { return pair[0] }\n",
+        "}\n",
+        "fn snap(command: i64) -> atomic<tuple<i64, i64>> {\n",
+        "    when { return (command, command) }\n",
+        "}\n",
+        "fn kept_whole<T>(pair: atomic<tuple<i64, i64>>, const tag: T) -> i64 {\n",
+        "    when { return pair[0] }\n",
+        "}\n",
+        "fn kept_part<T>(pair: atomic<tuple<T, i64>>, const tag: T) -> i64 {\n",
+        "    when { return pair[1] }\n",
+        "}\n",
+        "fn same_pair<T>(pair: tuple<T, T>) -> i64 {\n",
+        "    when all_valid(pair) { return 1 }\n",
+        "}\n",
+        "fn forwarded<T>(pair: tuple<i64, i64>, const tag: T) -> tuple<i64, i64> {\n",
+        "    when { return pair }\n",
+        "}\n",
+        "test given {\n",
+        "    let pairs = eval(two(command: [1, 2]))\n",
+        "    assert eval(forwarded(pair: pairs, tag: 1)) == [(1, 1), (2, 2)]\n",
+        "    assert eval(consume(pair: [(1, null)], tag: 1)) == [1]\n",
+        "    assert eval(same_pair(pair: pairs)) == [1, 1]\n",
+        "    assert eval(same_pair(pair: [(1, 2), (null, 3)])) == [1, 1]\n",
+        "    let snaps = eval(snap(command: [1]))\n",
+        "    assert eval(kept_whole(pair: snaps, tag: 1)) == [1]\n",
+        "    assert eval(kept_whole(pair: [(1, 2)], tag: 1)) == [1]\n",
+        "    assert eval(kept_part(pair: snaps, tag: 1)) == [1]\n",
+        "}\n",
+    ));
+    assert_eq!(checked.summary(), NONE, "{}", checked.report);
+    let module = checked.program.module("m").expect("module m exists");
+    let body = module.test_bodies[0]
+        .as_ref()
+        .expect("the test has a block");
+    let mut cells = Vec::new();
+    hgl_analyser::hir::walk_statements(&body.statements, &mut |expression| {
+        if let ExprKind::Trace(written) = &expression.kind {
+            cells.extend(
+                written
+                    .iter()
+                    .filter_map(|cell| cell.value.as_ref())
+                    .map(|value| value.ty.to_string()),
+            );
+        }
+    });
+    assert_eq!(
+        cells,
+        [
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
+            "tuple<i64, i64>",
+            "tuple<i64, i64?>",
+            "i64",
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
+            "tuple<i64?, i64?>",
+            "i64",
+            "i64",
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
+            "i64",
+            "i64",
+        ]
+    );
+}
+
+/// TYPE-16: "A delta that names one member, key or position both as
+/// added or updated and as removed is malformed. A constant one is
+/// rejected (`delta.overlap`)." TIME-7: "A value that is no T and is a
+/// `delta<T>` is published as that change", and TST-5 has a cell
+/// written as a `return` is. A malformed delta returned, or written in a
+/// cell, is a delta all the same: it is reported for its overlap, and
+/// not again as no complete value of its place.
+#[test]
+fn a_malformed_delta_is_reported_once() {
+    let checked = module(concat!(
+        "fn kept_set(values: set<i64>) -> set<i64> {\n",
+        "    when { return delta<set<i64>>(added: [1], removed: [1]) }\n",
+        "}\n",
+        "test overlapping {\n",
+        "    assert eval(kept_set(values: [delta<set<i64>>(added: [2], removed: [2])])) == [[2]]\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:32:57 type/delta.overlap TYPE-16",
+            "m.hgl:35:73 type/delta.overlap TYPE-16",
+        ]
+    );
+}
+
 /// TST-3: a trace is "given to a `const fn` as an argument. It is not a
 /// temporal argument outside an eval, is stored in no field". TST-16:
 /// there it is "a `list<tuple<datetime, delta<T>>>`, one tuple for each
