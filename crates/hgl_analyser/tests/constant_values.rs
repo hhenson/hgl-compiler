@@ -1106,6 +1106,38 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
 
 // ---- The review of #218 ----
 
+/// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
+/// value, not `==`: `-0.0` and `0.0` are different constants: different
+/// type arguments, different instances." "`requires X == 0.0` is the
+/// language's `==`: it holds for `-0.0`." "A NaN constant is the same
+/// constant as a NaN constant": NUM-3's true division "defaults to the
+/// `ieee` zero policy ... zero divided by zero produces NaN", which is a
+/// constant.
+#[test]
+fn a_constant_is_its_value_and_a_comparison_the_languages() {
+    let shared = concat!(
+        "struct Scaled<const X: f64> { v: i64 }\n",
+        "const fn z<const X: f64>(v: f64) -> f64 requires X == 0.0 => v\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Scaled<0.0>) -> Scaled<0.00> => x\n\
+             const fn b(x: Scaled<-0.0>) -> Scaled<-(0.0)> => x\n\
+             const fn c() -> f64 => z<-0.0>(1.0) + z<0.0>(1.0)\n\
+             const NAN: f64 = 0.0 / 0.0\n\
+             const fn d(t: Scaled<NAN>) -> Scaled<0.0 / 0.0> => t\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Scaled<-0.0>) -> Scaled<0.0> => x\n\
+             const fn b(x: Scaled<0.0>) -> Scaled<-0.0> => x\n"
+        ),
+        &["4 type.mismatch", "5 type.mismatch"],
+    );
+}
+
 /// UNIT-13: "a failure in evaluating it is a required-constant failure
 /// (ERR-9)", and ERR-9: "Required constant failures reject where
 /// specified": a constant whose `i64` arithmetic leaves the `i64`s

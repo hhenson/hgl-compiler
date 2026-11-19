@@ -785,7 +785,10 @@ impl<'a> Typer<'a> {
                     if let Some(constant) = constant {
                         match seen
                             .iter()
-                            .find(|(other, _)| other.same(&constant) == Some(true))
+                            // CTRL-6: "compared by resolved value", as the
+                            // selector's `==` compares them when the
+                            // program runs (`ConstantValue::equals`).
+                            .find(|(other, _)| other.equals(&constant) == Some(true))
                         {
                             Some((_, first)) => self.diagnostics.emit(
                                 error(

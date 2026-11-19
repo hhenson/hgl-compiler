@@ -660,8 +660,6 @@ impl From<Value> for ConstantValue {
     fn from(value: Value) -> ConstantValue {
         match value {
             Value::Int(value) => ConstantValue::Int(value),
-            // NUM-5: a NaN is equal to nothing; no constant is one.
-            Value::Float(value) if value.is_nan() => ConstantValue::Unevaluated,
             Value::Float(value) => ConstantValue::Float(value),
             Value::Bool(value) => ConstantValue::Bool(value),
             Value::Str(value) => ConstantValue::Str(value),
@@ -1842,8 +1840,8 @@ pub(crate) fn combined(
         // OPS-2: "`==` and `!=` compare two values of one type"; two of
         // two types have no candidate, and are not worked out here.
         (Op::Equal | Op::NotEqual, _, _) if !one_type(left, right) => None,
-        (Op::Equal, _, _) => left.same(right).map(V::Bool),
-        (Op::NotEqual, _, _) => left.same(right).map(|same| V::Bool(!same)),
+        (Op::Equal, _, _) => left.equals(right).map(V::Bool),
+        (Op::NotEqual, _, _) => left.equals(right).map(|equal| V::Bool(!equal)),
         (Op::And, V::Bool(left), V::Bool(right)) => Some(V::Bool(*left && *right)),
         (Op::Or, V::Bool(left), V::Bool(right)) => Some(V::Bool(*left || *right)),
         (Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual, _, _) => ordered(left, right)
@@ -1890,8 +1888,8 @@ pub(crate) fn combined(
         }),
         // NUM-3: `/` of numbers is true division, an `f64`, under the
         // `ieee` zero policy by default: a finite nonzero numerator by a
-        // zero is a signed infinity, and zero by zero a NaN, which is no
-        // constant (NUM-5).
+        // zero is a signed infinity, and zero by zero a NaN, which is a
+        // constant, the same as any NaN constant (hhenson/hgl_spec#139).
         (Op::Divide, V::Int(left), V::Int(right)) => float(divided(*left, *right)),
         // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
         // f64": the `i64` as the `f64` nearest it.
@@ -2039,9 +2037,11 @@ fn floored(left: f64, right: f64) -> (f64, f64) {
     (floor, remainder)
 }
 
-/// An `f64` result as a constant: a NaN is none (NUM-5).
+/// An `f64` result as a constant: a NaN and an infinity too
+/// (hhenson/hgl_spec#139: "A NaN constant is the same constant as a NaN
+/// constant").
 fn float(value: f64) -> Option<ConstantValue> {
-    (!value.is_nan()).then_some(ConstantValue::Float(value))
+    Some(ConstantValue::Float(value))
 }
 
 /// False where `left` and `right` are known to be values of two types,
@@ -2177,14 +2177,19 @@ pub(crate) fn worked_out(value: &ConstantValue) -> bool {
 // ---- Comparing ----
 
 impl ConstantValue {
-    /// Whether two constants are one value: `Some(true)` where they are,
-    /// `Some(false)` where they are not, `None` where that is not known.
+    /// Whether two constants are the same constant: `Some(true)` where
+    /// they are, `Some(false)` where they are not, `None` where that is
+    /// not known. This is what type identity and a target's instances
+    /// ask (GEN-8, TYPE-3). A comparison the program makes asks
+    /// [`ConstantValue::equals`].
     ///
-    /// Two values of one type are the same where they are equal as that
-    /// type's `==` has them (core's OPS-2), however each is written:
-    /// `1.0` and `1.00`, `0.0` and `-0.0` (NUM-4: "Plain numeric `==` is
-    /// exact"), `60s` and `1m`, `1Y` and `12M` (TYPE-17). Two temporal
-    /// values are compared by [`same_temporal`].
+    /// Two values of one type are the same where they are the same value
+    /// of it, however each is written: `1.0` and `1.00`, `60s` and `1m`,
+    /// `1Y` and `12M` (TYPE-17). Two temporal values are compared by
+    /// [`same_temporal`]. "The same is the same value, not `==`: `-0.0`
+    /// and `0.0` are different constants ... A NaN constant is the same
+    /// constant as a NaN constant" (hhenson/hgl_spec#139, written in
+    /// UNIT-13): two `f64` are compared by [`same_float`].
     ///
     /// What is not valued is neither: [`ConstantValue::Unevaluated`]
     /// gives `None` beside anything. So does a generic value parameter,
@@ -2194,6 +2199,28 @@ impl ConstantValue {
     /// known, for a literal where an `f64` is expected is read as one
     /// (EXPR-5): beside each other they give `None` too.
     pub fn same(&self, other: &ConstantValue) -> Option<bool> {
+        self.compared(other, &same_float)
+    }
+
+    /// Whether two constants are equal as the language's `==` compares
+    /// them (OPS-2): what a `requires` asks of an option, and what a
+    /// `switch` label's duplicates and a delta's overlap ask, which the
+    /// program compares as it runs. "`requires X == 0.0` is the
+    /// language's `==`: it holds for `-0.0`" (hhenson/hgl_spec#139): it
+    /// is [`ConstantValue::same`] but that two `f64` are equal as numbers
+    /// (NUM-5: "opposite signed zeros are equal", and "NaN is neither
+    /// equal nor close to any value, including itself").
+    ///
+    /// One constant held by its name, or one generic value parameter,
+    /// written twice is taken to equal itself, as it is the same
+    /// constant: whether it is a NaN is not known.
+    pub fn equals(&self, other: &ConstantValue) -> Option<bool> {
+        self.compared(other, &|left, right| left == right)
+    }
+
+    /// [`ConstantValue::same`] and [`ConstantValue::equals`], which
+    /// differ in how they compare two `f64`: `floats`.
+    fn compared(&self, other: &ConstantValue, floats: &dyn Fn(f64, f64) -> bool) -> Option<bool> {
         use ConstantValue as V;
         // All of two lists of answers: false where one is, true where
         // each is, and otherwise not known.
@@ -2204,7 +2231,7 @@ impl ConstantValue {
             let answers: Vec<Option<bool>> = left
                 .iter()
                 .zip(right)
-                .map(|(left, right)| left.same(right))
+                .map(|(left, right)| left.compared(right, floats))
                 .collect();
             if answers.contains(&Some(false)) {
                 Some(false)
@@ -2235,7 +2262,7 @@ impl ConstantValue {
             (V::Unary(operator, operand), V::Unary(other_operator, other_operand))
                 if operator == other_operator =>
             {
-                alike(operand.same(other_operand))
+                alike(operand.compared(other_operand, floats))
             }
             (
                 V::Binary(operator, left, right),
@@ -2255,7 +2282,7 @@ impl ConstantValue {
                     from: right,
                     ..
                 },
-            ) if left_of.declared == right_of.declared => alike(left.same(right)),
+            ) if left_of.declared == right_of.declared => alike(left.compared(right, floats)),
             (
                 V::Parameter { .. }
                 | V::Named { .. }
@@ -2274,7 +2301,7 @@ impl ConstantValue {
             ) => None,
             (V::Int(_), V::Float(_)) | (V::Float(_), V::Int(_)) => None,
             (V::Int(left), V::Int(right)) => Some(left == right),
-            (V::Float(left), V::Float(right)) => Some(left == right),
+            (V::Float(left), V::Float(right)) => Some(floats(*left, *right)),
             (V::Bool(left), V::Bool(right)) => Some(left == right),
             (V::Str(left), V::Str(right)) => Some(left == right),
             (V::Null, V::Null) | (V::Unbounded, V::Unbounded) => Some(true),
@@ -2299,6 +2326,14 @@ impl ConstantValue {
             _ => Some(false),
         }
     }
+}
+
+/// Whether two `f64` are the same constant: the same value, which is not
+/// `==` (hhenson/hgl_spec#139, written in UNIT-13). `-0.0` and `0.0` are
+/// two constants, and two NaN are one: a NaN is not told apart by its
+/// bits. This is the one place that says it.
+pub(crate) fn same_float(left: f64, right: f64) -> bool {
+    left.to_bits() == right.to_bits() || (left.is_nan() && right.is_nan())
 }
 
 /// Whether two temporal constants are one value: two values of one
@@ -2380,7 +2415,9 @@ impl ConstantValue {
             V::Int(value) => value.to_string(),
             // `0.0` and `-0.0` are one value (NUM-4); `{:?}` writes a
             // float so that it reads back as itself.
-            V::Float(value) if *value == 0.0 => "0.0".to_string(),
+            // One text for one value (`same_float`): `-0.0` is `-0.0`,
+            // and every NaN is `NaN`.
+            V::Float(value) if value.is_nan() => "NaN".to_string(),
             V::Float(value) => format!("{value:?}"),
             V::Bool(value) => value.to_string(),
             // `{:?}` writes a string quoted, each character that needs
@@ -2784,5 +2821,26 @@ mod tests {
         // The least `i64` floor-divided by -1 does not fit; its remainder
         // is 0.
         assert_eq!(divided(i64::MIN, -1), (None, Some("0".to_string())));
+    }
+
+    /// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
+    /// value, not `==`: `-0.0` and `0.0` are different constants ... A
+    /// NaN constant is the same constant as a NaN constant." "`requires
+    /// X == 0.0` is the language's `==`: it holds for `-0.0`."
+    #[test]
+    fn the_same_constant_is_not_the_languages_equality() {
+        use ConstantValue as V;
+        let (zero, minus_zero) = (V::Float(0.0), V::Float(-0.0));
+        let (nan, other_nan) = (V::Float(f64::NAN), V::Float(-f64::NAN));
+        assert_eq!(zero.same(&minus_zero), Some(false));
+        assert_eq!(zero.equals(&minus_zero), Some(true));
+        assert_eq!(nan.same(&other_nan), Some(true));
+        assert_eq!(nan.equals(&other_nan), Some(false));
+        let listed = |value: &V| V::List(vec![value.clone()]);
+        assert_eq!(listed(&zero).same(&listed(&minus_zero)), Some(false));
+        assert_eq!(listed(&zero).equals(&listed(&minus_zero)), Some(true));
+        // One text for one constant, which names its instance.
+        assert_ne!(zero.key(), minus_zero.key());
+        assert_eq!(nan.key(), other_nan.key());
     }
 }

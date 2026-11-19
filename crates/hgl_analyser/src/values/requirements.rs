@@ -1258,9 +1258,11 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                     (None, Some(name)) => (name, left),
                     _ => return None,
                 };
-                // The one comparison (`ConstantValue::same`): where the
-                // value is not known, whether it holds is not either.
-                (of.value_of)(&name)?.same(&(of.constant)(constant, &name)?)
+                // The language's `==` (`ConstantValue::equals`): "`requires
+                // X == 0.0` is the language's `==`: it holds for `-0.0`"
+                // (hhenson/hgl_spec#139, UNIT-13). Where the value is not
+                // known, whether it holds is not either.
+                (of.value_of)(&name)?.equals(&(of.constant)(constant, &name)?)
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
@@ -1272,7 +1274,7 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                 // not where it is known to be none.
                 let mut found = Some(false);
                 for member in right.children() {
-                    match (of.constant)(&member, &name).and_then(|member| value.same(&member)) {
+                    match (of.constant)(&member, &name).and_then(|member| value.equals(&member)) {
                         Some(true) => return Some(true),
                         Some(false) => {}
                         None => found = None,

@@ -826,20 +826,27 @@ parameter, or a symbol over one, as written (`N + 1`), which is worked
 out where the parameter is given a value; `Unevaluated` for what is not
 worked out; `Unknown` for what was reported. The written text stays
 beside it (`Constant::text`), for messages, and nothing compares or keys
-by it. `ConstantValue::same` is the one comparison: equal as values of
-the type (`1.0` is `1.00`, `60s` is `1m`, two datetimes as instants, a
-zoned datetime as an instant and a zone), and `None` where either is not
-known, which is neither equal nor unequal. `ConstantValue::key` is the
-text a target keys an instance by, one for each value.
+by it. Two questions are asked of two constants, each by one function.
+`ConstantValue::same` says whether they are the same constant: the same
+value of the type (`1.0` is `1.00`, `60s` is `1m`, two datetimes as
+instants, a zoned datetime as an instant and a zone), which for an `f64`
+is not `==`: `-0.0` is not `0.0`, and a NaN is a NaN (`same_float`,
+hhenson/hgl_spec#139, written in UNIT-13). Type identity and a target's
+instances ask it. `ConstantValue::equals` says whether they are equal as
+the language's `==` compares them, `-0.0` equal to `0.0` and a NaN to
+nothing: what the program compares asks it, a `requires`, a `switch`
+label's duplicates and a delta's overlap. Each gives `None` where either
+is not known, which is neither equal nor unequal. `ConstantValue::key`
+is the text a target keys an instance by, one for each constant.
 
 | A caller | Asks | Where a value is not known |
 | --- | --- | --- |
 | A type's identity | `declared::agree`: known to be the same | Not the same; `Unknown` agrees with any (ERR-9) |
 | A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
-| `requires` | `holds`: `same` of the option's value and each operand | Not told: nothing reported |
+| `requires` | `holds`: `equals` of the option's value and each operand | Not told: nothing reported |
 | A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
-| A `switch` label | CTRL-6 | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
-| A delta's key, a tuple's index | TYPE-16, EXPR-7 | No overlap, and the element's type not known |
+| A `switch` label | CTRL-6: `equals` of two labels | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
+| A delta's key, a tuple's index | TYPE-16: `equals` of two keys; EXPR-7 | No overlap, and the element's type not known |
 
 Not done: an operation the reader does not work out (one given
 configuration, a date moved by a tenor, a set's constant). The cycle check counts every field
