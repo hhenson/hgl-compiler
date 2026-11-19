@@ -78,6 +78,7 @@ transpiler: partial
 
 - hgraph: a dictionary's brackets fail with `value.missing_key` for a key that is not there, and core's `get` gives null
 - A temporal dictionary's key selected in a graph is a child that is not valid while the key is absent (EXPR-7, TIME-1), and is no strict read
+- A whole read checked when it runs, `rows[i]`, gives `err` or fails where a required part of the child is not valid, as a child's read does
 - Left: `at`; `get` with a fallback
 
 ## ERR-7

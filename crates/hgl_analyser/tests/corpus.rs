@@ -48,6 +48,49 @@ fn expected_rejections(text: &str) -> Vec<(usize, String)> {
     expected
 }
 
+/// The rejection cases of core the compiler does not yet reject, each as
+/// `(file, declaration)`, the file under `tests/conformance/`: the
+/// `[rejections]` of `crates/hgl_hgraph/ci/unsupported_cases.toml`, which
+/// `check_core.py` reads too, so that the two agree. Each is listed under a
+/// reason that names the rule not yet built.
+fn unrejected() -> Vec<(String, String)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../hgl_hgraph/ci/unsupported_cases.toml");
+    let text = std::fs::read_to_string(&path).expect("the list of unsupported cases");
+    text.lines()
+        // The table `[rejections]`, to the end of the file or the next.
+        .skip_while(|line| line.trim() != "[rejections]")
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .filter_map(|line| {
+            let name = line.trim().strip_prefix('"')?.strip_suffix("\",")?;
+            let rest = name.strip_prefix("conformance::")?;
+            let (file, declaration) = rest.rsplit_once("::")?;
+            Some((file.to_string(), declaration.to_string()))
+        })
+        .collect()
+}
+
+/// The lines of the declaration `name` of `text`, from the line that
+/// declares it, counted from 1, to the line before the next declaration.
+fn declaration_lines(text: &str, name: &str) -> std::ops::Range<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let starts = |line: &str| {
+        ["fn ", "const fn ", "struct ", "enum ", "native "]
+            .iter()
+            .any(|word| line.starts_with(word))
+    };
+    let first = lines
+        .iter()
+        .position(|line| starts(line) && line.contains(&format!(" {name}")))
+        .unwrap_or_else(|| panic!("no declaration `{name}`"));
+    let end = lines[first + 1..]
+        .iter()
+        .position(|line| starts(line) || line.starts_with("/**"))
+        .map_or(lines.len(), |after| first + 1 + after);
+    first + 1..end + 1
+}
+
 /// Every complete module among the specification's examples is accepted,
 /// but for what the example itself says is rejected: the analyser
 /// reports each `expect-error` annotation's code on the line it applies
@@ -176,11 +219,29 @@ fn the_conformance_rejections_are_rejected_as_annotated() {
         .map(|sample| (sample.origin.as_str(), sample.text.as_str()))
         .collect();
     let checked = check(&files);
+    // Each listed case the compiler does not yet reject, as the lines its
+    // expectations stand on: none is reported, and none is expected.
+    let listed: Vec<(String, std::ops::Range<usize>)> = unrejected()
+        .into_iter()
+        .map(|(file, declaration)| {
+            let (name, text) = files
+                .iter()
+                .find(|(name, _)| name.ends_with(&format!("conformance/{file}")))
+                .unwrap_or_else(|| panic!("no rejection file {file}"));
+            (name.to_string(), declaration_lines(text, &declaration))
+        })
+        .collect();
+    let is_listed = |name: &str, line: usize| {
+        listed
+            .iter()
+            .any(|(file, lines)| file == name && lines.contains(&line))
+    };
     let mut expected: Vec<String> = files
         .iter()
         .flat_map(|(name, text)| {
             expected_rejections(text)
                 .into_iter()
+                .filter(|(line, _)| !is_listed(name, *line))
                 .map(move |(line, code)| format!("{name}:{line} {code}"))
         })
         .collect();

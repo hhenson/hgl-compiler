@@ -490,7 +490,6 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
                 minimum,
             }
         }
-        Type::Ref(inner) => Type::Ref(part(inner)),
         Type::Endpoint(inner) => Type::Endpoint(part(inner)),
         // TYPE-9: formed again with what its payload now is, so that
         // `atomic<T>` with `T` an `i64` is an `i64`.
@@ -547,7 +546,6 @@ fn weight(ty: &Type) -> usize {
         Type::Tuple(elements) => elements.iter().map(weight).sum(),
         Type::List { element, .. } => weight(element),
         Type::Set(inner)
-        | Type::Ref(inner)
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
@@ -1362,8 +1360,7 @@ impl Structs<'_> {
                     ..held
                 }));
             }
-            Type::Ref(inner)
-            | Type::Endpoint(inner)
+            Type::Endpoint(inner)
             | Type::Delta(inner)
             | Type::Trace { cell: inner, .. }
             | Type::Nullable(inner) => {
@@ -1842,7 +1839,6 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
             sizes && type_may_be(element, other_element, found)
         }
         (Type::Set(given), Type::Set(applied))
-        | (Type::Ref(given), Type::Ref(applied))
         | (Type::Endpoint(given), Type::Endpoint(applied))
         | (Type::Atomic(given), Type::Atomic(applied))
         | (Type::Delta(given), Type::Delta(applied))
@@ -1964,7 +1960,6 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::Tuple(elements) => elements.iter().find_map(|element| grown(element, in_group)),
         Type::List { element, .. } => grown(element, in_group),
         Type::Set(inner)
-        | Type::Ref(inner)
         | Type::Endpoint(inner)
         | Type::Atomic(inner)
         | Type::Delta(inner)
@@ -2071,7 +2066,6 @@ fn agree_as(left: &Type, right: &Type, unknown: bool) -> bool {
             sizes && agree(element, other_element)
         }
         (Type::Set(left), Type::Set(right))
-        | (Type::Ref(left), Type::Ref(right))
         | (Type::Endpoint(left), Type::Endpoint(right))
         | (Type::Atomic(left), Type::Atomic(right))
         | (Type::Delta(left), Type::Delta(right))

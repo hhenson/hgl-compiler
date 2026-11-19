@@ -212,7 +212,7 @@ fn a_native_types_properties_are_ordinary_values() {
         checked.summary(),
         [
             "m.hgl:6:5 type/field.duplicate NATIVE-6",
-            "m.hgl:7:11 type/type.not_ordinary TYPE-12",
+            "m.hgl:7:11 type/type.not_ordinary NATIVE-6",
             "m.hgl:13:26 name/member.unknown NATIVE-6",
             "m.hgl:14:26 name/member.unknown NATIVE-6",
             "m.hgl:15:5 name/binding.immutable NATIVE-6",

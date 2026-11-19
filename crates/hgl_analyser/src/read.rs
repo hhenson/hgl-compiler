@@ -762,13 +762,17 @@ impl Reader<'_> {
                 has_default,
             });
         }
-        let result = child(node, SyntaxKind::ReturnType)
-            .and_then(|result| type_child(&result))
+        let written = child(node, SyntaxKind::ReturnType);
+        let result = written
+            .as_ref()
+            .and_then(type_child)
             .map(|written| self.outermost(&written));
         Signature {
             generics: self.generics.clone(),
             parameters,
             result,
+            // FN-16: "and its result, `-> ref f64`".
+            reference: written.is_some_and(|written| has_token(&written, SyntaxKind::KwRef)),
         }
     }
 

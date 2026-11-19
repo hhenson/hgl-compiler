@@ -78,7 +78,10 @@ fn returned(checked: &Checked, name: &str) -> Vec<String> {
                 }),
                 Stmt::Hook { body, .. } => visit(body, found),
                 Stmt::Expr(Expr {
-                    kind: ExprKind::If { then, otherwise, .. },
+                    kind:
+                        ExprKind::If {
+                            then, otherwise, ..
+                        },
                     ..
                 }) => {
                     for branch in [Some(&**then), otherwise.as_deref()].into_iter().flatten() {
@@ -174,10 +177,10 @@ fn a_ref_parameter_and_a_signal_take_only_what_their_types_admit() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:13:76 type/type.mismatch EXPR-5",
-            "m.hgl:14:46 type/type.mismatch EXPR-5",
-            "m.hgl:15:49 type/type.mismatch EXPR-5",
-            "m.hgl:16:36 type/type.mismatch EXPR-5",
+            "m.hgl:14:74 type/type.mismatch EXPR-5",
+            "m.hgl:15:46 type/type.mismatch EXPR-5",
+            "m.hgl:16:50 type/type.mismatch EXPR-5",
+            "m.hgl:17:36 type/type.mismatch EXPR-5",
         ]
     );
 }
@@ -213,15 +216,15 @@ fn only_a_node_marks_a_parameter_or_its_result_ref() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:1:16 function-kind/ref.position FN-16",
-            "m.hgl:2:30 function-kind/ref.position FN-16",
-            "m.hgl:3:11 function-kind/ref.position FN-16",
-            "m.hgl:4:28 function-kind/ref.position FN-16",
-            "m.hgl:5:19 function-kind/ref.position FN-16",
-            "m.hgl:6:21 function-kind/ref.position FN-16",
-            "m.hgl:10:26 function-kind/ref.position FN-16",
-            "m.hgl:12:17 function-kind/ref.position FN-16",
-            "m.hgl:12:36 function-kind/ref.position FN-16",
+            "m.hgl:2:16 function-kind/ref.position FN-16",
+            "m.hgl:3:31 function-kind/ref.position FN-16",
+            "m.hgl:4:11 function-kind/ref.position FN-16",
+            "m.hgl:5:28 function-kind/ref.position FN-16",
+            "m.hgl:6:19 function-kind/ref.position FN-16",
+            "m.hgl:7:21 function-kind/ref.position FN-16",
+            "m.hgl:11:26 function-kind/ref.position FN-16",
+            "m.hgl:13:17 function-kind/ref.position FN-16",
+            "m.hgl:13:36 function-kind/ref.position FN-16",
         ]
     );
     assert_eq!(
@@ -250,7 +253,7 @@ fn a_ref_parameter_is_an_endpoint_and_no_value() {
         "}\n",
         "const fn doubled(value: i64) -> i64 => value * 2\n",
         "fn observed(ref price: i64, ref xs: list<i64, 3>, ref quote: Quote, idx: i64) -> bool {\n",
-        "    when valid([]) {\n",
+        "    when valid(idx) {\n",
         "        let seen = last_modified(price)\n",
         "        if valid(xs[idx]) && modified(quote.bid) && all_valid(xs) { return is_active(price) }\n",
         "        return valid(price) && modified(price) && valid(xs[0]) && seen != null\n",
@@ -271,14 +274,14 @@ fn a_ref_parameter_is_an_endpoint_and_no_value() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:15:20 phase/ref.read FN-16",
-            "m.hgl:16:26 phase/ref.read FN-16",
-            "m.hgl:16:42 phase/ref.read FN-16",
-            "m.hgl:17:18 phase/ref.read FN-16",
-            "m.hgl:18:16 phase/ref.read FN-16",
-            "m.hgl:18:37 phase/ref.read FN-16",
-            "m.hgl:18:57 phase/ref.read FN-16",
-            "m.hgl:21:38 phase/ref.read FN-16",
+            "m.hgl:16:20 phase/ref.read FN-16",
+            "m.hgl:17:26 phase/ref.read FN-16",
+            "m.hgl:17:42 phase/ref.read FN-16",
+            "m.hgl:18:18 phase/ref.read FN-16",
+            "m.hgl:19:16 phase/ref.read FN-16",
+            "m.hgl:19:49 phase/ref.read FN-16",
+            "m.hgl:19:58 phase/ref.read FN-16",
+            "m.hgl:22:38 phase/ref.read FN-16",
         ]
     );
     assert_eq!(
@@ -303,7 +306,7 @@ fn a_ref_result_is_given_an_endpoint_it_designates() {
         "    when modified(idx) { return items[idx] }\n",
         "}\n",
         "fn passed(flag: bool, ref low: f64, high: f64) -> ref f64 {\n",
-        "    when valid(flag) {\n",
+        "    when {\n",
         "        if high > 0.0 { return high }\n",
         "        return low\n",
         "    }\n",
@@ -328,10 +331,10 @@ fn a_ref_result_is_given_an_endpoint_it_designates() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:11:36 type/type.mismatch FN-16",
-            "m.hgl:14:19 type/type.mismatch FN-16",
-            "m.hgl:17:19 type/type.mismatch FN-16",
-            "m.hgl:21:19 type/type.mismatch FN-16",
+            "m.hgl:12:36 type/type.mismatch FN-16",
+            "m.hgl:15:19 type/type.mismatch FN-16",
+            "m.hgl:18:19 type/type.mismatch EXPR-5",
+            "m.hgl:22:19 type/type.mismatch FN-16",
         ]
     );
     assert_eq!(returned(&checked, "route"), ["child endpoint of T"]);
@@ -371,9 +374,9 @@ fn out_of_a_ref_result_designates_and_is_no_value() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:11:20 phase/ref.read FN-16",
-            "m.hgl:12:15 type/type.mismatch FN-16",
-            "m.hgl:13:34 phase/ref.read FN-16",
+            "m.hgl:12:20 phase/ref.read FN-16",
+            "m.hgl:13:15 type/type.mismatch FN-16",
+            "m.hgl:14:22 phase/ref.read FN-16",
         ]
     );
 }
@@ -417,7 +420,10 @@ fn a_generic_binds_from_the_connection_at_a_ref_parameter_as_anywhere() {
     ));
     assert_eq!(checked.summary(), NONE);
     assert_eq!(instances(&checked, "followed"), ["ticks<i64>"]);
-    assert_eq!(instances(&checked, "listed"), ["designations<list<i64, 2>>"]);
+    assert_eq!(
+        instances(&checked, "listed"),
+        ["designations<list<i64, 2>>"]
+    );
     assert_eq!(instances(&checked, "designated"), ["designations<i64>"]);
     assert_eq!(
         instances(&checked, "designated_value"),
@@ -426,12 +432,17 @@ fn a_generic_binds_from_the_connection_at_a_ref_parameter_as_anywhere() {
     assert_eq!(instances(&checked, "stated"), ["designations<i64>"]);
     assert_eq!(
         instances(&checked, "requested"),
-        ["same<i64>", "designations<i64>"]
+        ["designations<i64>", "same<i64>"]
     );
     let mut candidate = None;
     walk_statements(&body(&checked, "watched").statements, &mut |value| {
         if let ExprKind::Call {
-            callee: Callee::Candidate { module, declaration, .. },
+            callee:
+                Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                },
             ..
         } = &value.kind
         {

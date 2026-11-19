@@ -329,10 +329,9 @@ impl Emitter<'_> {
             // "Omitted minimum equals maximum."
             let minimum = minimum.as_ref().unwrap_or(maximum);
             if !matches!(minimum.value, ConstantValue::Int(1)) {
-                self.unsupported(
-                    at,
-                    &format!("the readiness of `{window}`, which core leaves undefined,"),
-                );
+                // Core's END-9 has the readiness of the others, of a
+                // tick count and of a duration's span.
+                self.unsupported(at, &format!("the readiness END-9 gives `{window}`"));
                 return false;
             }
         }

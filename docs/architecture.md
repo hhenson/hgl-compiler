@@ -1961,9 +1961,13 @@ The check compares the runner's full discovery and execution lists and prints
 the outcomes and counts for each suite. A case can be reported as not run
 only for its source-located hgraph target diagnostic listed in
 [`unsupported_cases.toml`](../crates/hgl_hgraph/ci/unsupported_cases.toml).
-An assertion or source failure, an unavailable host, a new gap, or a listed
-case that passes or disappears fails the check. Remove a listed gap when its
-case starts passing. The backend owns this list alongside its target tests.
+A rejection case can fail only by not being rejected, and only where it is
+listed under the file's `[rejections]`, by `suite::file::declaration` and a
+reason that names the rule not yet built; the analyser's and the driver's
+corpus tests read the same list. An assertion or source failure, an
+unavailable host, a new gap, or a listed case that passes, is rejected or
+disappears fails the check. Remove a listed gap when its case starts
+passing. The backend owns this list alongside its target tests.
 
 ## Finding source files
 

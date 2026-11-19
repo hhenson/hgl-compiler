@@ -86,6 +86,7 @@ impl Program {
                 .result
                 .as_ref()
                 .map(|result| substitute_within(result, &map)),
+            reference: signature.reference,
         };
         let mut body = body.clone();
         for local in &mut body.locals {

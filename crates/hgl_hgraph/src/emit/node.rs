@@ -28,10 +28,7 @@ impl Emitter<'_> {
                 // SOURCE-1 has a source take no temporal input, and FN-16
                 // a node mark its result `ref`: a source's is not written.
                 if signature.reference {
-                    self.unsupported(
-                        module.declarations[index].at,
-                        "a `ref` result of a source",
-                    );
+                    self.unsupported(module.declarations[index].at, "a `ref` result of a source");
                 }
                 self.source(index, python, signature, body)
             }
@@ -613,7 +610,10 @@ impl Emitter<'_> {
             match kinds.iter().find(|(seen, _)| *seen == local) {
                 Some((_, before)) if *before == how => continue,
                 Some(_) => {
-                    self.unsupported(at, "an input designated whole and by a position in one node");
+                    self.unsupported(
+                        at,
+                        "an input designated whole and by a position in one node",
+                    );
                     continue;
                 }
                 None => kinds.push((local, how)),
@@ -630,9 +630,11 @@ impl Emitter<'_> {
                         size: Some(size),
                     },
                 ) => match &size.value {
-                    ConstantValue::Int(count) if *count > 0 => self
-                        .child_annotation(&ty, element, at)
-                        .map(|child| format!("_hg.TSL[{}, _hg.Size[{count}]]", designating(&child))),
+                    ConstantValue::Int(count) if *count > 0 => {
+                        self.child_annotation(&ty, element, at).map(|child| {
+                            format!("_hg.TSL[{}, _hg.Size[{count}]]", designating(&child))
+                        })
+                    }
                     _ => {
                         self.unsupported(at, &format!("a designation of a position of `{ty}`"));
                         None

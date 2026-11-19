@@ -52,7 +52,6 @@ impl<'a> Typer<'a> {
         self.fixed_arguments(&selected);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
-        self.references_given(&selected);
     }
 
     /// FN-9: "A graph injects `global_state` and no other, and uses it
@@ -552,53 +551,6 @@ impl<'a> Typer<'a> {
                     "TIME-8",
                 )
                 .with_note("a parameter that takes any type takes no capability"),
-            );
-        }
-    }
-
-    /// Reports a reference given to a value function outside
-    /// composition: in a hook, where a `ref<T>` input is read as the
-    /// designation it is. TYPE-12: "`ref<T>` designates an endpoint, not
-    /// an ordinary payload type"; FN-1: a value function's parameters
-    /// are ordinary value types, so one written as a generic parameter
-    /// takes none. In a graph a connection given to one is lifted, and
-    /// followed (TIME-10). What an endpoint operation is given is the
-    /// input's endpoint, and no payload.
-    fn references_given(&mut self, selected: &Selected) {
-        let &Selected {
-            module,
-            declaration,
-            arguments,
-            ..
-        } = selected;
-        let role = self.program.modules[module].declarations[declaration]
-            .kind
-            .role();
-        if role != Some(Role::Value) {
-            return;
-        }
-        let given: Vec<(Location, String)> = arguments
-            .iter()
-            .filter(|argument| {
-                !matches!(argument.value.ty, Type::Endpoint(_))
-                    && !self.composes(&argument.value)
-                    && crate::references::holds_ref(&argument.value.ty)
-            })
-            .map(|argument| (argument.value.at, argument.value.ty.to_string()))
-            .collect();
-        for (at, ty) in given {
-            self.diagnostics.emit(
-                error(
-                    Category::Type,
-                    codes::TYPE_NOT_ORDINARY,
-                    at,
-                    format!(
-                        "`{ty}` is not an ordinary value type, and a value function's parameter \
-                         is one"
-                    ),
-                    "TYPE-12",
-                )
-                .with_note("a `ref` designates an endpoint: a node returns it, or gives it to an endpoint operation"),
             );
         }
     }

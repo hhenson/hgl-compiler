@@ -56,6 +56,10 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && let Some(port) = self.input_port(function, value)
                 {
+                    if matches!(function.port_type(value), Type::RollingWindow { .. }) {
+                        let window = function.port_type(value).clone();
+                        return self.window_value(&window, &port, value.at);
+                    }
                     return self.port_value(function.port_type(value), &port, value.at);
                 }
                 let read = self.place(function, *local);
@@ -148,7 +152,9 @@ impl Emitter<'_> {
                     // TIME-9: "`all_valid` is true where every one is, by
                     // its own `valid`, one level deep": hgraph's
                     // `all_valid`, but where a part holds a list.
-                    EndpointOperation::AllValid => self.all_valid_test(&endpoint.ty, &input),
+                    EndpointOperation::AllValid => {
+                        self.all_valid_test(&endpoint.ty, &input, value.at)
+                    }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta." hgraph's own
                     // `modified` of an input in the cycle it is
@@ -435,6 +441,26 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && self.reads_child(function, value) =>
             {
+                // TYPE-11: a window child's value is read as a `list<V>`,
+                // which the child's port is not.
+                let window_child = match &value.kind {
+                    ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
+                        .is_some_and(|field| matches!(field.ty, Type::RollingWindow { .. })),
+                    ExprKind::Index { base, index } => match &base.ty {
+                        Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
+                            matches!(**child, Type::RollingWindow { .. })
+                        }
+                        Type::Tuple(elements) => constant_position(index)
+                            .and_then(|position| elements.get(position))
+                            .is_some_and(|element| matches!(element, Type::RollingWindow { .. })),
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                if window_child {
+                    self.unsupported(value.at, "a window's value inside another value");
+                    return "None".to_string();
+                }
                 match self.child_port(function, value) {
                     Some(port) => self.part_value(&value.ty, &port, value.at),
                     None => {
@@ -1168,7 +1194,15 @@ impl Emitter<'_> {
     /// deep". hgraph's `all_valid` counts each part by hgraph's `valid`,
     /// which is the language's where the part holds no list
     /// (`valid_test`); where one does, the provider counts it.
-    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str) -> String {
+    pub(super) fn all_valid_test(&mut self, ty: &Type, port: &str, at: Location) -> String {
+        // TIME-9: "`all_valid` is true where every one is, by its own
+        // `valid`, one level deep, an optional child aside: one whose type
+        // is `T?`, or a field that TYPE-4 makes optional, is not asked".
+        // hgraph's `all_valid` asks every child.
+        if optional_child(self.program, ty) {
+            self.unsupported(at, "`all_valid` of a value with an optional child (TIME-9)");
+            return "False".to_string();
+        }
         let parts_hold_lists = match ty {
             Type::List { element, .. } => validity_shape(self.program, element).is_some(),
             other => validity_shape(self.program, other).is_some(),
@@ -1245,7 +1279,7 @@ impl Emitter<'_> {
         self.natives = true;
         match operation {
             EndpointOperation::Valid => self.valid_test(&child.ty, &port),
-            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port),
+            EndpointOperation::AllValid => self.all_valid_test(&child.ty, &port, at),
             // END-4, END-6: a child that is not valid is not modified and
             // has no time it was last modified, nor a delta to read, by
             // `valid` as the language has it where a list is in the child
@@ -1333,6 +1367,22 @@ impl Emitter<'_> {
         }
     }
 
+    /// The value of a window input or `out`, `port`, of the window type
+    /// `window`, read in a hook. TYPE-11: "That value, read in a hook ...
+    /// is a `list<V>` of the values held, oldest first", and core's END-9:
+    /// "The read gives a `list<V>` of the values held", as hgraph's `TSW`
+    /// holds them (`_core.window_values`). Only a window whose readiness
+    /// this target writes is read (`readable_window`): one of ticks whose
+    /// minimum is one, all valid at its first value; where a read must
+    /// fail before it is all valid (END-9), it is reported.
+    fn window_value(&mut self, window: &Type, port: &str, at: Location) -> String {
+        if !self.readable_window(window, at) {
+            return "None".to_string();
+        }
+        self.natives = true;
+        format!("_core.window_values({port})")
+    }
+
     /// What the port `port`, of a temporal value of `ty`, holds, read in
     /// a hook. A struct's bundle holds a value of the struct, made from
     /// each field's port in turn (TYPE-9), and a tuple's a tuple of each
@@ -1347,12 +1397,10 @@ impl Emitter<'_> {
     /// names `_child{depth}` and `_key{depth}` are its own.
     fn port_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         match ty {
-            // TYPE-12: a window is no ordinary value, and core has no
-            // operation that reads what one holds: its values, or how
-            // many. Only its endpoint is read (TIME-9). So a value that
-            // holds one, a struct's or a list's, is not read whole.
+            // A value that holds a window, a struct's or a list's, is not
+            // read whole yet; a window input itself is (`window_value`).
             Type::RollingWindow { .. } => {
-                self.unsupported(at, "what a window holds, which no core operation reads,");
+                self.unsupported(at, "a window's value inside another value");
                 return "None".to_string();
             }
             // TYPE-9: "lists to child positions". A list's value is each
@@ -1896,4 +1944,34 @@ pub(super) fn constant_position(index: &Expr) -> Option<usize> {
 /// True for the literal `null`.
 fn is_null(value: &Expr) -> bool {
     matches!(value.kind, ExprKind::Literal(Value::Null))
+}
+
+/// True where `ty` is a collection with an optional child one level down
+/// (TIME-9), a struct's field whose type is `T?` or an `atomic<T?>`
+/// (TYPE-4), or a tuple's position, a list's element or a dictionary's
+/// value of a `T?`, beside another child: where it is the struct's or the
+/// tuple's one child, `all_valid` asks what hgraph's does, that the value
+/// is valid.
+fn optional_child(program: &Program, ty: &Type) -> bool {
+    let optional = |child: &Type| match child {
+        Type::Nullable(_) => true,
+        Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
+        _ => false,
+    };
+    match ty {
+        Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } => match program.modules[*module].details.get(*declaration) {
+            Some(Detail::Struct(read)) => {
+                read.members.len() > 1 && read.members.iter().any(|member| optional(&member.ty))
+            }
+            _ => false,
+        },
+        Type::Tuple(elements) => elements.len() > 1 && elements.iter().any(optional),
+        Type::List { element: child, .. } | Type::Dict { value: child, .. } => optional(child),
+        _ => false,
+    }
 }

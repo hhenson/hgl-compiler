@@ -199,7 +199,7 @@ fn requested_ticks(left: i64) -> i64 => ref_ticks(same(left))
 fn routed(idx: i64, slot: i64, reading: i64) -> i64 => follow(route(idx, set_one(slot, reading)))
 fn routed_out(idx: i64, slot: i64, reading: i64) -> i64 =>
     follow(route_out(idx, set_one(slot, reading)))
-fn held(flag: bool, value: i64) -> i64 => follow(hold(flag, value))
+fn followed_hold(flag: bool, value: i64) -> i64 => follow(hold(flag, value))
 fn held_designations(flag: bool, value: i64) -> i64 => designations(hold(flag, value))
 
 fn sampled_of(value: i64, probe: bool) -> i64 => sample(value, probe)
@@ -261,7 +261,7 @@ test a_ref_result_designates_what_its_return_names {
         slot:    [ 1,  1,  0, _,  2,  0],
         reading: [20, 21, 10, _, 30, 11],
     )) ==        [20, 21,  _, _, 30, 11]
-    assert eval(held(flag: [true, _, true], value: [1, 2, 3])) == [1, 2, 3]
+    assert eval(followed_hold(flag: [true, _, true], value: [1, 2, 3])) == [1, 2, 3]
     assert eval(held_designations(flag: [true, _, true], value: [1, 2, 3])) == [1, _, _]
 }
 
@@ -286,4 +286,43 @@ test an_atomic_struct_ticks_once_with_its_whole_value {
     assert eval(bids(value: [1, 2], bid: [5, _], ask: [6, _])) == [5, 5]
     assert eval(bids_left_out(value: [1, 2])) == [-1, -2]
     assert eval(snapshots(bid: [1, 2, 3], ask: [5, 6, _])) == [1, 2, 3]
+}
+
+# TYPE-3: a struct's connection is given where an abstract struct it
+# inherits from is expected, across a `ref` result and to a `ref`
+# parameter (FN-16) as anywhere.
+abstract struct Shape {
+    id: i64
+}
+
+struct Circle : Shape {
+    radius: i64
+}
+
+fn circled(id: i64) -> Circle {
+    when { return Circle(id: id, radius: 1) }
+}
+
+fn shape_id(shape: Shape) -> i64 {
+    when all_valid(shape) { return shape.id }
+}
+
+fn same_circle(circle: Circle) -> ref Circle {
+    when { return circle }
+}
+
+fn shapes_designated(ref shape: Shape) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen = seen + 1
+        return seen
+    }
+}
+
+fn narrowed_follow(id: i64) -> i64 => shape_id(same_circle(circled(id)))
+fn narrowed_designation(id: i64) -> i64 => shapes_designated(circled(id))
+
+test a_struct_is_narrowed_across_a_ref {
+    assert eval(narrowed_follow(id: [1, 2])) == [1, 2]
+    assert eval(narrowed_designation(id: [1, 2])) == [1, _]
 }

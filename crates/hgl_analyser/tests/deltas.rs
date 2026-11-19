@@ -40,7 +40,6 @@ fn a_delta_is_what_the_table_gives_for_its_type() {
         [
             "m.hgl:15:18 shape/delta.unsupported_shape TYPE-16",
             "m.hgl:15:36 shape/delta.unsupported_shape TYPE-16",
-            "m.hgl:15:56 shape/delta.unsupported_shape TYPE-16",
         ]
     );
     assert_eq!(
@@ -392,7 +391,7 @@ fn a_node_publishes_a_whole_value_or_a_delta() {
             "m.hgl:36:15 type/type.mismatch EXPR-5",
             "m.hgl:47:27 type/type.mismatch EXPR-5",
             "m.hgl:51:21 shape/delta.unsupported_shape TYPE-16",
-            "m.hgl:52:22 shape/delta.unsupported_shape TYPE-16",
+            "m.hgl:52:22 phase/ref.read FN-16",
         ]
     );
     assert_eq!(locals(&checked, "relay")[2..], ["change: delta<set<str>>"]);

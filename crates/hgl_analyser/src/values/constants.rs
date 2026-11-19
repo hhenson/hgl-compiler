@@ -68,7 +68,7 @@ impl<'a> Typer<'a> {
                 // "An omitted temporal argument is wired as a constant
                 // of its default, so the default is a value a constant
                 // of the parameter's type can publish." What that is
-                // for a window, an atomic or a reference is not settled
+                // for a window or an atomic is not settled
                 // here: `window: rolling_window<f64, 5> = []` is read, and
                 // held to no type.
                 let expected = if shaped(&parameter.ty) || names_parameter(&parameter.ty) {
@@ -294,18 +294,11 @@ pub(super) fn default_at(
 }
 
 /// True for a type that is a temporal shape and no ordinary value
-/// type, under a `?` or not: a window, an atomic, a reference, a
-/// signal, an endpoint. What a default of one is held to is not
-/// settled.
+/// type, under a `?` or not: a window, an atomic, a signal, an
+/// endpoint. What a default of one is held to is not settled.
 fn shaped(ty: &Type) -> bool {
     matches!(
         not_null(Some(ty)),
-        Some(
-            Type::RollingWindow { .. }
-                | Type::Atomic(_)
-                | Type::Ref(_)
-                | Type::Signal
-                | Type::Endpoint(_)
-        )
+        Some(Type::RollingWindow { .. } | Type::Atomic(_) | Type::Signal | Type::Endpoint(_))
     )
 }

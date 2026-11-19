@@ -3765,15 +3765,15 @@ fn a_window_is_hgraphs_tsw() {
     ]);
 }
 
-/// What this target does not write of a window is reported. FN-12:
-/// "Fixed-size lists and windows retain their own shape/readiness
-/// contracts", and core has none for a window yet, so a window is read
-/// only where its minimum is one tick, which every reading makes ready
-/// at its first value: an input or `out` read otherwise, and an eval's
-/// record of such a window, are reported. So are what a window holds,
-/// which no core operation reads, the invalidation of a window, which
-/// hgraph's `TSW` survives with what it holds, and a window of a value
-/// that is no scalar or enum.
+/// What this target does not write of a window is reported. Core's END-9
+/// gives a window's readiness, which this target writes only for a
+/// window of ticks whose minimum is one, ready at its first value: an
+/// input or `out` read otherwise, and an eval's record of such a window,
+/// are reported. So are the invalidation of a window, which hgraph's
+/// `TSW` survives with what it holds, and a window of a value that is no
+/// scalar or enum, and a window given to a lifted helper as a `list<V>`
+/// (FN-12). A window whose minimum is one is read in a hook as the
+/// `list<V>` it holds, oldest first (TYPE-11).
 #[test]
 fn a_window_form_not_written_yet_is_reported() {
     let emitted = emit(&[fixture!(
@@ -3788,21 +3788,20 @@ fn a_window_form_not_written_yet_is_reported() {
     assert_eq!(
         reported,
         [
-            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
-            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
-            "m.hgl:10:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
-            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:3:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
+            "m.hgl:6:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
+            "m.hgl:15:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
             "m.hgl:21:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
             "m.hgl:23:4 target.unsupported: the hgraph target does not write the type `rolling_window<Quote, 3, 1>` yet",
             "m.hgl:26:4 target.unsupported: the hgraph target does not write the type `rolling_window<f64?, 3, 1>` yet",
+            "m.hgl:39:39 target.unsupported: the hgraph target does not write a window given to a lifted helper (FN-12) yet",
         ]
     );
     // The record of `recent`'s window is core's, which reads it.
     let blocked = emitted.blocked("recorded").expect("the test is blocked");
     assert!(
         blocked.ends_with(
-            "the hgraph target does not write the readiness of `rolling_window<f64, 5s>`, \
-             which core leaves undefined, yet"
+            "the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s>` yet"
         ),
         "{blocked}"
     );
@@ -3826,17 +3825,17 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
         [
             // The readiness of a field's window, of a list's element of
             // a duration, of a dictionary's value, and of `out`'s field.
-            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
-            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 5s, 0s>`, which core leaves undefined, yet",
-            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
-            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness of `rolling_window<f64, 3>`, which core leaves undefined, yet",
+            "m.hgl:10:9 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
+            "m.hgl:13:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 5s, 0s>` yet",
+            "m.hgl:16:10 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
+            "m.hgl:22:12 target.unsupported: the hgraph target does not write the readiness END-9 gives `rolling_window<f64, 3>` yet",
             // A struct read whole, bound whole, its window field, a
             // dictionary of windows bound whole, a tuple's window.
-            "m.hgl:27:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
-            "m.hgl:31:20 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
-            "m.hgl:37:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
-            "m.hgl:43:19 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
-            "m.hgl:49:22 target.unsupported: the hgraph target does not write what a window holds, which no core operation reads, yet",
+            "m.hgl:27:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
+            "m.hgl:31:20 target.unsupported: the hgraph target does not write a window's value inside another value yet",
+            "m.hgl:37:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
+            "m.hgl:43:19 target.unsupported: the hgraph target does not write a window's value inside another value yet",
+            "m.hgl:49:22 target.unsupported: the hgraph target does not write a window's value inside another value yet",
             // `out` that holds a window, invalidated.
             "m.hgl:55:12 target.unsupported: the hgraph target does not write the invalidation of a window yet",
         ]
@@ -5348,45 +5347,62 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
     );
 }
 
-/// TYPE-12: "`ref<T>` designates an endpoint, not an ordinary payload
-/// type ... `signal` is a complete temporal input constraint with no
-/// readable payload". TIME-10: "A reference ticks on changed
-/// designation, not every target tick. Ordinary followers observe the
-/// selected target". GEN-11: argument inference removes reference
-/// boundaries. TYPE-9: "`atomic<V>` stops expansion at a complete
-/// ordinary V".
+/// FN-16: "A node ... may mark a temporal parameter `ref`, `ref low:
+/// f64`, and its result, `-> ref f64`. The mark is a mode ... A
+/// connection of T is given to a `ref` parameter, and a `ref` result is a
+/// connection of T to whoever reads it." TIME-10: "A reference ticks
+/// where its designation changes, not at every tick of its target. A
+/// designation published again unchanged is no tick". TYPE-12: "`signal`
+/// is a complete temporal input constraint with no readable payload".
+/// TYPE-9: "`atomic<V>` stops expansion at a complete ordinary V".
 const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 
-/// A reference is hgraph's `REF` of the temporal type it designates,
-/// and a `signal` its `SIGNAL`. A node returns a `REF` input's value, a
-/// reference, to re-point what follows it; a graph passes a connection
-/// across the boundary as it is, and hgraph binds an ordinary input,
-/// a lifted node's among them, to what a reference designates. A
-/// generic input given a reference is written for the type under it.
-/// A `signal?` left out is bound to an output that never ticks
-/// (UNIT-8), by a call and a captured one alike. A hook reads an atomic
-/// input as its whole value.
+/// A `ref` parameter and a `ref` result are hgraph's `REF` of their type,
+/// and a `signal` its `SIGNAL`. A node returns a `ref` parameter's value,
+/// the reference it holds, to re-point what follows it, and publishes no
+/// reference its result holds already (END-10). An input that is no `ref`
+/// parameter, and a fixed list's position of one, is designated through a
+/// hidden `REF` input that a graph of the function's name gives it the
+/// input twice. A graph passes a `ref` result on as it is, and hgraph
+/// binds an ordinary input, a lifted node's among them, to what it
+/// designates. A generic input is written for the connection's type. A
+/// `signal?` left out is bound to an output that never ticks (UNIT-8), by
+/// a call and a captured one alike. A hook reads an atomic input as its
+/// whole value.
 #[test]
-fn a_reference_is_a_ref_and_a_signal_a_signal() {
+fn a_ref_is_a_ref_and_a_signal_a_signal() {
     let emitted = emit_clean(&[REFERENCES]);
     let python = emitted.module("demo.references");
     let reference = "_hg.REF[_hg.TS[_py.int]]";
     python.assert_writes(&[
         format!(
-            "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}) -> {reference}:"
+            "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}, \
+             _output: _hg.TS_OUT[{reference}] = None) -> {reference}:"
         ),
-        "        return left.value\n".to_string(),
-        "    held = target.value\n    return held\n".to_string(),
+        "        return _core.designation(_output, left.value)\n".to_string(),
+        "    if (target.valid and target.modified):\n        return _core.designation(_output, target.value)\n"
+            .to_string(),
+        format!("def checked(target: {reference}) -> _hg.TS[_py.bool]:\n    if target.modified:\n        return target.valid\n"),
+        "@_hg.compute_node(active=(\"idx\",), valid=(\"idx\", \"items\"))\n\
+         def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
+         _ref_items: _hg.TSL[_hg.REF[_hg.TS[_py.int]], _hg.Size[3]], "
+            .to_string(),
+        "        return _core.designation(_output, _core.position_of(_ref_items, idx.value).value)\n"
+            .to_string(),
+        "    return _node_route(idx=idx, items=items, _ref_items=items)\n".to_string(),
+        "        _core.designate(_output, _core.position_of(_ref_items, idx.value).value)\n"
+            .to_string(),
+        "        return _core.designation(_output, _ref_value.value)\n".to_string(),
+        "    return _node_hold(flag=flag, value=value, _ref_value=value)\n".to_string(),
         "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:"
             .to_string(),
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:".to_string(),
         "    return _lift_0_doubled(value=pick(use_left=use_left, left=left, right=right))"
             .to_string(),
-        format!("def designated(left: {reference}) -> _hg.TS[_py.int]:\n    return left\n"),
         "    return _inst_ticks__i64(value=pick(use_left=use_left, left=left, right=right))"
             .to_string(),
         format!("def _inst_ref_ticks__i64(value: {reference}, "),
-        "    return _inst_same__ref_i64_(value=left)".to_string(),
+        "    return _inst_ref_ticks__i64(value=_inst_same__i64(value=left))".to_string(),
         "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))"
             .to_string(),
         // A captured call binds what it leaves out as a call does.
@@ -5405,60 +5421,73 @@ fn a_reference_is_a_ref_and_a_signal_a_signal() {
     ]);
 }
 
-/// TIME-10 and GEN-11: a lifted helper given a reference to a reference,
-/// or a reference that may be left out (TYPE-14), follows it to an
-/// ordinary input of what it designates: `Type::followed`, which the
-/// analyser admits it by.
+/// TIME-10: "Ordinary followers observe the selected target". A lifted
+/// helper given a `ref` result takes an ordinary input of its type
+/// (FN-16), which hgraph binds to what the result designates.
 #[test]
-fn a_lifted_input_follows_every_reference_it_is_given() {
+fn a_lifted_input_follows_the_ref_result_it_is_given() {
     let emitted = emit_clean(&[fixture!(
-        "a_lifted_input_follows_every_reference_it_is_given",
+        "a_lifted_input_follows_the_ref_result_it_is_given",
         "m.hgl"
     )]);
     let python = emitted.module("m");
     assert!(!python.contains("value: _hg.REF"), "{python}");
     python.assert_writes(&[
         "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:",
-        "def twice(left: _hg.REF[_hg.REF[_hg.TS[_py.int]]]) -> _hg.TS[_py.int]:",
-        "def optional(left: _hg.REF[_hg.TS[_py.int]]) -> _hg.TS[_py.int]:",
+        "def pick(flag: _hg.TS[_py.bool], low: _hg.REF[_hg.TS[_py.int]], high: _hg.REF[_hg.TS[_py.int]], ",
+        "    return _lift_0_doubled(value=pick(flag=flag, low=low, high=high))",
     ]);
 }
 
-/// TYPE-3: a struct is a value where an abstract struct it inherits from
-/// is expected, and its connection is narrowed to the abstract struct's
-/// bundle. Across a reference, designated or followed, that narrowing is
-/// not written yet: reported, where the same struct on both sides is not.
+/// FN-16: what this target does not write of a `ref` parameter or result
+/// is reported: a child of one as an endpoint, `all_valid` of one, and a
+/// designation of a child that is no position of a fixed list.
 #[test]
-fn an_inherited_struct_across_a_reference_is_not_written_yet() {
+fn what_a_ref_cannot_be_given_yet_is_reported() {
     let emitted = emit(&[fixture!(
-        "an_inherited_struct_across_a_reference_is_not_written_yet",
+        "what_a_ref_cannot_be_given_yet_is_reported",
         "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:14:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
-            "m.hgl:16:41 target.unsupported: the hgraph target does not write a struct connection given across a reference to a struct it inherits from yet",
+            "m.hgl:4:12 target.unsupported: the hgraph target does not write an endpoint of a child of a `ref` parameter or result yet",
+            "m.hgl:5:16 target.unsupported: the hgraph target does not write `all_valid` of a `ref` parameter or result yet",
+            "m.hgl:9:33 target.unsupported: the hgraph target does not write a designation of a child that is no position of a fixed list yet",
+            "m.hgl:12:19 target.unsupported: the hgraph target does not write a child of a `ref` parameter designated yet",
         ]
     );
 }
 
-/// What this target does not write of a reference is reported: one as
-/// a field of a temporal struct or an element of a temporal list, and
-/// an atomic field that may be left out (TYPE-14).
+/// TYPE-2: "Two `zoned_datetime` values are equal when both their
+/// instants and their zone names are ... Compared as UTC, they are equal
+/// when their instants are. That comparison is written `a =={utc: true}
+/// b`". Core's candidates of `eq_` and `ne_` for two zoned datetimes take
+/// the option `utc` (OPS-2), and are not written yet: reported.
 #[test]
-fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
+fn a_zoned_equality_is_not_written_yet() {
+    let emitted = emit(&[fixture!("a_zoned_equality_is_not_written_yet", "m.hgl")]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:12 target.unsupported: the hgraph target does not write the candidate `ne_(zoned_datetime, zoned_datetime, bool)` yet",
+            "m.hgl:7:12 target.unsupported: the hgraph target does not write the candidate `eq_(zoned_datetime, zoned_datetime, bool)` yet",
+            "m.hgl:8:12 target.unsupported: the hgraph target does not write the candidate `eq_(zoned_datetime, zoned_datetime, bool)` yet",
+        ]
+    );
+}
+
+/// A field that may be left out because its type is no ordinary value,
+/// an atomic's (TYPE-14), is reported.
+#[test]
+fn an_atomic_field_that_may_be_left_out_is_not_written_yet() {
     let emitted = emit(&[fixture!(
-        "a_reference_inside_a_temporal_composite_is_not_written_yet",
+        "an_atomic_field_that_may_be_left_out_is_not_written_yet",
         "m.hgl"
     )]);
     assert_eq!(
         emitted.reported,
-        [
-            "m.hgl:9:11 target.unsupported: the hgraph target does not write the type `Routed` yet",
-            "m.hgl:12:10 target.unsupported: the hgraph target does not write the type `Maybe` yet",
-            "m.hgl:15:9 target.unsupported: the hgraph target does not write the type `list<ref<i64>, 2>` yet",
-        ]
+        ["m.hgl:6:10 target.unsupported: the hgraph target does not write the type `Maybe` yet"]
     );
 }
 

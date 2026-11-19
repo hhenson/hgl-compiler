@@ -8,6 +8,7 @@ use hgl_source::Span;
 
 use super::Typer;
 use super::evals::{holds_trace, publications};
+use super::fit::window_value;
 use super::inference::{Inferred, Places, fixed, placed};
 use crate::declared::{is_optional, substitute_within};
 use crate::hir::{self, EndpointOperation, ExprKind};
@@ -454,7 +455,19 @@ impl<'a> Typer<'a> {
                 } else {
                     value
                 };
-                if !traced && holds_trace(&value.ty) {
+                // FN-12: "A window is passed only where it is
+                // `all_valid` ... That value, read in a hook or given to
+                // a lifted helper (FN-12), is a `list<V>` of the values
+                // held" (TYPE-11): a connection of a window is given to
+                // a value function's `list<V>` in composition.
+                let window = window_value(value.ty.omission_removed());
+                let lifted = takes == Takes::Parameters
+                    && slot.listed
+                    && self.composes(&value)
+                    && matches!(value.ty.omission_removed(), Type::RollingWindow { .. })
+                    && matches!(slot.ty, Type::List { size: None, .. })
+                    && self.admits(&slot.ty, &window);
+                if lifted || (!traced && holds_trace(&value.ty)) {
                     value
                 } else {
                     let place = format!("the {} `{}`", takes.noun(), slot.name);

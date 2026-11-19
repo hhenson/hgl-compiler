@@ -3,3 +3,33 @@
 "the candidate `mul_(str, i64)`" = [
     "core_implementation::reverse_scaling",
 ]
+# TYPE-2, OPS-2: two zoned datetimes compared by instant and zone, or as
+# UTC; core's candidates take the option `utc`.
+"the candidate `eq_(zoned_datetime, zoned_datetime, bool)`" = [
+    "core_implementation::reverse_instant_addition",
+    "core_implementation::a_duration_moves_a_zoned_instant",
+    "core_implementation::zoned_datetimes_are_equal_by_instant_and_zone",
+    "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
+]
+"`all_valid` of a value with an optional child (TIME-9)" = [
+    "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
+]
+"`modified([])` as a value" = [
+    "conformance::an_empty_selection_is_true_in_its_handler_when_an_input_ticks",
+]
+"a wake asked for with a duration that may not be more than zero (TIME-8)" = [
+    "conformance::a_zero_duration_asked_of_the_scheduler_fails",
+]
+"the readiness END-9 gives `rolling_window<i64, 3, 2>`" = [
+    "conformance::a_window_is_valid_before_its_minimum_and_all_valid_at_it",
+    "conformance::reading_a_window_before_it_is_all_valid_fails",
+]
+
+# Rejection cases the compiler does not yet reject, each
+# `suite::file::declaration` with the file under the suite's directory,
+# under a reason that names the missing rule. A listed case must fail by
+# not being rejected: one that is rejected fails the check.
+[rejections]
+"a whole read needs `all_valid` (TIME-1)" = [
+    "conformance::rejections/collection_children.hgl::quote_without_admission",
+]

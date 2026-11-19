@@ -113,12 +113,15 @@ fn ref_tokens(declaration: &hgl_parser::SyntaxNode) -> Vec<hgl_parser::SyntaxTok
 /// "`{ when; }` denotes a node", and not a graph, "`{}` denotes a
 /// graph".
 fn native_node(declaration: &Declaration) -> bool {
-    crate::syntax::child(&declaration.syntax, hgl_parser::SyntaxKind::NativeContractBody)
-        .into_iter()
-        .flat_map(|body| body.children())
-        .filter(|hook| hook.kind() == hgl_parser::SyntaxKind::NativeHook)
-        .filter_map(|hook| hook.first_token())
-        .any(|keyword| keyword.kind() == hgl_parser::SyntaxKind::KwWhen)
+    crate::syntax::child(
+        &declaration.syntax,
+        hgl_parser::SyntaxKind::NativeContractBody,
+    )
+    .into_iter()
+    .flat_map(|body| body.children())
+    .filter(|hook| hook.kind() == hgl_parser::SyntaxKind::NativeHook)
+    .filter_map(|hook| hook.first_token())
+    .any(|keyword| keyword.kind() == hgl_parser::SyntaxKind::KwWhen)
 }
 
 /// FN-15: "A value function, a `const fn` or a native one, may mark a

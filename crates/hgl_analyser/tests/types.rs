@@ -130,10 +130,10 @@ fn every_form_of_type_is_read() {
         "fn scalars(a: bool, b: i64, c: f64, d: str, e: bytes, f: any, g: date, h: time,\n",
         "    i: datetime, j: duration, k: civil_datetime, l: timezone, m: zoned_datetime,\n",
         "    n: zoned_time) {}\n",
-        "fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
+        "native fn shapes<T>(a: tuple<i64, str>, b: list<f64>, c: set<str>, d: dict<str, f64>,\n",
         "    e: rolling_window<f64, 5m>, ref f: f64, g: signal, h: atomic<Quote>,\n",
         "    i: result<f64, error>, j: error, k: delta<set<f64>>, l: T, m: f64?)\n",
-        "    -> list<dict<str, Box<Quote>>> {}\n",
+        "    -> list<dict<str, Box<Quote>>>\n",
         "fn named(a: Quote, b: Box<i64>, c: Side, d: Handle) {}\n",
     ));
     assert_eq!(checked.summary(), NONE);
@@ -676,8 +676,8 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
     let checked = module(concat!(
         "struct Quote { bid: f64 }\n",
         // What may hold an endpoint or a temporal shape.
-        "fn good(a: list<atomic<Quote>>, b: dict<str, atomic<Quote>>, c: tuple<signal, atomic<Quote>>,\n",
-        "    d: dict<str, rolling_window<f64, 5>>, ref e: list<f64>, f: delta<rolling_window<f64, 5>>,\n",
+        "fn good(a: list<atomic<Quote>>, b: dict<str, atomic<Quote>>, c: tuple<rolling_window<f64, 5>, atomic<Quote>>,\n",
+        "    d: dict<str, rolling_window<f64, 5>>, e: list<atomic<Quote>>, f: delta<rolling_window<f64, 5>>,\n",
         "    g: set<tuple<i64, list<str>>>, h: atomic<dict<str, list<Quote>>>) {}\n",
         "fn sets(a: set<signal>, b: set<rolling_window<f64, 5>>, c: set<atomic<Quote>>) {}\n",
         "fn keys(a: dict<signal, f64>, b: dict<atomic<Quote>, f64>) {}\n",
@@ -694,20 +694,20 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
         checked.summary(),
         [
             "m.hgl:6:16 type/type.not_ordinary TYPE-12",
-            "m.hgl:6:34 type/type.not_ordinary TYPE-9",
-            "m.hgl:6:66 type/type.not_ordinary TYPE-9",
+            "m.hgl:6:32 type/type.not_ordinary TYPE-9",
+            "m.hgl:6:64 type/type.not_ordinary TYPE-9",
             "m.hgl:7:17 type/type.not_ordinary TYPE-12",
-            "m.hgl:7:41 type/type.not_ordinary TYPE-9",
+            "m.hgl:7:39 type/type.not_ordinary TYPE-9",
             "m.hgl:8:30 type/type.not_ordinary TYPE-12",
-            "m.hgl:8:62 type/type.not_ordinary TYPE-11",
+            "m.hgl:8:60 type/type.not_ordinary TYPE-11",
             "m.hgl:9:23 type/type.not_ordinary TYPE-12",
-            "m.hgl:9:44 type/type.not_ordinary TYPE-9",
+            "m.hgl:9:42 type/type.not_ordinary TYPE-9",
             "m.hgl:10:22 type/type.not_ordinary TYPE-12",
-            "m.hgl:10:55 type/type.not_ordinary TYPE-13",
-            "m.hgl:11:32 type/type.not_ordinary TYPE-12",
-            "m.hgl:11:65 type/type.not_ordinary TYPE-12",
+            "m.hgl:10:53 type/type.not_ordinary TYPE-13",
+            "m.hgl:11:21 type/type.not_ordinary TYPE-9",
+            "m.hgl:11:67 type/type.not_ordinary TYPE-12",
             "m.hgl:13:24 type/type.not_ordinary TYPE-12",
-            "m.hgl:13:52 type/type.not_ordinary TYPE-9",
+            "m.hgl:13:50 type/type.not_ordinary TYPE-9",
         ]
     );
     assert_eq!(
@@ -733,9 +733,9 @@ fn a_part_that_is_a_value_is_an_ordinary_value_type() {
 #[test]
 fn constant_configuration_is_an_ordinary_value_type() {
     let checked = module(concat!(
-        "fn good(ref value: f64, const depth: i64, const names: list<str> = []) {}\n",
+        "fn good(value: rolling_window<f64, 5>, const depth: i64, const names: list<str> = []) {}\n",
         "const fn defaults(value: f64, factor: f64 = 2.0, window: rolling_window<f64, 5> = []) -> f64 => 1.0\n",
-        "fn constants(const a: atomic<Quote>, const b: signal, const c: atomic<i64>) {}\n",
+        "fn constants(const a: atomic<list<f64>>, const b: signal, const c: atomic<i64>) {}\n",
         "fn generic<const N: signal>(value: f64) {}\n",
         "operator add<T>(left: T, right: T) -> T\n",
         "    properties<i64, rolling_window<i64, 5>> { associative }\n",
@@ -744,9 +744,9 @@ fn constant_configuration_is_an_ordinary_value_type() {
         checked.summary(),
         [
             "m.hgl:3:58 type/type.not_ordinary FN-1",
-            "m.hgl:4:23 type/type.not_ordinary TYPE-12",
-            "m.hgl:4:42 type/type.not_ordinary TYPE-12",
-            "m.hgl:4:59 type/type.not_ordinary FN-1",
+            "m.hgl:4:23 type/type.not_ordinary FN-1",
+            "m.hgl:4:51 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:68 type/type.not_ordinary FN-1",
             "m.hgl:5:21 type/type.not_ordinary TYPE-12",
             "m.hgl:7:21 type/type.not_ordinary GEN-9",
         ]
@@ -774,7 +774,7 @@ fn signal_is_the_whole_type_of_an_input() {
         "native fn pulse(tick: signal)\n",
         "fn output() -> signal {}\n",
         "struct Field { tick: signal }\n",
-        "fn nested(a: list<signal>, b: atomic<signal>, c: tuple<i64, signal>, d: dict<str, signal>) {}\n",
+        "fn nested(a: list<signal>, b: list<list<signal>>, c: tuple<i64, signal>, d: dict<str, signal>) {}\n",
         // FN-8: each argument a positional pack captures is an input.
         "fn packed(ticks: ...signal) {}\n",
         // Neither a local nor an anonymous function's parameter is an
@@ -787,9 +787,9 @@ fn signal_is_the_whole_type_of_an_input() {
             "m.hgl:4:16 type/signal.position TYPE-12",
             "m.hgl:5:22 type/signal.position TYPE-12",
             "m.hgl:6:19 type/signal.position TYPE-12",
-            "m.hgl:6:35 type/signal.position TYPE-12",
-            "m.hgl:6:58 type/signal.position TYPE-12",
-            "m.hgl:6:80 type/signal.position TYPE-12",
+            "m.hgl:6:41 type/signal.position TYPE-12",
+            "m.hgl:6:65 type/signal.position TYPE-12",
+            "m.hgl:6:87 type/signal.position TYPE-12",
             "m.hgl:9:15 type/signal.position TYPE-12",
             "m.hgl:9:24 name/name.unknown UNIT-10",
             "m.hgl:10:22 type/signal.position TYPE-12",
@@ -813,7 +813,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
         "const fn good(b: list<f64?>, a: f64?, c: list<f64>?, d: dict<str, f64?>?) -> f64? => a\n",
         // On the whole type of an input `?` follows any type: the
         // argument may be omitted.
-        "fn inputs(ref a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: atomic<i64>?, e: list<signal>?) {}\n",
+        "fn inputs(a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: atomic<i64>?, e: list<rolling_window<f64, 5>>?) {}\n",
         // Not in a result, a local's annotation, a part of another
         // type, a value function's parameter or a `const` one.
         "fn output() -> signal? {}\n",
@@ -835,7 +835,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
             "m.hgl:6:17 type/type.not_ordinary TYPE-14",
             "m.hgl:6:43 name/name.unknown UNIT-10",
             "m.hgl:8:18 type/type.not_ordinary TYPE-14",
-            "m.hgl:8:43 type/type.not_ordinary TYPE-14",
+            "m.hgl:8:41 type/type.not_ordinary TYPE-14",
             "m.hgl:9:20 type/type.not_ordinary FN-1",
             "m.hgl:10:24 type/type.not_ordinary TYPE-12",
             "m.hgl:11:16 type/nullable.key TYPE-14",
@@ -854,7 +854,7 @@ fn a_nullable_type_is_an_ordinary_value_or_null() {
     assert_eq!(
         signature(&checked, "inputs"),
         // TYPE-9: `atomic<i64>` is `i64`.
-        "(ref a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: i64?, e: list<signal>?)"
+        "(a: f64?, b: signal?, c: rolling_window<f64, 5>?, d: i64?, e: list<rolling_window<f64, 5>>?)"
     );
     // TYPE-15: "`list<f64?>` has nullable elements; `list<f64>?` is a
     // nullable list value." They are two types.
@@ -1210,8 +1210,8 @@ fn any_parameter_but_a_pack_may_have_a_default() {
 fn a_value_functions_signature_is_of_ordinary_values() {
     let checked = module(concat!(
         "const fn good(a: list<f64?>, b: dict<str, f64>, c: tuple<i64, str>?, rest: ...f64) -> set<str> => []\n",
-        "const fn parameters(a: atomic<Quote>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
-        "const fn nested(a: list<signal>, rest: ...atomic<Quote>) -> i64 => 1\n",
+        "const fn parameters(a: atomic<list<f64>>, b: signal, c: rolling_window<f64, 5>, d: atomic<i64>) -> i64 => 1\n",
+        "const fn nested(a: list<signal>, rest: ...atomic<list<f64>>) -> i64 => 1\n",
         "const fn gives() -> signal => make()\n",
         "native const fn native_value(a: rolling_window<f64, 5>) -> atomic<i64>\n",
         // A temporal function takes and gives them all.
@@ -1220,14 +1220,14 @@ fn a_value_functions_signature_is_of_ordinary_values() {
     assert_eq!(
         checked.summary(),
         [
-            "m.hgl:3:24 type/type.not_ordinary TYPE-12",
-            "m.hgl:3:37 type/type.not_ordinary TYPE-12",
-            "m.hgl:3:48 type/type.not_ordinary FN-1",
-            "m.hgl:3:75 type/type.not_ordinary FN-1",
+            "m.hgl:3:24 type/type.not_ordinary FN-1",
+            "m.hgl:3:46 type/type.not_ordinary TYPE-12",
+            "m.hgl:3:57 type/type.not_ordinary FN-1",
+            "m.hgl:3:84 type/type.not_ordinary FN-1",
             "m.hgl:4:25 type/type.not_ordinary TYPE-12",
-            "m.hgl:4:45 type/type.not_ordinary TYPE-12",
+            "m.hgl:4:43 type/type.not_ordinary FN-1",
             "m.hgl:5:21 type/type.not_ordinary TYPE-12",
-            "m.hgl:5:33 name/name.unknown UNIT-10",
+            "m.hgl:5:31 name/name.unknown UNIT-10",
             "m.hgl:6:33 type/type.not_ordinary FN-1",
             "m.hgl:6:60 type/type.not_ordinary FN-1",
         ]

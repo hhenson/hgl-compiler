@@ -1421,7 +1421,10 @@ impl<'a> Emitter<'a> {
             }
             // FN-16: "a `return` to a `ref` result designates" the
             // endpoint it names, and TIME-10: "A designation published
-            // again unchanged is no tick" (`_core.designation`).
+            // again unchanged is no tick" (`_core.designation`). Core's
+            // END-10: "A publication of the designation it holds is no
+            // tick: unlike a value's (END-2, END-5), it leaves the endpoint
+            // unmodified and notifies no subscriber."
             Stmt::Return {
                 value: Some(returned),
                 ..

@@ -1,4 +1,6 @@
-//! A window's sizes computed from constants (TYPE-11, UNIT-13).
+//! A window's sizes computed from constants (TYPE-11, UNIT-13), and what
+//! a window is to `all_valid` and to a read of its value (TIME-9,
+//! TYPE-11, FN-12, END-9).
 
 mod common;
 
@@ -133,5 +135,51 @@ fn a_duration_times_an_integer_is_followed_in_either_order() {
     assert_eq!(
         parameter(&checked, "same", "b"),
         parameter(&checked, "same", "c")
+    );
+}
+
+/// TIME-9: "`all_valid` takes only a collection or a window; another
+/// endpoint is rejected (`endpoint.argument`)". TYPE-11 and END-9: "That
+/// value, read in a hook or given to a lifted helper (FN-12), is a
+/// `list<V>` of the values held, oldest first". So a hook gives a
+/// window's value where a `list<V>` is expected, and a graph gives a
+/// window's connection to a value function's `list<V>`, which is lifted;
+/// a temporal function's `list<V>` takes no window, and a window's value
+/// is no window.
+#[test]
+fn a_window_is_all_valid_and_its_value_a_list() {
+    let checked = module(concat!(
+        "const fn total(values: list<i64>) -> i64 => 0\n",
+        "fn collect(reading: i64) -> rolling_window<i64, 3, 2> {\n",
+        "    when { return reading }\n",
+        "}\n",
+        "fn ready(readings: rolling_window<i64, 3, 2>) -> list<bool, 2> {\n",
+        "    when valid([]) { return [valid(readings), all_valid(readings)] }\n",
+        "}\n",
+        "fn summed(readings: rolling_window<i64, 3, 2>) -> i64 {\n",
+        "    when all_valid(readings) {\n",
+        "        let held: list<i64> = readings\n",
+        "        return total(readings) + total(held)\n",
+        "    }\n",
+        "}\n",
+        "fn lifted(reading: i64) -> i64 => total(collect(reading))\n",
+        "fn listed(values: list<i64>) -> i64 {\n",
+        "    when { return 1 }\n",
+        "}\n",
+        "fn not_lifted(reading: i64) -> i64 => listed(collect(reading))\n",
+        "fn not_a_window(readings: rolling_window<i64, 3, 2>) -> rolling_window<i64, 3, 2> {\n",
+        "    when { return readings }\n",
+        "}\n",
+        "fn scalar(reading: f64) -> bool {\n",
+        "    when { return all_valid(reading) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:19:46 type/type.mismatch EXPR-5",
+            "m.hgl:21:19 type/type.mismatch EXPR-5",
+            "m.hgl:24:29 phase/endpoint.argument TIME-9",
+        ]
     );
 }

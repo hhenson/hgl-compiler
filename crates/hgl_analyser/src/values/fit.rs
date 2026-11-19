@@ -62,14 +62,14 @@ impl<'a> Typer<'a> {
     }
 
     /// [`Self::fit`], for a function's argument or a graph's result. In
-    /// composition a connection is taken there across a reference
-    /// boundary, and by a `signal` (`references::crosses`): TYPE-12,
-    /// "`ref<T>` designates an endpoint"; TIME-10, "Ordinary followers
-    /// observe the selected target"; TYPE-12, "`signal` is a complete
-    /// temporal input constraint with no readable payload".
+    /// composition a connection is taken there by a `signal`, and where
+    /// the `?` of an input that may be left out is no part of it
+    /// (`signals::crosses`): TYPE-12, "`signal` is a complete temporal
+    /// input constraint with no readable payload". A `ref` parameter of
+    /// T takes a connection of T as any parameter of T does (FN-16).
     pub(super) fn fit_input(&mut self, value: Expr, expected: &Type, what: &str) -> Expr {
         if self.composes(&value)
-            && crate::references::crosses(expected, &value.ty, &|expected, ty| {
+            && crate::signals::crosses(expected, &value.ty, &|expected, ty| {
                 self.admits(expected, ty)
             })
         {
@@ -78,16 +78,17 @@ impl<'a> Typer<'a> {
         self.fit(value, expected, what)
     }
 
-    /// The type `value`, given to a place declared `pattern`, says the
-    /// generic parameters in `pattern` stand for. A connection given to
-    /// a function's parameter in composition says it across a reference
-    /// boundary (GEN-11, `references::inferred_from`): "Argument
-    /// inference removes reference boundaries recursively from an
-    /// otherwise unbound generic; such an input observes values. An
-    /// explicit ref pattern binds its underlying type."
-    pub(super) fn inferred_from(&self, pattern: &Type, value: &Expr, takes: Takes) -> Type {
+    /// The type `value` says the generic parameters of the place it is
+    /// given to stand for. GEN-11: "No type holds
+    /// a reference (TYPE-12), so argument inference removes none: a
+    /// generic binds from the type of the connection it is given, at a
+    /// `ref` parameter as at any other (FN-16)." A connection given to a
+    /// function's parameter in composition says it with the `?` that
+    /// marks omission removed, which is no part of what it is given
+    /// (TYPE-14).
+    pub(super) fn inferred_from(&self, value: &Expr, takes: Takes) -> Type {
         if takes == Takes::Parameters && self.composes(value) {
-            crate::references::inferred_from(pattern, &value.ty)
+            value.ty.omission_removed().clone()
         } else {
             value.ty.clone()
         }
@@ -244,6 +245,20 @@ impl<'a> Typer<'a> {
             }
         }
         false
+    }
+}
+
+/// The type of a window's value, `window` being a `rolling_window<V, ...>`;
+/// any other type as it is. TYPE-11: "That value, read in a hook or given
+/// to a lifted helper (FN-12), is a `list<V>` of the values held, oldest
+/// first".
+pub(super) fn window_value(window: &Type) -> Type {
+    match window {
+        Type::RollingWindow { value, .. } => Type::List {
+            element: value.clone(),
+            size: None,
+        },
+        other => other.clone(),
     }
 }
 

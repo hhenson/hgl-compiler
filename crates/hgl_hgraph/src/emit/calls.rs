@@ -15,6 +15,62 @@ impl<'a> Emitter<'a> {
         (Some(module) == self.program.core() && provides(&python)).then_some(python)
     }
 
+    /// Reports a wake asked of the scheduler or the alarm, a call of
+    /// core's `schedule` (CAP-4, CAP-5), with a duration that may not be
+    /// more than zero outside `start`. TIME-8: "A wake asked for with a
+    /// `duration` takes one more than zero, but in `start`, which takes
+    /// zero too ... A duration that is not admitted ... rejects where the
+    /// compiler sees its value ... and elsewhere fails the call as the
+    /// program runs." Neither is written yet, so a duration there that is
+    /// a literal of no more than zero, or that reads what the node holds
+    /// as it runs, an input, a local or a state, is reported. One made of
+    /// literals, constants and `const` parameters, its configuration, is
+    /// not: its value is the program's to keep more than zero.
+    fn wake_durations(
+        &mut self,
+        function: &Function,
+        callee: (usize, usize),
+        signature: &Signature,
+        arguments: &[Argument],
+    ) {
+        let program = self.program;
+        if Some(callee.0) != program.core()
+            || program.modules[callee.0].declarations[callee.1].name != "schedule"
+            || function.mode == Mode::Lifecycle
+        {
+            return;
+        }
+        for argument in arguments {
+            let duration = argument
+                .parameter
+                .and_then(|index| signature.parameters.get(index))
+                .is_some_and(|parameter| parameter.ty == Type::Scalar(Scalar::Duration));
+            let not_positive = matches!(
+                argument.value.kind,
+                ExprKind::Literal(Value::Duration(micros)) if micros <= 0
+            );
+            let mut runtime = false;
+            argument.value.walk(&mut |part| {
+                if let ExprKind::Local(local) = part.kind {
+                    let declared = &function.locals[local];
+                    let configuration = declared.kind == LocalKind::Parameter
+                        && function.signature.is_some_and(|own| {
+                            own.parameters.iter().any(|parameter| {
+                                parameter.name == declared.name && parameter.constant
+                            })
+                        });
+                    runtime |= !configuration;
+                }
+            });
+            if duration && (not_positive || runtime) {
+                self.unsupported(
+                    argument.value.at,
+                    "a wake asked for with a duration that may not be more than zero (TIME-8)",
+                );
+            }
+        }
+    }
+
     /// The arguments of a call of `callee`, a module and a declaration
     /// of it: each by its parameter's name, so that the order they are
     /// written in does not matter to Python.
@@ -32,6 +88,7 @@ impl<'a> Emitter<'a> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
+        self.wake_durations(function, callee, signature, arguments);
         let kept = self.kept_configuration(callee, generics, signature);
         // Whether the callee is a node: a node keeps what a graph
         // gives it that is no connection, so such an argument is
@@ -565,6 +622,17 @@ impl<'a> Emitter<'a> {
                 self.unsupported(argument.value.at, "an argument of a pack in a lifted call");
                 continue;
             };
+            // FN-12: "A window is passed only where it is `all_valid`",
+            // as the `list<V>` it holds (TYPE-11): not written yet.
+            if input(self, &argument.value)
+                .is_some_and(|ty| matches!(ty.omission_removed(), Type::RollingWindow { .. }))
+            {
+                self.unsupported(
+                    argument.value.at,
+                    "a window given to a lifted helper (FN-12)",
+                );
+                continue;
+            }
             let taken = match input(self, &argument.value) {
                 // TIME-10: "Ordinary followers observe the selected
                 // target": a lifted function given a `ref` result takes
