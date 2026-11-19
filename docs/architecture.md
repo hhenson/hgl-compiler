@@ -1606,8 +1606,9 @@ is.
 | `push_all(items=rows, more=_core.copied(rows))` | The owner's first case: an argument read from a place that the same call gives to a `var` parameter. A second `var` parameter given the same place takes a copy too, and the place is given them in the order of the parameters (FN-15) |
 | `mine = _core.copied(values)`, `rows = _core.set_entry(rows, "b", _core.copied(items))` | What a place keeps, assigned to it or into it: a copy, where something else holds the value. A value written out and what a function of the program returns are held by nothing else, and are kept as they are |
 | `_core.fn_append(values=rows, item=_core.copied(row))` | What a native function with a `var` parameter puts into its place, where the place may hold it: `append` keeps its item, and `extend(values, more)` keeps the numbers `more` holds and takes `more` as it is |
-| `return _core.copied(value)`, `return out` | A result is the caller's to keep: a copy of what the function was given, and its own `var` or `let` as it is |
-| `_output.value = _core.copied(...)`, `yield`, a hook's `return` of a `state` | What is published is the runtime's to keep. The provider copies what it puts in a run's store |
+| `return _core.copied(value)`, `return out` | A result is the caller's to keep: a copy of what the function was given, and its own `var` or `let` as it is. A `let` is the function's own only where every value it may be is: `let x = if flag { mine } else { p }` may be the parameter `p`, and `return _core.copied(x)`. `copies` keeps, beside the places a name refers into, whether it may also be a value held elsewhere, a parameter, a constant or what a native function gives of one; a form it does not know is taken to be one |
+| `_output.value = _core.copied(...)`, `yield`, a hook's `return` of a `state` | What is published is the runtime's to keep. The provider copies what it puts in a run's store. A struct read whole from its bundle, `Ticket(id=current["id"].value, ...)`, is made anew, and is kept as it is |
+| `n = summed(values=_core.Held(_core.copied(cfg)), tick=tick)` | In a graph an ordinary value is changed where it is by a native function and a `var` parameter, as anywhere, and each copy above is made for it as in a value function; a connection is never copied. What a graph gives a node, its configuration and a constant hgraph wires for an input, is hgraph's to keep: a copy, where the graph holds it too. A graph's call of another graph gives the value as it is, and a source's graph copies its configuration |
 | `items = _core.set_item(items, i, value)`, `book = _core.set_entry(book, key, value)`, `order = _core.set_field(order, "size", 2)` | An element, an entry or a field assigned: the place's own list, dictionary or struct, changed where it is. A `var` parameter is the caller's place, and is changed where it is too. A dictionary keeps a copy of a key it has not, where something else holds it: `counts = _core.set_entry(counts, _core.copied(key), 1)` |
 | `book = _core.set_at(book, (("f", "bids"), ("k", price),), lambda: size)` | A place further in: the provider goes in and changes each list, dictionary and struct that is no value on the way where it is, and gives a value on the way a new one. The value is asked for once the way in has been read |
 | `_given = _core.given_at(book, (("f", "orders"),), _core.fn_append, "values", lambda: _py.dict(item=order))` | A native function of core given a place further in, and then `book = _given[1]` |
@@ -1625,7 +1626,9 @@ hold a collection on the way in, `append(rows[0], rows)`, of which the
 compiler gives a copy, taken before the change. So a recording grows
 with no copy, a list passed to a function is not copied, a function's
 own result is kept as it is, and a `let` costs a copy only where its
-place changes while it is in scope.
+place changes while it is in scope. `every_copy_the_copy_points_fixture_makes_is_needed`
+takes each copy the target writes for `copy_points.hgl` out in turn and
+runs the fixture's tests on hgraph: each time one fails.
 
 FN-15: "A function that fails leaves the place holding what its
 parameter held when it failed: no change it had made is undone." A list,

@@ -106,7 +106,11 @@ test a_let_is_a_copy_where_its_place_changes {
 }
 
 test a_loop_runs_over_a_copy_where_its_body_changes_the_place {
-    assert sizes_seen([ticket(1), ticket(2)]) == 3
+    # The `var` takes a copy of its parameter: what the caller gave is
+    # as it was.
+    var given = [ticket(1), ticket(2)]
+    assert sizes_seen(given) == 3
+    assert given == [ticket(1), ticket(2)]
     assert total_size([ticket(1), ticket(2)]) == 3
 }
 
@@ -276,9 +280,26 @@ test what_is_published_is_never_changed_after {
 }
 
 # FN-13: "Retained results must remain independent of later temporal
-# changes", for a struct as core's `keep_readings` is for a list.
+# changes". A node keeps what a helper gives of its `state`, which then
+# changes: the helper's result is a copy of what it was given.
 const fn keep_ticket(given: Ticket) -> Ticket => given
 
+fn kept_then_grown(step: i64) -> i64 {
+    state mine: Ticket = Ticket(id: 1, size: 0, price: 1.0)
+    cache kept: Ticket = Ticket(id: 0, size: 0, price: 0.0)
+    when {
+        mine.size += step
+        if step == 1 { kept = keep_ticket(mine) }
+        return kept.size
+    }
+}
+
+test a_retained_result_is_independent_of_later_changes {
+    assert eval(kept_then_grown(step: [1, 2])) == [1, 1]
+}
+
+# A struct read whole from its bundle is made anew from the fields'
+# ports: nothing else holds it, and what keeps it is given it as it is.
 fn ticketed(size: i64) -> Ticket {
     when { return ticket(size) }
 }
@@ -294,6 +315,151 @@ fn saved_size(current: Ticket, save: bool) -> i64 {
 fn observe_saved(size: i64, save: bool) -> i64 =>
     saved_size(keep_ticket(ticketed(size)), save)
 
-test a_retained_struct_is_independent_of_later_input_changes {
+test a_struct_read_from_its_bundle_is_its_own {
     assert eval(observe_saved(size: [2, 7, _], save: [true, false, true])) == [2, 2, 7]
+}
+
+# A result is the function's own only where every value it may be is:
+# one that may be a parameter, or a constant, is a copy.
+struct Lists {
+    left: list<i64>
+    right: list<i64>
+}
+const standard_list: list<i64> = [1]
+const fn pick(p: list<i64>, flag: bool) -> list<i64> {
+    var mine: list<i64> = [0]
+    let x = if flag { mine } else { p }
+    return x
+}
+const fn paired(p: list<i64>) -> Lists {
+    var mine: list<i64> = [0]
+    let x = Lists(left: mine, right: p)
+    return x
+}
+const fn tupled(p: list<i64>) -> tuple<list<i64>, list<i64>> {
+    var mine: list<i64> = [0]
+    let x = (mine, p)
+    return x
+}
+const fn standard_or_mine(flag: bool) -> list<i64> {
+    var mine: list<i64> = [0]
+    let x = if flag { mine } else { standard_list }
+    return x
+}
+const fn first_of(p: list<list<i64>>, flag: bool) -> list<i64> {
+    var mine: list<list<i64>> = [[0]]
+    let over = if flag { mine } else { p }
+    for x in over { return x }
+    return [9]
+}
+const fn pick_ticket(p: Ticket, flag: bool) -> Ticket {
+    var mine = Ticket(id: 0, size: 0, price: 0.0)
+    let x = if flag { mine } else { p }
+    return x
+}
+fn picked_growing(step: i64, publish: bool) -> atomic<Ticket> {
+    state mine: Ticket = Ticket(id: 1, size: 0, price: 1.0)
+    when modified(step) {
+        mine.size += step
+        if publish { return pick_ticket(mine, false) }
+    }
+}
+fn picked_then_read(step: i64, publish: bool, tick: bool) -> i64 =>
+    size_at(picked_growing(step, publish), tick)
+
+test a_result_that_may_be_a_parameter_is_a_copy {
+    var rows: list<i64> = [1]
+    var picked = pick(rows, false)
+    append(picked, 2)
+    var pair = paired(rows)
+    append(pair.right, 2)
+    var both = tupled(rows)
+    append(both[1], 2)
+    var standard_copy = standard_or_mine(false)
+    append(standard_copy, 2)
+    var nested: list<list<i64>> = [[1]]
+    var first = first_of(nested, false)
+    append(first, 2)
+    assert rows == [1] && standard_list == [1] && nested == [[1]]
+    assert pick(rows, true) == [0] && first_of(nested, true) == [0]
+    assert eval(picked_then_read(
+        step:    [   1,     2,    _],
+        publish: [true, false,    _],
+        tick:    [   _,     _, true],
+    )) ==        [   _,     _,    1]
+}
+
+# In a graph an ordinary value is changed where it is by a native
+# function and a `var` parameter, as in any function, and the copy rule
+# is the same for it (FN-15: "a value taken from the place before the
+# call is as it was"). What a node is given is hgraph's to keep.
+const fn sum_of(values: list<i64>) -> i64 {
+    var sum: i64 = 0
+    for value in values { sum += value }
+    return sum
+}
+const fn one() -> list<i64> => [1]
+const fn grow(var values: list<i64>) { append(values, 100) }
+const fn add_twice(var into: list<i64>, more: list<i64>) {
+    extend(into, more)
+    extend(into, more)
+}
+fn graph_var(x: i64) -> i64 {
+    var a = one()
+    var b = a
+    append(a, 10)
+    return x + sum_of(b)
+}
+fn graph_let(x: i64) -> i64 {
+    var a = one()
+    let snap = a
+    grow(a)
+    return x + sum_of(snap)
+}
+fn graph_twice(x: i64) -> i64 {
+    var a = one()
+    add_twice(a, a)
+    return x + sum_of(a)
+}
+fn graph_loop(x: i64) -> i64 {
+    var a = one()
+    for value in a {
+        if sum_of(a) < 10 { append(a, value) }
+    }
+    return x + sum_of(a)
+}
+fn summed(const values: list<i64>, tick: bool) -> i64 {
+    when { return sum_of(values) }
+}
+fn relayed(const values: list<i64>, tick: bool) -> i64 => summed(values, tick)
+fn graph_configured(tick: bool) -> i64 {
+    var cfg = one()
+    let n = summed(cfg, tick)
+    append(cfg, 10)
+    return n
+}
+fn graph_relayed(tick: bool) -> i64 {
+    var cfg = one()
+    let n = relayed(cfg, tick)
+    append(cfg, 10)
+    return n
+}
+fn counted_once(const values: list<i64>) -> i64 {
+    yield 1us: sum_of(values)
+}
+fn graph_source(x: i64) -> i64 {
+    var cfg = one()
+    let n = counted_once(cfg)
+    append(cfg, 10)
+    return n
+}
+
+test in_a_graph_an_ordinary_value_follows_the_copy_rule {
+    assert eval(graph_var(x: [0])) == [1]
+    assert eval(graph_let(x: [0])) == [1]
+    assert eval(graph_twice(x: [0])) == [3]
+    assert eval(graph_loop(x: [0])) == [2]
+    assert eval(graph_configured(tick: [true])) == [1]
+    assert eval(graph_relayed(tick: [true])) == [1]
+    assert eval(graph_source(x: [0])) == [_, 1]
 }
