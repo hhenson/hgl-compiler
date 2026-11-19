@@ -5,7 +5,8 @@
 //! starts the interpreter on a small driver the target carries
 //! (`support/run_tests.py`), and reads what the driver recorded of each
 //! test. [`run_application`] does the same for one application, with
-//! a driver of its own (`support/run_application.py`).
+//! a driver of its own (`support/run_application.py`). What the two
+//! drivers share is written beside them (`support/driver.py`).
 //!
 //! The driver and this file agree on two files, both in the output
 //! directory:
@@ -54,6 +55,15 @@ const APPLICATION_DRIVER_FILE: &str = "_run_application.py";
 
 /// The file that driver records an application's run in.
 const APPLICATION_RESULTS_FILE: &str = "_run.txt";
+
+/// What the two drivers share, as Python: how a results file escapes
+/// its text, the function that writes a line of one, and the path the
+/// program is found on.
+const SHARED: &str = include_str!("../support/driver.py");
+
+/// The file it is written to, beside the drivers, which import it as
+/// `_driver`.
+const SHARED_FILE: &str = "_driver.py";
 
 /// What became of an application given to [`run_application`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +181,7 @@ pub fn run_application(
     let driver = directory.join(ROOT).join(APPLICATION_DRIVER_FILE);
     let results = directory.join(APPLICATION_RESULTS_FILE);
     let written = write(&output.files, directory)
-        .and_then(|()| fs::write(&driver, APPLICATION_DRIVER))
+        .and_then(|()| write_driver(&driver, APPLICATION_DRIVER))
         // What an earlier run recorded in a directory that was kept is
         // not this run's.
         .and_then(|()| match fs::remove_file(&results) {
@@ -322,6 +332,13 @@ pub fn write(files: &[File], directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Writes the driver `text` to the file `driver`, and beside it, in the
+/// same directory, what the two drivers share ([`SHARED`]).
+fn write_driver(driver: &Path, text: &str) -> io::Result<()> {
+    fs::write(driver.with_file_name(SHARED_FILE), SHARED)?;
+    fs::write(driver, text)
+}
+
 /// Runs tests of a written program on hgraph, and says what became of
 /// each, in the order given.
 ///
@@ -365,7 +382,7 @@ pub fn run_within(
         })
         .collect();
     let written = write(&output.files, directory)
-        .and_then(|()| fs::write(&driver, DRIVER))
+        .and_then(|()| write_driver(&driver, DRIVER))
         .and_then(|()| fs::write(&plan, planned))
         // Results of an earlier run in a directory that was kept are
         // not this run's.
