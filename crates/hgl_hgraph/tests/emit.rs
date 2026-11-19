@@ -9444,7 +9444,8 @@ fn a_collections_child_is_an_endpoint_of_its_own() {
 /// cannot publish (TYPE-10, TIME-9); an endpoint of an unsized list's
 /// element, a whole tuple here (TIME-1); an assignment inside a child of
 /// a node's `out` (TIME-7); and a trace cell written whole whose parts
-/// are composites, or a list's that are nullable (TST-5, TST-9).
+/// are composites, or a list's that are nullable, or of a struct below
+/// the cell's (TST-5, TST-9).
 #[test]
 fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     let emitted = emit(&[(
@@ -9472,6 +9473,14 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "test nested_cells {\n",
             "    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [[\"a\": [\"b\": 1]]], nulls: [[null, 3]])) == [1]\n",
             "}\n",
+            "abstract struct Shape { id: i64 }\n",
+            "struct Circle : Shape { radius: i64 }\n",
+            "fn identified(shape: Shape) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "test below_cells {\n",
+            "    assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
@@ -9484,6 +9493,7 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:21:31 target.unsupported",
             "m.hgl:21:70 target.unsupported",
             "m.hgl:21:96 target.unsupported",
+            "m.hgl:29:36 target.unsupported",
         ]
     );
 }

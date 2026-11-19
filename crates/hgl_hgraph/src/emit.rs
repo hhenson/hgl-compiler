@@ -9335,6 +9335,14 @@ impl Emitter<'_> {
                 // publishes it whole, replacing what it held (TST-9), and
                 // an expectation's is compared with the value the result
                 // holds once its cycle has published.
+                // A whole value of a struct below the cell's struct, a
+                // `Circle` where the cell is a `Shape`'s (TYPE-3), would be
+                // published as the struct below, which the cell's bundle
+                // does not take: it is not written yet.
+                Some(value) if descendant_cell(ty, &value.ty) => {
+                    self.unsupported(value.at, "a whole trace cell of a struct below its type");
+                    "None".to_string()
+                }
                 Some(value) if whole_cell(ty, &value.ty) => {
                     // A whole value of composites, a struct with a struct
                     // field or a dictionary of dictionaries, would replace
@@ -9913,6 +9921,27 @@ fn whole_cell(trace: &Type, ty: &Type) -> bool {
                         ..
                     }
             )
+        )
+    )
+}
+
+/// True where a cell of a trace of `trace`, of a struct's delta, holds a
+/// whole value of another struct, one below it (TYPE-3).
+fn descendant_cell(trace: &Type, ty: &Type) -> bool {
+    let struct_type = |ty: &Type| {
+        matches!(
+            ty,
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            }
+        )
+    };
+    matches!(
+        trace,
+        Type::Trace { cell, .. } if matches!(
+            &**cell,
+            Type::Delta(of) if struct_type(of) && struct_type(ty) && **of != *ty
         )
     )
 }

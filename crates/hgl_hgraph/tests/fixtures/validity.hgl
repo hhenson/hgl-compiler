@@ -407,3 +407,14 @@ test what_the_fourth_review_found {
     # result, an abstract struct's here.
     assert eval(shaped(id: [1])) == [delta<Shape>(id: 1)]
 }
+
+# ---- What the fifth review of this lane found ----
+
+# TYPE-5: a cell written whole keeps the value it was given.
+test a_whole_cell_keeps_the_value_it_was_given {
+    var pair: list<i64, 2> = [1, 2]
+    var expected = eval(both_positions(low: [5]))
+    expected = [pair]
+    pair[0] = 9
+    assert eval(both_positions(low: [1])) == expected
+}

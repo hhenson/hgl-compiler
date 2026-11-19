@@ -65,7 +65,9 @@ class _Whole:
 def whole(value, fixed=False):
     """A trace's cell written as the whole value `value` (TST-5); `fixed`
     where it is a fixed list's, whose delta is each position's."""
-    return _Whole(value, fixed)
+    # The cell keeps the value it is given: a copy, so that what the
+    # program goes on changing does not change the trace (TYPE-5).
+    return _Whole(_core.copied(value), fixed)
 
 
 class _Published:
