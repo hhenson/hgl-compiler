@@ -41,6 +41,7 @@ use hgl_lexer::literal::{
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
+use crate::constant::is_least_magnitude;
 use crate::declared::{agree, is_optional, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, CalendarDate, Callee, ClockTime, EndpointOperation, ErrorPart,
@@ -8930,29 +8931,14 @@ impl<'a> Typer<'a> {
     /// comes to, each constant it names followed to its value (GEN-8:
     /// "a constant expression of those"): `TWO + 1`.
     fn folded_in(&self, file: FileId, node: &SyntaxNode) -> Option<OptionValue> {
+        // A generic value parameter folds to no value here: only an
+        // integer, a duration or a member is one (`constant_value`).
         constant_value(&crate::constant::fold(node, &|name| {
-            let bound =
-                name_token(name).and_then(|token| self.binding_at(file, token.span().start));
-            match bound {
-                Some(Binding::Declarations {
-                    module,
-                    declarations,
-                }) => match declarations.as_slice() {
-                    [declaration]
-                        if self.program.modules[*module].declarations[*declaration].kind
-                            == DeclarationKind::Constant =>
-                    {
-                        crate::read::constant_value(
-                            self.program,
-                            *module,
-                            *declaration,
-                            &self.constant_values,
-                        )
-                    }
-                    _ => ConstantValue::Unevaluated,
-                },
-                _ => ConstantValue::Unevaluated,
-            }
+            let Some(token) = name_token(name) else {
+                return ConstantValue::Unevaluated;
+            };
+            let bound = self.binding_at(file, token.span().start);
+            crate::read::named_constant(self.program, &self.constant_values, &token, bound)
         }))
     }
 
@@ -9171,31 +9157,14 @@ impl<'a> Typer<'a> {
     /// that parameter, so that `keep(value, N: M)` gives `N` the `M` it
     /// names and not a constant of which nothing is known.
     fn constant_here(&self, node: &SyntaxNode) -> Constant {
+        // UNIT-13: a constant of a module is followed to its value as
+        // a type that names it follows it.
         let name = |used: &SyntaxNode| {
             let Some(name) = name_token(used) else {
                 return ConstantValue::Unevaluated;
             };
-            match self.bindings.get(&(self.file, name.span().start)) {
-                Some(Binding::Local {
-                    at,
-                    kind: LocalKind::GenericParameter,
-                }) => ConstantValue::Parameter {
-                    name: name.text().to_string(),
-                    at: *at,
-                },
-                // UNIT-13: a constant of a module, followed to its
-                // value as a type that names it follows it.
-                Some(Binding::Declarations {
-                    module,
-                    declarations,
-                }) if declarations.len() == 1 => crate::read::constant_value(
-                    self.program,
-                    *module,
-                    declarations[0],
-                    &self.constant_values,
-                ),
-                _ => ConstantValue::Unevaluated,
-            }
+            let bound = self.bindings.get(&(self.file, name.span().start)).copied();
+            crate::read::named_constant(self.program, &self.constant_values, &name, bound)
         };
         Constant {
             text: node.text().to_string().trim().to_string(),
@@ -14763,17 +14732,17 @@ impl Typer<'_> {
 const CONSTANT_LABEL_DEPTH: usize = 64;
 
 /// The value of a label that is a constant this pass can tell from
-/// another: a literal, or a member of an enum.
+/// another and is no integer: a literal, or a member of an enum. An
+/// integer, `1` or `-1` or one written with constants, is
+/// [`constant_index`]'s, as a tuple's index is.
 fn label_of(label: &Expr) -> Option<Label> {
     match &label.kind {
-        ExprKind::Literal(Value::Int(value)) => Some(Label::Int(*value)),
         ExprKind::Literal(Value::Bool(value)) => Some(Label::Bool(*value)),
         ExprKind::Literal(Value::Str(value)) => Some(Label::Str(value.clone())),
         ExprKind::Literal(Value::Float(value)) => Label::float(*value),
         ExprKind::EnumMember { member, .. } => Some(Label::Member(*member)),
-        // `-1`: a minus over an integer literal, and `-1.5` over a float.
+        // `-1.5`: a minus over a float literal.
         _ => match &negated(label)?.kind {
-            ExprKind::Literal(Value::Int(value)) => value.checked_neg().map(Label::Int),
             ExprKind::Literal(Value::Float(value)) => Label::float(-*value),
             _ => None,
         },
@@ -15432,16 +15401,6 @@ fn same_declaration(left: &Type, right: &Type) -> bool {
         ) => (module, declaration) == (other_module, other_declaration),
         _ => false,
     }
-}
-
-/// True when `node` is the integer literal 2^63, which is one more
-/// than the greatest `i64`.
-fn is_least_magnitude(node: &SyntaxNode) -> bool {
-    node.kind() == SyntaxKind::Literal
-        && tokens(node).next().is_some_and(|token| {
-            token.kind() == SyntaxKind::Int
-                && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
-        })
 }
 
 /// The names of a delta's properties, for a message: `` `added` and
