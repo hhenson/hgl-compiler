@@ -1298,6 +1298,20 @@ fn a_constant_is_its_value_and_a_comparison_the_languages() {
         ),
         &[],
     );
+    // NUM-5: "NaN is neither equal nor close to any value, including
+    // itself", and an ordering of one is false: a comparison the program
+    // makes of a NaN constant is the language's.
+    expect(
+        &format!(
+            "{shared}struct Flag<const X: bool> {{ v: i64 }}\n\
+             const NAN: f64 = 0.0 / 0.0\n\
+             const fn a(x: Flag<(0 == NAN)>, y: Flag<(NAN == NAN)>) -> Flag<false> => x\n\
+             const fn b(x: Flag<(NAN < 1.0)>, y: Flag<(1 >= NAN)>) -> Flag<false> => y\n\
+             const fn c(x: Flag<(NAN != NAN)>, y: Flag<(0 != NAN)>) -> Flag<true> => y\n\
+             const fn d(x: Flag<(0 == NAN)>) -> Flag<true> => x\n"
+        ),
+        &["9 type.mismatch"],
+    );
     expect(
         &format!(
             "{shared}const fn a(x: Scaled<-0.0>) -> Scaled<0.0> => x\n\

@@ -1842,6 +1842,21 @@ pub(crate) fn combined(
     if symbolic(left) || symbolic(right) {
         return V::Binary(operator, Box::new(left.clone()), Box::new(right.clone()));
     }
+    // NUM-5: "NaN is neither equal nor close to any value, including
+    // itself", and core's comparisons are false for a NaN operand but
+    // `!=`. A NaN is a constant (hhenson/hgl_spec#139), and is told
+    // here before a number is ordered.
+    let number = |value: &ConstantValue| matches!(value, V::Int(_) | V::Float(_));
+    let nan = |value: &ConstantValue| matches!(value, V::Float(value) if value.is_nan());
+    if matches!(
+        operator,
+        Op::Equal | Op::NotEqual | Op::Less | Op::LessEqual | Op::Greater | Op::GreaterEqual
+    ) && number(left)
+        && number(right)
+        && (nan(left) || nan(right))
+    {
+        return V::Bool(operator == Op::NotEqual);
+    }
     let worked_out = match (operator, left, right) {
         // OPS-2: "Numbers compare as the numeric contract says, an
         // `i64` with an `f64` included", and exactly (NUM-2).
