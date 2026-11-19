@@ -1,0 +1,26 @@
+module demo.cell_deltas
+# TST-5: a cell written as a `delta<T>` is compared with the delta its
+# cycle published. A set's delta in it is compared by what it added and
+# what it removed (TYPE-16), wherever in the cell it is.
+struct Tagged {
+    tags: set<i64>
+    count: i64
+}
+fn tagged(tag: i64) -> Tagged {
+    when { return Tagged(tags: [tag], count: 1) }
+}
+fn paired(tag: i64) -> tuple<set<i64>, i64> {
+    when { return ([tag], 1) }
+}
+test a_set_delta_in_a_struct_cell_is_compared_by_its_changes {
+    assert eval(tagged(tag: [1])) == [delta<Tagged>(tags: delta<set<i64>>(added: [1]), count: 1)]
+    assert eval(tagged(tag: [1])) != [delta<Tagged>(tags: delta<set<i64>>(removed: [1]), count: 1)]
+}
+test a_set_delta_in_a_tuple_cell_is_compared_by_its_changes {
+    assert eval(paired(tag: [1])) == [(delta<set<i64>>(added: [1]), 1)]
+    assert eval(paired(tag: [1])) != [(delta<set<i64>>(removed: [1]), 1)]
+}
+test two_set_deltas_are_equal_by_their_changes {
+    assert delta<set<i64>>(added: [1]) != delta<set<i64>>(removed: [1])
+    assert delta<set<i64>>(added: [1]) == delta<set<i64>>(added: [1])
+}
