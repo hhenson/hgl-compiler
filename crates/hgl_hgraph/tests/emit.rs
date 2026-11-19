@@ -1710,7 +1710,7 @@ fn a_form_not_written_yet_is_reported() {
             // A struct as a temporal input, which is written (TYPE-9),
             // and one made in a graph, which is not.
             "fn quoted(quote: Quote) -> f64 {\n",
-            "    when { return quote.bid }\n",
+            "    when all_valid(quote) { return quote.bid }\n",
             "}\n",
             "fn fixed(value: f64) -> f64 => quoted(Quote(bid: 1.0))\n",
             // A generic struct made where its arguments are the
@@ -5687,8 +5687,8 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
             "added=_py.frozenset((joined,)), tp=_py.int)\n",
         ),
-        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0]), [])):\n",
-        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3]), [",
+        "    if not (_harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[0], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [])):\n",
+        "    if not (not _harness.same(_harness.evaluate(members, {\"command\": _hgl_4core._inst_replay__i64}, _hgl_4core._inst_record__set_i64_, command=[1, 3], _hold=lambda _port: (_py.frozenset(_port.value) if _port.valid else _core.unset_read())), [",
     ] {
         assert!(
             python.contains(expected),
@@ -6073,6 +6073,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("tuples.hgl", TUPLES));
     files.push(("tuples_names.hgl", TUPLES_NAMES));
     files.push(("struct_review.hgl", STRUCT_REVIEW));
+    files.push(("validity.hgl", VALIDITY));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6863,7 +6864,7 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
             "    last: f64\n",
             "}\n",
             "fn full(book: Full) -> f64 {\n",
-            "    when { return book.last }\n",
+            "    when valid(book.last) { return book.last }\n",
             "}\n",
             "fn timed(slots: list<rolling_window<f64, 5s, 0s>, 2>) -> bool {\n",
             "    when { return valid(slots) }\n",
@@ -6888,7 +6889,7 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
             "    }\n",
             "}\n",
             "fn field(book: Book) -> bool {\n",
-            "    when {\n",
+            "    when valid(book.prices) {\n",
             "        let prices = book.prices\n",
             "        return true\n",
             "    }\n",
@@ -6900,7 +6901,7 @@ fn a_window_within_a_value_is_reported_where_it_is_read() {
             "    }\n",
             "}\n",
             "fn first(pair: tuple<rolling_window<f64, 3, 1>, f64>) -> bool {\n",
-            "    when {\n",
+            "    when valid(pair[0]) {\n",
             "        let window = pair[0]\n",
             "        return true\n",
             "    }\n",
@@ -6963,7 +6964,7 @@ fn a_window_a_target_cannot_carry_is_reported() {
             "    when { return delta<Book>(prices: price, last: price) }\n",
             "}\n",
             "fn last(book: Book) -> f64 {\n",
-            "    when { return book.last }\n",
+            "    when valid(book.last) { return book.last }\n",
             "}\n",
             "fn routed(flag: bool, price: f64) -> f64 {\n",
             "    let w = collect(price)\n",
@@ -8400,7 +8401,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "    return _core.item(_py.list(values.value), 1)".to_string(),
         "    return _py.tuple(doubled(values=_py.list(values.value)))".to_string(),
         format!("-> {pair}:"),
-        "    return _core.list_delta(updated={slot.value: reading.value})".to_string(),
+        "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)".to_string(),
         "    return _py.tuple([low.value, _core.add__i64_i64(lhs=low.value, rhs=1)])".to_string(),
         // TIME-9: a fixed list is valid once any position is.
         format!("@_hg.compute_node\ndef pair_span(pair: {pair})"),
@@ -8427,7 +8428,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 /// is reported: a removed position written to a fixed list (hgraph's
 /// bounded `TSL` takes none), an unsized list's delta read (it ticks
 /// whole here), an unsized list of composite elements, a whole
-/// dictionary published, a nullable element of a fixed list published
+/// dictionary of composites published, a nullable element of a fixed list published
 /// whole, a list's element at a position that ticks, and an unsized
 /// list as the child of a temporal composite.
 #[test]
@@ -8448,8 +8449,8 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "fn quotes(values: list<Quote>) -> i64 {\n",
             "    when { return 1 }\n",
             "}\n",
-            "fn whole(key: str) -> dict<str, i64> {\n",
-            "    when { return [key: 1] }\n",
+            "fn whole(key: str) -> dict<str, Quote> {\n",
+            "    when { return [key: Quote(bid: 1)] }\n",
             "}\n",
             "fn maybe(value: i64) -> list<i64?, 2> {\n",
             "    when { return [value, null] }\n",
@@ -8655,12 +8656,13 @@ fn collection_validity_and_a_lists_delta_are_written() {
 }
 
 /// TYPE-16: "A delta written with a smaller `size_modified` and no
-/// `removed` shrinks the list"; TYPE-10: a size is "a count that is not
-/// negative". A negative size given as the graph runs fails, before the
-/// list is cut; the catalogue has no execution code for it.
+/// `removed` shrinks the list. A negative `size_modified` written
+/// reduces the list by that count: `size_modified: -1` drops its last
+/// position, and a count more than the list holds leaves it empty, which
+/// is no failure."
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn a_negative_list_size_fails_as_the_graph_runs() {
+fn a_negative_list_size_reduces_the_list_as_the_graph_runs() {
     let python = python_with_hgraph();
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_negative_size");
     fs::remove_dir_all(&directory).ok();
@@ -8684,7 +8686,7 @@ fn a_negative_list_size_fails_as_the_graph_runs() {
             "    assert eval(total_after(size: [3, 1])) == [60, 10]\n",
             "}\n",
             "test negative {\n",
-            "    assert eval(total_after(size: [3, -1])) == [60, 30]\n",
+            "    assert eval(total_after(size: [3, -1, -5])) == [60, 30, 0]\n",
             "}\n",
         ),
     )]);
@@ -8692,13 +8694,7 @@ fn a_negative_list_size_fails_as_the_graph_runs() {
     let tests = [emitted.test("shrinks").0, emitted.test("negative").0];
     let ran = run(Path::new(&python), &directory, &emitted.output, &tests);
     assert!(matches!(ran[0], Ran::Passed), "{:?}", ran[0]);
-    let Ran::Failed { message, .. } = &ran[1] else {
-        panic!("a negative size does not fail: {:?}", ran[1]);
-    };
-    assert!(
-        message.contains("HglError: the size -1 of a list is negative"),
-        "{message}"
-    );
+    assert!(matches!(ran[1], Ran::Passed), "{:?}", ran[1]);
 }
 
 /// CTRL-2, CTRL-3 and CTRL-7 to CTRL-15: a graph's `for`, `while` and
@@ -8827,6 +8823,8 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
             "m.hgl:6:12 target.unsupported",
             "m.hgl:11:25 target.unsupported",
             "m.hgl:16:9 target.unsupported",
+            // A nullable element of an unsized list (TYPE-14).
+            "m.hgl:21:10 target.unsupported",
             "m.hgl:22:5 target.unsupported",
             "m.hgl:25:23 target.unsupported",
         ]
@@ -8995,7 +8993,7 @@ fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
             "    when { out[key].bid = bid }\n",
             "}\n",
             "fn first(pair: tuple<i64, Quote>) -> i64 {\n",
-            "    when { return pair[0] }\n",
+            "    when all_valid(pair) { return pair[0] }\n",
             "}\n",
             "fn made(a: i64) -> i64 => first((a, Quote(bid: 1)))\n",
         ),
@@ -9123,7 +9121,7 @@ fn an_inherited_struct_across_a_reference_is_not_written_yet() {
             "    when { return Circle(id: id, radius: 1) }\n",
             "}\n",
             "fn shape_id(shape: Shape) -> i64 {\n",
-            "    when { return shape.id }\n",
+            "    when all_valid(shape) { return shape.id }\n",
             "}\n",
             "fn designated(id: i64) -> ref<Shape> => circled(id)\n",
             "fn same(id: i64) -> ref<Circle> => circled(id)\n",
@@ -9401,4 +9399,101 @@ fn an_unmatched_selector_fails_alike_on_each_path() {
         assert!(message.contains(expected), "{messages:?}");
     }
     assert_eq!(messages[4], "passed");
+}
+
+/// A collection's child (TIME-1, TIME-4, TIME-9, END-8, ERR-14), trace
+/// cells written whole or as a delta (TST-5, TST-9), the list's delta
+/// (TYPE-16), and what a node publishes to its own `out` (TIME-7).
+const VALIDITY: &str = include_str!("fixtures/validity.hgl");
+
+/// TIME-1: a child is hgraph's own child of the input, an endpoint
+/// whether or not it is valid; a read at a run-time index is checked
+/// when it runs (ERR-14). TST-5: a whole cell is marked so, and the
+/// value the result holds is read for it. TYPE-16: a fixed list's delta
+/// keeps its bounds. TIME-7: `out[key] = value` writes the one entry,
+/// and a fixed list's `out` is hgraph's `TS_OUT[TSL[...]]`.
+#[test]
+fn a_collections_child_is_an_endpoint_of_its_own() {
+    let emitted = emit(&[("validity.hgl", VALIDITY)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_validity/__init__.py");
+    let pair = "_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]";
+    for expected in [
+        "    if _core.position_of(parts, 1).valid:\n".to_string(),
+        "    if parts.all_valid:\n".to_string(),
+        "    if quote[\"ask\"].valid:\n".to_string(),
+        "    return _core.checked_child(_core.position_of(parts, slot.value), lambda _port: (_port.value if _port.valid else _core.unset_read()))\n".to_string(),
+        "    return _core.checked_child_result(_core.position_of(parts, slot.value), lambda _port: (_port.value if _port.valid else _core.unset_read()))\n".to_string(),
+        "    if _core.child_modified(_core.position_of(parts, 0)):\n".to_string(),
+        "        return _core.child_delta(_core.position_of(parts, 1))\n".to_string(),
+        "    return _core.entry_port(prices, \"B\").valid\n".to_string(),
+        "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)\n".to_string(),
+        "_hold=lambda _port: (_py.list(_port.value) if _port.all_valid else _core.unset_read())), [_harness.whole([1, 2], fixed=True), _harness.whole([5, 6], fixed=True)]".to_string(),
+        "    return _core.dict_replaced(_output, _py.dict(book.value))\n".to_string(),
+        format!("def pair_once(value: _hg.TS[_py.int], _output: _hg.TS_OUT[{pair}] = None) -> {pair}:"),
+        "    _output.value = {key.value: value.value}\n".to_string(),
+        "    _output[0].value = value.value\n".to_string(),
+    ] {
+        assert!(python.contains(&expected), "missing {expected} in:\n{python}");
+    }
+}
+
+/// What this target does not write of a collection is reported: an
+/// unsized list of a nullable, whose whole tuple holds no `None`
+/// (TYPE-14); a fixed list of no position, which hgraph 0.9.3's `TSL`
+/// cannot publish (TYPE-10, TIME-9); an endpoint of an unsized list's
+/// element, a whole tuple here (TIME-1); an assignment inside a child of
+/// a node's `out` (TIME-7); and a trace cell written whole whose parts
+/// are composites, or a list's that are nullable, or of a struct below
+/// the cell's (TST-5, TST-9).
+#[test]
+fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn maybe(value: i64) -> list<i64?> {\n",
+            "    when { return [value] }\n",
+            "}\n",
+            "fn none(value: i64) -> list<i64, 0> {\n",
+            "    when { return [] }\n",
+            "}\n",
+            "fn second(values: list<i64>) -> bool {\n",
+            "    when { return valid(values[1]) }\n",
+            "}\n",
+            "fn nested(key: str, value: i64) -> dict<str, list<i64, 2>> {\n",
+            "    inject out\n",
+            "    when { out[key][0] = value }\n",
+            "}\n",
+            "struct Inner { value: i64 }\n",
+            "struct Outer { inner: Inner }\n",
+            "fn relay(outer: Outer, book: dict<str, dict<str, i64>>, nulls: list<i64?, 2>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "test nested_cells {\n",
+            "    assert eval(relay(outer: [Outer(inner: Inner(value: 7))], book: [[\"a\": [\"b\": 1]]], nulls: [[null, 3]])) == [1]\n",
+            "}\n",
+            "abstract struct Shape { id: i64 }\n",
+            "struct Circle : Shape { radius: i64 }\n",
+            "fn identified(shape: Shape) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "test below_cells {\n",
+            "    assert eval(identified(shape: [Circle(id: 1, radius: 2)])) == [1]\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:2:4 target.unsupported",
+            "m.hgl:5:4 target.unsupported",
+            "m.hgl:9:19 target.unsupported",
+            "m.hgl:13:12 target.unsupported",
+            "m.hgl:21:31 target.unsupported",
+            "m.hgl:21:70 target.unsupported",
+            "m.hgl:21:96 target.unsupported",
+            "m.hgl:29:36 target.unsupported",
+        ]
+    );
 }

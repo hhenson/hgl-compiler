@@ -19,7 +19,7 @@ fn set_one(first: bool, value: i64) -> tuple<i64, i64> {
 
 # A temporal tuple read by a position and whole in a hook.
 fn first_of(pair: tuple<i64, str>) -> i64 {
-    when { return pair[0] }
+    when all_valid(pair) { return pair[0] }
 }
 
 fn two(a: i64, b: i64) -> tuple<i64, i64> {
@@ -57,7 +57,7 @@ fn maybe_first(value: i64) -> tuple<i64?, str> {
 }
 
 fn first_set(pair: tuple<i64?, str>) -> bool {
-    when { return pair[0] != null }
+    when valid(pair[0]) { return pair[0] != null }
 }
 
 # A tuple of a struct and a tuple: each part a child of its own.
@@ -71,7 +71,7 @@ fn nested(bid: i64, size: i64) -> tuple<Quote, tuple<i64, i64>> {
 }
 
 fn nested_ask(parts: tuple<Quote, tuple<i64, i64>>) -> i64 {
-    when { return parts[0].ask + parts[1][1] }
+    when all_valid(parts[0]) && all_valid(parts[1]) { return parts[0].ask + parts[1][1] }
 }
 
 fn nested_changes(parts: tuple<Quote, tuple<i64, i64>>) -> i64 {
@@ -95,7 +95,7 @@ fn snap_pair(snap: atomic<Quote>, n: i64) -> tuple<atomic<Quote>, i64> {
 }
 
 fn snap_ask(pair: tuple<atomic<Quote>, i64>) -> i64 {
-    when { return pair[0].ask + pair[1] }
+    when all_valid(pair) { return pair[0].ask + pair[1] }
 }
 
 fn snap_pair_of(bid: i64, n: i64) -> tuple<atomic<Quote>, i64> => snap_pair(snapshot(bid), n)
@@ -173,7 +173,7 @@ fn boxed(value: i64) -> Box<i64> {
 }
 
 fn unboxed(held: Box<i64>) -> i64 {
-    when {
+    when all_valid(held) {
         let whole = held
         return whole.value + held.value
     }
@@ -184,7 +184,7 @@ fn boxed_quote(bid: i64) -> Box<Quote> {
 }
 
 fn boxed_ask(held: Box<Quote>) -> i64 {
-    when { return held.value.ask }
+    when all_valid(held.value) { return held.value.ask }
 }
 
 # TYPE-9: `atomic<V>` of a generic struct publishes the whole value.
@@ -239,7 +239,7 @@ fn renamed(id: i64) -> Shape {
 }
 
 fn id_of(shape: Shape) -> i64 {
-    when { return shape.id }
+    when all_valid(shape) { return shape.id }
 }
 
 fn id_changes(shape: Shape) -> i64 {
@@ -257,7 +257,7 @@ fn square_id(id: i64) -> i64 => id_of(square(id))
 fn renamed_id(id: i64) -> i64 => id_changes(renamed(id))
 fn circle_changes(id: i64, radius: i64) -> i64 => id_changes(circle(id, radius))
 fn shape_and(parts: tuple<Shape, i64>) -> i64 {
-    when { return parts[0].id + parts[1] }
+    when all_valid(parts) && all_valid(parts[0]) { return parts[0].id + parts[1] }
 }
 
 fn shape_pair(id: i64, radius: i64) -> i64 => shape_and((circle(id, radius), radius))
@@ -407,7 +407,7 @@ fn raised_twice(bid: i64) -> Quote {
 }
 
 fn level_set(level: Level) -> bool {
-    when { return level.price != null }
+    when all_valid(level) { return level.price != null }
 }
 
 fn raised_whole(bid: i64) -> i64 => width(raised(bid))

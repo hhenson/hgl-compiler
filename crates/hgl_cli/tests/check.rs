@@ -356,12 +356,33 @@ fn the_limits_options_apply() {
 }
 
 /// UNIT-1, CONF-3: core's conformance cases are the parts of one module.
+/// Its source rejections, in `rejections/`, are a module of their own,
+/// `conformance.rejections`, which `hgl check` rejects and `hgl test`
+/// passes, each case rejected as its annotation says (TST-12, TST-14).
 #[test]
 fn the_conformance_cases_are_one_module() {
-    let cases = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/tests/conformance");
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/hgl_core/tests/conformance");
     assert!(
-        cases.is_dir(),
+        core.is_dir(),
         "no conformance cases; run `git submodule update --init`"
+    );
+    // The cases less the rejections, as they are.
+    let cases = scratch("conformance");
+    for entry in fs::read_dir(&core).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|extension| extension == "hgl") {
+            let name = path.file_name().unwrap().to_str().unwrap().to_string();
+            write(&cases, &name, &fs::read_to_string(&path).unwrap());
+        }
+    }
+    let rejections = core.join("rejections");
+    let tested = hgl(&["test", &argument(&rejections), "--rejections-only"]);
+    assert_eq!(text(&tested.stderr), "");
+    assert_eq!(tested.status.code(), Some(0), "{}", text(&tested.stdout));
+    assert!(
+        text(&tested.stdout).contains("rejection cases: 2 passed, 0 failed\n"),
+        "{}",
+        text(&tested.stdout)
     );
     let output = hgl(&["check", &argument(&cases), "--modules"]);
     assert_eq!(text(&output.stderr), "");

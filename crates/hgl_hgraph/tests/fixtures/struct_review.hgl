@@ -38,12 +38,15 @@ fn relayed(quote: Quote) -> Quote {
     when { return quote }
 }
 
+# TIME-1: one part is read where it is admitted, and its read is
+# rejected where it is not; under its guard it publishes nothing until it
+# is valid.
 fn ask_of(quote: Quote) -> i64 {
-    when { return quote.ask + 1 }
+    when valid(quote.ask) { return quote.ask + 1 }
 }
 
 fn second_of(pair: tuple<i64, str>) -> str {
-    when { return pair[1] }
+    when valid(pair[1]) { return pair[1] }
 }
 
 fn whole_first(pair: tuple<i64, str>) -> i64 {
@@ -57,6 +60,7 @@ const fn spread(quote: Quote) -> i64 => quote.ask - quote.bid
 
 fn price_or(level: Level) -> i64 {
     when {
+        if !valid(level.price) { return -1 }
         let price = level.price
         if price == null { return -1 }
         return price
@@ -114,8 +118,8 @@ fn ask_of_whole(bid: i64) -> i64 => ask_of(quoted(bid))
 test a_required_part_not_published_fails_its_read {
     assert raises("value.unset_read") { eval(snapshot_of(bid: [1])) }
     assert raises("value.unset_read") { eval(relayed_of(bid: [1])) }
-    assert raises("value.unset_read") { eval(ask_of_bid(bid: [1])) }
-    assert raises("value.unset_read") { eval(second_of_first(a: [1])) }
+    assert eval(ask_of_bid(bid: [1])) == []
+    assert eval(second_of_first(a: [1])) == []
     assert raises("value.unset_read") { eval(whole_first_of(a: [1])) }
     assert raises("value.unset_read") { eval(spread_of(bid: [1])) }
 }
@@ -152,11 +156,11 @@ fn tagged(tag: i64) -> set<i64> {
 }
 
 fn first(pair: tuple<i64, str>) -> i64 {
-    when { return pair[0] }
+    when all_valid(pair) { return pair[0] }
 }
 
 fn first_listed(values: list<i64, 2>) -> i64 {
-    when { return values[0] }
+    when all_valid(values) { return values[0] }
 }
 
 const fn fixed_pair() -> tuple<i64, str> => (7, "x")

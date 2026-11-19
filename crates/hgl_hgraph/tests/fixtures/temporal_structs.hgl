@@ -30,9 +30,10 @@ fn touched(bid: i64, ask: i64) -> Quote {
     when modified(ask) { out = delta<Quote>(ask: ask) }
 }
 
-# A temporal struct input read whole, and by a field, in a hook.
+# A temporal struct input read whole, and by a field, in a hook, where
+# `all_valid` admits each field (TIME-1).
 fn spread(quote: Quote) -> i64 {
-    when { return quote.ask - quote.bid }
+    when all_valid(quote) { return quote.ask - quote.bid }
 }
 
 fn whole_spread(quote: Quote) -> i64 {
@@ -57,7 +58,7 @@ fn ordered(bid: i64, size: i64) -> Order {
 }
 
 fn order_bid(order: Order) -> i64 {
-    when { return order.quote.bid }
+    when valid(order.quote.bid) { return order.quote.bid }
 }
 
 # TYPE-9: `atomic<V>` publishes the whole V.
@@ -82,7 +83,7 @@ fn leveled(price: i64) -> Level {
 }
 
 fn level_set(at: Level) -> bool {
-    when { return at.price != null }
+    when all_valid(at) { return at.price != null }
 }
 
 # `out` read back, by a field and whole (TIME-7).
@@ -118,7 +119,7 @@ fn boxed(value: i64) -> Boxed {
 }
 
 fn unboxed(held: Boxed) -> i64 {
-    when { return held.value + held.valid }
+    when all_valid(held) { return held.value + held.valid }
 }
 
 # A source that yields whole structs (SOURCE-1).

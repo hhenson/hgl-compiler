@@ -1,0 +1,420 @@
+module demo.validity
+
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+# ---- A collection's child (TIME-1, TIME-4, TIME-9, END-8, ERR-14) ----
+
+fn one_position(slot: i64, reading: i64) -> list<i64, 2> {
+    when { return delta<list<i64, 2>>(updated: [slot: reading]) }
+}
+
+fn one_field(is_bid: bool, price: i64) -> Quote {
+    when {
+        if is_bid { return delta<Quote>(bid: price) }
+        return delta<Quote>(ask: price)
+    }
+}
+
+# TIME-4: `valid(parts[1])` guards the read of `parts[1]`.
+fn second_or_zero(parts: list<i64, 2>) -> i64 {
+    when {
+        if valid(parts[1]) { return parts[1] }
+        return 0
+    }
+}
+
+# TIME-1: `all_valid(parts)` admits every child.
+fn both(parts: list<i64, 2>) -> i64 {
+    when all_valid(parts) { return parts[0] * 10 + parts[1] }
+}
+
+# TIME-1: `valid(quote.ask)` admits that field alone.
+fn ask_or_zero(quote: Quote) -> i64 {
+    when {
+        if valid(quote.ask) { return quote.ask }
+        return 0
+    }
+}
+
+# TIME-1: "Elsewhere, `parts[i]`, it is checked when it runs".
+fn at(parts: list<i64, 2>, slot: i64) -> i64 {
+    when { return parts[slot] }
+}
+
+# ERR-14: where `result<T, error>` is expected, an `err` coded
+# `value.unset_read`.
+fn checked_at(parts: list<i64, 2>, slot: i64) -> result<i64, error> {
+    when { return parts[slot] }
+}
+
+const fn code_of(outcome: result<i64, error>) -> str {
+    if is_ok(outcome) { return "ok" }
+    let code = outcome.error.code
+    if code == null { return "none" }
+    return code
+}
+
+# END-8: `valid`, `modified` and `last_modified` of a child, whether or
+# not it is valid, at a constant and at a run-time index.
+fn child_state(parts: list<i64, 2>, slot: i64) -> i64 {
+    when valid(slot) {
+        var seen: i64 = 0
+        if valid(parts[1]) { seen += 1 }
+        if modified(parts[0]) { seen += 10 }
+        if valid(parts[slot]) { seen += 100 }
+        if last_modified(parts[1]) == null { seen += 1000 }
+        return seen
+    }
+}
+
+# END-8: a child's `delta_value`, admitted by its own guard.
+fn second_delta(parts: list<i64, 2>) -> i64 {
+    when {
+        if valid(parts[1]) && modified(parts[1]) { return delta_value(parts[1]) }
+        return -1
+    }
+}
+
+# END-8: a dictionary's entry is an endpoint, not valid while its key is
+# absent.
+fn priced(key: str, price: i64) -> dict<str, i64> {
+    when { return delta<dict<str, i64>>(updated: [key: price]) }
+}
+
+fn has_b(prices: dict<str, i64>) -> bool {
+    when { return valid(prices["B"]) }
+}
+
+fn second_of(slot: i64, reading: i64) -> i64 => second_or_zero(one_position(slot, reading))
+fn both_of(slot: i64, reading: i64) -> i64 => both(one_position(slot, reading))
+fn ask_of(is_bid: bool, price: i64) -> i64 => ask_or_zero(one_field(is_bid, price))
+fn at_of(position: i64, reading: i64, slot: i64) -> i64 => at(one_position(position, reading), slot)
+fn code_at(position: i64, reading: i64, slot: i64) -> str =>
+    code_of(checked_at(one_position(position, reading), slot))
+fn state_of(position: i64, reading: i64, slot: i64) -> i64 =>
+    child_state(one_position(position, reading), slot)
+fn delta_of(slot: i64, reading: i64) -> i64 => second_delta(one_position(slot, reading))
+fn b_present(key: str, price: i64) -> bool => has_b(priced(key, price))
+
+test a_child_is_read_where_it_is_admitted {
+    assert eval(second_of(slot: [0, 1], reading: [3, 8])) == [0, 8]
+    assert eval(both_of(slot: [0, 1], reading: [3, 8])) == [_, 38]
+    assert eval(ask_of(is_bid: [true, false], price: [1, 2])) == [0, 2]
+}
+
+test a_child_read_at_a_runtime_index_is_checked_when_it_runs {
+    assert eval(at_of(position: [0], reading: [3], slot: [0])) == [3]
+    assert raises("value.unset_read") {
+        eval(at_of(position: [0, _], reading: [3, _], slot: [0, 1]))
+    }
+    assert eval(code_at(position: [0, _], reading: [3, _], slot: [0, 1])) ==
+        ["ok", "value.unset_read"]
+}
+
+test a_child_is_an_endpoint_whether_or_not_it_is_valid {
+    assert eval(state_of(position: [0, 1], reading: [3, 8], slot: [1, 1])) == [1010, 101]
+    assert eval(delta_of(slot: [0, 1, 0], reading: [3, 8, 4])) == [-1, 8, -1]
+    assert eval(b_present(key: ["A", "B"], price: [1, 2])) == [false, true]
+}
+
+# ---- Trace cells, whole or a delta (TST-5, TST-9) ----
+
+fn both_positions(low: i64) -> list<i64, 2> {
+    when { return [low, low + 1] }
+}
+
+fn relay_quote(quote: Quote) -> Quote {
+    when all_valid(quote) { return quote }
+}
+
+fn relay_book(book: dict<str, i64>) -> dict<str, i64> {
+    when all_valid(book) { return book }
+}
+
+fn relay_members(members: set<i64>) -> set<i64> {
+    when { return members }
+}
+
+test a_cell_is_written_whole_or_as_a_delta {
+    # An expectation written whole is compared with the value held.
+    assert eval(both_positions(low: [1, 5])) == [[1, 2], [5, 6]]
+    assert eval(one_position(slot: [0, 1], reading: [3, 8])) != [[3, 0], [3, 8]]
+    assert eval(one_position(slot: [0, 1], reading: [3, 8])) ==
+        [delta<list<i64, 2>>(updated: [0: 3]), [3, 8]]
+    assert eval(relay_quote(quote: [Quote(bid: 1, ask: 2), _, delta<Quote>(ask: 3)])) ==
+        [Quote(bid: 1, ask: 2), _, Quote(bid: 1, ask: 3)]
+    # A whole dictionary replaces what the input held.
+    assert eval(relay_book(book: [["bid": 10, "ask": 12], ["bid": 11]])) ==
+        [["bid": 10, "ask": 12], ["bid": 11]]
+    assert eval(relay_book(book: [["bid": 10, "ask": 12], ["bid": 11]])) ==
+        [["bid": 10, "ask": 12], delta<dict<str, i64>>(updated: ["bid": 11], removed: ["ask"])]
+    assert eval(relay_members(members: [[1, 2], [2, 3]])) == [[1, 2], [2, 3]]
+}
+
+# ---- The list's delta (TYPE-16) ----
+
+const fn digits(values: list<i64>) -> i64 {
+    var code: i64 = 0
+    for value in values { code = code * 10 + value }
+    return code
+}
+
+fn edited(command: i64) -> list<i64> {
+    when {
+        if command == 0 { return [1, 2, 3] }
+        if command == 1 { return delta<list<i64>>(updated: [3: 4]) }
+        if command == 2 { return delta<list<i64>>(size_modified: -1) }
+        return delta<list<i64>>(size_modified: -5)
+    }
+}
+
+fn digits_of(command: i64) -> i64 => digits(edited(command))
+
+fn failure_seen(failure: error) -> bool {
+    when { return true }
+}
+
+fn past_the_bounds(slot: i64, reading: i64) -> bool {
+    let boundary = capture(one_position, slot, reading)
+    return failure_seen(boundary.error)
+}
+
+test a_list_delta_extends_and_reduces_the_list {
+    assert eval(digits_of(command: [0, 1])) == [123, 1234]
+    assert eval(digits_of(command: [0, 2, 2])) == [123, 12, 1]
+    assert eval(digits_of(command: [0, 3])) == [123, 0]
+    assert eval(past_the_bounds(slot: [0, 2], reading: [3, 8])) == [_, true]
+}
+
+# ---- What a node publishes to its own `out` ----
+
+# TIME-7: a fixed list's `out`, read and published.
+fn pair_once(value: i64) -> list<i64, 2> {
+    inject out
+    when {
+        if valid(out) { return }
+        return [value, value]
+    }
+}
+
+const fn pair_total(pair: list<i64, 2>) -> i64 => pair[0] + pair[1]
+
+fn once_total(value: i64) -> i64 => pair_total(pair_once(value))
+
+# TIME-7: `out[key] = value` publishes the one entry (END-3).
+fn keyed(key: str, value: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if !valid(out) { return delta<dict<str, i64>>(updated: [key: value]) }
+        out[key] = value
+    }
+}
+
+fn updated_count(prices: dict<str, i64>) -> i64 {
+    when {
+        var count: i64 = 0
+        for key, price in delta_value(prices).updated { count += 1 }
+        return count
+    }
+}
+
+fn a_of_keyed(key: str, value: i64) -> i64 => keyed(key, value)["a"]
+fn changes_of(key: str, value: i64) -> i64 => updated_count(keyed(key, value))
+
+fn pair_set(value: i64) -> list<i64, 2> {
+    inject out
+    when {
+        if !valid(out) { return [value, value] }
+        out[0] = value
+    }
+}
+
+fn first_delta(pair: list<i64, 2>) -> i64 {
+    when {
+        let first = get(delta_value(pair).updated, 0)
+        if first == null { return -1 }
+        return first
+    }
+}
+
+fn pair_changes(value: i64) -> i64 => first_delta(pair_set(value))
+
+# EXPR-7: a key selected in a graph before it is present is a child that
+# is not valid, and nothing is published for it.
+fn b_of(key: str, price: i64) -> i64 => priced(key, price)["B"]
+
+test a_node_publishes_what_it_changes {
+    assert eval(once_total(value: [1, 5])) == [2, _]
+    assert eval(a_of_keyed(key: ["a", "b", "b"], value: [1, 5, 6])) == [1, _, _]
+    assert eval(changes_of(key: ["a", "b", "b"], value: [1, 5, 6])) == [1, 1, 1]
+    assert eval(pair_changes(value: [1, 5])) == [1, 5]
+    assert eval(b_of(key: ["A", "B"], price: [1, 2])) == [_, 2]
+}
+
+# ---- What the review of this lane found ----
+
+fn relayed(value: i64) -> i64 {
+    when { return value }
+}
+
+struct Tagged {
+    value: i64
+    tags: set<i64>
+}
+
+fn tagged(value: i64) -> Tagged {
+    when { return delta<Tagged>(value: value) }
+}
+
+fn nested(key: str, inner: str, price: i64) -> dict<str, dict<str, i64>> {
+    when {
+        return delta<dict<str, dict<str, i64>>>(updated: [key: delta<dict<str, i64>>(updated: [inner: price])])
+    }
+}
+
+fn has_inner(book: dict<str, dict<str, i64>>) -> bool {
+    when { return valid(book["outer"]["inner"]) }
+}
+
+fn inner_of(key: str, inner: str, price: i64) -> bool => has_inner(nested(key, inner, price))
+
+test what_the_review_found {
+    # A recording given to another eval replays what it published.
+    let seen = eval(relayed(value: [7, _, 9]))
+    assert eval(relayed(value: seen)) == [7, _, 9]
+    # A part that is not valid leaves the value held unread, and the
+    # delta is still compared.
+    assert eval(tagged(value: [1])) == [delta<Tagged>(value: 1)]
+    # A child of an absent entry is absent too.
+    assert eval(inner_of(key: ["other", "outer"], inner: ["inner", "inner"], price: [1, 2])) ==
+        [false, true]
+}
+
+# ---- What the second review of this lane found ----
+
+struct Holder {
+    pair: tuple<i64, i64>
+    count: i64
+}
+
+fn holding(a: i64, b: i64) -> Holder {
+    when { return delta<Holder>(pair: (a, b)) }
+}
+
+# END-8: a child's delta is read as a direct input's of its type is: a
+# tuple's, each position's delta (TYPE-16).
+fn first_change(holder: Holder) -> i64 {
+    when {
+        if valid(holder.pair) && modified(holder.pair) {
+            let first = delta_value(holder.pair)[0]
+            if first == null { return -1 }
+            return first
+        }
+        return -2
+    }
+}
+
+fn first_change_of(a: i64, b: i64) -> i64 => first_change(holding(a, b))
+
+fn one_set(slot: i64, member: i64) -> list<set<i64>, 2> {
+    when { return delta<list<set<i64>, 2>>(updated: [slot: delta<set<i64>>(added: [member])]) }
+}
+
+# TIME-1: a child admitted is read through its own endpoint, never
+# through its siblings, the second set here, which is not valid.
+fn first_members(parts: list<set<i64>, 2>) -> set<i64> {
+    when valid(parts[0]) { return parts[0] }
+}
+
+fn first_members_of(slot: i64, member: i64) -> set<i64> => first_members(one_set(slot, member))
+
+struct Maybe {
+    value: i64
+    optional: i64?
+}
+
+struct Both {
+    first: i64
+    second: i64
+}
+
+fn maybe_value(value: i64) -> Maybe {
+    when { return delta<Maybe>(value: value) }
+}
+
+fn both_first(value: i64) -> Both {
+    when { return delta<Both>(first: value) }
+}
+
+test what_the_second_review_found {
+    assert eval(first_change_of(a: [7], b: [8])) == [7]
+    assert eval(first_members_of(slot: [0], member: [3])) == [[3]]
+    # The owner's decision on hgl_spec#126: an optional part that is not
+    # valid is null in the whole value, and a required one leaves none.
+    assert eval(maybe_value(value: [1])) == [Maybe(value: 1, optional: null)]
+    assert eval(both_first(value: [1])) == [delta<Both>(first: 1)]
+    assert eval(both_first(value: [1])) != [Both(first: 1, second: 0)]
+}
+
+# ---- What the third review of this lane found ----
+
+# TST-16: "A T published whole is held as its delta too": a written cell
+# given to a `const fn` is the delta its publication records.
+const fn first_bid(seen: list<tuple<datetime, delta<Quote>>>) -> i64 {
+    let bid = seen[0][1].bid
+    if bid == null { return -1 }
+    return bid
+}
+
+test a_whole_cell_given_to_a_const_fn_is_its_delta {
+    var seen = eval(relay_quote(quote: [Quote(bid: 5, ask: 6)]))
+    assert first_bid(seen) == 5
+    seen = [Quote(bid: 1, ask: 2)]
+    assert first_bid(seen) == 1
+}
+
+# ---- What the fourth review of this lane found ----
+
+# TIME-1, ERR-14: an absent key's entry is a child that is not valid, and
+# its read where a `result` is expected is an `err` coded
+# `value.unset_read`.
+fn checked_entry(prices: dict<str, i64>, wanted: str) -> result<i64, error> {
+    when { return prices[wanted] }
+}
+
+fn entry_code(key: str, price: i64, wanted: str) -> str =>
+    code_of(checked_entry(priced(key, price), wanted))
+
+abstract struct Shape {
+    id: i64
+}
+
+struct Circle : Shape {
+    radius: i64
+}
+
+fn shaped(id: i64) -> Shape {
+    when { return delta<Shape>(id: id) }
+}
+
+test what_the_fourth_review_found {
+    assert eval(entry_code(key: ["A", _], price: [1, _], wanted: ["A", "B"])) ==
+        ["ok", "value.unset_read"]
+    # An eval that compares deltas alone needs no whole value of its
+    # result, an abstract struct's here.
+    assert eval(shaped(id: [1])) == [delta<Shape>(id: 1)]
+}
+
+# ---- What the fifth review of this lane found ----
+
+# TYPE-5: a cell written whole keeps the value it was given.
+test a_whole_cell_keeps_the_value_it_was_given {
+    var pair: list<i64, 2> = [1, 2]
+    var expected = eval(both_positions(low: [5]))
+    expected = [pair]
+    pair[0] = 9
+    assert eval(both_positions(low: [1])) == expected
+}

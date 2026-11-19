@@ -40,7 +40,7 @@ fn leveled(depth: i64) -> Level {
 }
 
 fn depth_of(level: Level) -> i64 {
-    when { return level.depth }
+    when all_valid(level) { return level.depth }
 }
 
 fn boxed(value: i64) -> Box<i64> {
@@ -48,7 +48,7 @@ fn boxed(value: i64) -> Box<i64> {
 }
 
 fn held_of(box: Box<i64>) -> i64 {
-    when { return box.held }
+    when all_valid(box) { return box.held }
 }
 
 fn price_of_quoted(price: i64) -> i64 => price_of(quoted(price))

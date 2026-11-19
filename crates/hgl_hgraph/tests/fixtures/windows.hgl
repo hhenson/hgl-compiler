@@ -133,7 +133,7 @@ fn book_all_valid(book: Book, probe: bool) -> bool {
 # A field that is no window is read in a hook; the window's change is its
 # delta's property.
 fn book_last(book: Book) -> f64 {
-    when { return book.last }
+    when valid(book.last) { return book.last }
 }
 
 fn book_change(book: Book) -> f64? {
@@ -161,7 +161,7 @@ fn paired(price: f64) -> tuple<rolling_window<f64, 2, 1>, f64> {
 }
 
 fn pair_second(pair: tuple<rolling_window<f64, 2, 1>, f64>) -> f64 {
-    when { return pair[1] }
+    when valid(pair[1]) { return pair[1] }
 }
 
 fn book_flow(price: f64, probe: bool) -> bool => book_valid(booked(price), probe)

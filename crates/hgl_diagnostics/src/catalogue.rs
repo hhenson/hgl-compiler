@@ -88,6 +88,7 @@ pub const SOURCE_CODES: &[(Category, &str)] = &[
     (Category::Phase, "input.lifecycle"),
     (Category::Phase, "payload.unguarded"),
     (Category::Phase, "endpoint.argument"),
+    (Category::Phase, "scheduled.lifecycle"),
     (Category::Phase, "connection.as_constant"),
     (Category::Type, "generic.invalid_application"),
     (Category::Type, "pack.default"),

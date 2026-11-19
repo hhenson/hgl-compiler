@@ -10,7 +10,7 @@ fn readings(reading: i64) -> list<i64> {
 
 # An unsized list input read whole and by an index in a hook.
 fn second(values: list<i64>) -> i64 {
-    when { return values[1] }
+    when all_valid(values) { return values[1] }
 }
 
 # A value helper lifted over an unsized list, taking and giving one (FN-6).
