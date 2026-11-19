@@ -451,7 +451,7 @@ fn in_calendar(date: CalendarDate, time: ClockTime, minutes: i16) -> bool {
 /// the three functions names the ones the node injects. That is the
 /// language's rule too: a capability "is used within the node that
 /// injects it and is not retained".
-fn capability(injected: &str) -> Option<(&'static str, &'static str)> {
+pub(super) fn capability(injected: &str) -> Option<(&'static str, &'static str)> {
     match injected {
         "clock" => Some(("_clock", "_hg.EvaluationClock")),
         "logger" => Some(("_logger", "_hg.LOGGER")),
@@ -1201,7 +1201,13 @@ impl<'a> Emitter<'a> {
     /// where its body is a runtime one, and a graph where it is
     /// composition (FN-3). `signature` and `body` are the declaration's
     /// own, or an instance's.
-    fn node_or_graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
+    pub(super) fn node_or_graph(
+        &mut self,
+        index: usize,
+        python: &str,
+        signature: &Signature,
+        body: &Body,
+    ) {
         let program = self.program;
         let module = &program.modules[self.module];
         match module.phases.get(index).copied().flatten() {
@@ -2373,7 +2379,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// A graph: `@graph`, whose body wires the nodes it calls.
-    fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
+    pub(super) fn graph(&mut self, index: usize, python: &str, signature: &Signature, body: &Body) {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
         let function = Function::of(self.program, body, Some(signature), Mode::Graph);
@@ -8098,7 +8104,7 @@ fn owns(program: &Program, function: &Function, local: usize) -> bool {
 /// True when `statements` hold a `yield`, at any depth: in a loop, a
 /// `switch`, an `if` or a block. SOURCE-1: "A temporal `fn` whose body
 /// has a `yield` is a source".
-fn yields(statements: &[Stmt]) -> bool {
+pub(super) fn yields(statements: &[Stmt]) -> bool {
     fn within(value: &Expr) -> bool {
         match &value.kind {
             // A block ends with an expression where its last statement
