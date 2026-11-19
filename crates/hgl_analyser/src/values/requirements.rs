@@ -1075,6 +1075,14 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
 struct Made {
     callee: (usize, usize),
     generics: Vec<Argument>,
+    /// What answers each requirement the callee states at this call
+    /// (`hir::Answer`), with the call's generic arguments in place.
+    answers: Vec<hir::Answer>,
+    /// For a call of an operation the enclosing declaration requires
+    /// (`Callee::Required`), the requirement's position: what it calls
+    /// is the candidate the instance's caller answers it with. `callee`,
+    /// `generics` and `answers` say nothing then.
+    required: Option<usize>,
     at: Location,
 }
 
@@ -1147,7 +1155,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             }
             let declared = own((index, position));
             for call in made {
-                if passes_on(&call.generics, &declared) {
+                if call.required.is_some() || passes_on(&call.generics, &declared) {
                     passed.entry((index, position)).or_default().push(call);
                 } else {
                     given.push(call);
@@ -1181,7 +1189,11 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             .filter(|(declared, _)| !reaching.contains(*declared))
             .filter(|(_, calls)| {
                 calls.iter().any(|call| {
-                    required(program, call.callee).is_some() || reaching.contains(&call.callee)
+                    // What a requirement calls is known where the body's
+                    // declaration is called: any candidate may be it.
+                    call.required.is_some()
+                        || required(program, call.callee).is_some()
+                        || reaching.contains(&call.callee)
                 })
             })
             .map(|(declared, _)| *declared)
@@ -1210,7 +1222,7 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
     {
-        let key = format!("{:?}{:?}", made.callee, made.generics);
+        let key = format!("{:?}{:?}{:?}", made.callee, made.generics, made.answers);
         match root_of.get(&key) {
             Some(&root) => roots[root].1.push(made.at),
             None => {
@@ -1241,12 +1253,45 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
             for call in inner {
-                let generics: Vec<Argument> = call
-                    .generics
-                    .iter()
-                    .map(|argument| given_in(argument, &map, &declared))
-                    .collect();
-                let key = format!("{:?}{generics:?}", call.callee);
+                // A call of an operation the body requires is a call of
+                // the candidate this instance's caller answers it with
+                // (GEN-16); any other has the instance's arguments and
+                // answers in place.
+                let (callee, generics, answers) = match call.required {
+                    Some(position) => match made.answers.get(position) {
+                        Some(hir::Answer::Candidate {
+                            module,
+                            declaration,
+                            generics,
+                            requirements,
+                            ..
+                        }) => (
+                            (*module, *declaration),
+                            generics.clone(),
+                            requirements.clone(),
+                        ),
+                        _ => continue,
+                    },
+                    None => (
+                        call.callee,
+                        call.generics
+                            .iter()
+                            .map(|argument| given_in(argument, &map, &declared))
+                            .collect(),
+                        call.answers
+                            .iter()
+                            .map(|answer| answered_in(answer, &map, &declared, &made.answers))
+                            .collect(),
+                    ),
+                };
+                let call = Made {
+                    callee,
+                    generics: Vec::new(),
+                    answers: Vec::new(),
+                    required: None,
+                    at: call.at,
+                };
+                let key = format!("{:?}{generics:?}{answers:?}", call.callee);
                 if key.len() > ARGUMENTS {
                     exhausted = true;
                     break;
@@ -1275,6 +1320,8 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                     waiting.push_back(Made {
                         callee: call.callee,
                         generics,
+                        answers,
+                        required: None,
                         at: made.at,
                     });
                 }
@@ -1324,6 +1371,8 @@ fn applied_in(ty: &Type, at: Location, made: &mut Vec<Made>) {
             made.push(Made {
                 callee,
                 generics,
+                answers: Vec::new(),
+                required: None,
                 at,
             });
         }
@@ -1375,7 +1424,7 @@ fn made_by(expression: &Expr, made: &mut Vec<Made>) {
 /// The call `expression` is, where it is one of a function, an
 /// operator's candidate or a struct it gives generic arguments.
 fn made_at(expression: &Expr, made: &mut Vec<Made>) {
-    let (callee, generics) = match &expression.kind {
+    let (callee, generics, answers) = match &expression.kind {
         // A function, or the candidate a call of an operator selected
         // (GEN-5), whose body may pass its parameters on as any does.
         ExprKind::Call {
@@ -1384,32 +1433,94 @@ fn made_at(expression: &Expr, made: &mut Vec<Made>) {
                     module,
                     declaration,
                     generics,
-                    ..
+                    requirements,
                 }
                 | Callee::Candidate {
                     module,
                     declaration,
                     generics,
+                    requirements,
                     ..
                 },
             ..
-        } => ((*module, *declaration), generics.clone()),
+        } => (
+            (*module, *declaration),
+            generics.clone(),
+            requirements.clone(),
+        ),
+        // GEN-16: an operation the enclosing declaration requires, whose
+        // candidate a call of that declaration answers.
+        ExprKind::Call {
+            callee: Callee::Required { requirement, .. },
+            ..
+        } => {
+            made.push(Made {
+                callee: (usize::MAX, usize::MAX),
+                generics: Vec::new(),
+                answers: Vec::new(),
+                required: Some(*requirement),
+                at: expression.at,
+            });
+            return;
+        }
         ExprKind::Construct {
             module,
             declaration,
             ..
         } => match &expression.ty {
-            Type::Named { arguments, .. } => ((*module, *declaration), arguments.clone()),
+            Type::Named { arguments, .. } => {
+                ((*module, *declaration), arguments.clone(), Vec::new())
+            }
             _ => return,
         },
         _ => return,
     };
-    if !generics.is_empty() {
+    if !generics.is_empty() || !answers.is_empty() {
         made.push(Made {
             callee,
             generics,
+            answers,
+            required: None,
             at: expression.at,
         });
+    }
+}
+
+/// `answer`, recorded at a call in a generic body, for an instance of
+/// that body: the body's generic arguments, `map`, in place, and what
+/// the instance's caller answers the body's own requirements with,
+/// `answers`, in place of each it states (`Answer::Stated`).
+fn answered_in(
+    answer: &hir::Answer,
+    map: &[(Location, &Argument)],
+    declared: &[Location],
+    answers: &[hir::Answer],
+) -> hir::Answer {
+    match answer {
+        hir::Answer::Candidate {
+            operator,
+            module,
+            declaration,
+            generics,
+            requirements,
+        } => hir::Answer::Candidate {
+            operator: *operator,
+            module: *module,
+            declaration: *declaration,
+            generics: generics
+                .iter()
+                .map(|argument| given_in(argument, map, declared))
+                .collect(),
+            requirements: requirements
+                .iter()
+                .map(|answer| answered_in(answer, map, declared, answers))
+                .collect(),
+        },
+        hir::Answer::Stated(position) => answers
+            .get(*position)
+            .cloned()
+            .unwrap_or(hir::Answer::Unread),
+        hir::Answer::Unread => hir::Answer::Unread,
     }
 }
 
