@@ -47,6 +47,7 @@ import functools as _functools
 import json as _json
 import math as _math
 import re as _re
+import sys as _sys
 import zoneinfo as _zoneinfo
 from fractions import Fraction as _Fraction
 
@@ -447,6 +448,11 @@ def struct(name, fields, by_value=False):
     arguments (see `applied`), and each field is equal. The fields are
     always compared: a value is not taken to equal itself, since a
     field of it may be a NaN.
+
+    The class is of the module that makes it, the module of the struct's
+    own: hgraph knows a class, and a bundle's schema (see `schema`), by
+    its module and its name, so two modules' structs of one name are two
+    types to it too.
     """
 
     def equal(self, other):
@@ -473,6 +479,7 @@ def struct(name, fields, by_value=False):
             "_hgl_fields": tuple(fields),
             "_hgl_by_value": by_value,
         },
+        module=_sys._getframe(1).f_globals.get("__name__", __name__),
     )
 
 
@@ -493,7 +500,11 @@ def applied(struct, arguments):
     key = (struct, arguments)
     made = _applications.get(key)
     if made is None:
-        made = type(f"{struct.__name__}<{arguments}>", (struct,), {"__slots__": ()})
+        made = type(
+            f"{struct.__name__}<{arguments}>",
+            (struct,),
+            {"__slots__": (), "__module__": struct.__module__},
+        )
         _applications[key] = made
     return made
 
@@ -544,7 +555,11 @@ def schema(struct, fields):
 
     `fields` is each field's name and its temporal type, in the
     struct's order. The schema is made once for a class, so that every
-    annotation of the struct names one type to hgraph.
+    annotation of the struct names one type to hgraph. It is of the
+    class's module, named after the class: hgraph knows a schema by its
+    module and its name, so two modules' structs of one name, and two
+    applications of a generic struct, are two types (TYPE-3: "Structs
+    are nominal").
     """
     made = _schemas.get(struct)
     if made is None:
@@ -555,6 +570,16 @@ def schema(struct, fields):
         )
         _schemas[struct] = made
     return made
+
+
+def narrowed(port, bundle, fields):
+    """A temporal struct's connection, `port`, where an abstract struct
+    it inherits from is expected (the language's TYPE-3: "A struct is a
+    value where an abstract struct it inherits from is expected"), as
+    hgraph's bundle `bundle` of the abstract struct: each of its
+    `fields` the struct's own field's connection. It is made where the
+    graph is built, and adds no node."""
+    return bundle.from_ts(**{field: port[field] for field in fields})
 
 
 def struct_delta(**fields):
@@ -620,6 +645,14 @@ def list_delta(updated=None, removed=(), size_modified=None):
         made[position] = _REMOVE
     made.size_modified = size_modified
     return made
+
+
+def whole_list(value):
+    """The delta a fixed list publishes for a whole value of it (the
+    language's TIME-7: "a value that is a T is published whole"), as a
+    trace's cell holds it (TST-5): each position updated with its
+    element."""
+    return list_delta(updated=dict(enumerate(value)))
 
 
 def size_modified(delta):
@@ -700,13 +733,63 @@ def removed(delta):
     return frozenset(key for key, change in delta.items() if _removes(change))
 
 
-def bundled(value):
-    """What a temporal struct publishes for a whole value of it (TYPE-9):
-    each field, as hgraph's bundle takes it. The compiler gives it only
-    a struct whose fields each publish whole. A field that is null is
-    published as a null, hgraph's `Null` (see `published`): `None` would
-    leave the field as it was."""
-    return {field: published(getattr(value, field)) for field in value._hgl_fields}
+def bundled(value, shape=None):
+    """What a temporal struct or tuple publishes for a whole value of it
+    (TYPE-9: "Temporalization recursively maps tuples/structs to child
+    fields"): each part, as hgraph's bundle takes it. A part that is
+    null is published as a null, hgraph's `Null` (see `published`):
+    `None` would leave the part as it was.
+
+    With no `shape` the value is a struct whose fields each publish
+    whole, every field its class has. Otherwise `shape` is what the
+    compiler wrote for the value's type: `None` for a part that
+    publishes whole; a `dict` of each field's shape for a struct, which
+    names the fields of the type and not of the struct below it that a
+    value of an abstract one is; a tuple of each position's for a tuple,
+    which hgraph's bundle takes position by position; and `[None]` for a
+    fixed list of elements that publish whole, as a tuple of them. A set
+    is given as the set it is, which hgraph's `TSS` takes as its members
+    now, removing those it no longer has."""
+    if shape is None:
+        return {field: published(getattr(value, field)) for field in value._hgl_fields}
+    return _bundled(value, shape)
+
+
+def _bundled(value, shape):
+    if shape is None:
+        return published(value)
+    if isinstance(shape, dict):
+        return {field: _bundled(getattr(value, field), part) for field, part in shape.items()}
+    if isinstance(shape, tuple):
+        return tuple(_bundled(item, part) for item, part in zip(value, shape))
+    return tuple(_bundled(element, shape[0]) for element in value)
+
+
+def position(index):
+    """The field of a temporal tuple's position `index`, `_0`, `_1`
+    (the language's TYPE-9: tuples map "to child fields"), for an index
+    that is a constant other than a literal, `pair[1 - 1]`."""
+    return f"_{index}"
+
+
+def positions(delta, shape):
+    """hgraph's delta of a temporal value that holds a tuple, as the
+    program reads it (the language's TYPE-16: a tuple's delta is
+    "`tuple<delta<A>?, delta<B>?>`: each position's delta, null where it
+    did not change").
+
+    hgraph's bundle that a tuple is gives a `dict` of each position that
+    changed, by the position's field, `_0`, `_1`. `shape` is what the
+    compiler wrote for the type: a tuple of each position's shape for a
+    tuple, a `dict` of the shape of each field that holds a tuple for a
+    struct, whose delta is a `dict` of the fields that changed, and
+    `None` for a part that holds no tuple. A null is a part that did not
+    change; a published null, hgraph's `Null`, is kept."""
+    if delta is None or shape is None:
+        return delta
+    if isinstance(shape, tuple):
+        return tuple(positions(delta.get(f"_{index}"), part) for index, part in enumerate(shape))
+    return {field: positions(change, shape.get(field)) for field, change in delta.items()}
 
 
 def item(sequence, index):
@@ -716,6 +799,18 @@ def item(sequence, index):
     if not 0 <= index < len(sequence):
         raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
     return sequence[index]
+
+
+def child(port, index):
+    """The port of the position `index` of a fixed list's port, which a
+    part of `out` is assigned through (the language's TIME-7). An index
+    outside the list fails, as an element's does (EXPR-3: "An index
+    outside a list fails where it is evaluated"); Python's own would
+    count a negative one back from the end."""
+    size = len(port)
+    if not 0 <= index < size:
+        raise HglError(f"the index {index} is outside a sequence of {size}")
+    return port[index]
 
 
 def entry(dictionary, key):
@@ -854,6 +949,33 @@ def fn_log(logger, level, message):
     logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
 
 
+class Wake:
+    """A node's scheduler for one evaluation (CAP-4, CAP-5).
+
+    hgraph holds the wake it delivers until the node has run: in its own
+    evaluation that wake is still its earliest, so `un_schedule` would
+    cancel it, `is_scheduled` count it and `next_scheduled_time` give the
+    current time. CAP-4 has a wake pending until it is delivered:
+    `is_scheduled` is "True while a wake is pending". So each wake due
+    now is taken as the node is entered, and `is_scheduled_now` keeps
+    that one was: "whether a wake asked of the scheduler is due in the
+    current evaluation", which asking again does not change. The rest is
+    hgraph's scheduler, as it now stands."""
+
+    def __init__(self, scheduler):
+        self._scheduler = scheduler
+        due = False
+        # hgraph's `un_schedule()` with no tag takes its earliest wake,
+        # and that wake's tag with it.
+        while scheduler.is_scheduled_now:
+            scheduler.un_schedule()
+            due = True
+        self.is_scheduled_now = due
+
+    def __getattr__(self, name):
+        return getattr(self._scheduler, name)
+
+
 def Scheduler_next_scheduled_time(scheduler):
     """CAP-4: "The time of the earliest pending wake; null with none".
     hgraph gives its earliest time where none is pending."""
@@ -871,16 +993,28 @@ def Scheduler_is_scheduled_now(scheduler):
     return scheduler.is_scheduled_now
 
 
+def _tag(tag):
+    """CAP-4's `tag`, a `str?`, as hgraph's scheduler keeps it. hgraph
+    keeps no wake under the empty tag, which is a tag as any other is:
+    each is given a mark before it, and no tag stays none."""
+    return None if tag is None else "#" + tag
+
+
 def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
     """CAP-4: "With a `duration`, a wake that long after the current
     evaluation time". hgraph counts a `timedelta` from then, and "a wake
-    asked for under a tag replaces the pending wake of that tag"."""
-    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+    asked for under a tag replaces the pending wake of that tag".
+
+    A wake at a time no cycle can still run at, the current evaluation
+    time or before (core's CRUN-3: each cycle's time "is later than the
+    one before"), is kept by no scheduler of hgraph's: it is not
+    delivered, as an alarm's is not (`_alarm`)."""
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
 def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
     """CAP-4: "with a `datetime`, a wake then"."""
-    capability.schedule(at, tag=tag, on_wall_clock=on_wall_clock)
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
 
 
 def fn_un_schedule(scheduler, tag):
@@ -890,7 +1024,7 @@ def fn_un_schedule(scheduler, tag):
     if tag is None:
         scheduler.un_schedule()
     else:
-        scheduler.un_schedule(tag)
+        scheduler.un_schedule(_tag(tag))
 
 
 def fn_reset(scheduler):
@@ -914,16 +1048,16 @@ def _alarm(scheduler, at):
     `at` is an instant, or a duration from the current evaluation time.
     hgraph says which instant a duration comes to where it is asked
     for: it is asked under a second tag, and the tag is taken back.
+    hgraph keeps none at a time no cycle can still run at, the current
+    evaluation time or before: that wake is not delivered, as a
+    scheduler's is not, and the one pending stays. The alarm's wake that
+    is due was taken as the node was entered (`Wake`).
     """
-    # In the evaluation a wake is due in, hgraph still holds it: it is
-    # the alarm's own wake, taken now, and no longer one that is
-    # pending.
-    due = scheduler.next_scheduled_time if scheduler.is_scheduled_now else None
     scheduler.schedule(at, tag=_ASKED)
-    asked = scheduler.pop_tag(_ASKED)
+    asked = scheduler.pop_tag(_ASKED, None)
+    if asked is None:
+        return
     pending = scheduler.pop_tag(_ALARM, None)
-    if pending is not None and pending == due:
-        pending = None
     scheduler.schedule(asked if pending is None or asked < pending else pending, tag=_ALARM)
 
 

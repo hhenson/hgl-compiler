@@ -1717,9 +1717,9 @@ fn a_form_not_written_yet_is_reported() {
             // function's own generic parameters.
             "struct Held<T> { value: T }\n",
             "const fn wrap<T>(value: T) -> Held<T> => Held(value: value)\n",
-            // A tuple as a temporal input (TYPE-9).
-            "fn paired(pair: tuple<f64, f64>) -> f64 {\n",
-            "    when { return pair[0] }\n",
+            // An atomic tuple as a temporal input (TYPE-9).
+            "fn paired(pair: atomic<tuple<f64, f64>>) -> f64 {\n",
+            "    when { return 1.0 }\n",
             "}\n",
         ),
     )]);
@@ -1731,8 +1731,8 @@ fn a_form_not_written_yet_is_reported() {
             "m.hgl:21:14 target.unsupported",
             "m.hgl:24:17 target.unsupported",
             // `chosen`, a graph with an `if` over a connection, is
-            // written (CTRL-13). The two of a struct, a tuple's, then
-            // what the test holds.
+            // written (CTRL-13). The two of a struct, an atomic
+            // tuple's, then what the test holds.
             "m.hgl:40:39 target.unsupported",
             "m.hgl:42:42 target.unsupported",
             "m.hgl:43:11 target.unsupported",
@@ -6055,6 +6055,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
     files.push(("timer_selectors.hgl", TIMER_SELECTORS));
+    files.push(("timer_fixes.hgl", TIMER_FIXES));
     files.push(("copies.hgl", COPIES));
     files.push(("copy_points.hgl", COPY_POINTS));
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
@@ -6065,6 +6066,8 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("windows.hgl", WINDOWS));
     files.push(("scalars.hgl", SCALARS));
     files.push(("errors.hgl", ERRORS));
+    files.push(("tuples.hgl", TUPLES));
+    files.push(("tuples_names.hgl", TUPLES_NAMES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6397,6 +6400,9 @@ fn a_timer_wakes_its_own_handlers() {
             "@_hg.compute_node(valid=())\n",
             "def sampled(price: _hg.TS[_py.float], every: _dt.timedelta, ",
             "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.float]:\n",
+            // CAP-4: the wake being delivered is taken as the node is
+            // entered, and is no longer pending.
+            "    _scheduler = _core.Wake(_scheduler)\n",
             // What woke the node is read where it is entered: a
             // handler before the one that asks may change it.
             "    _timer_woke = _scheduler.is_scheduled_now\n",
@@ -6431,6 +6437,7 @@ fn a_timer_wakes_its_own_handlers() {
             "@_hg.compute_node(active=(), valid=())\n",
             "def _node_beats(_begin: _hg.TS[_py.bool], every: _dt.timedelta, times: _py.int, ",
             "_state: _hg.STATE = None, _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler)\n",
             "    if _scheduler.is_scheduled_now:\n",
         ),
         concat!(
@@ -6475,6 +6482,7 @@ fn scheduled_is_a_bool_where_it_selects_nothing() {
         concat!(
             "@_hg.compute_node\n",
             "def either(a: _hg.TS[_py.int], b: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    _scheduler = _core.Wake(_scheduler)\n",
             "    _timer_woke = _scheduler.is_scheduled_now\n",
             "    if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):\n",
         ),
@@ -6529,6 +6537,62 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
             "m.hgl:17:11 target.unsupported",
         ]
     );
+}
+
+/// Core's CAP-4 and CAP-5: a wake not ahead of the current evaluation,
+/// the empty tag, the wake being delivered; and a node with no input,
+/// no handler and no timer.
+const TIMER_FIXES: &str = include_str!("fixtures/timer_fixes.hgl");
+
+/// hgraph takes no node without an input: every node with no temporal
+/// input is given one that never wakes it, one with only a `start`
+/// among them. CAP-4: the wake being delivered is taken as the node is
+/// entered, and the empty tag is given a mark as every tag is.
+#[test]
+fn every_inputless_node_has_a_hidden_input() {
+    let emitted = emit(&[("timer_fixes.hgl", TIMER_FIXES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_timer_fixes/__init__.py");
+    for expected in [
+        concat!(
+            "@_hg.sink_node(active=(), valid=())\n",
+            "def _node_started_only(_begin: _hg.TS[_py.bool], _store: _hg.GlobalState = None):\n",
+            "    pass\n",
+        ),
+        "    _node_started_only(_begin=_hg.const(True))\n",
+        "    _scheduler = _core.Wake(_scheduler)\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+    let native = emitted.text("_hgl/_core_native.py");
+    assert!(native.contains("return None if tag is None else \"#\" + tag"));
+}
+
+/// TIME-3: what `modified([])` asks beside a `modified` selector that
+/// names inputs is not settled, and is reported; beside `valid([])` it
+/// is the spec's own illustration, and is written.
+#[test]
+fn an_empty_selection_beside_another_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn both(a: i64) -> i64 {\n",
+            "    inject scheduler\n",
+            "    start { schedule(scheduler, 1s) }\n",
+            "    when modified([]) && modified(a) { return a }\n",
+            "}\n",
+            "fn sampled(a: i64) -> i64 {\n",
+            "    inject scheduler\n",
+            "    start { schedule(scheduler, 1s) }\n",
+            "    when modified([]) && valid([]) { return 0 }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:5:10 target.unsupported"]);
 }
 
 /// TYPE-11: windows of ticks and of a duration, as inputs and results;
@@ -7939,23 +8003,24 @@ fn a_temporal_struct_is_a_bundle_of_its_fields() {
     }
 }
 
-/// TYPE-9: a set field of a temporal struct is a `TSS`, which takes an
-/// update as members added. A whole struct published with such a field
-/// would not replace the set, so it is reported, and its delta is not.
+/// TYPE-9: a dictionary field of a temporal struct is a `TSD`, which
+/// takes an update as keys changed. A whole struct published with such a
+/// field would not remove the keys it has not, so it is reported, and
+/// its delta is not.
 #[test]
-fn a_whole_struct_with_a_set_field_is_not_published_yet() {
+fn a_whole_struct_with_a_dictionary_field_is_not_published_yet() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "struct Tagged {\n",
-            "    tags: set<i64>\n",
+            "    tags: dict<str, i64>\n",
             "}\n",
-            "fn whole(tag: i64) -> Tagged {\n",
-            "    when { return Tagged(tags: [tag]) }\n",
+            "fn whole(tag: str) -> Tagged {\n",
+            "    when { return Tagged(tags: [tag: 1]) }\n",
             "}\n",
-            "fn changed(tag: i64) -> Tagged {\n",
-            "    when { return delta<Tagged>(tags: delta<set<i64>>(added: [tag])) }\n",
+            "fn changed(tag: str) -> Tagged {\n",
+            "    when { return delta<Tagged>(tags: delta<dict<str, i64>>(removed: [tag])) }\n",
             "}\n",
         ),
     )]);
@@ -8438,6 +8503,171 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
             "m.hgl:16:9 target.unsupported",
             "m.hgl:22:5 target.unsupported",
             "m.hgl:25:23 target.unsupported",
+        ]
+    );
+}
+
+/// TYPE-9: "Temporalization recursively maps tuples/structs to child
+/// fields". TYPE-10: "A tuple retains positional identity". TYPE-16: a
+/// tuple's delta is "`tuple<delta<A>?, delta<B>?>`". TYPE-3: a generic
+/// struct's application, and an abstract struct with the structs below
+/// it. TIME-7: `out` assigned by part.
+const TUPLES: &str = include_str!("fixtures/tuples.hgl");
+
+/// TYPE-3: "Structs are nominal". A module whose structs have the names
+/// of `demo.tuples`'s, with other fields.
+const TUPLES_NAMES: &str = include_str!("fixtures/tuples_names.hgl");
+
+/// Two modules' structs of one name, a generic one among them, each a
+/// bundle and an atomic value, are two types to hgraph: the modules load
+/// together and each one's tests pass. hgraph knows a class and a
+/// bundle's schema by its module and its name, and each struct's are of
+/// its own module. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_struct_names");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let ran = run(Path::new(&python), &directory, &emitted.output, &all);
+    let not_passed: Vec<String> = emitted
+        .output
+        .tests
+        .iter()
+        .zip(&ran)
+        .filter(|(_, ran)| **ran != Ran::Passed)
+        .map(|(test, ran)| format!("{}: {ran:?}", test.identity()))
+        .collect();
+    assert_eq!(not_passed, Vec::<String>::new());
+    assert_eq!(ran.len(), 6);
+}
+
+/// A tuple is hgraph's bundle with no name, a field for each position;
+/// a generic struct's bundle has the field types its arguments give; an
+/// abstract struct's has its own fields, and a connection of a struct
+/// below it is narrowed to them; a whole struct sets a struct field by
+/// its fields and a set field whole; a part of `out` is its own port.
+#[test]
+fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
+    let emitted = emit(&[("tuples.hgl", TUPLES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_tuples/__init__.py");
+    let pair = "_hg.TSB[\"_0\": _hg.TS[_py.int], \"_1\": _hg.TS[_py.str]]";
+    let shape = "_hg.TSB[_core.schema(Shape, {\"id\": _hg.TS[_py.int]})]";
+    for expected in [
+        // TYPE-9, TYPE-10, TYPE-16: a tuple.
+        format!("-> {pair}:\n    return _core.bundled((a.value, b.value,), (None, None,))"),
+        "    only_first = (value.value, None,)".to_string(),
+        "    return pair[\"_0\"].value".to_string(),
+        "    held = (pair[\"_0\"].value, pair[\"_1\"].value,)".to_string(),
+        "    first = _core.item(_core.positions(pair.delta_value, (None, None,)), 0)".to_string(),
+        "_core.positions(parts.delta_value, (None, (None, None,),))".to_string(),
+        "    return _core.bundled((None, \"none\",), (None, None,))".to_string(),
+        "    return paired(a=a, b=b)[\"_0\"]".to_string(),
+        "    return nested(bid=bid, size=size)[\"_0\"][\"bid\"]".to_string(),
+        "    return paired(a=a, b=b)[_core.position(second_slot())]".to_string(),
+        "        _output[_core.position(_core.sub__i64_i64(lhs=1, rhs=1))].value = value.value"
+            .to_string(),
+        format!("    return {pair}.from_ts(_0=a, _1=b)"),
+        format!("_lift_2_total(pair={pair}.from_ts(_0=a, _1=\"y\"))"),
+        // TYPE-3, TYPE-4: a generic struct.
+        concat!(
+            "-> _hg.TSB[_core.schema(_core.applied(Box, \"i64\"), ",
+            "{\"value\": _hg.TS[_py.int]})]:"
+        )
+        .to_string(),
+        "    whole = _core.applied(Box, \"i64\")(value=held[\"value\"].value)".to_string(),
+        "{\"value\": {\"bid\": None, \"ask\": None}})".to_string(),
+        "-> _hg.TS[_core.applied(Box, \"i64\")]:".to_string(),
+        // TYPE-3: an abstract struct and the structs below it.
+        format!("def id_of(shape: {shape}) -> _hg.TS[_py.int]:"),
+        format!("    return _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
+        format!("    shape = _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
+        format!(
+            "from_ts(_0=_core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",)), _1=radius)"
+        ),
+        "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
+        // TIME-7: a whole struct with a struct field and a set field.
+        "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
+        "    return _core.bundled(Tagged(tags=_py.frozenset((tag.value,)), count=1))".to_string(),
+        // TIME-7: `out` assigned by part, and read back.
+        "    _output[\"ask\"].value = _core.add__i64_i64(lhs=_output[\"bid\"].value, rhs=1)"
+            .to_string(),
+        "        _output[\"quote\"].value = _core.bundled(Quote(bid=bid.value, ask=bid.value))"
+            .to_string(),
+        "        _output[\"quote\"][\"ask\"].value = ".to_string(),
+        "    _output[\"_0\"].value = _core.mul__i64_i64(lhs=_output[\"_1\"].value, rhs=2)"
+            .to_string(),
+        "        _output[\"price\"].value = _core.published(None)".to_string(),
+        "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[2]]] = None".to_string(),
+        "    _output[1].value = ".to_string(),
+        "    _output.value = {key.value: value.value}".to_string(),
+        "    _output.value = _core.with_field(_output.value, ask=".to_string(),
+        "    whole = Quote(bid=_output[\"bid\"].value, ask=_output[\"ask\"].value)".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// What this target does not write of a temporal tuple or struct is
+/// reported: an abstract struct read whole, in a hook and by a lifted
+/// helper, or as a node's configuration; the delta of a list of tuples;
+/// a place inside an entry of a dictionary `out`; and a composite value
+/// in a tuple of connections.
+#[test]
+fn a_temporal_tuple_or_struct_form_not_written_yet_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "abstract struct Shape { id: i64 }\n",
+            "struct Circle : Shape { radius: i64 }\n",
+            "struct Quote { bid: i64 }\n",
+            "fn whole(shape: Shape) -> i64 {\n",
+            "    when {\n",
+            "        let held = shape\n",
+            "        return held.id\n",
+            "    }\n",
+            "}\n",
+            "const fn id_of(shape: Shape) -> i64 => shape.id\n",
+            "fn shaped(id: i64) -> Shape {\n",
+            "    when { return delta<Shape>(id: id) }\n",
+            "}\n",
+            "fn lifted(value: i64) -> i64 => id_of(shaped(value))\n",
+            "fn configured(const shape: Shape, value: i64) -> i64 {\n",
+            "    when { return value }\n",
+            "}\n",
+            "fn changes(pairs: list<tuple<i64, i64>, 2>) -> i64 {\n",
+            "    when {\n",
+            "        let change = delta_value(pairs)\n",
+            "        return 1\n",
+            "    }\n",
+            "}\n",
+            "fn keyed(key: str, bid: i64) -> dict<str, Quote> {\n",
+            "    inject out\n",
+            "    when { out[key].bid = bid }\n",
+            "}\n",
+            "fn first(pair: tuple<i64, Quote>) -> i64 {\n",
+            "    when { return pair[0] }\n",
+            "}\n",
+            "fn made(a: i64) -> i64 => first((a, Quote(bid: 1)))\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:7:20 target.unsupported",
+            "m.hgl:15:33 target.unsupported",
+            "m.hgl:16:21 target.unsupported",
+            "m.hgl:21:22 target.unsupported",
+            "m.hgl:27:12 target.unsupported",
+            "m.hgl:32:37 target.unsupported",
         ]
     );
 }
