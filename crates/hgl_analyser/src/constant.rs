@@ -303,6 +303,16 @@ pub(crate) fn fit(
         if matches!(read.value, ConstantValue::Null) {
             return Ok(ConstantValue::Null);
         }
+        // One whose own type is nullable, a constant `const A: i64? = 1`
+        // or a parameter of a `T?`, is held to the whole type: it is a
+        // `T?` that is no null, and no `T`.
+        if let Some(ty @ Type::Nullable(_)) = &read.ty {
+            return if fits(ty, expected) {
+                Ok(read.value)
+            } else {
+                Err(Fault::Mismatch(Some(Box::new(ty.clone()))))
+            };
+        }
         return fit(read, Some(inner), program);
     }
     match (&read.value, read.open) {
@@ -384,6 +394,7 @@ pub(crate) fn fit(
 fn fits(ty: &Type, expected: &Type) -> bool {
     match (ty, expected) {
         _ if unknown(ty) || unknown(expected) => true,
+        (Type::Nullable(left), Type::Nullable(right)) => fits(left, right),
         (_, Type::Nullable(inner)) => fits(ty, inner),
         (Type::List { element, .. }, Type::List { element: other, .. }) => fits(element, other),
         (Type::Tuple(left), Type::Tuple(right)) => {

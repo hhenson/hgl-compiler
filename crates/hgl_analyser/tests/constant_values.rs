@@ -803,6 +803,25 @@ fn a_constant_in_a_type_an_option_and_an_equality_are_read_in_context() {
     );
 }
 
+/// TYPE-14: a constant of a `T?` that is no null is a value of a place
+/// of that `T?`, and of no place of a `T`.
+#[test]
+fn a_nullable_constant_is_a_value_of_its_nullable_type() {
+    let shared = concat!(
+        "const A: i64? = 1\n",
+        "struct Box<const X: i64?> { v: i64 }\n",
+        "struct IBox<const X: i64> { v: i64 }\n",
+    );
+    expect(
+        &format!("{shared}const fn a(x: Box<A>) -> Box<1> => x\n"),
+        &[],
+    );
+    expect(
+        &format!("{shared}const fn a(x: IBox<A>) -> i64 => 1\n"),
+        &["5 type.mismatch"],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

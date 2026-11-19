@@ -40,7 +40,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
 use crate::constant::{Fault, Scope, Typed};
-use crate::declared::{agree, names_one_of, names_parameter, substitute_within};
+use crate::declared::{agree, is_optional, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
     Local, LocalId, Run, Stmt, UnaryOperator, Value, ValueCategory,
@@ -63,6 +63,13 @@ mod children;
 /// Types the body of every value function of the program, filling in
 /// [`Module::bodies`].
 pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
+    // The signature of what has none: a test, a run statement, a
+    // constant.
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+    };
     // UNIT-13: the value each constant is written with, read as a value
     // of the constant's type with no parameter in scope. Every module's
     // are read before any body, which may read one as a `switch` label
@@ -70,10 +77,10 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
         let (bindings, written, calls) = tables(module);
-        let empty = Signature {
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result: None,
+        let found = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
         };
         let constants: Vec<Option<Expr>> = module
             .declarations
@@ -83,50 +90,18 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                 let Some(Detail::Constant(ty)) = module.details.get(position) else {
                     return None;
                 };
-                Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    &empty,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .constant(ty)
+                Typer::new(program, module, declaration, &empty, found, diagnostics).constant(ty)
             })
             .collect();
         program.modules[index].constants = constants;
     }
     for index in 0..program.modules.len() {
         let module = &program.modules[index];
-        // What each name resolved to, by where it is used (UNIT-10).
-        let bindings: HashMap<(FileId, u32), &Binding> = module
-            .uses
-            .iter()
-            .map(|used| ((used.at.file, used.at.span.start), &used.binding))
-            .collect();
-        // What each written type means, by where it starts.
-        let written: HashMap<(FileId, u32), &Type> = module
-            .written
-            .iter()
-            .map(|written| ((written.at.file, written.at.span.start), &written.ty))
-            .collect();
-        // The generic arguments each call writes, by where its callee
-        // starts (GEN-8).
-        let calls: HashMap<(FileId, u32), &CallArguments> = module
-            .call_arguments
-            .iter()
-            .map(|call| ((call.at.file, call.at.span.start), call))
-            .collect();
-        // The signature of what has none: a test, a run statement, a
-        // constant.
-        let empty = Signature {
-            generics: Vec::new(),
-            parameters: Vec::new(),
-            result: None,
+        let (bindings, written, calls) = tables(module);
+        let found = Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &calls,
         };
         let mut bodies = Vec::with_capacity(module.declarations.len());
         for (position, declaration) in module.declarations.iter().enumerate() {
@@ -137,19 +112,7 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     DeclarationKind::Function(Role::Value)
                     | DeclarationKind::Implementation(Role::Value, _),
                     Some(Detail::Callable(signature)),
-                ) => Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    signature,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .body(),
+                ) => Typer::new(program, module, declaration, signature, found, diagnostics).body(),
                 // FN-2: a node, whose hooks are read as value code
                 // (FN-3: "In a hook a temporal parameter is a value of
                 // its declared type, read as in a value function"). A
@@ -160,18 +123,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
                 ) if module.phases.get(position) == Some(&Some(Phase::Node)) => {
-                    let typer = Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    );
+                    let typer =
+                        Typer::new(program, module, declaration, signature, found, diagnostics);
                     if crate::phases::is_source(declaration) {
                         typer.source()
                     } else {
@@ -183,19 +136,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     DeclarationKind::Function(Role::Temporal)
                     | DeclarationKind::Implementation(Role::Temporal, _),
                     Some(Detail::Callable(signature)),
-                ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => Typer::new(
-                    program,
-                    module,
-                    declaration,
-                    signature,
-                    Tables {
-                        bindings: &bindings,
-                        written: &written,
-                        calls: &calls,
-                    },
-                    diagnostics,
-                )
-                .graph(),
+                ) if module.phases.get(position) == Some(&Some(Phase::Graph)) => {
+                    Typer::new(program, module, declaration, signature, found, diagnostics).graph()
+                }
                 // A declaration with no body to read writes types too:
                 // a struct's fields, an operator's parameters, a
                 // constant's type. Each is held to the `requires` of
@@ -207,27 +150,12 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     let signature = match detail {
                         Some(Detail::Callable(signature)) => signature,
                         Some(Detail::Struct(read)) => {
-                            of_struct = Signature {
-                                generics: read.generics.clone(),
-                                parameters: Vec::new(),
-                                result: None,
-                            };
+                            of_struct = Signature::of_struct(read);
                             &of_struct
                         }
                         _ => &empty,
                     };
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    );
+                    Typer::new(program, module, declaration, signature, found, diagnostics);
                     None
                 }
             };
@@ -239,82 +167,25 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         // empty signature.
         let mut test_bodies = Vec::with_capacity(module.tests.len());
         for test in &module.tests {
-            let stand_in = Declaration {
-                name: test.name.clone(),
-                at: test.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: true,
-                file: test.file,
-                syntax: test.syntax.clone(),
-            };
-            let body = Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .test(test.integration);
+            let stand_in =
+                Declaration::stand_in(&test.name, test.at, test.file, &test.syntax, true);
+            let body = Typer::new(program, module, &stand_in, &empty, found, diagnostics)
+                .test(test.integration);
             test_bodies.push(body);
         }
         // RUN-1: an application's run statement. It is no declaration
         // either, and is read as a graph with no parameter is.
         let run_body = module.run.as_ref().and_then(|run| {
-            let stand_in = Declaration {
-                name: "run".to_string(),
-                at: run.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: false,
-                file: run.file,
-                syntax: run.syntax.clone(),
-            };
-            Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .run_statement()
+            let stand_in = Declaration::stand_in("run", run.at, run.file, &run.syntax, false);
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics).run_statement()
         });
         // UNIT-14: the statements an application sets its run's store
         // with are no declaration either. They are read together, as
         // the statements of one block are.
         let store_body = module.store.first().and_then(|first| {
-            let stand_in = Declaration {
-                name: "store".to_string(),
-                at: first.at,
-                kind: DeclarationKind::Function(Role::Temporal),
-                exported: false,
-                test_only: false,
-                file: first.file,
-                syntax: first.syntax.clone(),
-            };
-            Typer::new(
-                program,
-                module,
-                &stand_in,
-                &empty,
-                Tables {
-                    bindings: &bindings,
-                    written: &written,
-                    calls: &calls,
-                },
-                diagnostics,
-            )
-            .store(&module.store)
+            let stand_in =
+                Declaration::stand_in("store", first.at, first.file, &first.syntax, false);
+            Typer::new(program, module, &stand_in, &empty, found, diagnostics).store(&module.store)
         });
         // UNIT-8: "Defaults remain required-constant/cold expressions
         // checked against the expected type. Any parameter but a pack
@@ -331,19 +202,8 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                         .iter()
                         .any(|parameter| parameter.has_default) =>
                 {
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    )
-                    .defaults()
+                    Typer::new(program, module, declaration, signature, found, diagnostics)
+                        .defaults()
                 }
                 Some(Detail::Callable(signature)) => vec![None; signature.parameters.len()],
                 // TYPE-4: a field's default is read as a value of the
@@ -352,24 +212,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
                     // A struct has no parameter and no result: what a
                     // default may name of it is its generic parameters
                     // (UNIT-7: "with its generic environment").
-                    let signature = Signature {
-                        generics: read.generics.clone(),
-                        parameters: Vec::new(),
-                        result: None,
-                    };
-                    Typer::new(
-                        program,
-                        module,
-                        declaration,
-                        &signature,
-                        Tables {
-                            bindings: &bindings,
-                            written: &written,
-                            calls: &calls,
-                        },
-                        diagnostics,
-                    )
-                    .field_defaults(read)
+                    let signature = Signature::of_struct(read);
+                    Typer::new(program, module, declaration, &signature, found, diagnostics)
+                        .field_defaults(read)
                 }
                 Some(Detail::Struct(read)) => vec![None; read.fields.len()],
                 _ => Vec::new(),
@@ -425,8 +270,26 @@ struct Called<'a> {
     generics: Option<&'a CallArguments>,
 }
 
+/// What a finished call selected, looked up once for the checks
+/// `finished_call` runs ([`Callee::declaration`]).
+struct Selected<'e> {
+    /// The position of the function's or the candidate's module in
+    /// `Program::modules`.
+    module: usize,
+    /// Its position in that module's `declarations`.
+    declaration: usize,
+    /// What each of its generic parameters stands for at the call.
+    generics: &'e [crate::types::Argument],
+    /// Its signature; `None` where what was read of it is none.
+    signature: Option<&'e Signature>,
+    /// The call's arguments, each with the parameter it is given to.
+    arguments: &'e [hir::Argument],
+}
+
 /// What the earlier passes found of a module, each by the file and
-/// offset it is written at.
+/// offset it is written at. It holds references only, so it is copied
+/// to each `Typer` (`Copy`).
+#[derive(Clone, Copy)]
 struct Tables<'a> {
     /// What each name resolved to (UNIT-10).
     bindings: &'a HashMap<(FileId, u32), &'a Binding>,
@@ -1101,18 +964,8 @@ impl<'a> Typer<'a> {
         else {
             return false;
         };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            _ => return false,
+        let Some((module, declaration)) = callee.declaration() else {
+            return false;
         };
         let put = Some(module) == self.program.core()
             && self.program.modules[module].declarations[declaration].name == "put";
@@ -3518,12 +3371,10 @@ impl<'a> Typer<'a> {
             // from the function gives the `if` no value and takes no
             // part in its type (CTRL-5)", and so none in what it is. An
             // `if` no branch of which gives a value has none itself.
-            ExprKind::If {
-                condition,
-                then,
-                otherwise,
-            } => {
-                let mut branches = [Some(then), otherwise.as_ref()]
+            ExprKind::If { condition, .. } => {
+                let mut branches = value
+                    .kind
+                    .branch_values()
                     .into_iter()
                     .flatten()
                     .filter(|branch| gives_a_value(branch))
@@ -3761,17 +3612,11 @@ impl<'a> Typer<'a> {
     fn capability_of(&self, value: &Expr) -> Option<LocalId> {
         match &value.kind {
             ExprKind::Local(local) => self.capability(*local),
-            ExprKind::Block {
-                value: Some(value), ..
-            } => self.capability_of(value),
-            ExprKind::If {
-                then, otherwise, ..
-            } => self.capability_of(then).or_else(|| {
-                otherwise
-                    .as_ref()
-                    .and_then(|otherwise| self.capability_of(otherwise))
-            }),
-            _ => None,
+            // The value of a block, or of a branch of an `if`.
+            kind => kind
+                .branch_values()?
+                .into_iter()
+                .find_map(|value| self.capability_of(value)),
         }
     }
 
@@ -5377,13 +5222,35 @@ impl<'a> Typer<'a> {
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
     fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
-        self.places_given(kind);
+        // A call of a function or a candidate: an operation a
+        // declaration requires has no candidate here, and a call that
+        // is not read no parameters to judge.
+        let selected = match kind {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => callee.declaration().map(|(module, declaration)| Selected {
+                module,
+                declaration,
+                generics: callee.generics(),
+                signature: match self.program.modules[module].details.get(declaration) {
+                    Some(Detail::Callable(signature)) => Some(signature),
+                    _ => None,
+                },
+                arguments,
+            }),
+            _ => None,
+        };
+        let Some(selected) = selected else {
+            self.store_call(kind);
+            return;
+        };
+        self.places_given(&selected);
         self.store_call(kind);
-        self.capabilities_given(kind);
-        self.fixed_arguments(kind);
-        self.traces_given(kind, evaluating);
-        self.store_keys(kind);
-        self.references_given(kind);
+        self.capabilities_given(&selected);
+        self.fixed_arguments(&selected);
+        self.traces_given(&selected, evaluating);
+        self.store_keys(&selected);
+        self.references_given(&selected);
     }
 
     /// FN-9: "A graph injects `global_state` and no other, and uses it
@@ -5436,31 +5303,16 @@ impl<'a> Typer<'a> {
     /// (`argument.place`)." And "A function that declares one is not
     /// lifted (FN-6) ... No argument of such a call is a connection
     /// (`connection.as_constant`)".
-    fn places_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration, generics) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                generics,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                generics,
-                ..
-            } => (*module, *declaration, generics),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
+    fn places_given(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
+            generics,
+            arguments,
+            ..
+        } = selected;
         let program = self.program;
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
-        else {
+        let Some(signature) = selected.signature else {
             return;
         };
         if !signature.parameters.iter().any(|parameter| parameter.var) {
@@ -5504,10 +5356,7 @@ impl<'a> Typer<'a> {
                 continue;
             }
             // The root of the place: `book` of `book.orders[0]`.
-            let mut root = &argument.value;
-            while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
-                root = base;
-            }
+            let root = argument.value.place_root();
             let takes = format!("the `var` parameter `{}` of `{callee}`", parameter.name);
             // "that holds an ordinary value of the parameter's type":
             // the call gives the place what the parameter holds, so
@@ -5643,29 +5492,11 @@ impl<'a> Typer<'a> {
     /// are no keys. A key written out is judged here. One that is a
     /// `const` parameter of the function it is in is known where the
     /// graph is built, which no pass reads yet.
-    fn store_keys(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+    fn store_keys(&mut self, selected: &Selected) {
+        let &Selected {
+            module, arguments, ..
+        } = selected;
+        let Some(signature) = selected.signature else {
             return;
         };
         let Some(store) = self.program.capability_type("global_state") else {
@@ -5723,26 +5554,14 @@ impl<'a> Typer<'a> {
     /// there (TST-16), and is held to the parameter's type where the
     /// argument is read: see `publications`. A value that holds one,
     /// `[seen]`, is given as it is and not held to the parameter's type.
-    fn traces_given(&mut self, kind: &ExprKind, evaluating: bool) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
+    fn traces_given(&mut self, selected: &Selected, evaluating: bool) {
+        let &Selected {
+            module,
+            declaration,
+            arguments,
+            signature,
+            ..
+        } = selected;
         // FN-1: a value function, or a value candidate.
         let value = matches!(
             self.program.modules[module].declarations[declaration]
@@ -5753,12 +5572,13 @@ impl<'a> Typer<'a> {
         if value {
             return;
         }
-        let constant = |index: usize| match self.program.modules[module].details.get(declaration) {
-            Some(Detail::Callable(signature)) => signature
-                .parameters
-                .get(index)
-                .is_some_and(|parameter| parameter.constant),
-            _ => false,
+        let constant = |index: usize| {
+            signature.is_some_and(|signature| {
+                signature
+                    .parameters
+                    .get(index)
+                    .is_some_and(|parameter| parameter.constant)
+            })
         };
         let escaped: Vec<Location> = arguments
             .iter()
@@ -5788,32 +5608,16 @@ impl<'a> Typer<'a> {
     /// connection, is `constants_of`'s. This is the other half: where
     /// values are those of one evaluation, in a hook, a source or a
     /// value function.
-    fn fixed_arguments(&mut self, kind: &ExprKind) {
+    fn fixed_arguments(&mut self, selected: &Selected) {
         if self.graph {
             return;
         }
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+        let &Selected {
+            arguments,
+            signature,
+            ..
+        } = selected;
+        let Some(signature) = signature else {
             return;
         };
         let given: Vec<(Location, String)> = arguments
@@ -5898,31 +5702,13 @@ impl<'a> Typer<'a> {
     /// call or a symbol selected. A capability given to a parameter of
     /// another type written out does not fit it, and is reported as any
     /// value is (EXPR-5).
-    fn capabilities_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            // What a requirement's operator selects is not known here,
-            // and a call that is not read has no parameters to judge.
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+    fn capabilities_given(&mut self, selected: &Selected) {
+        let &Selected {
+            arguments,
+            signature,
+            ..
+        } = selected;
+        let Some(signature) = signature else {
             return;
         };
         let mut given: Vec<(Location, String, String)> = Vec::new();
@@ -10996,7 +10782,7 @@ impl<'a> Typer<'a> {
                     // nullable ... or an `atomic<...>` of a nullable
                     // type", the generic arguments in place: the
                     // `value: T` of a `Box<i64?>` is.
-                    required: !member.has_default && !is_optional(&ty),
+                    required: !member.has_default && is_optional(&ty) != Some(true),
                     ty: placed(ty, &own),
                     pack: None,
                     listed: false,
@@ -11754,26 +11540,14 @@ impl<'a> Typer<'a> {
     /// takes none. In a graph a connection given to one is lifted, and
     /// followed (TIME-10). What an endpoint operation is given is the
     /// input's endpoint, and no payload.
-    fn references_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    ..
-                },
+    fn references_given(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
             arguments,
             ..
-        } = kind
-        else {
-            return;
-        };
-        let role = self.program.modules[*module].declarations[*declaration]
+        } = selected;
+        let role = self.program.modules[module].declarations[declaration]
             .kind
             .role();
         if role != Some(Role::Value) {
@@ -12377,12 +12151,9 @@ fn bound_by_loop(over: ValueCategory, ty: &Type, names: usize) -> (Vec<ValueCate
 /// the one it ends in (CTRL-10), and none when it ends in a `return` or
 /// any other statement; an `if` gives one where a branch does.
 fn gives_a_value(value: &Expr) -> bool {
-    match &value.kind {
-        ExprKind::Block { value, .. } => value.as_deref().is_some_and(gives_a_value),
-        ExprKind::If {
-            then, otherwise, ..
-        } => gives_a_value(then) || otherwise.as_deref().is_some_and(gives_a_value),
-        _ => true,
+    match value.kind.branch_values() {
+        Some(values) => values.into_iter().any(gives_a_value),
+        None => true,
     }
 }
 
@@ -13286,17 +13057,10 @@ fn widens_an_entry(value: &Expr) -> bool {
             .iter()
             .any(|(key, value)| widens_an_entry(key) || widens_an_entry(value)),
         // The value of a block, and of each branch of an `if`.
-        ExprKind::Block {
-            value: Some(value), ..
-        } => widens_an_entry(value),
-        ExprKind::If {
-            then, otherwise, ..
-        } => {
-            widens_an_entry(then)
-                || otherwise
-                    .as_ref()
-                    .is_some_and(|otherwise| widens_an_entry(otherwise))
-        }
+        ExprKind::Block { .. } | ExprKind::If { .. } => value
+            .kind
+            .branch_values()
+            .is_some_and(|values| values.into_iter().any(widens_an_entry)),
         // A symbol among the entries is read with the entry's type as
         // its place, so that core's own arithmetic over literals may
         // widen them: the `1` of `[-1]`, the `1` and `2` of `[1 + 2]`,
@@ -14312,30 +14076,7 @@ fn has_members(ty: &Type) -> bool {
 /// True when a type is known all the way down: no part of it is
 /// `Type::Unknown`.
 fn whole(ty: &Type) -> bool {
-    match ty {
-        Type::Unknown => false,
-        Type::Named { arguments, .. } => arguments.iter().all(|argument| match argument {
-            Argument::Type(argument) => whole(argument),
-            Argument::Constant(_) => true,
-        }),
-        Type::Tuple(elements) => elements.iter().all(whole),
-        Type::List { element, .. } => whole(element),
-        Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner) => whole(inner),
-        Type::Dict { key, value } => whole(key) && whole(value),
-        Type::RollingWindow { value, .. } => whole(value),
-        Type::Result { value, error } => whole(value) && whole(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext => true,
-    }
+    !ty.any_part(&|part| matches!(part, Type::Unknown), &|_| false)
 }
 
 /// What an argument may be given to: a parameter of a function, or a
@@ -14465,29 +14206,7 @@ fn publications(value: hir::Expr) -> hir::Expr {
 /// True when `ty` is a trace or holds one at any depth: the
 /// `list<trace of i64>` of `[seen]`.
 fn holds_trace(ty: &Type) -> bool {
-    match ty {
-        Type::Trace { .. } => true,
-        Type::Named { arguments, .. } => arguments
-            .iter()
-            .any(|argument| matches!(argument, Argument::Type(ty) if holds_trace(ty))),
-        Type::Tuple(elements) => elements.iter().any(holds_trace),
-        Type::List { element: inner, .. }
-        | Type::RollingWindow { value: inner, .. }
-        | Type::Set(inner)
-        | Type::Ref(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Nullable(inner) => holds_trace(inner),
-        Type::Dict { key, value } => holds_trace(key) || holds_trace(value),
-        Type::Result { value, error } => holds_trace(value) || holds_trace(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext
-        | Type::Unknown => false,
-    }
+    ty.any_part(&|part| matches!(part, Type::Trace { .. }), &|_| false)
 }
 
 /// An argument of an endpoint operation or an `endpoint<T>` parameter as
@@ -14773,16 +14492,6 @@ fn find(
     }
 }
 
-/// TYPE-4: "A field is optional when its type is nullable, `T?`, or an
-/// `atomic<...>` of a nullable type, `atomic<T?>`."
-fn is_optional(ty: &Type) -> bool {
-    match ty {
-        Type::Nullable(_) => true,
-        Type::Atomic(inner) => matches!(**inner, Type::Nullable(_)),
-        _ => false,
-    }
-}
-
 /// True when nothing can be said against a value of this type: it is
 /// not known, or it is `any`, whose typing is for a later pass
 /// (TYPE-8).
@@ -14824,36 +14533,7 @@ fn mentions(ty: &Type, own: &[Location]) -> bool {
 /// value parameter declared at one of `own`: the `N` of `list<i64, N>`,
 /// of `list<i64, N + 1>`, of `Box<[N]>`.
 fn names_value_of(ty: &Type, own: &[Location]) -> bool {
-    let named = |constant: &Constant| constant.value.names_one_of(own);
-    let inner = |ty: &Type| names_value_of(ty, own);
-    match ty {
-        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-            Argument::Type(ty) => inner(ty),
-            Argument::Constant(constant) => named(constant),
-        }),
-        Type::Tuple(elements) => elements.iter().any(inner),
-        Type::List { element, size } => size.as_ref().is_some_and(named) || inner(element),
-        Type::Set(ty)
-        | Type::Ref(ty)
-        | Type::Endpoint(ty)
-        | Type::Atomic(ty)
-        | Type::Delta(ty)
-        | Type::Trace { cell: ty, .. }
-        | Type::Nullable(ty) => inner(ty),
-        Type::Dict { key, value } => inner(key) || inner(value),
-        Type::RollingWindow {
-            value,
-            maximum,
-            minimum,
-        } => named(maximum) || minimum.as_ref().is_some_and(named) || inner(value),
-        Type::Result { value, error } => inner(value) || inner(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext
-        | Type::Unknown => false,
-    }
+    ty.any_part(&|_| false, &|constant| constant.value.names_one_of(own))
 }
 
 /// What is expected of an expression that takes its type from its
@@ -14890,12 +14570,20 @@ fn is_integer_literal(value: &Expr) -> bool {
 /// known to this pass. An option that is a generic value parameter is
 /// no argument: it selects the candidate, a division's `zero` say, and
 /// what that computes is core's.
-fn is_plain(callee: &Callee, arguments: &[hir::Argument], operands: usize) -> bool {
-    match callee {
-        Callee::Candidate {
-            operator, module, ..
+///
+/// A symbol recorded as it is written, an [`ExprKind::Unary`] or an
+/// [`ExprKind::Binary`], is core's own.
+fn is_plain(kind: &ExprKind, operands: usize) -> bool {
+    match kind {
+        ExprKind::Call {
+            callee: Callee::Candidate {
+                operator, module, ..
+            },
+            arguments,
+            ..
         } => operator.0 == *module && arguments.len() == operands,
-        _ => false,
+        ExprKind::Call { .. } => false,
+        _ => true,
     }
 }
 
@@ -14903,16 +14591,8 @@ fn is_plain(callee: &Callee, arguments: &[hir::Argument], operands: usize) -> bo
 /// written, or the plain call of `neg_` it stands for (see
 /// [`is_plain`]).
 fn negated(value: &Expr) -> Option<&Expr> {
-    match &value.kind {
-        ExprKind::Unary {
-            operator: UnaryOperator::Negate,
-            operand,
-        } => Some(operand),
-        ExprKind::Call {
-            callee,
-            arguments,
-            form: Form::Unary(UnaryOperator::Negate),
-        } if is_plain(callee, arguments, 1) => Some(&arguments[0].value),
+    match value.kind.unary() {
+        Some((UnaryOperator::Negate, operand)) if is_plain(&value.kind, 1) => Some(operand),
         _ => None,
     }
 }
@@ -14921,21 +14601,7 @@ fn negated(value: &Expr) -> Option<&Expr> {
 /// arithmetic: as it is written, or the plain call it stands for (see
 /// [`is_plain`]).
 fn arithmetic(value: &Expr) -> Option<(BinaryOperator, &Expr, &Expr)> {
-    match &value.kind {
-        ExprKind::Binary {
-            operator,
-            left,
-            right,
-        } => Some((*operator, left, right)),
-        ExprKind::Call {
-            callee,
-            arguments,
-            form: Form::Binary(operator),
-        } if is_plain(callee, arguments, 2) => {
-            Some((*operator, &arguments[0].value, &arguments[1].value))
-        }
-        _ => None,
-    }
+    value.kind.binary().filter(|_| is_plain(&value.kind, 2))
 }
 
 /// True when an expression is `.member`, in parentheses or not.
