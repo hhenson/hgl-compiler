@@ -1041,7 +1041,7 @@ struct Emitter<'a> {
     ran: Option<Piece>,
 }
 
-impl Emitter<'_> {
+impl<'a> Emitter<'a> {
     /// Reports a form this target does not write yet. The piece being
     /// written is then left out of the file.
     fn unsupported(&mut self, at: Location, what: &str) {
@@ -3139,11 +3139,7 @@ impl Emitter<'_> {
             } else {
                 python
             };
-            if held(&parameter.ty) {
-                format!("_core.Held({python})")
-            } else {
-                python
-            }
+            self.held_value(held(&parameter.ty), python)
         }));
         self.line(0, "");
         self.line(0, "");
@@ -6352,11 +6348,7 @@ impl Emitter<'_> {
                     continue;
                 };
                 let value = self.expression(function, &argument.value);
-                let value = if kept[index] {
-                    format!("_core.Held({value})")
-                } else {
-                    value
-                };
+                let value = self.held_value(kept[index], value);
                 let input = !signature.parameters[index].constant;
                 written.push((argument, index, value, input));
             }
@@ -6404,11 +6396,7 @@ impl Emitter<'_> {
                 if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
                     // A node keeps a default of its configuration as it
                     // keeps one given (`kept_configuration`).
-                    let value = if kept[index] {
-                        format!("_core.Held({value})")
-                    } else {
-                        value
-                    };
+                    let value = self.held_value(kept[index], value);
                     called.push(format!("{}={value}", name(&parameter.name)));
                 }
             }
@@ -7037,13 +7025,6 @@ impl Emitter<'_> {
         // gives it that is no connection, so such an argument is
         // copied below.
         let node = self.is_node(callee);
-        let kept = |index: usize, value: String| {
-            if kept[index] {
-                format!("_core.Held({value})")
-            } else {
-                value
-            }
-        };
         // The owner's rule: an argument is a reference to what it
         // names, and is copied in two cases alone.
         //
@@ -7133,7 +7114,8 @@ impl Emitter<'_> {
                         written
                     }
                 };
-                Some(format!("{}={}", name(&parameter.name), kept(index, value)))
+                let value = self.held_value(kept[index], value);
+                Some(format!("{}={value}", name(&parameter.name)))
             })
             .collect();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -7144,7 +7126,8 @@ impl Emitter<'_> {
                 continue;
             }
             if let Some(value) = self.left_out_of_call(callee, generics, index, parameter) {
-                written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
+                let value = self.held_value(kept[index], value);
+                written.push(format!("{}={value}", name(&parameter.name)));
             }
         }
         written.join(", ")
@@ -7174,13 +7157,9 @@ impl Emitter<'_> {
         {
             return self.left_out(callee, index, parameter);
         }
-        let instances = self.instances;
-        let instance = instances
-            .instanced(self.program, callee.0, callee.1)
-            .then(|| instances.find(self.program, callee, generics))
-            .flatten();
-        let ty = instance
-            .and_then(|instance| instance.signature.parameters.get(index))
+        let ty = self
+            .instance_signature(callee, generics)
+            .and_then(|signature| signature.parameters.get(index))
             .map_or(&parameter.ty, |parameter| &parameter.ty);
         Some(self.never_valid(ty, parameter.at))
     }
@@ -7201,6 +7180,34 @@ impl Emitter<'_> {
         format!("_hg.nothing(tp={annotation})")
     }
 
+    /// The signature of the instance a call of `callee`, a module and a
+    /// declaration of it, names with the generic arguments `generics`,
+    /// where `callee` is written by instance (GEN-2). `None` where it is
+    /// not, or where no instance is found for them.
+    fn instance_signature(
+        &self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+    ) -> Option<&'a Signature> {
+        let instances = self.instances;
+        instances
+            .instanced(self.program, callee.0, callee.1)
+            .then(|| instances.find(self.program, callee, generics))
+            .flatten()
+            .map(|instance| &instance.signature)
+    }
+
+    /// `written`, configuration a node is given, inside `_core.Held(...)`
+    /// where `kept`: an object hgraph keeps as it is (`held`,
+    /// `kept_configuration`). Otherwise `written` as it is.
+    fn held_value(&mut self, kept: bool, written: String) -> String {
+        if !kept {
+            return written;
+        }
+        self.natives = true;
+        format!("_core.Held({written})")
+    }
+
     /// For each parameter of `callee`, a module and a declaration of it,
     /// whether a call gives it inside `_core.Held(...)`.
     ///
@@ -7217,12 +7224,9 @@ impl Emitter<'_> {
         signature: &Signature,
     ) -> Vec<bool> {
         let node = self.is_node(callee);
-        let instances = self.instances;
-        let instance = instances
-            .instanced(self.program, callee.0, callee.1)
-            .then(|| instances.find(self.program, callee, generics))
-            .flatten();
-        let taken = instance.map_or(signature, |instance| &instance.signature);
+        let taken = self
+            .instance_signature(callee, generics)
+            .unwrap_or(signature);
         let kept: Vec<bool> = signature
             .parameters
             .iter()
@@ -8492,10 +8496,7 @@ impl Emitter<'_> {
                 _ => value,
             };
             let value = match &taken {
-                Bound::Configuration(ty) if held(ty) => {
-                    self.natives = true;
-                    format!("_core.Held({value})")
-                }
+                Bound::Configuration(ty) => self.held_value(held(ty), value),
                 _ => value,
             };
             bound[index] = Some(taken);
@@ -8832,10 +8833,9 @@ impl Emitter<'_> {
             // GEN-2: a function written by instance is lifted as its
             // instance for the eval's generic arguments, whose result
             // names no generic parameter.
-            let instances = self.instances;
-            let signature = instances
-                .find(self.program, (*module, *declaration), generics)
-                .map_or(signature, |instance| &instance.signature);
+            let signature = self
+                .instance_signature((*module, *declaration), generics)
+                .unwrap_or(signature);
             // An input is of its parameter's type where the function has
             // no generic parameter, as the run's replay is
             // (`run_wiring`), and of the type its trace is of otherwise.
