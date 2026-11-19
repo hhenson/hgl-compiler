@@ -111,7 +111,8 @@ analyser: planned
 transpiler: partial
 
 - hgraph: an input whose parameter has a default is not required valid, and the default is bound while it is not; every other input is required valid
-- Left: null bound for an input that admits null, which waits on nullable scalars; a struct, a tuple or a fixed list supplied only where it is `all_valid` too, with no fallback where it is not
+- A struct, a tuple and a fixed list are supplied only where they are `all_valid` too: one valid and not all valid binds no fallback, and the helper is not invoked
+- Left: null bound for an input that admits null, which waits on nullable scalars
 
 ## FN-12
 
@@ -124,8 +125,8 @@ transpiler: partial
 
 - hgraph: a lifted helper is one invocation with the whole value; a fixed list given to one is required `valid`, as any list is
 - A position of an unsized list that holds no value is passed as TIME-1's table reads it, NaN for an `f64` and null for a `V?`, and fails the invocation otherwise (`value.unset_read`)
+- A struct, a tuple and a fixed list are required all valid (TIME-9), an optional child not asked and passed as null
 - A window is required valid, the helper invoked only where it is all valid, with the `list<V>` it holds
-- Left: a struct, a tuple and a fixed list required all valid, an optional child passed as null
 - Left, reported: a window given to a parameter with a default, which FN-11 does not say what binds where the window is valid and not all valid
 - Left, reported: a window given to a lifted helper
 

@@ -2781,15 +2781,20 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
     let emitted = emit_clean(&[SETS]);
     let python = emitted.module("demo.sets");
     python.assert_writes(&[
-        "def members(command: _hg.TS[_py.int]) -> _hg.TSS[_py.int]:\n",
+        // TYPE-16: a delta of a set is published on the node's own
+        // output, where it ticks though it changes nothing.
         concat!(
-            "        return _hg.set_delta(added=_py.frozenset((3,)), ",
-            "removed=_py.frozenset((1,)), tp=_py.int)\n",
+            "def members(command: _hg.TS[_py.int], _output: _hg.TSS_OUT[_py.int] = None) ",
+            "-> _hg.TSS[_py.int]:\n",
+        ),
+        concat!(
+            "        return _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((3,)), ",
+            "removed=_py.frozenset((1,)), tp=_py.int), \"entries\")\n",
         ),
         // A property left out is empty.
         concat!(
-            "        return _hg.set_delta(removed=_py.frozenset((2,)), ",
-            "added=_py.frozenset(), tp=_py.int)\n",
+            "        return _core.entries_published(_output, _hg.set_delta(removed=_py.frozenset((2,)), ",
+            "added=_py.frozenset(), tp=_py.int), \"entries\")\n",
         ),
         // END-5: the node's own output, as hgraph names a set's.
         concat!(
@@ -2797,10 +2802,10 @@ fn a_set_is_a_tss_and_its_delta_is_what_it_added_and_removed() {
             "-> _hg.TSS[_py.int]:\n",
         ),
         concat!(
-            "    _output.value = _hg.set_delta(added=_py.frozenset((2, 3)), ",
-            "removed=_py.frozenset(), tp=_py.int)\n",
+            "    _output.value = _core.entries_published(_output, _hg.set_delta(added=_py.frozenset((2, 3)), ",
+            "removed=_py.frozenset(), tp=_py.int), \"entries\")\n",
         ),
-        "    return input.delta_value\n",
+        "    return _core.entries_published(_output, input.delta_value, \"entries\")\n",
         // EXPR-13: the properties in the order they are written.
         concat!(
             "    return _hg.set_delta(removed=_py.frozenset((left,)), ",
@@ -4928,8 +4933,8 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         format!("@_hg.compute_node\ndef _lift_3_pair_total(pair: {pair})"),
         "    return one_position(slot=slot, reading=reading)[0]".to_string(),
         format!("-> {prices}:"),
-        "        return _core.dict_delta(removed=_py.frozenset((key.value,)))".to_string(),
-        "    return _core.dict_delta(updated={key.value: price.value})".to_string(),
+        "        return _core.entries_published(_output, _core.dict_delta(removed=_py.frozenset((key.value,))), \"entries\")".to_string(),
+        "    return _core.entries_published(_output, _core.dict_delta(updated={key.value: price.value}), \"entries\")".to_string(),
         "store=_py.dict(prices.value), key=\"B\"".to_string(),
         "    for key in _core.removed(change):".to_string(),
         "store=_core.updated(change), key=\"A\"".to_string(),
@@ -5070,7 +5075,9 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
         "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
-        "        return _core.removed(pair.delta_value)",
+        // TIME-7: a whole set ticks where it is empty and changes
+        // nothing, on the node's output.
+        "        return _core.set_replaced(_output, _core.removed(pair.delta_value))",
     ]);
 }
 

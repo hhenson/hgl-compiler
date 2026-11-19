@@ -1,8 +1,5 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
-"`all_valid` of a value with an optional child (TIME-9)" = [
-    "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
-]
 
 # Rejection cases the compiler does not yet reject, each
 # `suite::file::declaration` with the file under the suite's directory,

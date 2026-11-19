@@ -641,13 +641,205 @@ def dict_delta(updated=None, removed=()):
     return changes
 
 
-def _marked(changes, removed):
-    """`changes`, a `dict` of each key or position updated with its
-    delta, with each of `removed` given hgraph's `REMOVE`: a `TSD`'s and
-    a `TSL`'s delta (TYPE-16's `updated` and `removed`)."""
-    for key in removed:
-        changes[key] = _REMOVE
-    return changes
+def _entries_change(change, shape):
+    """`change`, what a node or a source publishes to a value of `shape`,
+    with each key a dictionary in it removes given `REMOVE_IF_EXISTS`.
+
+    TYPE-16: "A `removed` that names a key a dictionary does not hold is
+    ignored, and is no failure, as one that names a member a set does not
+    hold is." hgraph's `TSD` fails the run for a key it does not hold
+    given `REMOVE`, which a delta read from an input (`delta_value`) has;
+    its `TSS` ignores a member it does not hold.
+
+    `shape` is what the compiler wrote for where the dictionaries and the
+    sets are: `"entries"` for one whose own parts hold none, `("entries",
+    part)` for a dictionary whose values hold one, `("fields", {name:
+    part})` for a struct, `("positions", (part, ...))` for a tuple,
+    `("list", part)` for a fixed list, and `None` for a part that holds
+    none. A struct's delta and a fixed list's are each a `dict`, of each
+    field or position that changed, and a tuple's a tuple, null where a
+    position did not change."""
+    if change is None or shape is None:
+        return change
+    if shape == "entries":
+        if isinstance(change, dict):
+            return {key: _REMOVE_IF_EXISTS if entry is _REMOVE else entry for key, entry in change.items()}
+        return change
+    kind, part = shape
+    # A whole value given where a delta may be, as a replay is given a
+    # trace's cell written whole, is published as it is.
+    if not isinstance(change, tuple if kind == "positions" else dict):
+        return change
+    if kind == "entries":
+        return {
+            key: _REMOVE_IF_EXISTS if entry is _REMOVE else entry if _removes(entry) else _entries_change(entry, part)
+            for key, entry in change.items()
+        }
+    if kind == "fields":
+        return {field: _entries_change(entry, part.get(field)) for field, entry in change.items()}
+    if kind == "positions":
+        return tuple(_entries_change(entry, within) for entry, within in zip(change, part))
+    return {index: entry if _removes(entry) else _entries_change(entry, part) for index, entry in change.items()}
+
+
+def _names_nothing(change):
+    """True where `change`, a delta as hgraph takes it, names no change
+    (TIME-7): an empty `dict` of a dictionary, a struct or a fixed list,
+    a tuple of nulls, or a set's delta that adds and removes nothing."""
+    if change is None:
+        return True
+    if isinstance(change, tuple):
+        return all(entry is None for entry in change)
+    if _is_set_delta(change):
+        return not change.added and not change.removed
+    return isinstance(change, dict) and not change
+
+
+def _pruned(port, change, shape):
+    """`change`, published to `port` of `shape` (`_entries_change`), less
+    what it names for a dictionary or a set within that is valid and that
+    the change leaves as it was.
+
+    TIME-7, as the specification's `main` has it (hhenson/hgl_spec#124):
+    a delta that names no change, published where the value is valid, "is
+    no tick"; proposed there, "a delta whose every entry is ignored, the
+    removal of a key, a member or a position that is not held (TYPE-16),
+    names no change". hgraph does not tick a `TSD` or a `TSS` for one,
+    but ticks what holds it, a `TSD`, a bundle or a `TSL`, where it is
+    given one for that child: so a child whose change names nothing is
+    left out of its holder's change. Where the child is not valid it is
+    kept, and made valid (`_validated`)."""
+    if change is None or shape is None or not port.valid:
+        return change
+    if shape == "entries":
+        if _is_set_delta(change):
+            held = port.value
+            if not change.added and all(member not in held for member in change.removed):
+                return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
+            return change
+        if isinstance(change, dict):
+            held = set(port.keys())
+            if all(_removes(entry) and key not in held for key, entry in change.items()):
+                return {}
+        return change
+    kind, part = shape
+    if not isinstance(change, tuple if kind == "positions" else dict):
+        return change
+
+    def kept(child, entry, within):
+        """`entry` for `child` pruned, or `None` where it names nothing to
+        a child that is valid."""
+        if entry is None or within is None or _removes(entry):
+            return entry
+        entry = _pruned(child, entry, within)
+        return None if _names_nothing(entry) and child.valid else entry
+
+    if kind == "entries":
+        held = set(port.keys())
+        pruned = {}
+        for key, entry in change.items():
+            if _removes(entry):
+                if key in held:
+                    pruned[key] = entry
+                continue
+            if key not in held:
+                pruned[key] = entry
+                continue
+            entry = kept(port[key], entry, part)
+            if entry is not None:
+                pruned[key] = entry
+        return pruned
+    if kind == "fields":
+        pruned = {}
+        for field, entry in change.items():
+            within = part.get(field)
+            entry = entry if within is None else kept(port[field], entry, within)
+            if entry is not None:
+                pruned[field] = entry
+        return pruned
+    if kind == "positions":
+        return tuple(
+            entry if within is None else kept(port[position(index)], entry, within)
+            for index, (entry, within) in enumerate(zip(change, part))
+        )
+    pruned = {}
+    for index, entry in change.items():
+        entry = kept(port[index], entry, part)
+        if entry is not None:
+            pruned[index] = entry
+    return pruned
+
+
+def _validated(port):
+    """Makes the dictionary or the set at `port`, a node's output, valid
+    and empty where a delta that names no change is published to it and
+    it is not valid.
+
+    TIME-7, as the specification's `main` has it (the owner's decision on
+    hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141): "A
+    delta that names no change ... ticks only where it changes validity.
+    Where a `list<V>`, a dictionary or a set is not valid, never published
+    or invalidated, it makes the value valid and empty, and ticks. Where
+    it is valid the delta changes nothing, and is no tick". Proposed
+    there: a delta whose every entry is an ignored removal names no
+    change. hgraph 0.9.5's `TSD` and `TSS` tick for neither, which is
+    right where they are valid; where they are not, `clear` makes them
+    valid, empty and modified. An invalidated one holds nothing
+    (`invalidated`)."""
+    if not port.valid:
+        port.clear()
+
+
+def _validated_parts(port, change, shape):
+    """Makes each dictionary and set at `port` that `change` publishes to
+    valid where it is not (`_validated`). `shape` is as `_entries_change`
+    has it."""
+    if change is None or shape is None:
+        return
+    if shape == "entries":
+        _validated(port)
+        return
+    kind, part = shape
+    if not isinstance(change, tuple if kind == "positions" else dict):
+        return
+    if kind == "entries":
+        for key, entry in change.items():
+            if not _removes(entry):
+                _validated_parts(port[key], entry, part)
+        _validated(port)
+    elif kind == "fields":
+        for field, entry in change.items():
+            if part.get(field) is not None:
+                _validated_parts(port[field], entry, part[field])
+    elif kind == "positions":
+        for index, (entry, within) in enumerate(zip(change, part)):
+            if within is not None:
+                _validated_parts(port[position(index)], entry, within)
+    else:
+        for index, entry in change.items():
+            if not _removes(entry):
+                _validated_parts(port[index], entry, part)
+
+
+def entries_published(port, change, shape):
+    """Publishes `change`, a delta (TYPE-16) of a value of `shape` that
+    holds a dictionary or a set (`_entries_change`), to `port`, the node's
+    own output, and gives what the node then publishes as its value:
+    nothing more, an empty delta of its kind.
+
+    TIME-7: "a `delta<T>` (TYPE-16), published as that change". One that
+    names no change makes each dictionary and set in it that is not valid
+    valid and empty (`_validated_parts`), and is otherwise no tick, each
+    child that it leaves as it was left out (`_pruned`). A key removed that
+    a dictionary does not hold is ignored (`_entries_change`)."""
+    change = _pruned(port, _entries_change(change, shape), shape)
+    port.value = change
+    _validated_parts(port, change, shape)
+    if isinstance(change, dict):
+        return {}
+    if isinstance(change, tuple):
+        return tuple(None for _ in change)
+    return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
 
 
 def list_delta(updated=None, removed=(), size_modified=None):
@@ -679,7 +871,9 @@ def _held_size(port):
 
 def _ticked(port):
     """Makes the unsized list at `port` tick in this evaluation where
-    what is published next would change nothing hgraph can see.
+    what is published next would change nothing hgraph can see: a whole
+    list (`_whole_list`), and a delta that makes the list valid
+    (`list_applied`).
 
     TIME-7 has a write publish ("No write means no tick"), and TIME-9 has
     "A published empty list ... valid". hgraph 0.9.5's unbounded `TSL`
@@ -756,8 +950,17 @@ def list_applied(port, delta):
     An entry at or past a size written with it contradicts the delta, and
     fails (the owner's decision on hhenson/hgl_spec#124). A removed
     position the list does not hold lost no value, and is ignored (the
-    owner's decision there). A delta that changes nothing hgraph sees
-    still ticks (`_ticked`)."""
+    owner's decision there).
+
+    TIME-7, as the specification's `main` has it (the owner's decision on
+    hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141): "A
+    delta that names no change ... ticks only where it changes validity.
+    Where a `list<V>` ... is not valid, never published or invalidated, it
+    makes the value valid and empty, and ticks. Where it is valid the
+    delta changes nothing, and is no tick". Proposed there: a delta whose
+    every entry is an ignored removal names no change. hgraph's `TSL`
+    does not tick for either, valid or not: where the list is not valid it
+    is made to (`_ticked`)."""
     held = _held_size(port)
     changes = updated(delta)
     gone = removed(delta)
@@ -780,7 +983,7 @@ def list_applied(port, delta):
         raise HglError(
             f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
-    if size == held and not changes:
+    if size == held and not changes and not port.valid:
         _ticked(port)
     return _TSLDelta(changes, removed=tuple(position for position in gone if position < size), size_modified=size)
 
@@ -831,8 +1034,13 @@ def published_into(port, value, shape):
 
 def _emptied(port, shape):
     """Drops each position of each unsized list `shape` names in what
-    `port` holds (`invalidated`)."""
+    `port` holds, and each key or member of a dictionary or a set that
+    `shape` is, `"entries"` (`invalidated`)."""
     if shape is None:
+        return
+    if shape == "entries":
+        if port.valid:
+            port.clear()
         return
     if shape == "list":
         if len(port) > 0:
@@ -844,12 +1052,16 @@ def _emptied(port, shape):
 
 
 def invalidated(port, shape):
-    """`invalidate(out)` of an output that holds an unsized list (END-4:
-    "Invalidation clears validity, modification, payload, and delta").
-    hgraph's unbounded `TSL` keeps its positions when it is invalidated,
-    and the next delta read would name them removed: each list is emptied
-    first, which no one reads, since the list is not valid after.
-    `shape` is as `published_into` has it."""
+    """`invalidate(out)` of an output that holds an unsized list, or that
+    is a dictionary or a set (END-4: "Invalidation clears validity,
+    modification, payload, and delta"). hgraph's unbounded `TSL` keeps
+    its positions when it is invalidated, and its `TSD` and `TSS` their
+    keys and members, which the next delta read would name removed, and
+    which a dictionary or a set made valid again by a delta that names no
+    change would still hold (TIME-7: "it makes the value valid and
+    empty"): each is emptied first, which no one reads, since it is not
+    valid after. `shape` is as `published_into` has it, or `"entries"`
+    for a dictionary or a set."""
     _emptied(port, shape)
     port.invalidate()
 
@@ -1335,10 +1547,34 @@ def dict_replaced(output, value):
     given its own output (TIME-7, TST-9: a T whole "replaces what the
     input held"): each entry of `value`, and the removal of each key the
     output holds that `value` has not. hgraph's `TSD` would otherwise
-    keep those."""
+    keep those.
+
+    TIME-7: "A value published whole, the same again or empty, is no
+    delta, and ticks as any publication does". hgraph's `TSD` does not
+    tick for an empty one where it holds none, valid or not, and is made
+    to (`clear`)."""
     made = {key: _REMOVE for key in (output.keys() if output.valid else ()) if key not in value}
     made.update({key: published(entry) for key, entry in value.items()})
+    if not made:
+        output.clear()
     return made
+
+
+def set_replaced(output, value):
+    """What a temporal set publishes for a whole value of it, given its
+    own output (TIME-7: "a complete value of the result's type T,
+    published whole"): the members of `value`, a `frozenset`, which
+    hgraph's `TSS` takes as what it now holds.
+
+    TIME-7: "A value published whole, the same again or empty, is no
+    delta, and ticks as any publication does". hgraph's `TSS` does not
+    tick for an empty one where it holds none, valid or not, and is made
+    to (`clear`), which publishes the set emptied; nothing more is then
+    published. One the same again that is not empty does not tick."""
+    if value:
+        return value
+    output.clear()
+    return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
 
 
 def whole_delta(value, keys, fixed=False, size=0, shape=None):
@@ -1562,10 +1798,13 @@ class Source:
         self.previous = None
 
 
-def resume(source, now, scheduler, port, shape=None):
+def resume(source, now, scheduler, port, shape=None, entries=None):
     """Resumes a source in the evaluation at `now`, and publishes what it
     is due there through `port`, its node's output (`None` for a source
-    with no result), as `published_into` has it for `shape`.
+    with no result), as `published_into` has it for `shape`. Where the
+    output holds a dictionary or a set, `entries` is where, and what is
+    published makes each that is not valid valid, where it names no
+    change, as a node's delta does (`entries_published`).
 
     SOURCE-2: "A duration is relative to current evaluation time; a
     datetime is absolute. Negative duration fails. Resolve duration
@@ -1582,8 +1821,11 @@ def resume(source, now, scheduler, port, shape=None):
     is `None` publishes nothing, as a node that returns `None` does."""
 
     def publish(value):
-        if port is not None and value is not None:
-            port.value = published_into(port, value, shape)
+        if port is None or value is None:
+            return
+        published = _pruned(port, _entries_change(published_into(port, value, shape), entries), entries)
+        port.value = published
+        _validated_parts(port, published, entries)
 
     if source.pending is not None:
         if source.target != now:

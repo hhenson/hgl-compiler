@@ -74,8 +74,10 @@ test the_delta_read_says_what_changed {
         delta<list<i64>>(updated: [5: 6], size_modified: 6),
         delta<list<i64>>(updated: [1: 7]),
     ]
-    # The empty list published first, and again.
-    assert eval(relay_of(command: [99, 99])) == [delta<list<i64>>(), delta<list<i64>>()]
+    # The empty list published first, and again: relayed, the second is a
+    # delta that names no change where the relay's list is valid, and is
+    # no tick (TIME-7 on the specification's main, hhenson/hgl_spec#124).
+    assert eval(relay_of(command: [99, 99])) == [delta<list<i64>>(), _]
 }
 
 # TIME-9: a list's validity and its positions'.
