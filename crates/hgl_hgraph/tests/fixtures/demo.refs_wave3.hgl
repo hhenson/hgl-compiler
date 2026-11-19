@@ -104,3 +104,58 @@ test a_designation_follows_a_re_binding_upstream {
         other: [100, _, _, _],
     )) == [10, _, 2, 4]
 }
+
+# TIME-10: "A designation published again unchanged is no tick, and
+# wakes no subscriber." Core's END-10: "A publication of the designation
+# it holds is no tick". What the result holds is what it held before the
+# evaluation: two writes that end where it began are none.
+fn designations_any(ref target: i64) -> i64 {
+    state seen: i64 = 0
+    when valid([]) {
+        seen += 1
+        return seen
+    }
+}
+
+fn written_twice(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        out = b
+    }
+}
+
+fn written_then_returned(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        return b
+    }
+}
+
+# Where `flag` is false the last write is `a`, which it did not hold.
+fn written_by_flag(flag: bool, ref a: i64, ref b: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        out = a
+        if flag { out = b }
+    }
+}
+
+fn twice_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_twice(flag, a, b))
+fn returned_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_then_returned(flag, a, b))
+fn flagged_designations(flag: bool, a: i64, b: i64) -> i64 =>
+    designations_any(written_by_flag(flag, a, b))
+fn flagged_follow(flag: bool, a: i64, b: i64) -> i64 =>
+    follow(written_by_flag(flag, a, b))
+
+test two_writes_that_end_where_they_began_are_no_tick {
+    assert eval(twice_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
+    assert eval(returned_designations(flag: [true, true, true], a: [1, _, _], b: [2, _, _])) == [1, _, _]
+    assert eval(flagged_designations(flag: [true, true, false, true], a: [1, _, _, _], b: [2, _, _, _])) ==
+        [1, _, 2, 3]
+    assert eval(flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _])) ==
+        [2, _, 1, 2]
+}

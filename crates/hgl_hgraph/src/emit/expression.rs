@@ -116,11 +116,17 @@ impl Emitter<'_> {
                 // last did, which are the `REF`'s own.
                 if function.designates(inputs[0]) {
                     // `out` of a `ref` result in a `when`: what it
-                    // designates is the provider's `Designation`'s.
+                    // designates is the provider's `Designation`'s, which
+                    // writes it as the evaluation ends.
                     let kept = function.designating() && function.is_out(inputs[0]);
                     return match operation {
                         EndpointOperation::Invalidate if kept => {
                             "_designation.invalidate()".to_string()
+                        }
+                        EndpointOperation::Valid if kept => "_designation.valid".to_string(),
+                        EndpointOperation::Modified if kept => "_designation.modified".to_string(),
+                        EndpointOperation::LastModified if kept => {
+                            "_designation.last_modified".to_string()
                         }
                         EndpointOperation::Valid => format!("{input}.valid"),
                         EndpointOperation::Modified => format!("{input}.modified"),

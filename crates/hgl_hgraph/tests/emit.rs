@@ -5541,7 +5541,8 @@ const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
 /// of the one the result designates, and the node returns before its
 /// handlers where no active input of its own woke it. No validity is the
 /// whole node's, so a re-binding to an endpoint that is not valid is
-/// followed too: each handler asks its own.
+/// followed too: each handler asks its own. What an evaluation writes is
+/// published as it ends.
 #[test]
 fn a_designation_follows_a_re_binding_upstream() {
     let emitted = emit_clean(&[REFS_WAVE3]);
@@ -5565,6 +5566,13 @@ fn a_designation_follows_a_re_binding_upstream() {
         // active.
         "    if not (((once.modified or once.invalidated) and once.active) or \
          ((data.modified or data.invalidated) and data.active) or "
+            .to_string(),
+        // TIME-10: "A designation published again unchanged is no tick":
+        // the writes of an evaluation are kept, and what the node returns
+        // is compared with what the result held before it.
+        "        _designation.designate(\"_ref_a\")\n\
+         \x20       _designation.designate(\"_ref_b\")\n\
+         \x20   return _designation.published()\n"
             .to_string(),
     ]);
 }

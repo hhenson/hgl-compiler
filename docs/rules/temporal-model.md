@@ -168,6 +168,6 @@ analyser: done
 transpiler: partial
 
 - hgraph: a `ref` parameter, a `REF` input, ticks when the reference it is given changes, and not when its target publishes; an ordinary input bound to a `ref` result, a lifted one's and a `signal` among them, follows the target and samples it when re-pointed
-- A designation published again unchanged is no tick: a node does not publish the reference its result holds (`_core.designation`, `_core.designate`)
+- A designation published again unchanged is no tick: a node publishes its result where it designates what it did not before the evaluation, so writes that end where they began are none (`_core.Designation`)
 - Proposed, and as hgraph has it: a `ref` parameter's `valid` is true where it designates something, `modified` where its designation changed, and `last_modified` is when it last did, each the `REF`'s own
 - Left: a route kept to a removed child

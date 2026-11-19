@@ -151,7 +151,8 @@ impl Emitter<'_> {
             });
         // TIME-10: "A designation published again unchanged is no tick":
         // a `ref` result is published where it designates what it did not
-        // (`_core.designation`), which it reads from `_output`.
+        // before the evaluation (`_core.Designation`), which it reads
+        // from `_output`.
         let has_out = has_out || signature.reference;
         let output = has_out.then(|| {
             let annotation = match &result {

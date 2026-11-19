@@ -1168,6 +1168,18 @@ def _bound(port):
     return port.value if port.valid else None
 
 
+def _same_designation(left, right):
+    """Whether two designations (`_bound`) are one: both nothing, or the
+    same reference."""
+    if left is None or right is None:
+        return left is None and right is None
+    return left == right
+
+
+# What a designation is before any write of an evaluation.
+_UNCHANGED = object()
+
+
 class Designation:
     """What a node's `ref` result, `output`, designates through one of
     its evaluations (the language's FN-16, TIME-10; core's END-10).
@@ -1175,49 +1187,50 @@ class Designation:
     FN-16: "The result designates the logical endpoint that path names:
     its readers follow what that endpoint is bound to, a later re-binding
     upstream included, and the node is not woken for it." `ports` has
-    each endpoint the node designates by name: the hidden `REF` input it
-    is given for it, which is active whatever the node's own activity
-    is. `state`, the node's `STATE`, keeps which one the result
-    designates, `_designates`: where that endpoint is re-bound, its
-    `REF` ticks, and the result designates what it is bound to now, the
-    node's handlers not entered for it (the generated node returns
+    each endpoint the node designates by name: the `REF` input it is
+    read through, a hidden one where the node may not be woken by the
+    endpoint's own. `state`, the node's `STATE`, keeps which one the
+    result designates, `_designates`: where that endpoint is re-bound,
+    its `REF` ticks, and the result designates what it is bound to now,
+    the node's handlers not entered for it (the generated node returns
     first).
 
     TIME-10: "A designation published again unchanged is no tick", and
-    END-10: "A publication of the designation it holds is no tick".
-    hgraph's reference output would tick for it, and a `ref` parameter
-    given it would be modified.
+    END-10: "A publication of the designation it holds is no tick". The
+    writes of an evaluation are kept here, and `published` gives what
+    the node returns once it ends: the designation where it is not what
+    the result held before the evaluation, and nothing otherwise, so
+    `out = a; out = b` while it holds `b` is no tick. hgraph's reference
+    output would tick for each write, and a `ref` parameter given it
+    would be modified.
     """
 
-    __slots__ = ("_output", "_state", "_ports", "_key")
+    __slots__ = ("_output", "_state", "_ports", "_held", "_pending", "_key")
 
     def __init__(self, output, state, ports):
         self._output = output
         self._state = state
         self._ports = ports
+        # What the result designated before this evaluation.
+        self._held = output.value if output.valid else None
         self._key = getattr(state, "_designates", None)
+        self._pending = _UNCHANGED
         if self._key is not None:
             port = self._port(self._key)
             if port.modified:
-                self._write(_bound(port))
+                self._pending = _bound(port)
 
     def _port(self, key):
-        """The hidden `REF` input of `key`: an endpoint's name, and the
-        position of a fixed list's where it is one."""
+        """The `REF` input of `key`: an endpoint's name, and the position
+        of a fixed list's where it is one."""
         port = self._ports[key[0]]
         return position_of(port, key[1]) if len(key) > 1 else port
-
-    def _write(self, reference):
-        if reference is not None and not (
-            self._output.valid and self._output.value == reference
-        ):
-            self._output.value = reference
 
     def designate(self, *key):
         """`out = items[idx]` (FN-16, proposed): the result designates the
         endpoint `key` names (`_port`)."""
+        self._pending = _bound(self._port(key))
         self._key = key
-        self._write(_bound(self._port(key)))
 
     def returned(self, *key):
         """`return items[idx]`: designates `key`, and gives what the node
@@ -1227,14 +1240,49 @@ class Designation:
 
     def invalidate(self):
         """`invalidate(out)`: the result designates nothing."""
+        self._pending = None
         self._key = None
-        self._output.invalidate()
+
+    def _now(self):
+        return self._held if self._pending is _UNCHANGED else self._pending
+
+    @property
+    def valid(self):
+        """`valid(out)` (FN-16 and TIME-10, proposed): that it designates
+        something."""
+        return self._now() is not None
+
+    @property
+    def modified(self):
+        """`modified(out)` (FN-16 and TIME-10, proposed): that its
+        designation changed in this evaluation."""
+        return self._pending is not _UNCHANGED and not _same_designation(
+            self._pending, self._held
+        )
+
+    @property
+    def last_modified(self):
+        """`last_modified(out)` (FN-16 and TIME-10, proposed): when its
+        designation last changed, and null where it designates nothing
+        (END-6)."""
+        if not self.valid:
+            return None
+        if self.modified:
+            return self._output.owning_graph.evaluation_clock.evaluation_time
+        return self._output.last_modified_time
 
     def published(self):
-        """What the node returns as it ends its evaluation: nothing, what
-        it designates is written to its output where it changes."""
+        """What the node returns as it ends its evaluation: the
+        designation where it changed, `None` where it did not. Where it
+        designates nothing the output is invalidated here."""
         self._state._designates = self._key
-        return None
+        pending = self._pending
+        if pending is _UNCHANGED or _same_designation(pending, self._held):
+            return None
+        if pending is None:
+            self._output.invalidate()
+            return None
+        return pending
 
 
 def checked_child(port, read):

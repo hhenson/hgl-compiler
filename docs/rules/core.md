@@ -427,7 +427,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included (the provider's `Designation`, through an active `REF` input), and the node is not woken by that endpoint's ticks; a designation the result holds already is not published again
+- hgraph: a `ref` parameter is a `REF` input, modified where its designation changes; a reader of a `ref` result follows what it designates, a re-binding upstream included (the provider's `Designation`, through an active `REF` input), and the node is not woken by that endpoint's ticks; a designation the result held before the evaluation is not published again, after any number of writes
 - Proposed, and as hgraph has it: `modified`, `valid` and `last_modified` of a `ref` parameter ask of its designation
 - Left, reported: what FN-16's entry lists
 
