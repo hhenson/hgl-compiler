@@ -1,0 +1,56 @@
+module m
+struct Full {
+    prices: rolling_window<f64, 3>
+    last: f64
+}
+struct Book {
+    prices: rolling_window<f64, 3, 1>
+    last: f64
+}
+fn full(book: Full) -> f64 {
+    when valid(book.last) { return book.last }
+}
+fn timed(slots: list<rolling_window<f64, 5s, 0s>, 2>) -> bool {
+    when { return valid(slots) }
+}
+fn keyed(prices: dict<str, rolling_window<f64, 3>>) -> bool {
+    when { return valid(prices) }
+}
+fn own(price: f64) -> Full {
+    inject out
+    when {
+        if valid(out) { return }
+        out = delta<Full>(last: price)
+    }
+}
+fn whole(book: Book) -> Book {
+    when { return book }
+}
+fn bound(book: Book) -> f64 {
+    when {
+        let copy = book
+        return copy.last
+    }
+}
+fn field(book: Book) -> bool {
+    when valid(book.prices) {
+        let prices = book.prices
+        return true
+    }
+}
+fn entries(prices: dict<str, rolling_window<f64, 3, 1>>) -> bool {
+    when {
+        let all = prices
+        return true
+    }
+}
+fn first(pair: tuple<rolling_window<f64, 3, 1>, f64>) -> bool {
+    when valid(pair[0]) {
+        let window = pair[0]
+        return true
+    }
+}
+fn cleared(price: f64) -> Book {
+    inject out
+    when { invalidate(out) }
+}

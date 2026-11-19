@@ -1,0 +1,27 @@
+module demo.timed
+fn pass(value: i64) -> i64 {
+    when { return value }
+}
+fn beats(const every: duration) -> i64 {
+    cache count: i64 = 0
+    while {
+        count += 1
+        yield every: count
+    }
+}
+const later: datetime = earliest_start + 5us
+const fn first(seen: list<tuple<datetime, i64>>) -> datetime => seen[0][0]
+test timed_traces {
+    # A duration from the run's start: an input, and what is expected.
+    assert eval(pass(value: [0s: 1, 2s: 2])) == [0s: 1, 2s: 2]
+    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1, 3s: 2]
+    assert eval(pass(value: [0s: 1, 2s: 2])) != [0s: 1]
+    # What a source publishes each second, for four seconds.
+    assert eval(beats(every: 1s), RunConfig(length: 4s)) == [1s: 1, 2s: 2, 3s: 3]
+    # An instant: it is replayed then, wherever the run starts.
+    assert eval(pass(value: [later: 7])) == [later: 7]
+    assert first(eval(pass(value: [later: 7]))) == later
+    # A duration is counted from the start the run has.
+    assert eval(pass(value: [1us: 7]), RunConfig(start: later)) == [1us: 7]
+    assert first(eval(pass(value: [1us: 7]), RunConfig(start: later))) == later + 1us
+}

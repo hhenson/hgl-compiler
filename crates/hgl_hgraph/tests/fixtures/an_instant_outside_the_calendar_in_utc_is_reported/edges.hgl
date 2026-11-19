@@ -1,0 +1,9 @@
+module edges
+test late { let at = @9999-12-31T23:00-01:00 }
+test early { let at = @0001-01-01T00:59+01:00 }
+test zoned { let at = @9999-12-31T23:30-01:00[Etc/GMT+1] }
+test inside {
+    let late = @9999-12-31T22:59-01:00
+    let early = @0001-01-01T01:00+01:00
+    let east = @9999-12-31T23:59+01:00
+}

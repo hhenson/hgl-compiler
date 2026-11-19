@@ -1,0 +1,31 @@
+module demo.instants
+const opened: datetime = @2026-09-03T09:30:00Z
+const fn later(at: datetime, by: duration) -> datetime => at + by
+const fn earlier(at: datetime, by: duration) -> datetime => at - by
+const fn between(first: datetime, second: datetime) -> duration => second - first
+const fn on(day: date, at: time) -> civil_datetime => day + at
+const fn days(first: date, second: date) -> duration => second - first
+const fn after(day: date, by: duration) -> civil_datetime => day + by
+const fn before(day: date, by: duration) -> civil_datetime => day - by
+fn shifted(at: datetime, by: duration) -> datetime => at + by
+test instants_are_values_and_ticks {
+    assert later(opened, 30m) == @2026-09-03T10:00:00Z
+    assert earlier(opened, 1d) == @2026-09-02T09:30:00Z
+    assert between(opened, @2026-09-03T10:00:00Z) == 30m
+    # LEX-11: an instant written east of UTC is that far before what
+    # its date and time say.
+    assert @2026-09-03T10:30:00+01:00 == opened
+    assert on(@2026-09-03, @09:30) == @2026-09-03T09:30
+    assert days(@2026-09-01, @2026-09-03) == 2d
+    # OPS-10: a date and a duration give the civil datetime that far
+    # from the start of the date, in either order.
+    assert after(@2026-09-03, 2d) == @2026-09-05T00:00
+    assert after(@2026-09-03, 36h) == @2026-09-04T12:00
+    assert 36h + @2026-09-03 == @2026-09-04T12:00
+    assert before(@2026-09-03, 1h) == @2026-09-02T23:00
+    assert raises("numeric.out_of_range") { after(@9999-12-31, 1d) }
+    # Core's named times (its CRUN-3) are constants of these types.
+    assert earliest_start == never + smallest_step
+    assert latest_end == forever - smallest_step
+    assert eval(shifted(at: [opened], by: [1h])) == [@2026-09-03T10:30:00Z]
+}

@@ -1,0 +1,24 @@
+module demo.configured
+use demo.left as l
+use demo.right as r
+
+const fn pick() -> i64 => 100
+
+const fn chosen(fallback: i64?) -> i64 {
+    if fallback == null { return l::pick() }
+    return r::pick() + pick()
+}
+
+fn kept(value: i64, const first: i64) -> i64 {
+    state last: i64 = first
+    when {
+        let before = last
+        last = value
+        return before + chosen()
+    }
+}
+
+test keeps {
+    assert eval(kept(value: [5, 6], first: 9)) == [10, 6]
+    assert chosen(1) == 102
+}
