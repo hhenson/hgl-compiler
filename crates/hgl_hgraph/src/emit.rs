@@ -1764,6 +1764,14 @@ impl Emitter<'_> {
             self.hgraph = true;
             return Some(format!("_hg.TSD[{key}, {child}]"));
         }
+        if let Type::RollingWindow {
+            value,
+            maximum,
+            minimum,
+        } = ty
+        {
+            return self.window_annotation(ty, value, (maximum, minimum.as_ref()), temporal, at);
+        }
         // A list, a tuple or a dictionary that is a node's configuration
         // is given to hgraph inside an object it keeps as it is
         // (`held`): to hgraph it is an object.
@@ -1922,6 +1930,86 @@ impl Emitter<'_> {
         }
     }
 
+    /// The annotation of the window `ty`, of `value`, with its maximum
+    /// and its minimum, `None` where none is written.
+    ///
+    /// TYPE-11: "`rolling_window<V, Max, Min>` is a rolling window of V.
+    /// Its maximum and minimum have one constant kind: tick count or
+    /// duration ... Omitted minimum equals maximum". It is hgraph's
+    /// `TSW`, whose sizes are a count of ticks or a `timedelta`, and
+    /// which takes one size as both its maximum and its minimum, as
+    /// TYPE-11 does. TYPE-16: a window's delta is "V: the value that
+    /// arrived", and a tick of a `TSW` is one value added to it.
+    ///
+    /// hgraph's window holds values that are scalars to it, so V is a
+    /// scalar or an enum here. A window of a nullable, of a struct and
+    /// of a collection is reported, and so is a size not known as the
+    /// module is written: one that names a generic parameter.
+    fn window_annotation(
+        &mut self,
+        ty: &Type,
+        value: &Type,
+        (maximum, minimum): (&Constant, Option<&Constant>),
+        temporal: bool,
+        at: Location,
+    ) -> Option<String> {
+        // TYPE-12: a window is no ordinary value, so it is only ever a
+        // temporal one.
+        if !temporal || !publishes_whole(value) || is_nullable(value) {
+            self.unsupported(at, &format!("the type `{ty}`"));
+            return None;
+        }
+        let value = self.annotation(value, false, at)?;
+        let mut sizes = Vec::new();
+        for size in std::iter::once(maximum).chain(minimum) {
+            let written = match &size.value {
+                ConstantValue::Int(ticks) => ticks.to_string(),
+                ConstantValue::Duration(microseconds) => {
+                    self.datetime = true;
+                    format!("_dt.timedelta(microseconds={microseconds})")
+                }
+                _ => {
+                    self.unsupported(at, &format!("the type `{ty}`"));
+                    return None;
+                }
+            };
+            sizes.push(format!("_hg.WindowSize[{written}]"));
+        }
+        self.hgraph = true;
+        Some(format!("_hg.TSW[{value}, {}]", sizes.join(", ")))
+    }
+
+    /// True where a node may read `ty`, a window, as an input or as its
+    /// own `out`; otherwise reported at `at`.
+    ///
+    /// FN-12: "Fixed-size lists and windows retain their own
+    /// shape/readiness contracts", and TYPE-11: "window publications
+    /// obey core's contract". Core has no such contract yet: it does
+    /// not say whether a window is valid before it holds its minimum,
+    /// how a duration is held, or whether a value leaves a window of a
+    /// duration as time passes with none arriving. Only a window of
+    /// ticks whose minimum is one tick is the same under every reading:
+    /// it is valid from the first value that arrives, and a value
+    /// leaves it only as another arrives, as hgraph's `TSW` has it.
+    fn readable_window(&mut self, ty: &Type, at: Location) -> bool {
+        let Type::RollingWindow {
+            maximum, minimum, ..
+        } = ty
+        else {
+            return true;
+        };
+        // "Omitted minimum equals maximum."
+        let minimum = minimum.as_ref().unwrap_or(maximum);
+        if matches!(minimum.value, ConstantValue::Int(1)) {
+            return true;
+        }
+        self.unsupported(
+            at,
+            &format!("the readiness of `{ty}`, which core leaves undefined,"),
+        );
+        false
+    }
+
     /// The annotation of the struct `ty`, declared at `(module,
     /// declaration)` with `arguments`: its class as a value, and as a
     /// temporal value hgraph's bundle, `TSB`.
@@ -2001,6 +2089,17 @@ impl Emitter<'_> {
         (parameters, result)
     }
 
+    /// Reports each window input of a node or a source whose readiness
+    /// is not known (`readable_window`): the node reads it, if only by
+    /// requiring it valid (TIME-3). A graph only wires one.
+    fn window_inputs(&mut self, signature: &Signature) {
+        for parameter in &signature.parameters {
+            if !parameter.constant {
+                self.readable_window(&parameter.ty, parameter.at);
+            }
+        }
+    }
+
     /// A node: `@compute_node`, or `@sink_node` where it has no result.
     ///
     /// TIME-3: "In a `when` header, `modified()` subscribes to all
@@ -2034,6 +2133,7 @@ impl Emitter<'_> {
             copies: Copies::of(self.program, body),
         };
         let (mut parameters, result) = self.temporal_signature(declaration, signature);
+        self.window_inputs(signature);
         // The `const` parameters, as written for the node: a `start`
         // and a `stop` are functions of their own to hgraph, and are
         // given the configuration they may read by naming it.
@@ -2127,11 +2227,12 @@ impl Emitter<'_> {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
             // `TSB_OUT[...]` for a struct's bundle, `TSL_OUT` for a
-            // list's and `TSD_OUT` for a dictionary's. Only the
-            // outermost is renamed: a child stays as it is.
+            // list's and `TSD_OUT` for a dictionary's, `TSW_OUT` for a
+            // window's. Only the outermost is renamed: a child stays as
+            // it is.
             let annotation = match &result {
                 Some(result) => {
-                    let kind = ["TSS", "TSB", "TSL", "TSD"]
+                    let kind = ["TSS", "TSB", "TSL", "TSD", "TSW"]
                         .into_iter()
                         .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
                         .unwrap_or("TS");
@@ -2556,6 +2657,7 @@ impl Emitter<'_> {
         let program = self.program;
         let declaration = &program.modules[self.module].declarations[index];
         let (parameters, result) = self.temporal_signature(declaration, signature);
+        self.window_inputs(signature);
         // What the body is made of: the declarations, the hooks, and
         // the statements that yield.
         let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
@@ -4827,9 +4929,20 @@ impl Emitter<'_> {
             } => format!("{}()", self.function_name(*module, *declaration)),
             ExprKind::Local(local) => {
                 let read = self.place(function, *local);
+                // TYPE-12: a window is no ordinary value, and core has
+                // no operation that reads what one holds: its values,
+                // or how many. Only its endpoint is read (TIME-9).
+                let window = matches!(function.locals[*local].ty, Type::RollingWindow { .. })
+                    && (Self::is_input(function, *local) || Self::is_out(function, *local));
                 // In a hook a temporal input is read through its
                 // payload: in a `when`, and in `stop` (TIME-5).
-                if matches!(function.mode, Mode::Node | Mode::Stop)
+                if window && matches!(function.mode, Mode::Node | Mode::Stop) {
+                    self.unsupported(
+                        value.at,
+                        "what a window holds, which no core operation reads,",
+                    );
+                    "None".to_string()
+                } else if matches!(function.mode, Mode::Node | Mode::Stop)
                     && Self::is_input(function, *local)
                 {
                     self.port_value(&function.locals[*local].ty, &read)
@@ -4884,6 +4997,19 @@ impl Emitter<'_> {
                 } else {
                     name(&endpoint.name)
                 };
+                // A window's endpoint: an input's readiness is asked of
+                // its parameter (`window_inputs`), and `out`'s here.
+                // hgraph's `TSW` keeps what it holds when it is
+                // invalidated, where END-4 has "Invalidation clears
+                // validity, modification, payload, and delta".
+                if matches!(endpoint.ty, Type::RollingWindow { .. }) {
+                    if endpoint.kind == LocalKind::Inject {
+                        self.readable_window(&endpoint.ty, value.at);
+                    }
+                    if matches!(operation, EndpointOperation::Invalidate) {
+                        self.unsupported(value.at, "the invalidation of a window");
+                    }
+                }
                 match operation {
                     // TIME-9, END-7: "`valid` of a collection is true where any
                     // element, field or entry is valid", as hgraph's
