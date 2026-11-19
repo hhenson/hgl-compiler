@@ -3232,8 +3232,10 @@ const STRUCT_FAILS: &str = concat!(
 /// any depth: a field, `point.x = 1`".
 ///
 /// A struct is a class the provider makes, written before the
-/// functions of its module. Its values are never changed: an
-/// assignment to a field gives the place's root a new value.
+/// functions of its module. By the owner's rule (the compiler's issue
+/// 151), a struct of at most two scalar fields is a value: an
+/// assignment to a field gives the place a new one. Any other that a
+/// place holds is changed where it is, and what took it took a copy.
 ///
 /// TYPE-3: "Generic applications are invariant by origin and complete
 /// canonical arguments": a `Tagged<i64>` and a `Tagged<f64>` are of
@@ -3243,7 +3245,7 @@ const STRUCT_FAILS: &str = concat!(
 /// NUM-5 holds inside a value: a struct, a list, a tuple, or a
 /// dictionary that holds a NaN is not equal to itself."
 #[test]
-fn a_struct_is_a_class_whose_values_are_never_changed() {
+fn a_struct_is_a_class_and_a_value_of_two_scalars_is_never_changed() {
     let emitted = emit(&STRUCTS);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_structs/__init__.py");
@@ -3253,9 +3255,13 @@ fn a_struct_is_a_class_whose_values_are_never_changed() {
         // has a `_` after it.
         "Base = _core.struct(\"Base\", (\"id\", \"held\", \"rate\"))\n",
         "Order = _core.struct(\"Order\", (\"id\", \"held\", \"rate\", \"side\", \"note\"))\n",
-        "Point = _core.struct(\"Point\", (\"x\", \"y\"))\n",
+        // A struct of at most two scalar fields is a value.
+        "Point = _core.struct(\"Point\", (\"x\", \"y\"), by_value=True)\n",
         "Line = _core.struct(\"Line\", (\"start\", \"end\", \"class_\"))\n",
-        "Empty = _core.struct(\"Empty\", ())\n",
+        "Empty = _core.struct(\"Empty\", (), by_value=True)\n",
+        // A struct another inherits from, and a generic one, are not.
+        "Shape = _core.struct(\"Shape\", ())\n",
+        "Box = _core.struct(\"Box\", (\"value\", \"count\"))\n",
         // A field left out has its default: the struct's own `id = 7`
         // for the parent's field, the parent's for `rate`, and null
         // for an optional field with none.
@@ -3267,13 +3273,20 @@ fn a_struct_is_a_class_whose_values_are_never_changed() {
         "    point = Point(y=2.0, x=1.0)\n",
         "    line = Line(start=origin(), end=Point(x=1.0, y=0.0), class_=3)\n",
         "def held(base):\n    return base.held\n",
-        // An assignment to a field, and to a field of a field.
+        // An assignment to a field of a value: a new one, and the
+        // value given as it is.
+        "    next = point\n",
         "    next = _core.with_field(next, x=_core.add__f64_f64(lhs=next.x, rhs=by))\n",
+        // A struct of three fields is copied where a place takes it,
+        // and changed where it is: a field of it, and a field of a
+        // field, a `Point` that is given a new value.
+        "    next = _core.copied(line)\n",
         concat!(
-            "    next = _core.with_field(next, end=_core.with_field(next.end, ",
-            "x=_core.add__f64_f64(lhs=next.end.x, rhs=by)))\n",
+            "    next = _core.set_at(next, ((\"f\", \"end\"), (\"f\", \"x\"),), ",
+            "lambda: _core.add__f64_f64(lhs=next.end.x, rhs=by))\n",
         ),
-        "    next = _core.with_field(next, class_=4)\n",
+        "    next = _core.set_field(next, \"class_\", 4)\n",
+        "    return next\n",
         // A candidate of an operator on a struct.
         "def _impl_add__Point_Point(lhs, rhs):\n",
         // A generic struct is made of the class for its arguments.
@@ -3285,9 +3298,10 @@ fn a_struct_is_a_class_whose_values_are_never_changed() {
         "_core.applied(Tagged, \"list<f64>\")(tag=[odd.x])",
         // A `state` that is a struct.
         "    _state.at = Point(x=0.0, y=0.0)\n",
+        "    _state.at = _core.with_field(_state.at, x=_core.add__f64_f64(lhs=_state.at.x, rhs=step.value))\n",
         concat!(
-            "    _state.seen = _core.with_field(_state.seen, ",
-            "count=_core.add__i64_i64(lhs=_state.seen.count, rhs=1))\n",
+            "    _state.seen = _core.set_field(_state.seen, \"count\", ",
+            "_core.add__i64_i64(lhs=_state.seen.count, rhs=1))\n",
         ),
     ] {
         assert!(
@@ -4408,39 +4422,53 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_places/__init__.py");
     for expected in [
+        // FN-15: "A function that fails leaves the place holding what
+        // its parameter held when it failed": what fails is given
+        // back in the result's place, with what each parameter holds.
         concat!(
             "def bump(count, by):\n",
-            "    count = _core.add__i64_i64(lhs=count, rhs=by)\n",
-            "    return (None, count)\n",
+            "    try:\n",
+            "        count = _core.add__i64_i64(lhs=count, rhs=by)\n",
+            "        return (None, count)\n",
+            "    except _py.Exception as _failed:\n",
+            "        return (_core.Failed(_failed), count)\n",
         ),
         concat!(
             "def take(count):\n",
-            "    before = count\n",
-            "    count = 0\n",
-            "    return (before, count)\n",
+            "    try:\n",
+            "        before = count\n",
+            "        count = 0\n",
+            "        return (before, count)\n",
         ),
         "    return (None, left, right)\n",
+        "        return (_core.Failed(_failed), left, right)\n",
         concat!(
             "def early(count, halt):\n",
-            "    if halt:\n",
-            "        return (_core.neg__i64(value=1), count)\n",
+            "    try:\n",
+            "        if halt:\n",
+            "            return (_core.neg__i64(value=1), count)\n",
         ),
-        // The call, and then the place.
+        // The call, then the place, and then what failed raised again.
         concat!(
             "        _given = bump(count=sum, by=value)\n",
             "        sum = _given[1]\n",
+            "        _core.raise_if_failed(_given[0])\n",
         ),
         // A `var` parameter given on is a place of this function.
         concat!(
             "def through(count):\n",
-            "    _given = bump(count=count, by=1)\n",
-            "    count = _given[1]\n",
-            "    return (None, count)\n",
+            "    try:\n",
+            "        _given = bump(count=count, by=1)\n",
+            "        count = _given[1]\n",
+            "        _core.raise_if_failed(_given[0])\n",
+            "        return (None, count)\n",
         ),
-        // A place inside a value: its root is given a new value.
+        // A place inside a value: a field of a struct that is no value
+        // is assigned where the struct is.
         concat!(
             "    _given = set_first(items=book.orders, value=5)\n",
-            "    book = _core.with_field(book, orders=_given[1])\n",
+            "    book = _core.set_field(book, \"orders\", _given[1])\n",
+            "    _core.raise_if_failed(_given[0])\n",
             "    _given = bump(count=_core.item(book.orders, 1), by=3)\n",
             "    book = _core.set_at(book, ((\"f\", \"orders\"), (\"i\", 1),), lambda: _given[1])\n",
         ),
@@ -4448,6 +4476,7 @@ fn a_call_assigns_the_places_its_var_parameters_are_given() {
         concat!(
             "    _given = take(count=held)\n",
             "    held = _given[1]\n",
+            "    _core.raise_if_failed(_given[0])\n",
             "    was = _given[0]\n",
         ),
         concat!(
@@ -4879,8 +4908,8 @@ const INSIDE: &str = concat!(
     "    let taken = orders_of(book)\n",
     "    append(book.orders, 4)\n",
     "    assert taken == [1, 2, 3]\n",
-    // A field that is no collection: the struct is made anew, and its
-    // collections are still its own.
+    // A field that is no collection: the struct, of three fields, is
+    // changed where it is, and its collections are still its own.
     "    book.name = \"b\"\n",
     "    append(book.orders, 5)\n",
     "    assert book.orders == [1, 2, 3, 4, 5]\n",
@@ -4947,8 +4976,9 @@ fn a_collection_inside_a_value_is_changed_where_it_is() {
         // A loop whose body changes nothing of what it runs over reads
         // each entry where it is.
         "    for row in rows:\n",
-        // A field that is no collection: a new struct.
-        "    book = _core.with_field(book, name=\"b\")\n",
+        // A field that is no collection, of a struct that is no value:
+        // the struct is changed where it is.
+        "    book = _core.set_field(book, \"name\", \"b\")\n",
     ] {
         assert!(
             python.contains(expected),
@@ -4997,8 +5027,8 @@ const PUSHES: &str = concat!(
 /// to says which of its arguments are places." A candidate with a `var`
 /// parameter is written as a function with one is: it returns its
 /// result and then what each holds, and the call assigns the places. A
-/// place's own list is given as it is, and put back where the call
-/// fails.
+/// place's own list is given as it is, and what the call did to it
+/// stays where the call fails.
 #[test]
 fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
     let emitted = emit(&[("pushes.hgl", PUSHES)]);
@@ -5007,9 +5037,10 @@ fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
     for expected in [
         concat!(
             "def _impl_push_list_i64__i64(values, item):\n",
-            "    _given = _core.fn_append(values=values, item=item)\n",
-            "    values = _given[1]\n",
-            "    return (None, values)\n",
+            "    try:\n",
+            "        _given = _core.fn_append(values=values, item=item)\n",
+            "        values = _given[1]\n",
+            "        return (None, values)\n",
         ),
         // The list's candidate is given the place's own list.
         concat!(
@@ -5021,10 +5052,12 @@ fn a_candidate_that_takes_a_place_is_called_as_a_function_that_does() {
             "    _given = _impl_push_dict_str__i64__str(values=seen, item=\"a\")\n",
             "    seen = _given[1]\n",
         ),
-        // A place inside a value.
+        // A place inside a value: a struct of a list is no value, and
+        // is changed where it is.
         concat!(
             "    _given = _impl_push_list_i64__i64(values=book.orders, item=2)\n",
-            "    book = _core.with_field(book, orders=_given[1])\n",
+            "    book = _core.set_field(book, \"orders\", _given[1])\n",
+            "    _core.raise_if_failed(_given[0])\n",
         ),
     ] {
         assert!(
@@ -5464,7 +5497,7 @@ fn a_list_is_changed_where_it_is_and_copied_where_it_is_kept() {
         "    return out\n",
         // A `var` parameter is the place itself, and what the function
         // keeps in it is a copy.
-        "def keep(slot, value):\n    slot = _core.copied(value)\n",
+        "def keep(slot, value):\n    try:\n        slot = _core.copied(value)\n",
         concat!(
             "    _given = keep(slot=slot, value=source)\n",
             "    slot = _given[1]\n",
@@ -6038,6 +6071,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
     files.push(("copies.hgl", COPIES));
+    files.push(("copy_points.hgl", COPY_POINTS));
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
@@ -6231,6 +6265,109 @@ fn a_copy_is_made_where_a_reference_is_kept_or_outlives_a_change() {
         // and given again.
         "    _given = push_all(items=rows, more=_core.copied(rows))\n",
         "    _given = both(left=twice, right=_core.copied(twice))\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// The owner's rule for a struct, FN-15's failure, and FN-13's stable
+/// arguments and retained results: what no copy is made for, and what
+/// one is. The fixture's tests, run on hgraph, show that nothing that
+/// took a value sees a later change of it.
+const COPY_POINTS: &str = include_str!("fixtures/copy_points.hgl");
+
+/// "The copy by value exception is for trivial structures (think
+/// sizeof(i64))": a struct of at most two scalar fields is a value,
+/// copied and never changed. Any other is changed where it is (EXPR-3:
+/// "An assignment may name a place inside a value, at any depth"), and
+/// copied at the points a list is: "the value is passed to a function
+/// and the function also recieves a var reference to the item or items
+/// it contains", "let assignment", and where it is kept.
+///
+/// FN-15: "A function that fails leaves the place holding what its
+/// parameter held when it failed: no change it had made is undone."
+/// FN-13: "Each invocation observes a stable ordinary argument value
+/// ... Retained results must remain independent of later temporal
+/// changes."
+#[test]
+fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
+    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_copy_points/__init__.py");
+    for expected in [
+        // A struct of two scalars is a value; one of three, one with a
+        // `str`, one another inherits from, and one of structs are not.
+        "Point = _core.struct(\"Point\", (\"x\", \"y\"), by_value=True)\n",
+        "Small = _core.struct(\"Small\", (\"size\",), by_value=True)\n",
+        "Ticket = _core.struct(\"Ticket\", (\"id\", \"size\", \"price\"))\n",
+        "Key = _core.struct(\"Key\", (\"name\", \"side\"))\n",
+        "Sized = _core.struct(\"Sized\", (\"size\",))\n",
+        "Book = _core.struct(\"Book\", (\"best\", \"name\", \"at\"))\n",
+        // No copy: a change of a field, at any depth, is made where the
+        // struct is, and a value on the way is given a new one.
+        "    mine = _core.set_field(mine, \"size\", 2)\n",
+        "    book = _core.set_at(book, ((\"f\", \"best\"), (\"f\", \"size\"),), lambda: 5)\n",
+        "    book = _core.set_at(book, ((\"f\", \"at\"), (\"f\", \"x\"),), lambda: 1)\n",
+        "    tickets = _core.set_at(tickets, ((\"i\", 1), (\"f\", \"size\"),), lambda: 8)\n",
+        "    pair = _core.set_at(pair, ((\"i\", 0), (\"f\", \"size\"),), lambda: 12)\n",
+        "        into = _core.set_field(into, \"size\", ",
+        "        _state.mine = _core.set_field(_state.mine, \"size\", ",
+        // No copy: a `let` whose place changes no more in its scope, a
+        // loop over what its body does not change, a value written out,
+        // a function's own result and its own `var`, and an argument of
+        // a call with no `var` reference to it.
+        "    read = mine\n",
+        "    for each in tickets:\n",
+        "    fourth = Ticket(id=4, size=4, price=4.0)\n",
+        "    third = grown(given=first, by=2)\n",
+        "    _given = _core.fn_append(values=tickets, item=ticket(size=3))\n",
+        "    return mine\n",
+        "    _given = absorb(into=mine, other=other)\n",
+        // No copy, and no change where it is: a value.
+        "    moved = at\n",
+        "    before = at\n",
+        "    moved = _core.with_field(moved, x=5)\n",
+        "    held = small\n",
+        "    _given = _core.fn_append(values=items, item=small)\n",
+        // A copy: a `let` and a loop whose place changes in its scope.
+        "    before = _core.copied(mine)\n",
+        "    best = _core.copied(book.best)\n",
+        "    for each in _core.copied(mine):\n",
+        // A copy: what a place keeps, assigned to it or into it, or put
+        // in it by a native function, a dictionary's key among them.
+        "    second = _core.copied(first)\n",
+        "    mine = _core.copied(given)\n",
+        "    tickets = _core.set_item(tickets, 0, _core.copied(first))\n",
+        "    _given = _core.fn_append(values=tickets, item=_core.copied(first))\n",
+        "    named = _core.set_entry(named, \"a\", _core.copied(first))\n",
+        "    book = _core.set_field(book, \"best\", _core.copied(first))\n",
+        "    pair = _core.copied((first, 1,))\n",
+        "    counts = _core.set_entry(counts, _core.copied(key), 1)\n",
+        // A copy: a result of what the function was given, and what is
+        // published of a `state`; a node's `var` of its configuration.
+        "def same(given):\n    return _core.copied(given)\n",
+        "            return _core.copied(_state.mine)\n",
+        "    mine = _core.copied(initial)\n",
+        // A copy: the owner's first case (FN-13's stable argument).
+        "    _given = absorb(into=mine, other=_core.copied(mine))\n",
+        // FN-15: what fails is given back beside what the parameter
+        // holds, the place is assigned, and it is raised again.
+        concat!(
+            "    except _py.Exception as _failed:\n",
+            "        return (_core.Failed(_failed), count)\n",
+        ),
+        concat!(
+            "        _given = bump_then_fail(count=count, zero=0)\n",
+            "        count = _given[1]\n",
+            "        _core.raise_if_failed(_given[0])\n",
+        ),
+        concat!(
+            "        book = _core.set_at(book, ((\"f\", \"best\"), (\"f\", \"size\"),), lambda: _given[1])\n",
+            "        _core.raise_if_failed(_given[0])\n",
+        ),
     ] {
         assert!(
             python.contains(expected),

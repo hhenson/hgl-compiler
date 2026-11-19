@@ -29,8 +29,10 @@ otherwise.
 A `result` is an `Ok` or an `Err`, and an `error` an `Error`: the values
 the language's `ok`, `err` and `error` make (ERR-2, ERR-4).
 
-A struct is a class `struct` makes: a value that is never changed, so
-that one held in two places is as good as a copy in each (TYPE-5).
+A struct is a class `struct` makes. One of at most two scalar fields is
+a value that is never changed, so that one held in two places is as good
+as a copy in each; any other is changed where its place holds it, and
+what keeps it elsewhere keeps a copy (TYPE-5, `copied`).
 """
 
 import calendar as _calendar
@@ -259,6 +261,28 @@ class Propagated(Exception):
         self.failure = failure
 
 
+class Failed:
+    """What a function with `var` parameters gives in its result's place
+    where it fails, beside what each of them held then: `error`, what
+    was raised. The language's FN-15: "A function that fails leaves the
+    place holding what its parameter held when it failed: no change it
+    had made is undone." The call assigns each place, and then raises
+    `error` again (`raise_if_failed`)."""
+
+    __slots__ = ("error",)
+
+    def __init__(self, error):
+        self.error = error
+
+
+def raise_if_failed(result):
+    """Raises again what a function with `var` parameters raised, where
+    `result`, what it gave in its result's place, says it failed
+    (`Failed`). The call has assigned its places by then."""
+    if type(result) is Failed:
+        raise result.error
+
+
 def propagated(result):
     """`result?` in a value function: the value of a success. A failure
     leaves the function, which returns it (ERR-5)."""
@@ -298,15 +322,22 @@ def member(enum, value):
         raise HglError(f"`{declared}` has no member {value!r}") from None
 
 
-def struct(name, fields):
+def struct(name, fields, by_value=False):
     """A struct of the program, as a class (TYPE-3: "Structs are
     nominal, with public ordered fields and no methods").
 
     `fields` is every field the struct has, its parents' first, each by
-    its Python name. A value is made with each field by name, and is
-    never changed after: "Retained results own their data; later
-    mutation of a source cannot change an earlier retained value"
-    (TYPE-5).
+    its Python name. A value is made with each field by name.
+
+    A struct that is `by_value`, the compiler's word for one of at most
+    two scalar fields (the owner's rule on the compiler's issue 151), is
+    never changed after it is made: a change of a field makes a new one
+    (`set_field`). A value of any other struct that a `var`, a `state`
+    or a `cache` holds is that place's own, and is changed where it is;
+    what keeps it elsewhere keeps a copy (`copied`): "Retained results
+    own their data; later mutation of a source cannot change an earlier
+    retained value" (TYPE-5). The class is frozen all the same, so that
+    nothing but `set_field` changes a value, and none that hgraph holds.
 
     Two are equal when they are of one struct, with the same generic
     arguments (see `applied`), and each field is equal. The fields are
@@ -330,8 +361,14 @@ def struct(name, fields):
         kw_only=True,
         eq=False,
         # `_hgl_fields` names the fields, for what looks inside a value
-        # (`copied`).
-        namespace={"__eq__": equal, "__hash__": hashed, "_hgl_fields": tuple(fields)},
+        # (`copied`), and `_hgl_by_value` says whether a value is ever
+        # changed where it is (`set_field`).
+        namespace={
+            "__eq__": equal,
+            "__hash__": hashed,
+            "_hgl_fields": tuple(fields),
+            "_hgl_by_value": by_value,
+        },
     )
 
 
@@ -358,15 +395,38 @@ def applied(struct, arguments):
 
 
 def with_field(value, /, **field):
-    """`place.field = new` (EXPR-3): the struct `value` with one field
-    another value. `value` itself is as it was, for whatever else holds
-    it; the compiler assigns what this gives to the place.
+    """`place.field = new` (EXPR-3) for a struct that is a value (see
+    `struct`), and for one that is no place's own: the struct `value`
+    with one field another value. `value` itself is as it was, for
+    whatever else holds it; the compiler assigns what this gives to the
+    place.
 
     `value` is taken by position only: a field may be named `value`.
     The new struct keeps the field's value, which the compiler gives it
     as a copy where something else holds it.
     """
     return _dataclasses.replace(value, **field)
+
+
+def set_field(value, field, new, /):
+    """`place.field = new` (EXPR-3) where the place is a field of the
+    struct a `var`, a `state` or a `cache` holds itself: the struct is
+    changed where it is, and keeps `new`, which the compiler gives as a
+    copy where something else holds it. What took the struct before
+    took a copy of it.
+
+    A struct that is a value (see `struct`) is not changed: it may be
+    held under the type of an abstract parent, which is changed where it
+    is, and other names may hold it. It is given a new one, as
+    `with_field` gives. The compiler assigns what this gives to the
+    place.
+    """
+    if type(value)._hgl_by_value:
+        return _dataclasses.replace(value, **{field: new})
+    # The class is frozen: `object.__setattr__` sets a field of it all
+    # the same, as the dataclass's own `__init__` does.
+    object.__setattr__(value, field, new)
+    return value
 
 
 # The bundle schema of each struct's class, made once (see `schema`).
@@ -744,36 +804,48 @@ _PLAIN = frozenset(
 
 
 def copied(value):
-    """A copy of `value` that shares no list and no dictionary with it.
+    """A copy of `value` that shares no list, no dictionary and no
+    struct that is changed where it is with it.
 
-    A `var`, a `state` and a `cache` change the list or the dictionary
-    they hold where it is, and Python's is one object that every name
-    of it sees change. So what is kept of a value that something else
-    holds is a copy of it, made where it is kept: the compiler says
-    where (the language's TYPE-5, "Retained results own their data;
-    later mutation of a source cannot change an earlier retained
-    value"). A struct, a tuple and a result are never changed, and are
-    made again only to hold the copies of what is inside them.
+    A `var`, a `state` and a `cache` change the list, the dictionary and
+    the struct that is no value (see `struct`) they hold where it is,
+    and Python's is one object that every name of it sees change. So
+    what is kept of a value that something else holds is a copy of it,
+    made where it is kept: the compiler says where (the language's
+    TYPE-5, "Retained results own their data; later mutation of a source
+    cannot change an earlier retained value"). A struct that is a value,
+    a tuple, a set and a result are never changed, and are made again
+    only to hold the copies of what is inside them; a dictionary's keys
+    and a set's members are copied as its values are, since a struct
+    may be one.
     """
     kind = type(value)
     if kind in _PLAIN:
         return value
     if kind is list:
         # One pass that Python makes itself tells whether any entry may
-        # hold a collection.
+        # hold what is changed where it is.
         if set(map(type, value)) <= _PLAIN:
             return value.copy()
         return [copied(part) for part in value]
     if kind is dict:
-        return {key: copied(part) for key, part in value.items()}
+        if set(map(type, value)) <= _PLAIN:
+            return {key: copied(part) for key, part in value.items()}
+        return {copied(key): copied(part) for key, part in value.items()}
     if kind is tuple:
         return tuple(copied(part) for part in value)
+    if kind is frozenset or kind is set:
+        if set(map(type, value)) <= _PLAIN:
+            return value
+        return kind(copied(part) for part in value)
     if kind is Ok:
         return Ok(copied(value.value))
     if kind is Err:
         return Err(copied(value.error))
     fields = getattr(kind, "_hgl_fields", None)
     if fields is not None:
+        if kind._hgl_by_value:
+            return value
         return kind(**{field: copied(getattr(value, field)) for field in fields})
     return value
 
@@ -782,10 +854,11 @@ def _changed(holder, steps, at, change):
     """What `holder` is to be once the value `steps[at:]` leads to inside
     it has been changed by `change`.
 
-    `holder` is held by its place, or by a collection that is. A list
-    and a dictionary on the way are changed where they are; a struct
-    and a tuple are never changed, and a new one is made where a part
-    of it has another value. A step that fails,
+    `holder` is held by its place, or by a value that is. A list, a
+    dictionary and a struct that is no value (see `struct`) on the way
+    are changed where they are; a struct that is a value and a tuple are
+    never changed, and a new one is made where a part of it has another
+    value (`set_field`). A step that fails,
     an index outside a list or a key a dictionary has not, fails before
     anything is changed.
     """
@@ -795,7 +868,7 @@ def _changed(holder, steps, at, change):
     if kind == "f":
         inner = getattr(holder, key)
         changed = _changed(inner, steps, at + 1, change)
-        return holder if changed is inner else _dataclasses.replace(holder, **{key: changed})
+        return holder if changed is inner else set_field(holder, key, changed)
     if kind == "k":
         if key not in holder:
             raise HglError(f"the dictionary has no key {key!r}", code="value.missing_key")
@@ -840,7 +913,8 @@ def set_at(root, steps, value, /):
     `steps` is the way in, each step its kind and what it names: `"f"`
     a struct's field, `"k"` a dictionary's key, and `"i"` a list's index
     or a tuple's position. The last step is the place assigned: "A key
-    the dictionary has not is added."
+    the dictionary has not is added." A struct on the way is changed
+    where it is, but for one that is a value (`set_field`).
 
     `value` gives the value when it is called. It is called once the
     way in has been read, so that a step that fails does so before the
@@ -855,7 +929,7 @@ def set_at(root, steps, value, /):
 
     def assign(holder):
         if kind == "f":
-            return _dataclasses.replace(holder, **{key: new})
+            return set_field(holder, key, new)
         if kind == "k":
             holder[key] = new
             return holder

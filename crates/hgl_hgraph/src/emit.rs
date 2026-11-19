@@ -1234,6 +1234,14 @@ impl Emitter<'_> {
             }
             _ => Vec::new(),
         };
+        // A struct that is a value is never changed where it is: the
+        // provider gives it a new value for a change of a field, though
+        // a parent's type stands for it (`by_value`).
+        let by_value = if by_value(program, self.module, index) {
+            ", by_value=True"
+        } else {
+            ""
+        };
         self.natives = true;
         self.piece.first = true;
         self.line(0, "");
@@ -1241,7 +1249,7 @@ impl Emitter<'_> {
         self.line(
             0,
             &format!(
-                "{} = _core.struct({}, {})",
+                "{} = _core.struct({}, {}{by_value})",
                 name(&declaration.name),
                 string(&declaration.name),
                 tuple(&fields)
@@ -1333,7 +1341,7 @@ impl Emitter<'_> {
             let failure = if signature
                 .result
                 .as_ref()
-                .is_some_and(|result| holds_collection(self.program, result, 0))
+                .is_some_and(|result| changed_in_place(self.program, result, 0))
             {
                 self.natives = true;
                 "_core.copied(_left.failure)"
@@ -1341,6 +1349,29 @@ impl Emitter<'_> {
                 "_left.failure"
             };
             let given = self.returned(failure);
+            self.line(2, &format!("return {given}"));
+        }
+        if !self.given_back.is_empty() {
+            // FN-15: "A function that fails leaves the place holding
+            // what its parameter held when it failed: no change it had
+            // made is undone." What a `var` parameter of a type changed
+            // where it is holds is the caller's own already, but a
+            // parameter of any other type, and one given a value of
+            // its own, is a name of this function's. So what fails is
+            // caught, and given back in the result's place with what
+            // each `var` parameter holds then: the call assigns each
+            // place, and then raises it again
+            // (`_core.raise_if_failed`).
+            let body: String = self.text[start..]
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect();
+            self.text.truncate(start);
+            self.natives = true;
+            self.line(1, "try:");
+            self.text.push_str(&body);
+            self.line(1, "except _py.Exception as _failed:");
+            let given = self.returned("_core.Failed(_failed)");
             self.line(2, &format!("return {given}"));
         }
         self.given_back.clear();
@@ -1473,10 +1504,15 @@ impl Emitter<'_> {
         }
         // FN-15: "A function that fails leaves the place holding what
         // its parameter held when it failed: no change it had made is
-        // undone." A list or a dictionary is changed where it is, so
-        // what the function did to one stays where it fails. A value
-        // of any other type is given back when the function returns,
-        // and is as it was where it does not.
+        // undone." A function of the program gives back what fails in
+        // its result's place, beside what each `var` parameter held
+        // then (see `value_function`): the places are assigned, and it
+        // is raised again. A native function of core changes a list
+        // where it is, and raises where it fails.
+        let failure_given_back = self.program.modules[*module]
+            .bodies
+            .get(*declaration)
+            .is_some_and(Option::is_some);
         self.place_call = true;
         let called = self.expression(function, value);
         self.place_call = false;
@@ -1495,6 +1531,10 @@ impl Emitter<'_> {
                 self.hoist(depth);
                 self.line(depth, &format!("{target} = {assigned}"));
             }
+        }
+        if failure_given_back {
+            self.natives = true;
+            self.line(depth, "_core.raise_if_failed(_given[0])");
         }
         self.held.clear();
         Some("_given[0]".to_string())
@@ -1544,7 +1584,7 @@ impl Emitter<'_> {
         let root = self.way_in(function, &first.value, 1)?;
         self.natives = true;
         let target = self.place(function, root);
-        let steps = self.steps(function, &first.value);
+        let steps = self.steps(function, &first.value, false);
         let mut given = Vec::new();
         for argument in rest {
             let parameter = signature.parameters.get(argument.parameter?)?;
@@ -3395,7 +3435,7 @@ impl Emitter<'_> {
             self.copied(function, value, written)
         } else if function.copies.copied(local)
             && function.mode != Mode::Graph
-            && holds_collection(self.program, &value.ty, 0)
+            && changed_in_place(self.program, &value.ty, 0)
         {
             self.natives = true;
             format!("_core.copied({written})")
@@ -3404,12 +3444,13 @@ impl Emitter<'_> {
         }
     }
 
-    /// True where `base` is a list or a dictionary that a `var`, a
-    /// `state` or a `cache` of this function holds itself ([`owns`]): an
-    /// element or an entry of it is assigned where the collection is,
-    /// and no entry of it is copied for the change. A `var` parameter
-    /// is such a place: what it is given is the caller's own
-    /// collection, which the function changes where it is (FN-15).
+    /// True where `base` is a list, a dictionary or a struct that is no
+    /// value ([`by_value`]) that a `var`, a `state` or a `cache` of this
+    /// function holds itself ([`owns`]): an element, an entry or a field
+    /// of it is assigned where it is, and nothing of it is copied for
+    /// the change. A `var` parameter is such a place: what it is given
+    /// is the caller's own, which the function changes where it is
+    /// (FN-15).
     fn changed_where_it_is(&self, function: &Function, base: &Expr) -> bool {
         let ExprKind::Local(local) = &base.kind else {
             return false;
@@ -3419,13 +3460,14 @@ impl Emitter<'_> {
         // (EXPR-15), and is written as one.
         function.mode != Mode::Graph
             && owns(self.program, function, *local)
-            && matches!(declared.ty, Type::List { .. } | Type::Dict { .. })
+            && (matches!(declared.ty, Type::List { .. } | Type::Dict { .. })
+                || struct_in_place(self.program, &declared.ty))
     }
 
     /// What a `var` parameter is given for the place `value` (FN-15):
-    /// what the place holds, as it is. The function changes a list or
-    /// a dictionary where it is, and gives back what the place is to
-    /// hold.
+    /// what the place holds, as it is. The function changes a list, a
+    /// dictionary or a struct that is no value where it is, and gives
+    /// back what the place is to hold.
     fn given_place(&mut self, function: &Function, value: &Expr) -> String {
         if let Some((_, held)) = self.held.iter().find(|(at, _)| *at == value.at) {
             return held.clone();
@@ -4791,13 +4833,14 @@ impl Emitter<'_> {
     ///
     /// EXPR-3: "An assignment may name a place inside a value, at any
     /// depth: a field, `point.x = 1` ... The place's root is a `var`, a
-    /// `state`, a `cache`, or, in a `when`, `out`." A value is never
-    /// changed (TYPE-5: "later mutation of a source cannot change an
-    /// earlier retained value"), so the root is given a new one:
-    /// `line.end.x = 1` makes `line` the `line` whose `end` is the old
-    /// `end` with `x` 1, and `rows[0][1] = 2` makes `rows` the `rows`
-    /// whose first element is the old one with its second 2. What held
-    /// the old value holds it still.
+    /// `state`, a `cache`, or, in a `when`, `out`." A value that took
+    /// the old one is as it was (TYPE-5: "later mutation of a source
+    /// cannot change an earlier retained value"). The list, the
+    /// dictionary and the struct that is no value ([`by_value`]) that a
+    /// place holds are the place's own, and are changed where they are:
+    /// what took one of them took a copy (`kept`). Any other value on
+    /// the way is given a new one: `point.x = 1` makes `point` the
+    /// `Point` whose `x` is 1, and `pair[0] = 1` a new tuple.
     fn assigned(
         &mut self,
         function: &Function,
@@ -4805,17 +4848,17 @@ impl Emitter<'_> {
         value: String,
     ) -> Option<(String, String)> {
         // A place more than one step inside the value a `var`, a
-        // `state` or a `cache` holds, with a collection on the way: the
-        // provider goes in, and changes each collection where it is.
-        // The value is given as it is asked for, after the way in has
-        // been read, as it is evaluated in any assignment.
+        // `state` or a `cache` holds, with a value changed where it is
+        // on the way: the provider goes in, and changes each such value
+        // where it is. The value is given as it is asked for, after the
+        // way in has been read, as it is evaluated in any assignment.
         if let Some(root) = self
             .way_in(function, place, 2)
-            .filter(|_| goes_through_a_collection(place))
+            .filter(|_| changed_on_the_way(self.program, place))
         {
             self.natives = true;
             let target = self.place(function, root);
-            let steps = self.steps(function, place);
+            let steps = self.steps(function, place, true);
             return Some((
                 target.clone(),
                 format!("_core.set_at({target}, ({steps}), lambda: {value})"),
@@ -4828,12 +4871,12 @@ impl Emitter<'_> {
     /// the place and change what is there where it is (`_core.set_at`,
     /// `_core.given_at`); `None` for any other place.
     ///
-    /// The local is a `var`, a `state` or a `cache` of this function
-    /// that holds a collection ([`owns`]), and no `var` parameter,
-    /// whose value is the caller's until the call returns (FN-15). The
-    /// way in has at least `least` steps, and a list or a dictionary on
-    /// it or at its end: a way of struct fields alone to a scalar
-    /// changes nothing where it is. The provider is given every index
+    /// The local is a `var`, a `var` parameter, a `state` or a `cache`
+    /// of this function that holds a value changed where it is
+    /// ([`owns`]). The way in has at least `least` steps, and a list, a
+    /// dictionary or a struct that is no value ([`by_value`]) on it or
+    /// at its end: a way through values alone to a scalar changes
+    /// nothing where it is. The provider is given every index
     /// before it reads the first step, so an index that is an
     /// expression is taken only where nothing that may fail is read
     /// before it, the element of a list or the entry of a dictionary:
@@ -4841,18 +4884,20 @@ impl Emitter<'_> {
     /// evaluated only once `rows[key]` has been read (EXPR-7).
     fn way_in(&self, function: &Function, place: &Expr, least: usize) -> Option<usize> {
         // A place that is itself a list or a dictionary is one a
-        // function may change where it is.
-        let mut collection = matches!(place.ty, Type::List { .. } | Type::Dict { .. });
+        // function may change where it is; so is a value on the way
+        // that is changed where it is.
+        let mut changed = matches!(place.ty, Type::List { .. } | Type::Dict { .. });
         let mut steps = 0;
         let mut at = place;
         loop {
             match &at.kind {
                 ExprKind::Local(local) => {
                     let root = function.mode != Mode::Graph && owns(self.program, function, *local);
-                    return (root && collection && steps >= least).then_some(*local);
+                    return (root && changed && steps >= least).then_some(*local);
                 }
                 ExprKind::Field { base, member } => {
                     field_of(self.program, &base.ty, *member)?;
+                    changed |= struct_in_place(self.program, &base.ty);
                     at = base;
                 }
                 ExprKind::Index { base, index } => {
@@ -4860,7 +4905,7 @@ impl Emitter<'_> {
                         return None;
                     }
                     element_read(&base.ty)?;
-                    collection |= matches!(base.ty, Type::List { .. } | Type::Dict { .. });
+                    changed |= matches!(base.ty, Type::List { .. } | Type::Dict { .. });
                     at = base;
                 }
                 _ => return None,
@@ -4891,7 +4936,11 @@ impl Emitter<'_> {
     /// provider is given it: each step its kind and what it names, a
     /// struct's field `("f", "bids")`, a dictionary's key `("k", price)`
     /// and a list's index or a tuple's position `("i", 0)`.
-    fn steps(&mut self, function: &Function, place: &Expr) -> String {
+    ///
+    /// Where `assigned`, the place is assigned, and a dictionary whose
+    /// entry it is keeps its key where it has none: a copy, where
+    /// something else holds the key and may change it (`copied`).
+    fn steps(&mut self, function: &Function, place: &Expr, assigned: bool) -> String {
         let mut written = Vec::new();
         let mut at = place;
         while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
@@ -4914,6 +4963,9 @@ impl Emitter<'_> {
                         self.hoisted.push(format!("{held} = {key}"));
                         key = held;
                     }
+                    if assigned && kind == "k" && written.is_empty() {
+                        key = self.copied(function, index, key);
+                    }
                     format!("(\"{kind}\", {key})")
                 }
                 _ => unreachable!("the loop is over fields and indices"),
@@ -4931,9 +4983,9 @@ impl Emitter<'_> {
     }
 
     /// The copying form of an assignment to a place (`assigned`): each
-    /// value on the way is given a new one, but for the collection a
-    /// `var` of this function holds itself, which is changed where it
-    /// is.
+    /// value on the way is given a new one, but for the list, the
+    /// dictionary and the struct that is no value that a `var` of this
+    /// function holds itself, which is changed where it is.
     fn assigned_by_copy(
         &mut self,
         function: &Function,
@@ -4949,9 +5001,16 @@ impl Emitter<'_> {
                 };
                 self.natives = true;
                 // The struct is read to make the new one of: nothing
-                // of it is kept that it does not hold already.
+                // of it is kept that it does not hold already. A struct
+                // that is no value, which a `var`, a `state` or a
+                // `cache` holds itself, is changed where it is.
                 let held = self.expression(function, base);
-                let value = format!("_core.with_field({held}, {}={value})", name(&field.name));
+                let field = name(&field.name);
+                let value = if self.changed_where_it_is(function, base) {
+                    format!("_core.set_field({held}, {}, {value})", string(&field))
+                } else {
+                    format!("_core.with_field({held}, {field}={value})")
+                };
                 self.assigned_by_copy(function, base, value)
             }
             // "of a list's element type, under an `i64` index; of a
@@ -4970,7 +5029,14 @@ impl Emitter<'_> {
                 };
                 self.natives = true;
                 let held = self.expression(function, base);
-                let index = self.expression(function, index);
+                let written = self.expression(function, index);
+                // A dictionary keeps a key it has not: a copy, where
+                // something else holds it and may change it.
+                let index = if matches!(base.ty, Type::Dict { .. }) {
+                    self.copied(function, index, written)
+                } else {
+                    written
+                };
                 // The collection a `var`, a `state` or a `cache` holds
                 // itself is changed where it is; one inside another
                 // value is given a new one.
@@ -5155,8 +5221,8 @@ impl Emitter<'_> {
             .filter_map(|argument| {
                 let index = argument.parameter?;
                 let parameter = signature.parameters.get(index)?;
-                let collection = function.mode != Mode::Graph
-                    && holds_collection(self.program, &argument.value.ty, 0);
+                let changeable = function.mode != Mode::Graph
+                    && changed_in_place(self.program, &argument.value.ty, 0);
                 let value = if parameter.var {
                     // FN-15: the place itself. A second `var`
                     // parameter given the same place takes a copy:
@@ -5166,7 +5232,7 @@ impl Emitter<'_> {
                     let place = copies::place_of(function.locals, &argument.value);
                     let again = place.is_some_and(|place| given_places.contains(&place));
                     given_places.extend(place);
-                    if again && collection {
+                    if again && changeable {
                         self.natives = true;
                         format!("_core.copied({written})")
                     } else {
@@ -5179,10 +5245,10 @@ impl Emitter<'_> {
                             .copies
                             .places(self.program, function.locals, &argument.value);
                     let shared = read_from.iter().any(|place| places.contains(place));
-                    if collection && shared {
+                    if changeable && shared {
                         self.natives = true;
                         format!("_core.copied({written})")
-                    } else if collection
+                    } else if changeable
                         && holders
                             .iter()
                             .any(|holder| may_hold(self.program, holder, &argument.value.ty))
@@ -6607,6 +6673,27 @@ fn indices_of(mut place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
     indices
 }
 
+/// True where the way to `place` from its root goes through a value
+/// that is changed where it is: an element of a list or an entry of a
+/// dictionary is read, `rows[key][0]`, `book.bids[price]`, or a field of
+/// a struct that is no value ([`by_value`]), `line.end.x` where `line`
+/// is a `Line` of three fields. Not `point.x`, nor `pair[0].x` of a
+/// tuple of `Point`s, two values.
+fn changed_on_the_way(program: &Program, place: &Expr) -> bool {
+    let mut at = place;
+    while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
+        let changed = match &at.kind {
+            ExprKind::Index { .. } => matches!(base.ty, Type::List { .. } | Type::Dict { .. }),
+            _ => struct_in_place(program, &base.ty),
+        };
+        if changed {
+            return true;
+        }
+        at = base;
+    }
+    false
+}
+
 /// True where the way to `place` from its root reads an element of a
 /// list or an entry of a dictionary: `rows[key][0]`, `book.bids[price]`,
 /// and not `line.end.x`.
@@ -6623,39 +6710,40 @@ fn goes_through_a_collection(place: &Expr) -> bool {
     false
 }
 
-/// True for a local that holds a list or a dictionary of its own: a
-/// `var`, a `var` parameter, a `state` or a `cache` of such a type,
-/// which is no connection.
+/// True for a local that holds a value of its own that is changed where
+/// it is: a `var`, a `var` parameter, a `state` or a `cache` of such a
+/// type ([`changed_in_place`]), which is no connection.
 ///
 /// LIST-3: "a value taken from the place before the call is as it
-/// was". Python's list is one object that every name of it sees
-/// change. So the collection such a local holds is changed where it
-/// is, and is the local's alone: what is kept of it elsewhere, and a
-/// name that outlives a change of it, is a copy (`Emitter::kept`).
+/// was". Python's list, dictionary and struct are each one object that
+/// every name of it sees change. So what such a local holds is changed
+/// where it is, and is the local's alone: what is kept of it elsewhere,
+/// and a name that outlives a change of it, is a copy
+/// (`Emitter::kept`).
 fn owns(program: &Program, function: &Function, local: usize) -> bool {
     let declared = &function.locals[local];
     matches!(
         declared.kind,
         LocalKind::Var | LocalKind::State | LocalKind::Cache
-    ) && holds_collection(program, &declared.ty, 0)
+    ) && changed_in_place(program, &declared.ty, 0)
         && declared.category != ValueCategory::Connection
 }
 
-/// True for a type whose value may be, or may hold, a list or a
-/// dictionary that a place changes where it is: one of those, and a
-/// nullable, a tuple, a set, a result or a struct with one inside it.
-/// A generic parameter, `any` and a struct that another inherits from
-/// may hold anything. A scalar, an enum and a struct of those are
-/// simple: they are copied, and nothing in them is changed.
-pub(crate) fn holds_collection(program: &Program, ty: &Type, depth: usize) -> bool {
-    // A struct may hold itself inside a list, which is a collection.
+/// True for a type whose value may be, or may hold, one that a place
+/// changes where it is: a list, a dictionary and a struct that is no
+/// value ([`by_value`]), and a nullable, a tuple, a set, a result or a
+/// struct with one inside it. A generic parameter and `any` may hold
+/// anything. A scalar, an enum and a struct that is a value are copied,
+/// and nothing in them is changed where it is.
+pub(crate) fn changed_in_place(program: &Program, ty: &Type, depth: usize) -> bool {
+    // A struct may hold itself inside a list, which is changed in place.
     if depth > 8 {
         return true;
     }
     let any = |types: &[&Type]| {
         types
             .iter()
-            .any(|ty| holds_collection(program, ty, depth + 1))
+            .any(|ty| changed_in_place(program, ty, depth + 1))
     };
     match ty {
         Type::List { .. } | Type::Dict { .. } => true,
@@ -6670,23 +6758,54 @@ pub(crate) fn holds_collection(program: &Program, ty: &Type, depth: usize) -> bo
             declaration,
             kind: NamedKind::Struct,
             ..
-        } => match program.modules[*module].details.get(*declaration) {
-            Some(Detail::Struct(read)) => {
-                inherited(program, *module, *declaration)
-                    || read
-                        .members
-                        .iter()
-                        .any(|member| holds_collection(program, &member.ty, depth + 1))
-            }
-            _ => true,
-        },
+        } => !by_value(program, *module, *declaration),
         Type::Nullable(inner) | Type::Set(inner) => any(&[inner]),
         Type::Tuple(elements) => elements
             .iter()
-            .any(|element| holds_collection(program, element, depth + 1)),
+            .any(|element| changed_in_place(program, element, depth + 1)),
         Type::Result { value, error } => any(&[value, error]),
         _ => true,
     }
+}
+
+/// True for the struct `declaration` of `module` where it is a value:
+/// copied where it is given or kept, and given a new value where a
+/// field of it is assigned. The owner's rule (the compiler's issue
+/// 151): "The copy by value exception is for trivial structures (think
+/// sizeof(i64))", built as at most two fields, each a scalar other than
+/// a `str`, a `bytes` or an `any`, or an enum. A struct with generic
+/// parameters is not one, nor is a struct that another inherits from: a
+/// value of the other may stand for it. Any other struct a `var`, a
+/// `state` or a `cache` holds is changed where it is, as a list is.
+///
+/// The provider's class says it too (`_core.struct(..., by_value=True)`),
+/// so that what changes a field where it is never changes a value of
+/// such a struct that a parent's type stands for.
+pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> bool {
+    let Some(Detail::Struct(read)) = program.modules[module].details.get(declaration) else {
+        return false;
+    };
+    read.generics.is_empty()
+        && !inherited(program, module, declaration)
+        && read.members.len() <= 2
+        && read.members.iter().all(|member| match &member.ty {
+            Type::Scalar(scalar) => !matches!(scalar, Scalar::Str | Scalar::Bytes | Scalar::Any),
+            Type::Named {
+                kind: NamedKind::Enum,
+                ..
+            } => true,
+            _ => false,
+        })
+}
+
+/// True for a type that is a struct changed where it is: one that is
+/// no value ([`by_value`]).
+fn struct_in_place(program: &Program, ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named { module, declaration, kind: NamedKind::Struct, .. }
+            if !by_value(program, *module, *declaration)
+    )
 }
 
 /// The types of what a value of `ty` holds directly: a list's element,
@@ -6725,8 +6844,9 @@ fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
 }
 
 /// True where a value of type `holder` may come to hold a value of type
-/// `given`, or a part of one, that is or holds a list or a dictionary:
-/// a `list<list<i64>>` may hold a `list<i64>`, and a `list<i64>` holds
+/// `given`, or a part of one, that is changed where it is
+/// ([`changed_in_place`]): a `list<list<i64>>` may hold a `list<i64>`,
+/// and a `list<i64>` holds
 /// nothing of another `list<i64>` but its numbers. What a native
 /// function puts into the place it is given is copied only where this
 /// holds: `append(rows, row)` keeps `row`, and `extend(values, more)`
@@ -6762,7 +6882,7 @@ fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
     }
     parts
         .iter()
-        .any(|part| holds_collection(program, part, 0) && holds.contains(part))
+        .any(|part| changed_in_place(program, part, 0) && holds.contains(part))
 }
 
 /// True where another struct of the program inherits from the struct
