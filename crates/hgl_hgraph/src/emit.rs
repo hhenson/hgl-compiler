@@ -422,7 +422,7 @@ fn float(value: f64) -> String {
 /// is a Python type of its own. Python's `int` has no bound, so core's
 /// arithmetic holds an `i64` to its range (NUM-2). A Python `bytes`
 /// holds octets, each 0 to 255, and orders them as unsigned octets.
-fn scalar(ty: &Type) -> Option<&'static str> {
+pub(super) fn scalar(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Scalar(Scalar::Bool) => Some("_py.bool"),
         Type::Scalar(Scalar::I64) => Some("_py.int"),
@@ -1733,7 +1733,7 @@ impl<'a> Emitter<'a> {
     /// The annotation of a parameter or a result of a temporal
     /// function: `TS[int]` for a temporal `i64`, `int` for a `const`
     /// one. `None`, reported, for a type not written yet.
-    fn annotation(&mut self, ty: &Type, temporal: bool, at: Location) -> Option<String> {
+    pub(super) fn annotation(&mut self, ty: &Type, temporal: bool, at: Location) -> Option<String> {
         // TYPE-9: temporalization maps "sets to membership". A
         // temporal `set<T>` is hgraph's `TSS[T]`, whose tick
         // is the set's delta, and a `const` one a `frozenset`.
@@ -1912,7 +1912,12 @@ impl<'a> Emitter<'a> {
     /// list ticks whole here (`list_annotation`), and its parent's
     /// update would give it a position's change, so as a child it is
     /// reported.
-    fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
+    pub(super) fn child_annotation(
+        &mut self,
+        ty: &Type,
+        child: &Type,
+        at: Location,
+    ) -> Option<String> {
         // A reference as a child, and a field that may be left out
         // because its type is no ordinary value (TYPE-14), are not
         // written yet. Nor is a struct with no field, a `TS` of its class
@@ -1944,7 +1949,7 @@ impl<'a> Emitter<'a> {
     /// elements, each a value that publishes whole, so a tick is the
     /// complete list. Its delta, a position's own validity and a child
     /// of it are not written: they are reported where they are met.
-    fn list_annotation(
+    pub(super) fn list_annotation(
         &mut self,
         ty: &Type,
         element: &Type,
@@ -2042,7 +2047,7 @@ impl<'a> Emitter<'a> {
     /// leaves it only as another arrives, as hgraph's `TSW` has it. A
     /// window inside a struct, a tuple, a list or a dictionary decides
     /// that one's validity too (TIME-9).
-    fn readable_window(&mut self, ty: &Type, at: Location) -> bool {
+    pub(super) fn readable_window(&mut self, ty: &Type, at: Location) -> bool {
         for window in windows_in(self.program, ty) {
             let Type::RollingWindow {
                 maximum, minimum, ..
@@ -2087,7 +2092,7 @@ impl<'a> Emitter<'a> {
     /// any struct below it, with fields its bundle has not, so a value
     /// of it, and its temporal value read whole (`port_value`), are not
     /// written yet.
-    fn struct_annotation(
+    pub(super) fn struct_annotation(
         &mut self,
         ty: &Type,
         (module, declaration): (usize, usize),
@@ -2142,7 +2147,7 @@ impl<'a> Emitter<'a> {
     /// and complete canonical arguments" (see `construct`). `None` for a
     /// type that is no struct, and where an argument is not known as
     /// the module is written.
-    fn struct_class(&mut self, ty: &Type) -> Option<String> {
+    pub(super) fn struct_class(&mut self, ty: &Type) -> Option<String> {
         let Type::Named {
             module,
             declaration,
@@ -2182,7 +2187,12 @@ impl<'a> Emitter<'a> {
     /// TYPE-16's `tuple<delta<A>?, delta<B>?>` (`positions`), and
     /// hgraph's bundle takes a tuple, a `None` where a position does
     /// not change, as that delta.
-    fn tuple_annotation(&mut self, ty: &Type, elements: &[Type], at: Location) -> Option<String> {
+    pub(super) fn tuple_annotation(
+        &mut self,
+        ty: &Type,
+        elements: &[Type],
+        at: Location,
+    ) -> Option<String> {
         if elements.is_empty() {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
@@ -2198,7 +2208,7 @@ impl<'a> Emitter<'a> {
 
     /// The parameters of a temporal function as Python writes them, and
     /// its result's annotation.
-    fn temporal_signature(
+    pub(super) fn temporal_signature(
         &mut self,
         declaration: &Declaration,
         signature: &Signature,
@@ -2229,7 +2239,7 @@ impl<'a> Emitter<'a> {
     /// itself or within, whose readiness is not known
     /// (`readable_window`): the node reads it, if only by requiring it
     /// valid (TIME-3). A graph only wires one.
-    fn window_inputs(&mut self, signature: &Signature) {
+    pub(super) fn window_inputs(&mut self, signature: &Signature) {
         for parameter in &signature.parameters {
             if !parameter.constant {
                 self.readable_window(&parameter.ty, parameter.at);
@@ -2246,7 +2256,7 @@ impl<'a> Emitter<'a> {
     /// alone publish once. A write through `out`, to it or to a part of
     /// it, may be followed by another: it is written only where it is
     /// the node's one place that publishes, and stands in no loop.
-    fn window_published_once(&mut self, signature: &Signature, body: &Body) {
+    pub(super) fn window_published_once(&mut self, signature: &Signature, body: &Body) {
         use hgl_analyser::hir::{Node, walk_statement_nodes};
         let program = self.program;
         if signature
