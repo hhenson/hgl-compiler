@@ -348,8 +348,8 @@ transpiler: partial
 - A fixed list's delta, `REMOVE` for a position that lost its value; an unsized list's, hgraph 0.9.5's `TSLDelta`: the new size where it moves, never a negative one, and on a shrink the dropped tail in `removed`, also for a smaller `size_modified` alone and a negative one, which the provider counts from what the list holds, to empty at most; growth by an entry after the last and past it, the positions between not valid
 - A fixed list's entry past its bounds, and a `size_modified` that moves its size, fails the write
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
-- A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost, as removing a key a dictionary has not is (the owner's rule for a dictionary on hhenson/hgl_spec#124, taken for a list by analogy, to be confirmed)
-- Left: an entry at or past a `size_modified` written with it, which neither rule settles: it fails as the graph runs, named as not written
+- A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
+- An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 
 ## END-4
 

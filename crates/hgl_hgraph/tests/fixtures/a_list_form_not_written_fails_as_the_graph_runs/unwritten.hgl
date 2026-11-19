@@ -10,8 +10,8 @@ fn edited(command: i64) -> list<i64> {
     inject out
     when {
         if command == 0 { return [1, 2, 3] }
-        # TYPE-16 does not say what an entry at or past the size written
-        # with it is.
+        # An entry at or past the size written with it contradicts the
+        # delta: "a failure" (the owner's decision on hhenson/hgl_spec#124).
         if command == 1 { return delta<list<i64>>(updated: [4: 1], size_modified: 2) }
         # EXPR-3: "An index outside a list fails where it is evaluated".
         out[5] = 1

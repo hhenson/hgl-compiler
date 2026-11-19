@@ -743,12 +743,11 @@ def list_applied(port, delta):
     between hold no value and are not valid", as hgraph's `TSL` grows.
 
     A negative position fails, as an index outside a list does (EXPR-3).
-    The rules do not say what an entry at or past a size written with it
-    is: hgraph fails the run for it, so it is not written. A removed
-    position the list does not hold lost no value, and is ignored, as
-    removing a key a dictionary has not is (the owner's rule for a
-    dictionary on hhenson/hgl_spec#124, taken for a list by analogy). A
-    delta that changes nothing hgraph sees still ticks (`_ticked`)."""
+    An entry at or past a size written with it contradicts the delta, and
+    fails (the owner's decision on hhenson/hgl_spec#124). A removed
+    position the list does not hold lost no value, and is ignored (the
+    owner's decision there). A delta that changes nothing hgraph sees
+    still ticks (`_ticked`)."""
     held = _held_size(port)
     changes = updated(delta)
     gone = removed(delta)
@@ -762,10 +761,14 @@ def list_applied(port, delta):
         size = max(held + written, 0)
     else:
         size = written
-    if written is not None and any(position >= size for position in changes):
-        raise NotImplementedError(
-            "the hgraph target does not write an updated position at or past the size "
-            "a list's delta gives it yet"
+    # The owner's decision on hhenson/hgl_spec#124: an entry at or past the
+    # size written with it is "a failure it contradicts itself". No
+    # catalogued code is one for it, so the failure has none, as an index
+    # outside a list's has none.
+    beyond = [position for position in changes if written is not None and position >= size]
+    if beyond:
+        raise HglError(
+            f"the delta updates the position {min(beyond)} and gives the list a size of {size}"
         )
     if size == held and not changes:
         _ticked(port)
@@ -868,16 +871,31 @@ def list_child(port, index):
     return port[index]
 
 
-def list_value(port):
-    """A temporal list of elements that publish whole and are not null,
-    read whole at its port, a fixed list or an unsized one: a Python list
-    of its elements, made anew. A position that is not valid leaves no
-    whole value (the owner's decision on hhenson/hgl_spec#126 so far, as
-    `unset_read` has it): a list grown past a gap, or with a position
-    removed, is read whole only once each position is valid again."""
-    if not port.all_valid:
+# What `list_value` is given where a list's element type has no value
+# for a position that is not set.
+_NO_HOLE = object()
+
+
+def list_value(port, hole=_NO_HOLE):
+    """A temporal list of elements that publish whole, read whole at its
+    port, a fixed list or an unsized one: a Python list of its elements,
+    made anew. The one reading of a list whole: a hook's, a lifted value
+    function's argument and a trace cell's held value.
+
+    The language's TIME-1 (the owner's decision on hhenson/hgl_spec#124):
+    a position of an unsized list that holds no value, a gap or one
+    removed, reads as the element type's value for "not set" where the
+    type has one, `hole`, NaN for an `f64`; an optional element reads
+    null, of a fixed list too (TYPE-15); and the read fails where there is
+    none, as for an `i64` (`unset_read`). A list that is not valid by its
+    own `valid` (`valid_of`) has no whole value either."""
+    if port.all_valid:
+        return list(port.value)
+    if hole is _NO_HOLE or not valid_of(port, ("list", None)):
         unset_read()
-    return list(port.value)
+    return [
+        child.value if child.valid else hole for child in (port[index] for index in range(len(port)))
+    ]
 
 
 def list_within(delta, size):
@@ -980,7 +998,7 @@ def _removes(change):
     return change is _REMOVE or change is _REMOVE_IF_EXISTS
 
 
-@_compute_node
+@_compute_node(valid=("index",))
 def position_in(
     values: _TSL[_TS[_SCALAR], _SIZE], index: _TS[int], _output: _TS_OUT[_SCALAR] = None
 ) -> _TS[_SCALAR]:
@@ -993,8 +1011,9 @@ def position_in(
     own `getitem_` fails the run where the list no longer holds it. It
     publishes where the index ticks or the selected child does; where the
     child goes or loses its value, what it published before is
-    invalidated (END-4). A negative index fails, as an index outside a
-    list does (EXPR-3)."""
+    invalidated (END-4). It runs where the list is not valid, invalidated
+    whole among them, and requires only the index valid. A negative index
+    fails, as an index outside a list does (EXPR-3)."""
     selected = index.value
     if selected < 0:
         _index(selected, _held_size(values))
@@ -1008,7 +1027,7 @@ def position_in(
         return published(child.value)
 
 
-@_compute_node
+@_compute_node(valid=("key",))
 def entry_of(
     dictionary: _TSD[_K, _TS[_SCALAR]], key: _TS[_K], _output: _TS[_SCALAR] = None
 ) -> _TS[_SCALAR]:
@@ -1021,9 +1040,11 @@ def entry_of(
     strict read is of an ordinary or atomic dictionary, and not this.
     It publishes where the key ticks or the selected child does, so
     another child's tick is silent; where the selected child is gone or
-    is not valid, what it published before is invalidated (END-4)."""
+    is not valid, what it published before is invalidated (END-4). It
+    runs where the dictionary is not valid, invalidated whole among them,
+    and requires only the key valid."""
     selected = key.value
-    child = dictionary[selected] if selected in dictionary.keys() else None
+    child = dictionary[selected] if dictionary.valid and selected in dictionary.keys() else None
     if child is None or not child.valid:
         if _output.valid:
             _output.invalidate()

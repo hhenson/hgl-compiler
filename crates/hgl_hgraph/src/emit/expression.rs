@@ -1273,15 +1273,22 @@ impl Emitter<'_> {
             // TYPE-9: "lists to child positions". A list's value is each
             // child's, in order: hgraph's own tuple of them, fixed or
             // unbounded, where each child publishes whole, made a Python
-            // `list`. A required element that is not valid, one removed or
-            // past a gap, leaves no whole value (`list_value`); an optional
-            // one is null.
-            Type::List { element, .. } if whole_scalar(element) => {
+            // `list` (`list_value`). TIME-1's table: a position of an
+            // unsized list "that holds no value, a gap or one removed
+            // (TYPE-16), reads in the whole value ... as that type's value
+            // for 'not set' where it has one", NaN for an `f64`; an
+            // optional element reads null, "as an optional child that is
+            // not valid is in any whole value (TYPE-15)", of a fixed list
+            // too; any other fails the read, and so does a fixed list
+            // that is not all valid.
+            Type::List { element, size } if publishes_whole(element) => {
                 self.natives = true;
-                return format!("_core.list_value({port})");
-            }
-            Type::List { element, .. } if publishes_whole(element) => {
-                return format!("_py.list({port}.value)");
+                let hole = match (&**element, size) {
+                    (Type::Nullable(_), _) => ", None",
+                    (Type::Scalar(Scalar::F64), None) => ", _py.float(\"nan\")",
+                    _ => "",
+                };
+                return format!("_core.list_value({port}{hole})");
             }
             // An element of composites is read as a part is
             // (`part_value_at`): each of its own required parts where it is
@@ -1377,11 +1384,12 @@ impl Emitter<'_> {
     /// `part_value` of a port read inside `depth` comprehensions.
     fn part_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         let read = self.port_value_at(ty, port, depth, at);
-        // A list of required elements that publish whole is read whole
-        // from its `TSL` where each of them is valid, and fails otherwise
-        // (`list_value`). One of composites reads each element as a part,
-        // whose own optional parts may be invalid.
-        if matches!(ty, Type::List { element, .. } if whole_scalar(element)) {
+        // A list of elements that publish whole is read whole from its
+        // `TSL`, which holds it to its own `valid` and fills or fails at
+        // a position that holds no value (`list_value`). One of
+        // composites reads each element as a part, whose own optional
+        // parts may be invalid.
+        if matches!(ty, Type::List { element, .. } if publishes_whole(element)) {
             return read;
         }
         let ready = self.valid_test(ty, port);

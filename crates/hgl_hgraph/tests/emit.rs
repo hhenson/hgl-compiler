@@ -5019,13 +5019,14 @@ fn a_growing_lists_delta_runs_on_hgraph() {
     );
 }
 
-/// What the language does not settle of a growing list fails as the
-/// graph runs, named as not written: an entry at or past a size written
-/// with it, which hgraph fails the run for (TYPE-16). So does an index of
-/// `out` past the list (EXPR-3: "An index outside a list fails where it
-/// is evaluated"), which hgraph would grow the list to, and an empty list
-/// assigned to a position of `out`, which hgraph 0.9.5's `TSL` does not
-/// tick for and which has no port of its own where it is written
+/// What fails of a growing list as the graph runs: an entry at or past a
+/// size written with it, which contradicts the delta (the owner's
+/// decision on hhenson/hgl_spec#124: "a failure"), with no code, since
+/// none catalogued is one for it; an index of `out` past the list
+/// (EXPR-3: "An index outside a list fails where it is evaluated"), which
+/// hgraph would grow the list to; and, named as not written, an empty
+/// list assigned to a position of `out`, which hgraph 0.9.5's `TSL` does
+/// not tick for and which has no port of its own where it is written
 /// (TIME-9).
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
@@ -5041,7 +5042,7 @@ fn a_list_form_not_written_fails_as_the_graph_runs() {
     let expected = [
         (
             "an_entry_past_the_size_written_with_it failed unwritten.hgl:24:9",
-            "NotImplementedError: the hgraph target does not write an updated position at or past the size a list's delta gives it yet",
+            "HglError: the delta updates the position 4 and gives the list a size of 2",
         ),
         (
             "a_position_of_out_past_the_list failed unwritten.hgl:28:9",
@@ -5115,6 +5116,8 @@ fn a_growing_lists_position_is_an_endpoint_of_its_own() {
         "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
         "_core.position_in(edited(command=command), _hg.const(1, tp=_hg.TS[_py.int]))".to_string(),
         "_core.position_in(edited(command=command), index)".to_string(),
+        // hhenson/hgl_spec#124: an `f64` list's hole reads as NaN.
+        "holes(values=_core.list_value(values, _py.float(\"nan\")))".to_string(),
     ]);
 }
 
