@@ -20,7 +20,7 @@
 //! eval(counted(upto: (5)), RunConfig(length: (10s)))
 //! ```
 
-use hgl_analyser::hir::{Argument, Callee, ExprKind};
+use hgl_analyser::hir::{Argument, ExprKind};
 use hgl_analyser::{Argument as GenericArgument, Detail, ParsedFile, Program};
 use hgl_diagnostics::Diagnostics;
 use hgl_lexer::{lex, literal};
@@ -255,25 +255,11 @@ impl EntryCall {
         let ExprKind::Call { callee, .. } = &run.call.kind else {
             return None;
         };
-        let (Callee::Function {
-            module,
-            declaration,
-            generics,
-            ..
-        }
-        | Callee::Candidate {
-            module,
-            declaration,
-            generics,
-            ..
-        }) = callee
-        else {
-            return None;
-        };
+        let (module, declaration) = callee.declaration()?;
         Some(EntryCall {
-            module: *module,
-            declaration: *declaration,
-            generics: generics.clone(),
+            module,
+            declaration,
+            generics: callee.generics().to_vec(),
         })
     }
 
@@ -412,27 +398,16 @@ pub(crate) fn replaced(
     else {
         return Err(unread());
     };
-    let (Callee::Function {
-        module,
-        declaration,
-        ..
-    }
-    | Callee::Candidate {
-        module,
-        declaration,
-        ..
-    }) = callee
-    else {
+    let Some((module, declaration)) = callee.declaration() else {
         return Err(unread());
     };
-    let Some(Detail::Callable(signature)) = program.modules[*module].details.get(*declaration)
-    else {
+    let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration) else {
         return Err(unread());
     };
     let entry = Written {
         owner: format!(
             "the entry `{}`",
-            program.modules[*module].declarations[*declaration].name
+            program.modules[module].declarations[declaration].name
         ),
         what: "parameter",
         names: signature
