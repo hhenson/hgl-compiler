@@ -245,6 +245,18 @@ It is built in passes:
 written types and the bodies of value functions, nodes, sources, graphs
 and tests; it runs no test.
 
+`hgl check --json ROOT...` writes one JSON object to stdout. Version 1 has
+`version: 1` and a source-ordered `diagnostics` array. Each entry carries
+`severity` (error or warning), `category`, `code`, `catalogued`, `message`,
+`primary`, nullable `rule`, `notes` and `related`. A location has `file`
+and half-open `start` and `end` positions. Both `line` and UTF-16
+`character` are zero-based, measured after any leading BOM. A related entry
+has `location` and `message`. File names follow the input paths, relative to
+the working directory when supplied that way. Bundled core uses its compiler
+display names. A clean report has an empty array. Warnings exit 0, source
+errors exit 1, and invocation or I/O failures exit 2 with a message on stderr.
+`--modules` is a text listing and conflicts with `--json`.
+
 ### Resolution
 
 Scopes nest as the source does: a declaration (its generic parameters and
@@ -1998,6 +2010,7 @@ the job the way the design needs is dropped.
 | Crate | Used by | For |
 | --- | --- | --- |
 | `clap` | `hgl_cli` | command-line parsing and help text |
+| `serde_json` | `hgl_cli` | serialize machine-readable check diagnostics |
 | `codespan-reporting` | `hgl_diagnostics` | source excerpts and underlines in rendered diagnostics |
 | `ctrlc` | `hgl_cli` | taking an interrupt or a request to end while an application runs, to stop the run and still print its output |
 | `petgraph` | `hgl_analyser` | the graph of imports and the groups of modules in a cycle |

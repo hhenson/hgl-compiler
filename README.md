@@ -43,6 +43,7 @@ cargo test --workspace
 cargo run -- tokens path/to/file.hgl
 cargo run -- tree path/to/file.hgl
 cargo run -- check path/to/sources --modules
+cargo run -- check --json path/to/sources
 cargo run -- test path/to/sources --rejections-only
 cargo run -- test path/to/sources --integration
 cargo run -- run path/to/sources --application demo.app --python path/to/python
@@ -56,7 +57,8 @@ node or token per line; `--fragment declarations` or `--fragment statements`
 parses source that has no `module` line. `hgl check` reads a program, every
 `.hgl` file under the source roots given, and reports what is wrong with
 its modules, declarations, imports, names and written types; `--modules`
-lists what it found. Core's module, which every program has and every
+lists what it found. Editors can use `--json` for codes, severity, UTF-16
+ranges and related locations. Core's module, which every program has and every
 module uses with no `use`, is the one `hgl` is built with unless the
 roots hold a `module core` of their own. What an expression is,
 phases and constants are not checked yet. `hgl test` checks the

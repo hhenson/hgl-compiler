@@ -33,6 +33,7 @@
 //! A file that is not UTF-8 is source the language rejects (LEX-16), so it
 //! exits with status 1 and a diagnostic like any other rejection.
 
+mod check_json;
 mod replace;
 
 use std::collections::HashSet;
@@ -131,6 +132,10 @@ struct CheckArgs {
     /// and tests.
     #[arg(long)]
     modules: bool,
+
+    /// Write versioned JSON diagnostics with UTF-16 ranges to stdout.
+    #[arg(long, conflicts_with = "modules")]
+    json: bool,
 
     #[command(flatten)]
     limits: LimitArgs,
@@ -717,6 +722,18 @@ fn check(arguments: &CheckArgs) -> ExitCode {
         Err(status) => return status,
     };
     let program = hgl_analyser::analyse(&parsed, &mut diagnostics);
+    if arguments.json {
+        diagnostics.sort_by_location();
+        if let Err(error) = check_json::write(std::io::stdout().lock(), &sources, &diagnostics) {
+            eprintln!("hgl: cannot write diagnostics: {error}");
+            return ExitCode::from(EXIT_FAILED);
+        }
+        return if diagnostics.has_errors() {
+            ExitCode::from(EXIT_REJECTED)
+        } else {
+            ExitCode::SUCCESS
+        };
+    }
     // The module the compiler supplied is not counted or listed: the
     // counts and the listing are of what the source roots hold. It is
     // in the program only when its files were read whole: under a
