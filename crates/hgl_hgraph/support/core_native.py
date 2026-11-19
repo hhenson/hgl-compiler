@@ -1158,48 +1158,6 @@ def resume(source, now, scheduler):
         return published
 
 
-def Clock_evaluation_time(clock):
-    """CAP-3: a clock's four properties, each read from hgraph's
-    `EvaluationClock`, which has them by the same names. An instant is
-    a `datetime` in UTC that names no zone, as hgraph has them."""
-    return clock.evaluation_time
-
-
-def Clock_now(clock):
-    return clock.now
-
-
-def Clock_cycle_time(clock):
-    return clock.cycle_time
-
-
-def Clock_next_cycle_evaluation_time(clock):
-    return clock.next_cycle_evaluation_time
-
-
-# CAP-2: core's `LogLevel` members, each with the level Python's
-# `logging` has for it, lowest first.
-_LOG_LEVELS = (("debug", 10), ("info", 20), ("warning", 30), ("error", 40))
-
-
-def Logger_level(logger):
-    """CAP-2: "`logger.level` is the logger's current level". The name
-    of the `LogLevel` member that a record must be at to be written: a
-    level above `error` writes none below it, and is `error`."""
-    level = logger.getEffectiveLevel()
-    for member, number in _LOG_LEVELS:
-        if level <= number:
-            return member
-    return "error"
-
-
-def fn_log(logger, level, message):
-    """CAP-2: `log(logger, level, message)` "writes one record of
-    `message` at `level`". The message is given as an argument of a
-    fixed format, so that a `%` in it is text."""
-    logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
-
-
 class Wake:
     """A node's scheduler for one evaluation (CAP-4, CAP-5).
 
@@ -1227,60 +1185,11 @@ class Wake:
         return getattr(self._scheduler, name)
 
 
-def Scheduler_next_scheduled_time(scheduler):
-    """CAP-4: "The time of the earliest pending wake; null with none".
-    hgraph gives its earliest time where none is pending."""
-    return scheduler.next_scheduled_time if scheduler.is_scheduled else None
-
-
-def Scheduler_is_scheduled(scheduler):
-    """CAP-4: "True while a wake is pending"."""
-    return scheduler.is_scheduled
-
-
-def Scheduler_is_scheduled_now(scheduler):
-    """CAP-4: "whether a wake asked of the scheduler is due in the
-    current evaluation, whether or not an input has ticked in it"."""
-    return scheduler.is_scheduled_now
-
-
 def _tag(tag):
     """CAP-4's `tag`, a `str?`, as hgraph's scheduler keeps it. hgraph
     keeps no wake under the empty tag, which is a tag as any other is:
     each is given a mark before it, and no tag stays none."""
     return None if tag is None else "#" + tag
-
-
-def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
-    """CAP-4: "With a `duration`, a wake that long after the current
-    evaluation time". hgraph counts a `timedelta` from then, and "a wake
-    asked for under a tag replaces the pending wake of that tag".
-
-    A wake at a time no cycle can still run at, the current evaluation
-    time or before (core's CRUN-3: each cycle's time "is later than the
-    one before"), is kept by no scheduler of hgraph's: it is not
-    delivered, as an alarm's is not (`_alarm`)."""
-    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
-
-
-def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
-    """CAP-4: "with a `datetime`, a wake then"."""
-    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
-
-
-def fn_un_schedule(scheduler, tag):
-    """CAP-4: "`un_schedule(scheduler)` and `un_schedule(scheduler, tag:
-    name)` cancel a pending wake": the earliest, or the one asked for
-    under `name`."""
-    if tag is None:
-        scheduler.un_schedule()
-    else:
-        scheduler.un_schedule(_tag(tag))
-
-
-def fn_reset(scheduler):
-    """CAP-4: "`reset(scheduler)` every one"."""
-    scheduler.reset()
 
 
 # The tags an alarm's wake is kept under in hgraph's scheduler: the one
@@ -1312,14 +1221,6 @@ def _alarm(scheduler, at):
     scheduler.schedule(asked if pending is None or asked < pending else pending, tag=_ALARM)
 
 
-def schedule_Alarm_duration(capability, at):
-    _alarm(capability, at)
-
-
-def schedule_Alarm_datetime(capability, at):
-    _alarm(capability, at)
-
-
 class Held:
     """A value given to hgraph to keep as it is.
 
@@ -1334,26 +1235,6 @@ class Held:
 
     def __init__(self, value):
         self.value = value
-
-
-def get_GlobalState_str(store, key):
-    """CAP-6: the value under `key`; "an absent key fails the node"."""
-    try:
-        return store[key].value
-    except KeyError:
-        raise HglError(f"the global store holds nothing under {key!r}") from None
-
-
-def has_GlobalState_str(store, key):
-    """CAP-6: "whether the key holds a value"."""
-    return key in store
-
-
-def put_GlobalState_str_V(store, key, value):
-    """CAP-6: "puts one there". It is kept as it is (`Held`). The store
-    keeps the value, and is given a copy (`copied`): a place it was
-    read from goes on changing, and that does not reach the store."""
-    store[key] = Held(copied(value))
 
 
 # The types of the values that hold no other: `copied` has nothing to
@@ -1563,6 +1444,173 @@ def set_entry(dictionary, key, value, /):
     return dictionary
 
 
+def with_item(sequence, index, value, /):
+    """`place[index] = value` for a tuple, and for a list that is no
+    place's own (EXPR-3): the sequence with one element another value.
+    "An index outside a list fails where it is evaluated." `sequence`
+    itself is as it was, for whatever else holds it."""
+    _index(index, len(sequence))
+    return _spliced(sequence, index, value)
+
+
+def with_entry(dictionary, key, value, /):
+    """`place[key] = value` for a dictionary that is no place's own
+    (EXPR-3): the dictionary with the key given the value. "A key the
+    dictionary has not is added." `dictionary` itself is as it was."""
+    return {**dictionary, key: value}
+
+
+def unmatched(selected):
+    """A `switch` with no `default`, where no case has the selector's
+    value (CTRL-6: "An unmatched selector uses default or fails")."""
+    raise HglError(f"no case of the `switch` has the value {selected!r}")
+
+
+# What `nullable` has made: a node for each Python type of `T`.
+_NULLABLE = {}
+
+
+def nullable(port, scalar):
+    """A connection of `T` where one of `T?` is wanted, as hgraph's
+    `TS[T | None]` (the language's TYPE-14: "a T is a value where a T?
+    is expected"). hgraph's `switch_` takes branches of one type, and a
+    connection of `T` is its `TS[T]`. `port` is given as it is where it
+    is one of `T?` already; otherwise a node publishes each value it
+    publishes, and is invalid where it is (END-4). `scalar` is the
+    Python type of `T`."""
+    if port.output_type == _TS[scalar | None]:
+        return port
+    node = _NULLABLE.get(scalar)
+    if node is None:
+
+        @_compute_node(valid=())
+        def node(value: _TS[scalar], _output: _TS_OUT[scalar | None] = None) -> _TS[scalar | None]:
+            if value.valid:
+                return value.value
+            _output.invalidate()
+
+        _NULLABLE[scalar] = node
+    return node(value=port)
+
+def Clock_evaluation_time(clock):
+    """CAP-3: a clock's four properties, each read from hgraph's
+    `EvaluationClock`, which has them by the same names. An instant is
+    a `datetime` in UTC that names no zone, as hgraph has them."""
+    return clock.evaluation_time
+
+
+def Clock_now(clock):
+    return clock.now
+
+
+def Clock_cycle_time(clock):
+    return clock.cycle_time
+
+
+def Clock_next_cycle_evaluation_time(clock):
+    return clock.next_cycle_evaluation_time
+
+
+# CAP-2: core's `LogLevel` members, each with the level Python's
+# `logging` has for it, lowest first.
+_LOG_LEVELS = (("debug", 10), ("info", 20), ("warning", 30), ("error", 40))
+
+
+def Logger_level(logger):
+    """CAP-2: "`logger.level` is the logger's current level". The name
+    of the `LogLevel` member that a record must be at to be written: a
+    level above `error` writes none below it, and is `error`."""
+    level = logger.getEffectiveLevel()
+    for member, number in _LOG_LEVELS:
+        if level <= number:
+            return member
+    return "error"
+
+
+def fn_log(logger, level, message):
+    """CAP-2: `log(logger, level, message)` "writes one record of
+    `message` at `level`". The message is given as an argument of a
+    fixed format, so that a `%` in it is text."""
+    logger.log(dict(_LOG_LEVELS)[level.name], "%s", message)
+
+
+def Scheduler_next_scheduled_time(scheduler):
+    """CAP-4: "The time of the earliest pending wake; null with none".
+    hgraph gives its earliest time where none is pending."""
+    return scheduler.next_scheduled_time if scheduler.is_scheduled else None
+
+
+def Scheduler_is_scheduled(scheduler):
+    """CAP-4: "True while a wake is pending"."""
+    return scheduler.is_scheduled
+
+
+def Scheduler_is_scheduled_now(scheduler):
+    """CAP-4: "whether a wake asked of the scheduler is due in the
+    current evaluation, whether or not an input has ticked in it"."""
+    return scheduler.is_scheduled_now
+
+
+def schedule_Scheduler_duration_str__bool(capability, at, tag, on_wall_clock):
+    """CAP-4: "With a `duration`, a wake that long after the current
+    evaluation time". hgraph counts a `timedelta` from then, and "a wake
+    asked for under a tag replaces the pending wake of that tag".
+
+    A wake at a time no cycle can still run at, the current evaluation
+    time or before (core's CRUN-3: each cycle's time "is later than the
+    one before"), is kept by no scheduler of hgraph's: it is not
+    delivered, as an alarm's is not (`_alarm`)."""
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
+
+
+def schedule_Scheduler_datetime_str__bool(capability, at, tag, on_wall_clock):
+    """CAP-4: "with a `datetime`, a wake then"."""
+    capability.schedule(at, tag=_tag(tag), on_wall_clock=on_wall_clock)
+
+
+def fn_un_schedule(scheduler, tag):
+    """CAP-4: "`un_schedule(scheduler)` and `un_schedule(scheduler, tag:
+    name)` cancel a pending wake": the earliest, or the one asked for
+    under `name`."""
+    if tag is None:
+        scheduler.un_schedule()
+    else:
+        scheduler.un_schedule(_tag(tag))
+
+
+def fn_reset(scheduler):
+    """CAP-4: "`reset(scheduler)` every one"."""
+    scheduler.reset()
+
+
+def schedule_Alarm_duration(capability, at):
+    _alarm(capability, at)
+
+
+def schedule_Alarm_datetime(capability, at):
+    _alarm(capability, at)
+
+
+def get_GlobalState_str(store, key):
+    """CAP-6: the value under `key`; "an absent key fails the node"."""
+    try:
+        return store[key].value
+    except KeyError:
+        raise HglError(f"the global store holds nothing under {key!r}") from None
+
+
+def has_GlobalState_str(store, key):
+    """CAP-6: "whether the key holds a value"."""
+    return key in store
+
+
+def put_GlobalState_str_V(store, key, value):
+    """CAP-6: "puts one there". It is kept as it is (`Held`). The store
+    keeps the value, and is given a copy (`copied`): a place it was
+    read from goes on changing, and that does not reach the store."""
+    store[key] = Held(copied(value))
+
+
 def fn_append(values, item):
     """LIST-1: `append(values, item)` "gives the place `values` the list
     it held with `item` after its last entry".
@@ -1590,28 +1638,6 @@ def get_dict_K__T__K(store, key):
     it gives is still in the dictionary: it is read there, and what
     keeps it takes a copy."""
     return store.get(key)
-
-
-def with_item(sequence, index, value, /):
-    """`place[index] = value` for a tuple, and for a list that is no
-    place's own (EXPR-3): the sequence with one element another value.
-    "An index outside a list fails where it is evaluated." `sequence`
-    itself is as it was, for whatever else holds it."""
-    _index(index, len(sequence))
-    return _spliced(sequence, index, value)
-
-
-def with_entry(dictionary, key, value, /):
-    """`place[key] = value` for a dictionary that is no place's own
-    (EXPR-3): the dictionary with the key given the value. "A key the
-    dictionary has not is added." `dictionary` itself is as it was."""
-    return {**dictionary, key: value}
-
-
-def unmatched(selected):
-    """A `switch` with no `default`, where no case has the selector's
-    value (CTRL-6: "An unmatched selector uses default or fails")."""
-    raise HglError(f"no case of the `switch` has the value {selected!r}")
 
 
 def _i64(value, what="an i64 result"):
@@ -1823,6 +1849,176 @@ def mod__i64_f64(lhs, rhs, zero):
 
 def mod__f64_i64(lhs, rhs, zero):
     return _divide(_mod, lhs, rhs, zero)
+
+
+def neg__i64(value):
+    return _i64(-value)
+
+
+def neg__f64(value):
+    return -value
+
+
+def eq__T_T(lhs, rhs):
+    return _equal(lhs, rhs)
+
+
+def ne__T_T(lhs, rhs):
+    return not _equal(lhs, rhs)
+
+
+def lt__T_T(lhs, rhs):
+    return lhs < rhs
+
+
+def le__T_T(lhs, rhs):
+    return lhs <= rhs
+
+
+def gt__T_T(lhs, rhs):
+    return lhs > rhs
+
+
+def ge__T_T(lhs, rhs):
+    return lhs >= rhs
+
+
+def _compare(lhs, rhs):
+    """`lhs <=> rhs`: the name of the member of core's `CmpResult` the
+    comparison comes to (OPS-3). NUM-6: "A NaN operand yields
+    `unordered`; equivalent numeric values, including opposite signed
+    zeros, yield `equivalent`." Only a number is a NaN, so "only a
+    numeric comparison yields `unordered`". Python compares an `i64`
+    with an `f64` exactly.
+
+    A native candidate that gives an enum gives its member's name, as
+    one that takes an enum is given it: the generated module reads the
+    member from the enum it declares.
+    """
+    if lhs != lhs or rhs != rhs:
+        return "unordered"
+    if lhs < rhs:
+        return "less"
+    if lhs > rhs:
+        return "greater"
+    return "equivalent"
+
+
+def compare__T_T(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def compare__i64_f64(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def compare__f64_i64(lhs, rhs):
+    return _compare(lhs, rhs)
+
+
+def and__bool_bool(lhs, rhs):
+    return lhs and rhs
+
+
+def or__bool_bool(lhs, rhs):
+    return lhs or rhs
+
+
+def not__bool(value):
+    return not value
+
+
+def _close(lhs, rhs, abs, rel):
+    """`lhs == rhs` under the tolerances `abs` and `rel` (NUM-4, NUM-5).
+
+    With no tolerance it is exact. Python compares an `int` with a
+    `float` by their exact values, as NUM-2 has a mixed comparison do,
+    and its `==` already has NaN equal to nothing, an infinity equal to
+    itself alone, and the two zeros equal.
+
+    NUM-4: "For finite operands, closeness is the symmetric condition"
+
+        abs(a - b) <= max(abs_tolerance, rel_tolerance * max(abs(a), abs(b)))
+
+    NUM-5: "The finite test must not admit an incorrect result through
+    overflow of intermediate subtraction or scaling." The difference of
+    `1e308` and `-1e308` is no `f64`, and nor is 1.9 times `1e308`: the
+    test is made in exact fractions, which every finite number is.
+    """
+    # NUM-4: "Tolerances must be finite and nonnegative. ... An invalid
+    # tolerance is an HGL error".
+    for name, tolerance in (("abs", abs), ("rel", rel)):
+        if not (_math.isfinite(tolerance) and tolerance >= 0):
+            raise HglError(f"the tolerance `{name}` is not finite and nonnegative")
+    if abs == 0 and rel == 0:
+        return lhs == rhs
+    # NUM-5: "NaN is neither equal nor close to any value, including
+    # itself. Infinities are equal/close only to the same signed
+    # infinity ... Apply these cases before the finite closeness rule."
+    if lhs != lhs or rhs != rhs:
+        return False
+    if _math.isinf(lhs) or _math.isinf(rhs):
+        return lhs == rhs
+    left, right = _Fraction(lhs), _Fraction(rhs)
+    allowed = max(_Fraction(abs), _Fraction(rel) * max(_magnitude(left), _magnitude(right)))
+    return _magnitude(left - right) <= allowed
+
+
+def eq__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return _close(lhs, rhs, abs, rel)
+
+
+def eq__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return _close(lhs, rhs, abs, rel)
+
+
+def eq__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return _close(lhs, rhs, abs, rel)
+
+
+# NUM-4: "Configured `!=` is the complement under the same options."
+def ne__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return not _close(lhs, rhs, abs, rel)
+
+
+def ne__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return not _close(lhs, rhs, abs, rel)
+
+
+def ne__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
+    return not _close(lhs, rhs, abs, rel)
+
+
+def lt__i64_f64(lhs, rhs):
+    return lhs < rhs
+
+
+def lt__f64_i64(lhs, rhs):
+    return lhs < rhs
+
+
+def le__i64_f64(lhs, rhs):
+    return lhs <= rhs
+
+
+def le__f64_i64(lhs, rhs):
+    return lhs <= rhs
+
+
+def gt__i64_f64(lhs, rhs):
+    return lhs > rhs
+
+
+def gt__f64_i64(lhs, rhs):
+    return lhs > rhs
+
+
+def ge__i64_f64(lhs, rhs):
+    return lhs >= rhs
+
+
+def ge__f64_i64(lhs, rhs):
+    return lhs >= rhs
 
 
 def _microseconds(value):
@@ -2517,200 +2713,3 @@ def fn_weekend(day):
 def fn_same_month(lhs, rhs):
     """TEN-8: true where the two dates are in one month of one year."""
     return (lhs.year, lhs.month) == (rhs.year, rhs.month)
-
-
-def neg__i64(value):
-    return _i64(-value)
-
-
-def neg__f64(value):
-    return -value
-
-
-def eq__T_T(lhs, rhs):
-    return _equal(lhs, rhs)
-
-
-def ne__T_T(lhs, rhs):
-    return not _equal(lhs, rhs)
-
-
-def lt__T_T(lhs, rhs):
-    return lhs < rhs
-
-
-def le__T_T(lhs, rhs):
-    return lhs <= rhs
-
-
-def gt__T_T(lhs, rhs):
-    return lhs > rhs
-
-
-def ge__T_T(lhs, rhs):
-    return lhs >= rhs
-
-
-def _compare(lhs, rhs):
-    """`lhs <=> rhs`: the name of the member of core's `CmpResult` the
-    comparison comes to (OPS-3). NUM-6: "A NaN operand yields
-    `unordered`; equivalent numeric values, including opposite signed
-    zeros, yield `equivalent`." Only a number is a NaN, so "only a
-    numeric comparison yields `unordered`". Python compares an `i64`
-    with an `f64` exactly.
-
-    A native candidate that gives an enum gives its member's name, as
-    one that takes an enum is given it: the generated module reads the
-    member from the enum it declares.
-    """
-    if lhs != lhs or rhs != rhs:
-        return "unordered"
-    if lhs < rhs:
-        return "less"
-    if lhs > rhs:
-        return "greater"
-    return "equivalent"
-
-
-def compare__T_T(lhs, rhs):
-    return _compare(lhs, rhs)
-
-
-def compare__i64_f64(lhs, rhs):
-    return _compare(lhs, rhs)
-
-
-def compare__f64_i64(lhs, rhs):
-    return _compare(lhs, rhs)
-
-
-def and__bool_bool(lhs, rhs):
-    return lhs and rhs
-
-
-def or__bool_bool(lhs, rhs):
-    return lhs or rhs
-
-
-def not__bool(value):
-    return not value
-
-
-def _close(lhs, rhs, abs, rel):
-    """`lhs == rhs` under the tolerances `abs` and `rel` (NUM-4, NUM-5).
-
-    With no tolerance it is exact. Python compares an `int` with a
-    `float` by their exact values, as NUM-2 has a mixed comparison do,
-    and its `==` already has NaN equal to nothing, an infinity equal to
-    itself alone, and the two zeros equal.
-
-    NUM-4: "For finite operands, closeness is the symmetric condition"
-
-        abs(a - b) <= max(abs_tolerance, rel_tolerance * max(abs(a), abs(b)))
-
-    NUM-5: "The finite test must not admit an incorrect result through
-    overflow of intermediate subtraction or scaling." The difference of
-    `1e308` and `-1e308` is no `f64`, and nor is 1.9 times `1e308`: the
-    test is made in exact fractions, which every finite number is.
-    """
-    # NUM-4: "Tolerances must be finite and nonnegative. ... An invalid
-    # tolerance is an HGL error".
-    for name, tolerance in (("abs", abs), ("rel", rel)):
-        if not (_math.isfinite(tolerance) and tolerance >= 0):
-            raise HglError(f"the tolerance `{name}` is not finite and nonnegative")
-    if abs == 0 and rel == 0:
-        return lhs == rhs
-    # NUM-5: "NaN is neither equal nor close to any value, including
-    # itself. Infinities are equal/close only to the same signed
-    # infinity ... Apply these cases before the finite closeness rule."
-    if lhs != lhs or rhs != rhs:
-        return False
-    if _math.isinf(lhs) or _math.isinf(rhs):
-        return lhs == rhs
-    left, right = _Fraction(lhs), _Fraction(rhs)
-    allowed = max(_Fraction(abs), _Fraction(rel) * max(_magnitude(left), _magnitude(right)))
-    return _magnitude(left - right) <= allowed
-
-
-def eq__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return _close(lhs, rhs, abs, rel)
-
-
-def eq__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return _close(lhs, rhs, abs, rel)
-
-
-def eq__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return _close(lhs, rhs, abs, rel)
-
-
-# NUM-4: "Configured `!=` is the complement under the same options."
-def ne__i64_i64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return not _close(lhs, rhs, abs, rel)
-
-
-def ne__f64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return not _close(lhs, rhs, abs, rel)
-
-
-def ne__i64_f64_f64_f64(lhs, rhs, abs=0.0, rel=0.0):
-    return not _close(lhs, rhs, abs, rel)
-
-
-def lt__i64_f64(lhs, rhs):
-    return lhs < rhs
-
-
-def lt__f64_i64(lhs, rhs):
-    return lhs < rhs
-
-
-def le__i64_f64(lhs, rhs):
-    return lhs <= rhs
-
-
-def le__f64_i64(lhs, rhs):
-    return lhs <= rhs
-
-
-def gt__i64_f64(lhs, rhs):
-    return lhs > rhs
-
-
-def gt__f64_i64(lhs, rhs):
-    return lhs > rhs
-
-
-def ge__i64_f64(lhs, rhs):
-    return lhs >= rhs
-
-
-def ge__f64_i64(lhs, rhs):
-    return lhs >= rhs
-
-
-# What `nullable` has made: a node for each Python type of `T`.
-_NULLABLE = {}
-
-
-def nullable(port, scalar):
-    """A connection of `T` where one of `T?` is wanted, as hgraph's
-    `TS[T | None]` (the language's TYPE-14: "a T is a value where a T?
-    is expected"). hgraph's `switch_` takes branches of one type, and a
-    connection of `T` is its `TS[T]`. `port` is given as it is where it
-    is one of `T?` already; otherwise a node publishes each value it
-    publishes, and is invalid where it is (END-4). `scalar` is the
-    Python type of `T`."""
-    if port.output_type == _TS[scalar | None]:
-        return port
-    node = _NULLABLE.get(scalar)
-    if node is None:
-
-        @_compute_node(valid=())
-        def node(value: _TS[scalar], _output: _TS_OUT[scalar | None] = None) -> _TS[scalar | None]:
-            if value.valid:
-                return value.value
-            _output.invalidate()
-
-        _NULLABLE[scalar] = node
-    return node(value=port)
