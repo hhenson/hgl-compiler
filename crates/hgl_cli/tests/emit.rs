@@ -1,33 +1,10 @@
 //! Runs `hgl emit` the way a user would.
 
+mod common;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .output()
-        .expect("the hgl binary runs")
-}
-
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
-}
-
-/// An empty directory for the test named `test`.
-fn scratch(test: &str) -> PathBuf {
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("emit")
-        .join(test);
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
-    directory
-}
+use common::{hgl, scratch, text};
 
 /// An accepted program is written: a file for each module, in a
 /// directory for each part of its path, and the support files.

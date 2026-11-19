@@ -3,56 +3,9 @@
 //! The programs are written by the tests when they run, into a scratch
 //! directory of their own each.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod common;
 
-/// Runs `hgl` with `arguments` and waits for it to finish.
-fn hgl(arguments: &[&str]) -> Output {
-    hgl_with(arguments, &[])
-}
-
-/// Runs `hgl` with `arguments` and with each of `environment`, a name
-/// and a value, set in its environment.
-fn hgl_with(arguments: &[&str], environment: &[(&str, &str)]) -> Output {
-    // Cargo builds the binary before the test and puts its path in this
-    // environment variable at compile time.
-    Command::new(env!("CARGO_BIN_EXE_hgl"))
-        .args(arguments)
-        .envs(environment.iter().copied())
-        .output()
-        .expect("the hgl binary runs")
-}
-
-/// A stream's bytes as text.
-fn text(bytes: &[u8]) -> String {
-    String::from_utf8(bytes.to_vec()).expect("hgl writes UTF-8")
-}
-
-/// An empty directory for the test named `test`.
-fn scratch(test: &str) -> PathBuf {
-    // Cargo gives integration tests a scratch directory under `target/`.
-    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("cases")
-        .join(test);
-    // Left over from an earlier run, perhaps; `ok()` ignores "not there".
-    fs::remove_dir_all(&directory).ok();
-    fs::create_dir_all(&directory).unwrap();
-    directory
-}
-
-/// Writes `text` to `directory/name` and gives the path as `hgl` will
-/// print it.
-fn write(directory: &Path, name: &str, text: &str) -> String {
-    let path = directory.join(name);
-    fs::write(&path, text).unwrap();
-    path.display().to_string()
-}
-
-/// A path as an argument.
-fn argument(path: &Path) -> String {
-    path.display().to_string()
-}
+use common::{argument, hgl, hgl_with, interpreter, scratch, text, write};
 
 /// A program of rejection cases that pass, with one test to run.
 const PASSING: &str = concat!(
@@ -466,8 +419,7 @@ fn a_host_option_needs_a_target() {
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn tests_run_on_hgraph() {
-    let python = std::env::var("HGL_HGRAPH_PYTHON")
-        .expect("HGL_HGRAPH_PYTHON names a Python interpreter that has hgraph");
+    let python = interpreter();
     let root = scratch("on_hgraph");
     let file = write(&root, "cases.hgl", RUNNING);
     let kept = scratch("on_hgraph_kept");
