@@ -3668,7 +3668,7 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
         [
             "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:17:11 target.unsupported: the hgraph target does not write this expression yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` as a value yet",
         ]
     );
 }
@@ -4814,7 +4814,7 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:5:45 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` takes no removed position and no size yet",
             "m.hgl:9:23 target.unsupported: the hgraph target does not write the delta of an unsized list yet",
             "m.hgl:11:11 target.unsupported: the hgraph target does not write the type `list<Quote>` yet",
-            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary of composites yet",
             "m.hgl:18:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
             "m.hgl:23:44 target.unsupported: the hgraph target does not write a list's element at a position that ticks yet",
             "m.hgl:24:4 target.unsupported: the hgraph target does not write the type `dict<str, list<i64>>` yet",
@@ -4925,7 +4925,7 @@ fn collection_validity_and_a_lists_delta_are_written() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta published to an unsized list yet",
+            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta of an unsized list yielded by a source yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` does not report a position that became invalid yet"
         ]
     );
@@ -5477,7 +5477,7 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:13:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
             "m.hgl:21:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
             "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
-            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of a list of nullables yet",
             "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
         ]
     );

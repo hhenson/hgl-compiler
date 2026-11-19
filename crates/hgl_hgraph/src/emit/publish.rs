@@ -55,7 +55,12 @@ impl Emitter<'_> {
                 self.natives = true;
                 return format!("_core.list_applied(_output, {written})");
             }
-            self.unsupported(value.at, "a delta published to an unsized list");
+            let unwritten = if function.mode == Mode::Source {
+                "a delta of an unsized list yielded by a source"
+            } else {
+                "a delta published to an unsized list"
+            };
+            self.unsupported(value.at, unwritten);
             return written;
         }
         // TYPE-16: "A `list<V, N>` keeps its bounds: ... one in a delta
@@ -349,6 +354,12 @@ impl Emitter<'_> {
                     at,
                     "a whole list published where an element is temporal composite or nullable",
                 );
+                None
+            }
+            // A node's whole dictionary of values that publish whole is
+            // written (`bundled`); one of composites is not.
+            Type::Dict { value, .. } if !publishes_whole(value) => {
+                self.unsupported(at, "a whole dictionary of composites");
                 None
             }
             Type::Dict { .. } => {
