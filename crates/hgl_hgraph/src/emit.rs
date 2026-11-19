@@ -5759,6 +5759,13 @@ impl Emitter<'_> {
         // it is an input of the child, a connection, or its
         // configuration.
         let mut written: Vec<(&Argument, usize, String, bool)> = Vec::new();
+        // What a node is given inside `_core.Held(...)`; a lifted node
+        // holds its configuration itself (`bound`).
+        let kept = if lifted {
+            vec![false; signature.parameters.len()]
+        } else {
+            self.kept_configuration(callee, generics, signature)
+        };
         let child = if lifted {
             let (values, bound) = self.bound(function, signature, arguments, |emitter, value| {
                 emitter.connects(function, value).then(|| value.ty.clone())
@@ -5790,7 +5797,6 @@ impl Emitter<'_> {
             }
             node
         } else {
-            let kept = self.kept_configuration(callee, generics, signature);
             for argument in arguments {
                 let Some(index) = argument.parameter else {
                     continue;
@@ -5846,6 +5852,13 @@ impl Emitter<'_> {
                     continue;
                 }
                 if let Some(value) = self.left_out(callee, index, parameter) {
+                    // A node keeps a default of its configuration as it
+                    // keeps one given (`kept_configuration`).
+                    let value = if kept[index] {
+                        format!("_core.Held({value})")
+                    } else {
+                        value
+                    };
                     called.push(format!("{}={value}", name(&parameter.name)));
                 }
             }

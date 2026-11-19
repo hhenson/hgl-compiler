@@ -545,3 +545,30 @@ test a_capture_in_a_keyed_child_is_that_childs {
         shown: "a")) ==
                [_,   _,   1,    _,   1,    _,   _,   2]
 }
+
+fn tagged_sum(value: i64, const tags: list<i64> = [1, 2]) -> i64 {
+    when {
+        var total = 100 // value
+        for tag in tags { total += tag }
+        return total
+    }
+}
+
+fn tagged_sums(value: i64) -> i64 {
+    let boundary = capture(tagged_sum, value)
+    return boundary.value
+}
+
+const given_tags: list<i64> = [5]
+
+fn tagged_given(value: i64) -> i64 {
+    let boundary = capture(tagged_sum, value, given_tags)
+    return boundary.value
+}
+
+# A captured node keeps its configuration, given or left out, as a call
+# of it does.
+test a_captured_node_keeps_its_configuration {
+    assert eval(tagged_sums(value: [4, 0, 5])) == [28, _, 23]
+    assert eval(tagged_given(value: [4, 0, 5])) == [30, _, 25]
+}
