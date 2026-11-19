@@ -386,6 +386,48 @@ fn defaults_a_parent_has_are_judged_with_the_arguments_below() {
     );
 }
 
+/// UNIT-9: each struct has one effective default for a field. Where it
+/// declares the field itself, with a default or without one (TYPE-4: "A
+/// typed field introduction fixes its type and optionality"), that
+/// decides; otherwise its direct parents' effective defaults do. A
+/// conflict is reported in the struct where two of those differ, and a
+/// struct below sees only its parents' effective defaults: one that
+/// resolves the conflict ends it, and one below a conflict is not
+/// reported again.
+#[test]
+fn each_struct_has_one_effective_default_for_a_field() {
+    let checked = module(concat!(
+        "abstract struct Top1 { x: i64 = 1 }\n",
+        "abstract struct Top2 { x: i64 = 2 }\n",
+        // Redeclared with no default: the field has none below.
+        "abstract struct Redeclared : Top1, Top2 { x: i64 }\n",
+        "struct AfterRedeclared : Redeclared {}\n",
+        // Resolved by a default of its own, three levels deep.
+        "abstract struct Resolved : Top1, Top2 { x = 3 }\n",
+        "struct AfterResolved : Resolved {}\n",
+        "struct AgainstTop : Resolved, Top1 {}\n",
+        // A conflict in the middle, reported once.
+        "abstract struct InConflict : Top1, Top2 {}\n",
+        "struct BelowConflict : InConflict {}\n",
+        // A diamond: one field by two paths, one default.
+        "abstract struct Base { y: i64 = 1 }\n",
+        "abstract struct Left : Base {}\n",
+        "abstract struct Right : Base {}\n",
+        "struct Diamond : Left, Right {}\n",
+        // A diamond one side of which gives the field another default.
+        "abstract struct Changed : Base { y = 2 }\n",
+        "struct Uneven : Changed, Right {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:8:31 local:type/default.conflict UNIT-9",
+            "m.hgl:9:36 local:type/default.conflict UNIT-9",
+            "m.hgl:16:26 local:type/default.conflict UNIT-9",
+        ]
+    );
+}
+
 /// UNIT-9 compares the defaults of one field. Two parents' fields of
 /// one name and two types are a `field.conflict` (TYPE-4), and are not
 /// reported again for their defaults.

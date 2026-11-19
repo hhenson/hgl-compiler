@@ -26,7 +26,6 @@ use petgraph::algo::kosaraju_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::constant::fold;
-use crate::inherited::{InheritedDefault, InheritedDefaults};
 use crate::program::{Declaration, DeclarationKind, Program};
 use crate::read::{child, has_token, is_type, tokens};
 use crate::types::{
@@ -41,13 +40,7 @@ type Id = (usize, usize);
 
 /// Checks every struct and enum of the program, and fills in the
 /// [`Detail::Enum`] of each enum.
-///
-/// It gives the pairs of defaults a struct has from two parents for
-/// one field, which are compared once the defaults are read (UNIT-9).
-pub(crate) fn check(
-    program: &mut Program,
-    diagnostics: &mut Diagnostics,
-) -> Vec<InheritedDefaults> {
+pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
     for module in &mut program.modules {
         for (index, declaration) in module.declarations.iter().enumerate() {
             if declaration.kind == DeclarationKind::Enum {
@@ -99,17 +92,11 @@ pub(crate) fn check(
     // What each struct has, for the passes that read constructors and
     // member accesses.
     let members: Vec<(Id, Vec<Member>)> = ids.iter().map(|&id| (id, structs.members(id))).collect();
-    let defaults: Vec<InheritedDefaults> = ids
-        .iter()
-        .filter_map(|id| structs.fields.get(id))
-        .flat_map(|fields| fields.defaults.iter().cloned())
-        .collect();
     for ((module, declaration), members) in members {
         if let Detail::Struct(read) = &mut program.modules[module].details[declaration] {
             read.members = members;
         }
     }
-    defaults
 }
 
 // ---- Enums (TYPE-7) ----
@@ -268,15 +255,6 @@ struct Introduced {
     /// That field: the struct that writes it, and its position among
     /// that struct's own fields.
     default_of: Option<(Id, usize)>,
-    /// What the generic parameters of the struct that writes that
-    /// default stand for in the struct that has the field, each by
-    /// where it is declared. `None` where that struct is this one, or
-    /// there is no default: its parameters stand for themselves.
-    default_arguments: Option<Bindings>,
-    /// The other defaults parents give this field by other paths, each
-    /// with the arguments of its path, which a struct below compares
-    /// once its own arguments are in place (UNIT-9).
-    alternatives: Vec<Alternative>,
     /// The struct that declares it, and the field's position among that
     /// struct's members.
     origin: (Id, usize),
@@ -285,20 +263,6 @@ struct Introduced {
     /// The position, among the parents of the struct being checked, of
     /// the parent it came through.
     via: usize,
-}
-
-/// A default a field has from a parent by another path than the one
-/// whose default the field takes (UNIT-9).
-#[derive(Debug, Clone, PartialEq)]
-struct Alternative {
-    /// The field that writes it: the struct, and the field's position
-    /// among that struct's own fields.
-    of: (Id, usize),
-    /// What the generic parameters of that struct stand for in the
-    /// struct that has the field.
-    arguments: Bindings,
-    /// Where it is written.
-    from: Location,
 }
 
 /// A field of a struct, its own or one from a parent, whose type names
@@ -337,9 +301,6 @@ struct Fields {
     inherited: Vec<Introduced>,
     /// Those, then its own.
     all: Vec<Introduced>,
-    /// The defaults two of its parents give one field, where the
-    /// struct gives that field none of its own (UNIT-9).
-    defaults: Vec<InheritedDefaults>,
 }
 
 struct Structs<'a> {
@@ -851,13 +812,6 @@ impl Structs<'_> {
     /// `known`.
     fn fields_of(&self, id: Id, known: &HashMap<Id, Fields>) -> Fields {
         let mut inherited: Vec<Introduced> = Vec::new();
-        // UNIT-9: "Compare inherited defaults ... Conflicting inherited
-        // defaults require an explicit child override." Each pair of
-        // defaults two parents give one field, where they are not
-        // plainly the same: they are compared once they are read.
-        let mut defaults: Vec<InheritedDefaults> = Vec::new();
-        // Every default a parent gives a field, by each path, each once.
-        let mut given: Vec<Introduced> = Vec::new();
         for (via, parent) in self.parents[&id].iter().enumerate() {
             // A parent with no fields is part of a cycle of
             // inheritance, which has been reported.
@@ -877,130 +831,31 @@ impl Structs<'_> {
                 } else {
                     self.in_place(&field.ty, parent.id, &parent.arguments)
                 };
-                // What the parameters of the struct that writes the
-                // default stand for here: what they stand for in the
-                // parent, with this struct's arguments in place of the
-                // parent's parameters.
-                let default_arguments = field.has_default.then(|| {
-                    let start = match &field.default_arguments {
-                        Some(arguments) => arguments.clone(),
-                        None => self.own_parameters(parent.id),
-                    };
-                    start
-                        .iter()
-                        .map(|(at, argument)| (*at, self.carried(argument, parent)))
-                        .collect()
-                });
-                // The other defaults the parent has for the field, with
-                // this struct's arguments in place.
-                let alternatives: Vec<Alternative> = field
-                    .alternatives
-                    .iter()
-                    .map(|alternative| Alternative {
-                        arguments: alternative
-                            .arguments
-                            .iter()
-                            .map(|(at, argument)| (*at, self.carried(argument, parent)))
-                            .collect(),
-                        ..alternative.clone()
-                    })
-                    .collect();
                 let field = Introduced {
                     ty,
                     via,
-                    default_arguments,
-                    alternatives,
                     ..field.clone()
                 };
-                // The field's default, and each other, as a default of
-                // its own to compare.
-                let mut defaults_of = Vec::new();
-                if field.has_default {
-                    defaults_of.push(field.clone());
-                }
-                defaults_of.extend(field.alternatives.iter().map(|alternative| Introduced {
-                    has_default: true,
-                    default_of: Some(alternative.of),
-                    default_arguments: Some(alternative.arguments.clone()),
-                    default_from: Some(alternative.from),
-                    alternatives: Vec::new(),
-                    ..field.clone()
-                }));
-                for default in defaults_of {
-                    let same = |other: &Introduced| {
-                        other.name == default.name
-                            && other.default_of == default.default_of
-                            && other.default_arguments == default.default_arguments
-                    };
-                    if !given.iter().any(same) {
-                        given.push(default);
-                    }
-                }
                 // The same field by another path is one field.
                 let listed = inherited
                     .iter_mut()
                     .find(|other| other.origin == field.origin && other.ty == field.ty);
                 match listed {
-                    // Only one path gives it a default: that is the
-                    // default it has, whatever order the parents are
-                    // written in.
+                    // UNIT-9: where only one path gives it a default,
+                    // that is the default it has, whatever order the
+                    // parents are written in. Two that differ are
+                    // reported once the defaults are read.
                     Some(first) if !first.has_default && field.has_default => {
                         first.has_default = true;
                         first.null_default = field.null_default;
                         first.empty_default = field.empty_default;
                         first.default_from = field.default_from;
                         first.default_of = field.default_of;
-                        first.default_arguments = field.default_arguments;
-                        first.alternatives = field.alternatives;
                     }
-                    // Its default and its others, where they are not the
-                    // one the field takes, are kept as others, so that a
-                    // struct below compares them with its arguments in
-                    // place.
-                    Some(first) => {
-                        let mut others = field.alternatives;
-                        if let (Some(of), Some(arguments), Some(from)) = (
-                            field.default_of,
-                            field.default_arguments,
-                            field.default_from,
-                        ) {
-                            others.push(Alternative {
-                                of,
-                                arguments,
-                                from,
-                            });
-                        }
-                        for other in others {
-                            let taken = first.default_of == Some(other.of)
-                                && first.default_arguments.as_ref() == Some(&other.arguments);
-                            if !taken && !first.alternatives.contains(&other) {
-                                first.alternatives.push(other);
-                            }
-                        }
-                    }
+                    Some(_) => {}
                     None => inherited.push(field),
                 }
             }
-        }
-        // Each two of those for one field, whether one field by two paths
-        // or two parents' fields of one name (TYPE-4: they have "one type
-        // and optionality"): every pair, so that a default that cannot
-        // be judged hides no two that can. Two of different types are a
-        // `field.conflict`, and their defaults are not compared too.
-        for (index, later) in given.iter().enumerate() {
-            for earlier in &given[..index] {
-                if earlier.name == later.name
-                    && !differs(earlier, &later.ty)
-                    && let Some(pair) = self.inherited_defaults(id, earlier, later)
-                {
-                    defaults.push(pair);
-                }
-            }
-        }
-        // A field this struct writes itself, with a default or a type
-        // of its own, has no default from a parent to choose between.
-        if let Some(read) = self.struct_type(id) {
-            defaults.retain(|pair| !read.fields.iter().any(|field| field.name == pair.field));
         }
         let mut all = inherited.clone();
         // A default this struct gives a field a parent has, by
@@ -1015,8 +870,6 @@ impl Structs<'_> {
                     inherited.empty_default = field.empty_default;
                     inherited.default_from = Some(field.at);
                     inherited.default_of = Some((id, index));
-                    inherited.default_arguments = None;
-                    inherited.alternatives.clear();
                 }
             }
         }
@@ -1033,8 +886,6 @@ impl Structs<'_> {
                         empty_default: field.empty_default,
                         default_from: field.has_default.then_some(field.at),
                         default_of: field.has_default.then_some((id, index)),
-                        default_arguments: None,
-                        alternatives: Vec::new(),
                         origin: (id, index),
                         at: field.at,
                         via: 0,
@@ -1042,119 +893,7 @@ impl Structs<'_> {
                 }
             }
         }
-        Fields {
-            inherited,
-            all,
-            defaults,
-        }
-    }
-
-    /// The generic parameters of the struct `id`, each standing for
-    /// itself: a type parameter as that type, a value parameter as that
-    /// constant.
-    fn own_parameters(&self, id: Id) -> Bindings {
-        let Some(read) = self.struct_type(id) else {
-            return Vec::new();
-        };
-        read.generics
-            .iter()
-            .map(|generic| {
-                let argument = match generic.kind {
-                    GenericKind::Value(_) => Argument::Constant(Constant {
-                        text: generic.name.clone(),
-                        value: ConstantValue::Parameter {
-                            name: generic.name.clone(),
-                            at: generic.at,
-                        },
-                    }),
-                    _ => Argument::Type(Type::Parameter {
-                        name: generic.name.clone(),
-                        at: generic.at,
-                    }),
-                };
-                (generic.at, argument)
-            })
-            .collect()
-    }
-
-    /// `argument`, written in the parameters of `parent`'s struct, with
-    /// the arguments the struct below gives that parent in their place.
-    /// What that is not known for, a type pack's part or a type given
-    /// where a constant is, is `Type::Unknown`.
-    fn carried(&self, argument: &Argument, parent: &Parent) -> Argument {
-        match argument {
-            Argument::Type(ty) => Argument::Type(if parent.forwards_pack && names_parameter(ty) {
-                Type::Unknown
-            } else {
-                self.in_place(ty, parent.id, &parent.arguments)
-            }),
-            Argument::Constant(constant) => {
-                let ConstantValue::Parameter { at, .. } = &constant.value else {
-                    return argument.clone();
-                };
-                let Some(read) = self.struct_type(parent.id) else {
-                    return argument.clone();
-                };
-                // The parameters before a type pack take the arguments
-                // in their places, as `in_place` has them.
-                let position = read
-                    .generics
-                    .iter()
-                    .take_while(|generic| !matches!(generic.kind, GenericKind::Pack { .. }))
-                    .position(|generic| generic.at == *at);
-                match position {
-                    // A parameter of another struct: as it is.
-                    None => argument.clone(),
-                    Some(_) if parent.forwards_pack => Argument::Type(Type::Unknown),
-                    Some(position) => match parent.arguments.get(position) {
-                        Some(Argument::Constant(given)) => Argument::Constant(given.clone()),
-                        // A wrong count, or a type for a value, has
-                        // been reported.
-                        _ => Argument::Type(Type::Unknown),
-                    },
-                }
-            }
-        }
-    }
-
-    /// The defaults `earlier` and `later` give the struct `id` for one
-    /// field, from two of its parents, to compare once they are read
-    /// (UNIT-9); `None` where they are plainly one default: the same
-    /// field writes both, with the same arguments, or one of them has
-    /// none.
-    fn inherited_defaults(
-        &self,
-        id: Id,
-        earlier: &Introduced,
-        later: &Introduced,
-    ) -> Option<InheritedDefaults> {
-        if !earlier.has_default || !later.has_default {
-            return None;
-        }
-        if earlier.default_of == later.default_of
-            && earlier.default_arguments == later.default_arguments
-        {
-            return None;
-        }
-        let default = |field: &Introduced| {
-            let ((module, declaration), index) = field.default_of?;
-            Some(InheritedDefault {
-                written: FieldRef {
-                    module,
-                    declaration,
-                    field: index,
-                },
-                arguments: field.default_arguments.clone().unwrap_or_default(),
-                at: field.default_from?,
-                parent: self.parents[&id][field.via].at,
-            })
-        };
-        Some(InheritedDefaults {
-            owner: id,
-            field: later.name.clone(),
-            ty: later.ty.clone(),
-            defaults: [default(earlier)?, default(later)?],
-        })
+        Fields { inherited, all }
     }
 
     /// A field's type `ty`, of the generic struct `id`, with `arguments`
@@ -1213,8 +952,8 @@ impl Structs<'_> {
             match members.iter_mut().find(|known| known.name == member.name) {
                 // UNIT-9: of two parents' fields of one name, one with
                 // a default gives the field that default, whatever
-                // order the parents are written in. Two that differ
-                // are reported once they are read.
+                // order the parents are written in. Two that differ are
+                // reported once the defaults are read.
                 Some(known) if inherited && known.has_default && !member.has_default => {}
                 Some(known) => *known = member,
                 None => members.push(member),

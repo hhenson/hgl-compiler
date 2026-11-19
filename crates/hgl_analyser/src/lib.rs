@@ -48,8 +48,9 @@
 //! * `documentation` checks that a documentation comment's `Args:` and
 //!   `Type Args:` keys name the declaration's parameters and generic
 //!   parameters (SDOC-3), and records nothing (SDOC-6);
-//! * `inherited` compares the defaults a struct has for one field from
-//!   two parents, once `values` has read them (UNIT-9).
+//! * `inherited` works out each struct's effective default for each
+//!   field, once `values` has read the defaults, and reports two from
+//!   its parents that differ (UNIT-9).
 //!
 //! What an expression is, phases and constants are not checked yet.
 //!
@@ -558,12 +559,12 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     phases::classify(&mut program);
     read::read(&mut program, diagnostics);
     phases::check(&program, diagnostics);
-    let inherited = declared::check(&mut program, diagnostics);
+    declared::check(&mut program, diagnostics);
     signatures::check(&program, diagnostics);
     documentation::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
     // UNIT-9: asked once each default has been read.
-    inherited::check(&program, &inherited, diagnostics);
+    inherited::check(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);

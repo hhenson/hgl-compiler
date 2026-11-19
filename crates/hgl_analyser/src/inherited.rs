@@ -1,156 +1,423 @@
-//! Compares the defaults a struct has for one field from two of its
-//! parents (UNIT-9).
-//!
-//! `declared` works out the fields each struct has, and finds where two
-//! parents give one field a default and the struct gives it none of its
-//! own. What each default is, is a question of what it is written as,
-//! which `values` reads. So this pass runs after it, with the arguments
-//! each default's path gives the struct that writes it in place.
+//! Compares the defaults a struct has for one field from its parents
+//! (UNIT-9).
 //!
 //! UNIT-9: "Compare inherited defaults by bound expression and
 //! canonical type after substitution, before folding. Declaration
 //! identity matters; source location and alias spelling do not.
 //! Conflicting inherited defaults require an explicit child override."
 //!
+//! Each struct has one effective default for each field, worked out
+//! from the top down, parents first. Where the struct declares the
+//! field itself, with a default or without one, that declaration
+//! decides (TYPE-4: "A typed field introduction fixes its type and
+//! optionality"; "An untyped inherited override changes only the
+//! construction default"). Otherwise the field has what its direct
+//! parents' effective defaults give it, each with the arguments the
+//! struct gives that parent in place. A conflict belongs to the struct
+//! where two of those provably differ: it is reported there, and a
+//! struct below sees only that the field's default is in conflict, so
+//! it is not reported again, and a struct that resolves it ends it.
+//!
 //! The pass rejects only what it can tell: two defaults that are each a
 //! constant value of the field's type, the type the struct has the field
-//! with, and that are two values. A default it cannot read as such a
-//! value, a call, an expression of operators, a generic value parameter
-//! left as one, a date or time among them, is not judged, and nothing is
-//! reported for its pair.
+//! with, and that are two values (see [`Known`]). Defaults it cannot
+//! read so, a call, an expression of operators, a generic value
+//! parameter left as one, a date or time, are not judged where they
+//! stand; they are kept, and a struct below, whose arguments may make
+//! them values, judges them again. It runs after `values`, which reads
+//! each default.
+
+use std::collections::{HashMap, HashSet};
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_lexer::literal::{decode_float, decode_string};
+use hgl_parser::{HasSpan, SyntaxKind};
 
 use crate::codes;
-use crate::declared::bare_literal;
+use crate::declared::{agree, bare_literal, substitute_within};
 use crate::hir::{Callee, Expr, ExprKind, Form, UnaryOperator, Value};
-use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, FieldRef, Scalar, Type};
+use crate::program::{DeclarationKind, Program};
+use crate::read::{child, has_token, is_type};
+use crate::types::{
+    Argument, Constant, ConstantValue, Detail, FieldRef, GenericKind, Scalar, StructType, Type,
+};
 
-/// The defaults two parents give one field of a struct, which gives
-/// that field none of its own.
-#[derive(Debug, Clone)]
-pub(crate) struct InheritedDefaults {
-    /// The struct: the position of its module in `Program::modules`,
-    /// and its own in that module's declarations.
-    pub(crate) owner: (usize, usize),
-    /// The field's name.
-    pub(crate) field: String,
-    /// The field's type as the struct has it, its parents' generic
-    /// arguments in place.
-    pub(crate) ty: Type,
-    /// The default the earlier parent gives it, then the later's.
-    pub(crate) defaults: [InheritedDefault; 2],
+/// A declaration, by the position of its module in `Program::modules`
+/// and its own in that module's `declarations`.
+type Id = (usize, usize);
+
+/// One default a field may take: the field that writes it, and what the
+/// generic parameters of the struct that writes it stand for in the
+/// struct being worked out, each by where it is declared.
+#[derive(Debug, Clone, PartialEq)]
+struct Inherited {
+    /// The field that writes it, whose value is in `Module::defaults`.
+    written: FieldRef,
+    /// The arguments of its path.
+    arguments: Vec<(Location, Argument)>,
 }
 
-/// One default a struct has for a field from a parent.
+/// What a struct's field takes when a construction leaves it out.
 #[derive(Debug, Clone)]
-pub(crate) struct InheritedDefault {
-    /// The field that writes it, whose value is in `Module::defaults`.
-    pub(crate) written: FieldRef,
-    /// What the generic parameters of the struct that writes it stand
-    /// for in the struct that has the field, each by where it is
-    /// declared.
-    pub(crate) arguments: Vec<(Location, Argument)>,
-    /// Where it is written.
-    pub(crate) at: Location,
-    /// Where the parent it comes through is written, after the `:`.
-    pub(crate) parent: Location,
+enum Effective {
+    /// No default: the field is given, or is null where it is optional.
+    Nothing,
+    /// The defaults it may take, each once: one, or several that this
+    /// pass could not tell apart where they met, which a struct below
+    /// judges again with its own arguments in place.
+    Defaults(Vec<Inherited>),
+    /// Two defaults that differ, reported where they met.
+    Conflict,
 }
 
 /// How many constants a default's value is followed through: one that
 /// names more is not judged.
 const DEPTH: usize = 32;
 
-/// Reports each struct that has two different defaults for one field
-/// from its parents and gives the field none of its own: once for each
-/// field, at the later parent.
+/// Works out the effective default of every field of every struct,
+/// parents first, and reports each conflict where it stands.
 ///
-/// Only a field whose type is concrete, with no generic parameter in it
-/// and nothing unknown, is judged, and only where each default is a
-/// constant value of that type: see [`Known`]. A struct below one that
-/// has the same two defaults in conflict has them from it: the conflict
-/// is reported where it first stands, and not again below.
-pub(crate) fn check(
-    program: &Program,
-    pending: &[InheritedDefaults],
-    diagnostics: &mut Diagnostics,
-) {
-    // Each conflict found: the pair, and its two defaults' fields.
-    let mut conflicts: Vec<(&InheritedDefaults, [FieldRef; 2])> = Vec::new();
-    for pair in pending {
-        let found = |known: &(&InheritedDefaults, [FieldRef; 2])| {
-            known.0.owner == pair.owner && known.0.field == pair.field
-        };
-        if conflicts.iter().any(found) || !concrete(&pair.ty) {
-            continue;
-        }
-        let [earlier, later] = &pair.defaults;
-        let (Some(first), Some(second)) = (
-            value_of(program, earlier, &pair.ty),
-            value_of(program, later, &pair.ty),
-        ) else {
-            continue;
-        };
-        if first != second {
-            conflicts.push((pair, [earlier.written, later.written]));
-        }
-    }
-    for (pair, written) in &conflicts {
-        let above = ancestors(program, pair.owner);
-        let inherited = conflicts.iter().any(|(other, other_written)| {
-            above.contains(&other.owner)
-                && other.field == pair.field
-                && (other_written == written || *other_written == [written[1], written[0]])
-        });
-        if inherited {
-            continue;
-        }
-        let [earlier, later] = &pair.defaults;
-        let owner = &program.modules[pair.owner.0].declarations[pair.owner.1].name;
-        let message = format!(
-            "`{owner}` has two different defaults for `{}` from its parents, and gives it \
-             none of its own: write `{} = ...` in `{owner}`",
-            pair.field, pair.field
-        );
-        diagnostics.emit(
-            Diagnostic::error(
-                Category::Type,
-                Code::Local(codes::local::DEFAULT_CONFLICT),
-                later.parent,
-                message,
-            )
-            .with_rule("UNIT-9")
-            .with_related(earlier.at, "one default")
-            .with_related(later.at, "the other"),
-        );
-    }
-}
-
-/// Every struct `id` inherits from, through any number of parents; not
-/// `id` itself unless it inherits from itself, which is reported.
-fn ancestors(program: &Program, id: (usize, usize)) -> Vec<(usize, usize)> {
-    let mut found: Vec<(usize, usize)> = Vec::new();
-    let mut to_do = vec![id];
-    while let Some(current) = to_do.pop() {
-        let Some(Detail::Struct(read)) = program.modules[current.0].details.get(current.1) else {
-            continue;
-        };
-        for parent in &read.parents {
-            if let Type::Named {
-                module,
-                declaration,
-                ..
-            } = parent
-                && !found.contains(&(*module, *declaration))
-            {
-                found.push((*module, *declaration));
-                to_do.push((*module, *declaration));
+/// The parents are reached with a list of structs still to do, kept
+/// here, and not by this function calling itself: a chain of parents is
+/// as long as the source makes it, and the call stack is not. A struct
+/// whose parent is still waiting is in a cycle of inheritance, which
+/// has been reported, and that parent is passed over.
+pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
+    let mut done: HashMap<Id, HashMap<String, Effective>> = HashMap::new();
+    let mut waiting: HashSet<Id> = HashSet::new();
+    for start in structs(program) {
+        let mut to_do = vec![start];
+        // `last` looks at the struct on top of the list without taking
+        // it off.
+        while let Some(&id) = to_do.last() {
+            if done.contains_key(&id) {
+                to_do.pop();
+                continue;
+            }
+            waiting.insert(id);
+            let next = parents(program, id)
+                .into_iter()
+                .map(|(parent, _, _)| parent)
+                .find(|parent| !done.contains_key(parent) && !waiting.contains(parent));
+            match next {
+                Some(parent) => to_do.push(parent),
+                None => {
+                    let fields = effective(program, id, &done, diagnostics);
+                    done.insert(id, fields);
+                    waiting.remove(&id);
+                    to_do.pop();
+                }
             }
         }
     }
-    found
+}
+
+/// Every struct of the program, in order of module and declaration.
+fn structs(program: &Program) -> Vec<Id> {
+    let mut ids = Vec::new();
+    for (module, declared) in program.modules.iter().enumerate() {
+        for (index, declaration) in declared.declarations.iter().enumerate() {
+            if declaration.kind == DeclarationKind::Struct {
+                ids.push((module, index));
+            }
+        }
+    }
+    ids
+}
+
+/// What was read of the struct `id`.
+fn struct_type(program: &Program, id: Id) -> Option<&StructType> {
+    match program.modules[id.0].details.get(id.1) {
+        Some(Detail::Struct(read)) => Some(read),
+        _ => None,
+    }
+}
+
+/// The parents of the struct `id` that are abstract structs, each with
+/// the generic arguments it is given and where it is written. Any other
+/// parent has been reported (TYPE-3).
+fn parents(program: &Program, id: Id) -> Vec<(Id, Vec<Argument>, Location)> {
+    let Some(read) = struct_type(program, id) else {
+        return Vec::new();
+    };
+    let module = &program.modules[id.0];
+    let declaration = &module.declarations[id.1];
+    let file = module.files[declaration.file].file;
+    let written = child(&declaration.syntax, SyntaxKind::StructBases)
+        .into_iter()
+        .flat_map(|bases| bases.children())
+        .filter(|parent| is_type(parent.kind()))
+        .map(|parent| Location::new(file, parent.span()));
+    read.parents
+        .iter()
+        .zip(written)
+        .filter_map(|(ty, at)| match ty {
+            Type::Named {
+                module,
+                declaration,
+                arguments,
+                ..
+            } => {
+                let parent = &program.modules[*module].declarations[*declaration];
+                let abstract_struct = parent.kind == DeclarationKind::Struct
+                    && has_token(&parent.syntax, SyntaxKind::KwAbstract);
+                abstract_struct.then(|| ((*module, *declaration), arguments.clone(), at))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The effective default of each field of the struct `id`, its
+/// parents' in `done`. A conflict that first stands here is reported.
+fn effective(
+    program: &Program,
+    id: Id,
+    done: &HashMap<Id, HashMap<String, Effective>>,
+    diagnostics: &mut Diagnostics,
+) -> HashMap<String, Effective> {
+    let mut fields = HashMap::new();
+    let Some(read) = struct_type(program, id) else {
+        return fields;
+    };
+    let parents = parents(program, id);
+    // The struct's type packs: an argument that passes one on to a
+    // parent leaves which parameter each argument is given unknown.
+    let packs: Vec<Location> = read
+        .generics
+        .iter()
+        .filter(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+        .map(|generic| generic.at)
+        .collect();
+    for member in &read.members {
+        let name = &member.name;
+        // The struct's own declaration decides: a default it writes,
+        // or none.
+        if let Some(index) = read.fields.iter().position(|field| field.name == *name) {
+            let own = if read.fields[index].has_default {
+                Effective::Defaults(vec![Inherited {
+                    written: FieldRef {
+                        module: id.0,
+                        declaration: id.1,
+                        field: index,
+                    },
+                    arguments: own_parameters(read),
+                }])
+            } else {
+                Effective::Nothing
+            };
+            fields.insert(name.clone(), own);
+            continue;
+        }
+        // What its direct parents' effective defaults give it, each
+        // with the arguments of the parent it comes through in place,
+        // and where that parent is written.
+        let mut given: Vec<(Inherited, Location)> = Vec::new();
+        let mut conflict = false;
+        for (parent, arguments, at) in &parents {
+            // TYPE-4: a field two parents give two types is a
+            // `field.conflict`, and its defaults are not judged too.
+            if let Some(ty) = parent_field_type(program, *parent, arguments, name)
+                && !matches!(ty, Type::Unknown)
+                && !matches!(member.ty, Type::Unknown)
+                && !agree(&ty, &member.ty)
+            {
+                conflict = true;
+            }
+            match done.get(parent).and_then(|fields| fields.get(name)) {
+                Some(Effective::Defaults(defaults)) => {
+                    for default in defaults {
+                        let default = carried(program, default, *parent, arguments, &packs);
+                        if !given.iter().any(|(known, _)| *known == default) {
+                            given.push((default, *at));
+                        }
+                    }
+                }
+                Some(Effective::Conflict) => conflict = true,
+                Some(Effective::Nothing) | None => {}
+            }
+        }
+        let field = if conflict {
+            // Reported where it first stood, or a conflict of types.
+            Effective::Conflict
+        } else if given.is_empty() {
+            Effective::Nothing
+        } else if differing(program, id, name, &member.ty, &given, diagnostics) {
+            Effective::Conflict
+        } else {
+            Effective::Defaults(given.into_iter().map(|(default, _)| default).collect())
+        };
+        fields.insert(name.clone(), field);
+    }
+    fields
+}
+
+/// True when two of `given`, the defaults the field `name` of the
+/// struct `id` has from its parents, are constant values of the field's
+/// type `ty` that differ; the first two such are reported, at the later
+/// one's parent.
+fn differing(
+    program: &Program,
+    id: Id,
+    name: &str,
+    ty: &Type,
+    given: &[(Inherited, Location)],
+    diagnostics: &mut Diagnostics,
+) -> bool {
+    if given.len() < 2 || !concrete(ty) {
+        return false;
+    }
+    let values: Vec<Option<Known>> = given
+        .iter()
+        .map(|(default, _)| value_of(program, default, ty))
+        .collect();
+    for (later, value) in values.iter().enumerate() {
+        let Some(value) = value else {
+            continue;
+        };
+        let earlier = values[..later]
+            .iter()
+            .position(|other| other.as_ref().is_some_and(|other| other != value));
+        let Some(earlier) = earlier else {
+            continue;
+        };
+        let owner = &program.modules[id.0].declarations[id.1].name;
+        let message = format!(
+            "`{owner}` has two different defaults for `{name}` from its parents, and gives it \
+             none of its own: write `{name} = ...` in `{owner}`"
+        );
+        let mut diagnostic = Diagnostic::error(
+            Category::Type,
+            Code::Local(codes::local::DEFAULT_CONFLICT),
+            given[later].1,
+            message,
+        )
+        .with_rule("UNIT-9");
+        for (note, index) in [("one default", earlier), ("the other", later)] {
+            if let Some(at) = written_at(program, given[index].0.written) {
+                diagnostic = diagnostic.with_related(at, note);
+            }
+        }
+        diagnostics.emit(diagnostic);
+        return true;
+    }
+    false
+}
+
+/// The type the parent `parent` has its field `name` with, `arguments`
+/// in place of its generic parameters; `None` where it has no such
+/// field.
+fn parent_field_type(
+    program: &Program,
+    parent: Id,
+    arguments: &[Argument],
+    name: &str,
+) -> Option<Type> {
+    let read = struct_type(program, parent)?;
+    let member = read.members.iter().find(|member| member.name == name)?;
+    if read
+        .generics
+        .iter()
+        .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }))
+    {
+        return Some(Type::Unknown);
+    }
+    let map: Vec<(Location, &Argument)> = read
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(arguments)
+        .collect();
+    Some(substitute_within(&member.ty, &map))
+}
+
+/// Where the field `written` is written.
+fn written_at(program: &Program, written: FieldRef) -> Option<Location> {
+    let read = struct_type(program, (written.module, written.declaration))?;
+    Some(read.fields.get(written.field)?.at)
+}
+
+/// The generic parameters of a struct, each standing for itself: a type
+/// parameter as that type, a value parameter as that constant.
+fn own_parameters(read: &StructType) -> Vec<(Location, Argument)> {
+    read.generics
+        .iter()
+        .map(|generic| {
+            let argument = match generic.kind {
+                GenericKind::Value(_) => Argument::Constant(Constant {
+                    text: generic.name.clone(),
+                    value: ConstantValue::Parameter {
+                        name: generic.name.clone(),
+                        at: generic.at,
+                    },
+                }),
+                _ => Argument::Type(Type::Parameter {
+                    name: generic.name.clone(),
+                    at: generic.at,
+                }),
+            };
+            (generic.at, argument)
+        })
+        .collect()
+}
+
+/// `default`, a default of the parent `parent`, as the struct below has
+/// it: the parent's generic parameters, wherever its arguments name
+/// them, given `arguments`. Where the parent or the arguments have a
+/// type pack, which argument a parameter is given is not worked out:
+/// each argument is then not known, and the default is not judged.
+/// `packs` are the type packs of the struct below.
+fn carried(
+    program: &Program,
+    default: &Inherited,
+    parent: Id,
+    arguments: &[Argument],
+    packs: &[Location],
+) -> Inherited {
+    let Some(read) = struct_type(program, parent) else {
+        return default.clone();
+    };
+    let forwards = arguments.iter().any(|argument| {
+        matches!(argument, Argument::Type(Type::Parameter { at, .. }) if packs.contains(at))
+    });
+    let packed = forwards
+        || read
+            .generics
+            .iter()
+            .any(|generic| matches!(generic.kind, GenericKind::Pack { .. }));
+    let map: Vec<(Location, &Argument)> = read
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(arguments)
+        .collect();
+    let arguments = default
+        .arguments
+        .iter()
+        .map(|(at, argument)| {
+            let argument = match argument {
+                _ if packed => Argument::Type(Type::Unknown),
+                Argument::Type(ty) => Argument::Type(substitute_within(ty, &map)),
+                Argument::Constant(constant) => match &constant.value {
+                    ConstantValue::Parameter { at, .. } => {
+                        match map.iter().find(|(declared, _)| declared == at) {
+                            Some((_, Argument::Constant(given))) => {
+                                Argument::Constant(given.clone())
+                            }
+                            Some((_, Argument::Type(_))) => Argument::Type(Type::Unknown),
+                            None => argument.clone(),
+                        }
+                    }
+                    _ => argument.clone(),
+                },
+            };
+            (*at, argument)
+        })
+        .collect();
+    Inherited {
+        written: default.written,
+        arguments,
+    }
 }
 
 /// A default as the constant value it is, of the field's type.
@@ -176,7 +443,7 @@ enum Known {
 /// The value `default` gives a field of type `ty`, with the arguments of
 /// its path in place of the generic parameters of the struct that
 /// writes it. `None` where it is no constant value of that type.
-fn value_of(program: &Program, default: &InheritedDefault, ty: &Type) -> Option<Known> {
+fn value_of(program: &Program, default: &Inherited, ty: &Type) -> Option<Known> {
     let written = default.written;
     let mut value = program.modules[written.module]
         .defaults
