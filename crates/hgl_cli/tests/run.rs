@@ -516,10 +516,16 @@ fn an_application_the_target_cannot_write_is_not_run() {
             "fn one() -> i64 {\n",
             "    yield 1s: 1\n",
             "}\n",
-            // A loop in a graph is not written yet.
+            // An `if` over a connection whose branches assign two
+            // `var`s is not written yet.
             "fn waits() -> i64 {\n",
-            "    for item in [1, 2] { let seen = one() }\n",
-            "    return one()\n",
+            "    var first = one()\n",
+            "    var second = one()\n",
+            "    if one() > 0 {\n",
+            "        first = one()\n",
+            "        second = one()\n",
+            "    }\n",
+            "    return first + second\n",
             "}\n",
             "eval(waits())\n",
         ),
@@ -528,7 +534,9 @@ fn an_application_the_target_cannot_write_is_not_run() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         text(&output.stderr),
-        format!("{file}:6:5: the hgraph target does not write this statement yet\n")
+        format!(
+            "{file}:8:5: the hgraph target does not write an `if` or a `switch` over a connection whose branches assign more than one `var` yet\n"
+        )
     );
     assert_eq!(
         text(&output.stdout),
