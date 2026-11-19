@@ -85,6 +85,7 @@ mod instance;
 mod phases;
 mod program;
 mod read;
+mod references;
 mod resolve;
 mod signatures;
 mod types;
