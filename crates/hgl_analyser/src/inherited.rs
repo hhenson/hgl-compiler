@@ -299,6 +299,10 @@ fn knows(ty: &Type) -> bool {
         Type::Dict { key, value } => knows(key) && knows(value),
         Type::RollingWindow { value, .. } => knows(value),
         Type::Result { value, error } => knows(value) && knows(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext => true,
     }
 }
