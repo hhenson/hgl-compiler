@@ -4,6 +4,8 @@
 //! an eval or a run of the harness. Part of the transpiler, the last
 //! stage: `emit` writes a module with them.
 
+use std::collections::HashMap;
+
 use super::*;
 
 impl<'a> Emitter<'a> {
@@ -52,7 +54,7 @@ impl<'a> Emitter<'a> {
             let parameter = signature.parameters.get(argument.parameter?)?;
             (parameter.ty == Type::Scalar(Scalar::Duration)).then_some(&argument.value)
         })?;
-        let known = self.known_duration(given);
+        let known = self.known_duration(given, &mut HashMap::new());
         match function.mode {
             Mode::Node | Mode::Stop | Mode::Lifecycle => {
                 let starting = function.mode == Mode::Lifecycle;
@@ -80,18 +82,31 @@ impl<'a> Emitter<'a> {
     /// checked arithmetic. `None` for any other: a local, a call of
     /// another function, one that overflows. The analyser has rejected a
     /// constant that depends on itself (`constant.cycle`), so a chain of
-    /// constants ends.
-    fn known_duration(&self, value: &Expr) -> Option<i64> {
+    /// constants ends. `known` holds what each constant, by its module
+    /// and declaration, came to, so that one named many times, `D0 + D0`,
+    /// is worked out once.
+    fn known_duration(
+        &self,
+        value: &Expr,
+        known: &mut HashMap<(usize, usize), Option<i64>>,
+    ) -> Option<i64> {
         let program = self.program;
         match &value.kind {
             ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
             ExprKind::Constant {
                 module,
                 declaration,
-            } => match program.modules[*module].constants.get(*declaration) {
-                Some(Some(constant)) => self.known_duration(constant),
-                _ => None,
-            },
+            } => {
+                if let Some(value) = known.get(&(*module, *declaration)) {
+                    return *value;
+                }
+                let value = match program.modules[*module].constants.get(*declaration) {
+                    Some(Some(constant)) => self.known_duration(constant, known),
+                    _ => None,
+                };
+                known.insert((*module, *declaration), value);
+                value
+            }
             ExprKind::Call {
                 callee, arguments, ..
             } => {
@@ -100,21 +115,22 @@ impl<'a> Emitter<'a> {
                     return None;
                 }
                 // An operand that is a duration, or an `i64` literal.
-                let operand = |argument: &Argument| match (&argument.value.ty, &argument.value.kind)
-                {
-                    (Type::Scalar(Scalar::Duration), _) => {
-                        self.known_duration(&argument.value).map(Operand::Duration)
-                    }
-                    (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
-                        Some(Operand::Count(*count))
-                    }
-                    _ => None,
-                };
+                let mut operand =
+                    |argument: &Argument| match (&argument.value.ty, &argument.value.kind) {
+                        (Type::Scalar(Scalar::Duration), _) => self
+                            .known_duration(&argument.value, known)
+                            .map(Operand::Duration),
+                        (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
+                            Some(Operand::Count(*count))
+                        }
+                        _ => None,
+                    };
                 // In the order of the parameters, however they are
                 // written: `sub_(rhs: a, lhs: b)` is `b - a`.
                 let mut ordered: Vec<&Argument> = arguments.iter().collect();
                 ordered.sort_by_key(|argument| argument.parameter);
-                let operands: Option<Vec<Operand>> = ordered.into_iter().map(operand).collect();
+                let operands: Option<Vec<Operand>> =
+                    ordered.into_iter().map(&mut operand).collect();
                 let name = program.modules[module].declarations[declaration]
                     .name
                     .as_str();

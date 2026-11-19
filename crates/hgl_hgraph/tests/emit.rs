@@ -3700,6 +3700,29 @@ fn the_empty_selection_as_a_bool_and_a_wakes_duration_are_written() {
     assert!(support.contains("code=\"schedule.non_positive_duration\""));
 }
 
+/// TIME-8: a wake's duration that is a constant made of constants is
+/// worked out once for each constant, however many times it is named:
+/// `D40`, each `D{n}` the sum of two of `D{n-1}`, is more than zero, and
+/// is given as it is, with no check as the program runs.
+#[test]
+fn a_chain_of_constant_durations_is_worked_out_once_each() {
+    let mut text = String::from("module m\nconst D0: duration = 1us\n");
+    for n in 1..=40 {
+        text.push_str(&format!("const D{n}: duration = D{} + D{}\n", n - 1, n - 1));
+    }
+    text.push_str(concat!(
+        "fn deep() -> bool {\n",
+        "    inject scheduler\n",
+        "    start { schedule(scheduler, D40) }\n",
+        "    when scheduled() { return true }\n",
+        "}\n",
+    ));
+    let emitted = emit_clean(&[("m.hgl", &text)]);
+    emitted.module("m").assert_writes(&[
+        "_core.schedule_Scheduler_duration_str__bool(capability=_scheduler, at=D40(), tag=None, on_wall_clock=False)\n",
+    ]);
+}
+
 /// TIME-3: `modified([])` is "true in a cycle where no temporal input
 /// was modified", and `start` and `stop` are no cycle of the node: what
 /// it is there the rule does not say, and it is reported. TIME-8: "A
