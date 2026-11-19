@@ -14699,8 +14699,36 @@ fn infer_constant(
     if is_unsaid(actual) {
         return;
     }
-    if let ConstantValue::Parameter { at, .. } = &pattern.value {
-        find(*at, Argument::Constant(actual.clone()), generics, found);
+    infer_value(&pattern.value, actual, generics, found);
+}
+
+/// [`infer_constant`], for the value `pattern` is, at any depth inside a
+/// list or a tuple: `[N, 1]` given `[2, 1]` says `N` is 2.
+fn infer_value(
+    pattern: &ConstantValue,
+    actual: &Constant,
+    generics: &[GenericParameter],
+    found: &mut [Option<Argument>],
+) {
+    match (pattern, &actual.value) {
+        (ConstantValue::Parameter { at, .. }, _) => {
+            find(*at, Argument::Constant(actual.clone()), generics, found);
+        }
+        (ConstantValue::List(patterns), ConstantValue::List(values))
+        | (ConstantValue::Tuple(patterns), ConstantValue::Tuple(values))
+            if patterns.len() == values.len() =>
+        {
+            for (pattern, value) in patterns.iter().zip(values) {
+                // An element has no text of its own: it is written as
+                // the value it is.
+                let element = Constant {
+                    text: value.key().unwrap_or_else(|| actual.text.clone()),
+                    value: value.clone(),
+                };
+                infer_value(pattern, &element, generics, found);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -14792,10 +14820,11 @@ fn mentions(ty: &Type, own: &[Location]) -> bool {
     names_one_of(ty, own) || names_value_of(ty, own)
 }
 
-/// True when a size or a constant argument inside `ty` is a generic
-/// value parameter declared at one of `own`: the `N` of `list<i64, N>`.
+/// True when a size or a constant argument inside `ty` names a generic
+/// value parameter declared at one of `own`: the `N` of `list<i64, N>`,
+/// of `list<i64, N + 1>`, of `Box<[N]>`.
 fn names_value_of(ty: &Type, own: &[Location]) -> bool {
-    let named = |constant: &Constant| matches!(&constant.value, ConstantValue::Parameter { at, .. } if own.contains(at));
+    let named = |constant: &Constant| constant.value.names_one_of(own);
     let inner = |ty: &Type| names_value_of(ty, own);
     match ty {
         Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {

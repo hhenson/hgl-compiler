@@ -426,8 +426,13 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         ConstantValue::Parameter { at, .. } => {
             given(*at).cloned().unwrap_or_else(|| constant.clone())
         }
-        // `N + 1`: worked out with what `N` is given.
-        ConstantValue::Unary(..) | ConstantValue::Binary(..) => {
+        // `N + 1`: worked out with what `N` is given; `[N]` and
+        // `Side(N)` hold it.
+        ConstantValue::Unary(..)
+        | ConstantValue::Binary(..)
+        | ConstantValue::List(_)
+        | ConstantValue::Tuple(_)
+        | ConstantValue::Constructed(_) => {
             let value = constant
                 .value
                 .substituted(&|at| given(at).map(|given| given.value.clone()));
@@ -1916,10 +1921,26 @@ fn type_may_be(given: &Type, applied: &Type, found: &mut Matching<'_>) -> bool {
 
 /// [`may_be`], for a constant.
 fn constant_may_be(given: &Constant, applied: &Constant, found: &mut Matching<'_>) -> bool {
-    if let ConstantValue::Parameter { at, .. } = &applied.value {
-        return found.open || bind(*at, Argument::Constant(given.clone()), found);
+    match (&given.value, &applied.value) {
+        (_, ConstantValue::Parameter { at, .. }) => {
+            found.open || bind(*at, Argument::Constant(given.clone()), found)
+        }
+        // `[N, 1]` against `[2, 1]`: each element, a parameter among
+        // them bound to what is given in its place.
+        (ConstantValue::List(givens), ConstantValue::List(applieds))
+        | (ConstantValue::Tuple(givens), ConstantValue::Tuple(applieds))
+            if givens.len() == applieds.len() =>
+        {
+            givens.iter().zip(applieds).all(|(given, applied)| {
+                let element = |value: &ConstantValue| Constant {
+                    text: value.key().unwrap_or_default(),
+                    value: value.clone(),
+                };
+                constant_may_be(&element(given), &element(applied), found)
+            })
+        }
+        _ => may_be_one(given, applied),
     }
-    may_be_one(given, applied)
 }
 
 /// True when two constants may be one value: neither is known to be

@@ -661,6 +661,46 @@ fn a_composite_constant_is_its_elements_in_an_instance() {
     );
 }
 
+/// A list and a tuple constant are their elements (GEN-8: "a constant
+/// expression of those"), each read as a value of the element's type,
+/// under a `?` too (TYPE-14, EXPR-5): `[1]` where a `list<f64>?` is
+/// expected is `[1.0]`. A generic value parameter among the elements is
+/// given its value where the declaration is called (GEN-2), and says
+/// what it is where an argument's type gives it one.
+#[test]
+fn a_composite_constant_is_compared_element_by_element() {
+    let shared = concat!(
+        "struct Box<const X: list<i64>> { v: i64 }\n",
+        "struct NBox<const X: list<f64>?> { v: i64 }\n",
+        "struct TBox<const X: tuple<f64, i64>?> { v: i64 }\n",
+        "const fn mk<const N: i64>() -> Box<[N]> => Box<[N]>(v: 1)\n",
+        "const fn take<const N: i64>(given: Box<[N, 1]>) -> i64 requires N == 5 => N\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Box<[2]> => mk<2>()\n\
+             const fn c(x: NBox<[1]>) -> NBox<[1.0]> => x\n\
+             const fn e(x: TBox<(1, 2)>) -> TBox<(1.0, 0x2)> => x\n\
+             const fn f() -> i64 => take(Box<[5, 1]>(v: 1))\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Box<[3]> => mk<2>()\n\
+             const fn c(x: NBox<null>) -> NBox<[1.0]> => x\n\
+             const fn e(x: TBox<(1, 2)>) -> TBox<(2, 1)> => x\n\
+             const fn f() -> i64 => take(Box<[4, 1]>(v: 1))\n"
+        ),
+        &[
+            "7 type.mismatch",
+            "8 type.mismatch",
+            "9 type.mismatch",
+            "10 requires.unmet",
+        ],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

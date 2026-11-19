@@ -33,7 +33,7 @@ use hgl_diagnostics::Location;
 use crate::declared::substitute_within;
 use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
 use crate::program::Program;
-use crate::types::{Argument, ConstantValue, Detail, Parameter, Signature, Type};
+use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
 /// it stands for at one call.
@@ -264,20 +264,26 @@ fn place_answer(answer: &mut Answer, map: &Map, answers: &[Answer]) {
 }
 
 /// A generic argument with what `map` gives in place: a type with its
-/// parameters replaced, and a constant that is a generic value
-/// parameter replaced by the constant given for it.
+/// parameters replaced, a constant that is a generic value parameter
+/// replaced by the constant given for it, and one that holds such a
+/// parameter, `N + 1` or `[N]`, worked out with it.
 fn placed(argument: &Argument, map: &Map) -> Argument {
+    let given = |at: Location| {
+        map.iter().find_map(|(declared, given)| match given {
+            Argument::Constant(given) if *declared == at => Some(given),
+            _ => None,
+        })
+    };
     match argument {
         Argument::Type(ty) => Argument::Type(substitute_within(ty, map)),
         Argument::Constant(constant) => match &constant.value {
-            ConstantValue::Parameter { at, .. } => map
-                .iter()
-                .find_map(|(declared, given)| match given {
-                    Argument::Constant(_) if declared == at => Some((*given).clone()),
-                    _ => None,
-                })
+            ConstantValue::Parameter { at, .. } => given(*at)
+                .map(|given| Argument::Constant(given.clone()))
                 .unwrap_or_else(|| argument.clone()),
-            _ => argument.clone(),
+            value => Argument::Constant(Constant {
+                text: constant.text.clone(),
+                value: value.substituted(&|at| given(at).map(|given| given.value.clone())),
+            }),
         },
     }
 }

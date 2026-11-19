@@ -372,6 +372,14 @@ fn is_float(ty: &Type) -> bool {
     matches!(ty, Type::Scalar(Scalar::F64))
 }
 
+/// `ty` under any `?`.
+fn non_null(ty: &Type) -> &Type {
+    match ty {
+        Type::Nullable(inner) => non_null(inner),
+        other => other,
+    }
+}
+
 /// The enum `ty` is, under any `?`.
 fn enum_of(ty: &Type) -> Option<(usize, usize)> {
     match ty {
@@ -395,6 +403,10 @@ fn value(
     if depth > DEPTH {
         return Ok(Typed::unevaluated(None));
     }
+    // TYPE-14: a value of a `T?` other than `null` is a T, and is read
+    // as one: `[1]` where a `list<f64>?` is expected is a list of
+    // `f64`. `null` is held to the whole type by `fit`.
+    let expected = expected.map(non_null);
     match node.kind() {
         SyntaxKind::Literal => literal_constant(node, expected),
         // EXPR-1: "Parentheses select grouping": `(2.0)` is `2.0`.
@@ -1881,9 +1893,29 @@ fn from_instant(instant: i128) -> Temporal {
 // ---- Giving parameters values ----
 
 impl ConstantValue {
+    /// True when this constant names a generic value parameter declared
+    /// at one of `own`, itself or anywhere inside it: `N`, `N + 1`,
+    /// `[N]`, `Side(N)`.
+    pub(crate) fn names_one_of(&self, own: &[Location]) -> bool {
+        match self {
+            ConstantValue::Parameter { at, .. } => own.contains(at),
+            ConstantValue::Unary(_, operand) | ConstantValue::Constructed(operand) => {
+                operand.names_one_of(own)
+            }
+            ConstantValue::Binary(_, left, right) => {
+                left.names_one_of(own) || right.names_one_of(own)
+            }
+            ConstantValue::List(values) | ConstantValue::Tuple(values) => {
+                values.iter().any(|value| value.names_one_of(own))
+            }
+            _ => false,
+        }
+    }
+
     /// This constant with each generic value parameter `given` gives a
     /// value put in its place, and what an expression of them then
-    /// comes to worked out: `N + 1` with `N` given `2` is `3`.
+    /// comes to worked out: `N + 1` with `N` given `2` is `3`, and
+    /// `[N, 1]` is `[2, 1]`.
     pub(crate) fn substituted(
         &self,
         given: &dyn Fn(Location) -> Option<ConstantValue>,
@@ -1903,6 +1935,19 @@ impl ConstantValue {
             ConstantValue::Constructed(from) => {
                 ConstantValue::Constructed(Box::new(from.substituted(given)))
             }
+            // `[N, 1]`: each element given its value.
+            ConstantValue::List(values) => ConstantValue::List(
+                values
+                    .iter()
+                    .map(|value| value.substituted(given))
+                    .collect(),
+            ),
+            ConstantValue::Tuple(values) => ConstantValue::Tuple(
+                values
+                    .iter()
+                    .map(|value| value.substituted(given))
+                    .collect(),
+            ),
             _ => self.clone(),
         }
     }
