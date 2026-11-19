@@ -5300,7 +5300,9 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
     for expected in [
-        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(tags))\n",
+        // A node keeps what a graph gives it: a copy of the graph's
+        // parameter, which its caller may go on changing.
+        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(_core.copied(tags)))\n",
         "    return _inst_optional__list_i64_(value=value, tag=_core.Held(None))\n",
         // The node written for a list takes it out; the one for an
         // `i64` has nothing to take out.
@@ -6365,12 +6367,91 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        book = _core.set_at(book, ((\"f\", \"best\"), (\"f\", \"size\"),), lambda: _given[1])\n",
             "        _core.raise_if_failed(_given[0])\n",
         ),
+        // No copy: a struct read whole from its bundle is made anew.
+        "            _state.saved = Ticket(id=current[\"id\"].value, size=current[\"size\"].value, price=current[\"price\"].value)\n",
+        // A copy: a result that may be the function's own `var` or its
+        // parameter, a constant or what a loop over one gives.
+        "def pick(p, flag):\n    mine = [0]\n    x = (mine if flag else p)\n    return _core.copied(x)\n",
+        "        return _core.copied(x)\n",
+        // In a graph, an ordinary value: a `var` and a `let` of one, a
+        // call given it twice, a loop over what its body grows, and
+        // what a node or a source keeps. A graph that gives on what it
+        // was given gives it as it is: the node copies it.
+        "    b = _core.copied(a)\n",
+        "    snap = _core.copied(a)\n",
+        "    _given = add_twice(into=a, more=_core.copied(a))\n",
+        "    for value in _core.copied(a):\n",
+        "    n = summed(values=_core.Held(_core.copied(cfg)), tick=tick)\n",
+        "    return summed(values=_core.Held(_core.copied(values)), tick=tick)\n",
+        "    n = relayed(values=cfg, tick=tick)\n",
+        "_core.Held(_core.copied(values)))\n",
     ] {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
+
+/// Every copy the target writes for `copy_points.hgl` is needed: with
+/// any one of them taken out, a test of the fixture fails on hgraph. So
+/// the fixture shows each copy point it has, and the claim that each
+/// copy is needed is checked, not asserted. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn every_copy_the_copy_points_fixture_makes_is_needed() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_copy_points");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    // A test that a copy taken out sends round a loop without end is
+    // stopped: it has not passed.
+    let limit = |_: &Test| Some(std::time::Duration::from_secs(30));
+    let ran = run_within(
+        Path::new(&python),
+        &directory.join("whole"),
+        &emitted.output,
+        &all,
+        &limit,
+    );
+    assert!(ran.iter().all(|ran| *ran == Ran::Passed), "{ran:?}");
+    let module = "_hgl/_m_demo/_m_copy_points/__init__.py";
+    let text = emitted.text(module);
+    let copy = "_core.copied";
+    let copies: Vec<usize> = text.match_indices(copy).map(|(at, _)| at).collect();
+    assert!(
+        copies.len() > 20,
+        "the fixture makes {} copies",
+        copies.len()
+    );
+    let mut needless = Vec::new();
+    for (number, &at) in copies.iter().enumerate() {
+        // `_core.copied(x)` taken out is `(x)`, the value itself.
+        let mut output = emitted.output.clone();
+        let file = output
+            .files
+            .iter_mut()
+            .find(|file| file.path == module)
+            .expect("the module is written");
+        file.text.replace_range(at..at + copy.len(), "");
+        let ran = run_within(
+            Path::new(&python),
+            &directory.join(format!("without_{number}")),
+            &output,
+            &all,
+            &limit,
+        );
+        // A copy is shown needed by a test that ran and failed: one
+        // that did not run shows nothing.
+        if !ran.iter().any(|ran| matches!(ran, Ran::Failed { .. })) {
+            let line = text[..at].matches('\n').count() + 1;
+            let written = text.lines().nth(line - 1).unwrap_or_default().trim();
+            needless.push(format!("line {line}: {written}: {ran:?}"));
+        }
+    }
+    assert_eq!(needless, Vec::<String>::new());
 }
 
 /// TIME-9, core's CAP-4 and CAP-5: nodes that a scheduler or an alarm

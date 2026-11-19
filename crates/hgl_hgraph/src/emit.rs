@@ -2705,6 +2705,14 @@ impl Emitter<'_> {
         let mut wired = vec!["_hg.const(True)".to_string()];
         wired.extend(signature.parameters.iter().map(|parameter| {
             let python = name(&parameter.name);
+            // The node keeps what the graph is given, which the caller
+            // may go on changing where it is: a copy.
+            let python = if parameter.constant && changed_in_place(self.program, &parameter.ty, 0) {
+                self.natives = true;
+                format!("_core.copied({python})")
+            } else {
+                python
+            };
             if held(&parameter.ty) {
                 format!("_core.Held({python})")
             } else {
@@ -3840,10 +3848,32 @@ impl Emitter<'_> {
     }
 
     /// True where nothing else holds what `value` gives
-    /// ([`copies::fresh`]), and in a graph, where a value is a
-    /// connection and nothing is changed where it is.
+    /// ([`copies::fresh`]), and where it is a connection of a graph,
+    /// which is never changed where it is. An ordinary value of a graph
+    /// is no connection: a native function and a `var` parameter
+    /// change it where it is, as in any function, and the copy rule is
+    /// the same for it.
     fn fresh(&self, function: &Function, value: &Expr) -> bool {
-        function.mode == Mode::Graph || copies::fresh(self.program, value)
+        self.connection(function, value)
+            || self.made_anew(function, value)
+            || copies::fresh(self.program, value)
+    }
+
+    /// True where reading `value` in a hook makes a value nothing else
+    /// holds: a temporal input, `out`, or a field of one, of a struct
+    /// whose bundle's ports are read each into a new value
+    /// (`port_value`). A struct with a field that may hold what is
+    /// changed where it is is not one: hgraph may hold that part.
+    fn made_anew(&self, function: &Function, value: &Expr) -> bool {
+        matches!(function.mode, Mode::Node | Mode::Stop)
+            && self.input_port(function, value).is_some()
+            && built_anew(self.program, &value.ty, 0)
+    }
+
+    /// True where `value` is a connection of a graph: hgraph's wiring,
+    /// which nothing changes where it is, and which is never copied.
+    fn connection(&self, function: &Function, value: &Expr) -> bool {
+        function.mode == Mode::Graph && self.connects(function, value)
     }
 
     /// `written`, the text of `value`, as what keeps it takes it: a
@@ -3867,12 +3897,17 @@ impl Emitter<'_> {
     /// declares is gone when the function returns and is given as it
     /// is, and what is read from a parameter is the caller's already.
     /// A hook's `return` publishes: the runtime keeps the value, and a
-    /// `state` or a `cache` it is read from goes on changing.
+    /// `state` or a `cache` it is read from goes on changing. A graph's
+    /// ordinary result is wired as a constant, which hgraph keeps: it
+    /// is the graph's own, as a value function's is, or a copy. In a
+    /// branch's graph it is read from the graph around it, which is
+    /// not the branch's own.
     fn given_out(&mut self, function: &Function, value: &Expr, written: String) -> String {
         let locals = function.locals;
         let own = match function.mode {
-            Mode::Graph | Mode::Test => true,
-            Mode::Value => {
+            Mode::Test => true,
+            Mode::Graph if self.in_case > 0 => false,
+            Mode::Value | Mode::Graph => {
                 let parameters = function
                     .signature
                     .map_or(0, |signature| signature.parameters.len());
@@ -3904,7 +3939,7 @@ impl Emitter<'_> {
         if copies::is_place(function.locals, local) {
             self.copied(function, value, written)
         } else if function.copies.copied(local)
-            && function.mode != Mode::Graph
+            && !self.connection(function, value)
             && changed_in_place(self.program, &value.ty, 0)
         {
             self.natives = true;
@@ -4412,7 +4447,7 @@ impl Emitter<'_> {
         let over = if names
             .first()
             .is_some_and(|&first| function.copies.copied(first))
-            && function.mode != Mode::Graph
+            && !self.connection(function, sequence)
         {
             self.natives = true;
             format!("_core.copied({over})")
@@ -6270,7 +6305,7 @@ impl Emitter<'_> {
             .filter_map(|argument| {
                 let index = argument.parameter?;
                 let parameter = signature.parameters.get(index)?;
-                let changeable = function.mode != Mode::Graph
+                let changeable = !self.connection(function, &argument.value)
                     && changed_in_place(self.program, &argument.value.ty, 0);
                 let value = if parameter.var {
                     // FN-15: the place itself. A second `var`
@@ -6298,10 +6333,16 @@ impl Emitter<'_> {
                         self.natives = true;
                         format!("_core.copied({written})")
                     } else if changeable
-                        && holders
-                            .iter()
-                            .any(|holder| may_hold(self.program, holder, &argument.value.ty))
+                        && ((node && function.mode == Mode::Graph)
+                            || holders
+                                .iter()
+                                .any(|holder| may_hold(self.program, holder, &argument.value.ty)))
                     {
+                        // A node keeps what a graph gives it that is no
+                        // connection, its configuration or a constant
+                        // hgraph wires for an input: hgraph holds it
+                        // while the graph goes on changing what it was
+                        // read from.
                         self.copied(function, &argument.value, written)
                     } else {
                         written
@@ -6926,7 +6967,15 @@ impl Emitter<'_> {
                 None => Bound::Configuration(argument.value.ty.clone()),
             };
             let value = self.expression(function, &argument.value);
-            // A lifted node keeps its configuration, as any node does.
+            // A lifted node keeps its configuration, as any node does:
+            // a copy, where the graph that wires it holds it too. An
+            // eval of a test runs before the test goes on.
+            let value = match &taken {
+                Bound::Configuration(_) if function.mode == Mode::Graph => {
+                    self.copied(function, &argument.value, value)
+                }
+                _ => value,
+            };
             let value = match &taken {
                 Bound::Configuration(ty) if held(ty) => {
                     self.natives = true;
@@ -7880,6 +7929,30 @@ pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> 
                 ..
             } => true,
             _ => false,
+        })
+}
+
+/// True for a struct whose value `port_value` makes anew from its
+/// bundle, every part of it: each field is of a type nothing changes
+/// where it is, or such a struct itself. Any other type is not.
+fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
+    let Type::Named {
+        module,
+        declaration,
+        kind: NamedKind::Struct,
+        ..
+    } = ty
+    else {
+        return false;
+    };
+    let Some(Detail::Struct(read)) = program.modules[*module].details.get(*declaration) else {
+        return false;
+    };
+    depth < 8
+        && read.generics.is_empty()
+        && !inherited(program, *module, *declaration)
+        && read.members.iter().all(|member| {
+            !changed_in_place(program, &member.ty, 0) || built_anew(program, &member.ty, depth + 1)
         })
 }
 
