@@ -371,7 +371,7 @@ fn in_calendar(date: CalendarDate, time: ClockTime, minutes: i16) -> bool {
 
 /// What `Emitter::branched` made of a statement of a graph.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Branched {
+pub(super) enum Branched {
     /// It is no `if` and no `switch` of composition: it is written as
     /// any statement.
     No,
@@ -1352,7 +1352,7 @@ impl<'a> Emitter<'a> {
     /// is given after them, in each branch of Python's `if`. "With no
     /// `else` it is as if its `else` were null", and "A branch that
     /// returns from the function gives the `if` no value" (CTRL-5).
-    fn valued(&mut self, function: &Function, statement: &Stmt, depth: usize) -> bool {
+    pub(super) fn valued(&mut self, function: &Function, statement: &Stmt, depth: usize) -> bool {
         // A value that has statements in it, at any depth of blocks and
         // `if`s; any other is written as an expression.
         fn has_statements(value: &Expr) -> bool {
@@ -1463,7 +1463,7 @@ impl<'a> Emitter<'a> {
     /// and the binding it had before for a branch that does not assign
     /// it": each branch's graph gives the `var`, and what `switch_`
     /// gives is assigned to it.
-    fn branched(
+    pub(super) fn branched(
         &mut self,
         function: &Function,
         statement: &Stmt,
@@ -1983,7 +1983,7 @@ impl<'a> Emitter<'a> {
 
     /// What a `return` written now gives: the result of the innermost
     /// branch graph of a `switch_` that encloses it, or the graph's.
-    fn current_result(&self, function: &Function) -> Option<Type> {
+    pub(super) fn current_result(&self, function: &Function) -> Option<Type> {
         self.results.last().cloned().or_else(|| {
             function
                 .signature
@@ -2001,7 +2001,7 @@ impl<'a> Emitter<'a> {
     /// constant, one publication when the graph starts", and a null is
     /// published as hgraph's `Null` (TYPE-15). A `T?` of any other `T`
     /// is reported.
-    fn normalized(
+    pub(super) fn normalized(
         &mut self,
         function: &Function,
         written: String,
@@ -2956,7 +2956,7 @@ impl<'a> Emitter<'a> {
     ///
     /// Python's `for` reads what it loops over once, where the loop
     /// begins: a `var` the body assigns is not what is looped over.
-    fn for_loop(
+    pub(super) fn for_loop(
         &mut self,
         function: &Function,
         (names, sequence): (&[usize], &Expr),
@@ -3020,7 +3020,7 @@ impl<'a> Emitter<'a> {
     /// argument of a temporal parameter (`key_read_as_value`), where a
     /// port is what is taken. The connections the body reads from
     /// outside it are given whole, `_hg.pass_through`.
-    fn each(
+    pub(super) fn each(
         &mut self,
         function: &Function,
         names: &[usize],
@@ -3200,7 +3200,7 @@ impl<'a> Emitter<'a> {
     /// at: one nested in a case has another. Each case is an `if` on
     /// it, and what no case matches falls to the `default`, or fails in
     /// the provider.
-    fn switch(
+    pub(super) fn switch(
         &mut self,
         function: &Function,
         selector: &Expr,
@@ -3237,7 +3237,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// `if condition { ... } else { ... }` standing as a statement.
-    fn if_statement(
+    pub(super) fn if_statement(
         &mut self,
         function: &Function,
         condition: &Expr,
@@ -3268,7 +3268,7 @@ impl<'a> Emitter<'a> {
 
     /// Marks `local` as having a value in the graph being written
     /// (`Emitter::bound`).
-    fn bind(&mut self, function: &Function, local: usize) {
+    pub(super) fn bind(&mut self, function: &Function, local: usize) {
         if function.mode == Mode::Graph && !self.bound.contains(&local) {
             self.bound.push(local);
         }
@@ -4028,7 +4028,7 @@ impl<'a> Emitter<'a> {
     /// it is the value of a `let` (`Emitter::captured_call`), and
     /// reported anywhere else; so is one in a test outside an eval, and
     /// one of a lifted operator or native function.
-    fn capture(&mut self, function: &Function, call: &Expr) -> String {
+    pub(super) fn capture(&mut self, function: &Function, call: &Expr) -> String {
         let at = call.at;
         let program = self.program;
         // TST-3: a test is a composition block, and a capture there, as
@@ -4155,7 +4155,12 @@ impl<'a> Emitter<'a> {
     /// as it is; any other is held too, in its place in the order. The
     /// defaults of what the call leaves out are evaluated after, in
     /// the graph's call of the child, as a call evaluates them.
-    fn captured_call(&mut self, function: &Function, call: &Expr, depth: usize) -> Option<String> {
+    pub(super) fn captured_call(
+        &mut self,
+        function: &Function,
+        call: &Expr,
+        depth: usize,
+    ) -> Option<String> {
         let at = call.at;
         let program = self.program;
         let ExprKind::Call {
