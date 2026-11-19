@@ -16,7 +16,7 @@ use hgl_source::FileId;
 use crate::constant::{Constants, Fault, Scope};
 use crate::declared::names_parameter;
 use crate::program::{Binding, DeclarationKind, Program, Role};
-use crate::read::{child, has_token};
+use crate::syntax::{child, has_token};
 use crate::types::{Detail, GenericKind, NamedKind, Type};
 use crate::values::generic_default;
 use crate::{codes, error};
@@ -66,7 +66,7 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
                 if !parameter.var {
                     continue;
                 }
-                let Some(var) = crate::read::tokens(node)
+                let Some(var) = crate::syntax::tokens(node)
                     .find(|token| token.kind() == hgl_parser::SyntaxKind::KwVar)
                 else {
                     continue;

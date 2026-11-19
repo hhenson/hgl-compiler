@@ -58,7 +58,7 @@ use hgl_source::FileId;
 use crate::codes;
 use crate::hir::{BinaryOperator, CalendarDate, ClockTime, Temporal, Tenor, UnaryOperator, Value};
 use crate::program::{Binding, DeclarationKind, LocalKind, Program};
-use crate::read::{tokens, used_name};
+use crate::syntax::{name_token, tokens};
 use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
 
 /// How deep one expression is read. A constant nested deeper is not
@@ -566,7 +566,7 @@ fn literal_constant(node: &SyntaxNode, expected: Option<&Type>) -> Result<Typed,
 
 /// What a lone name is bound to, in the file it is written in.
 fn bound<'s>(node: &SyntaxNode, scope: &Scope<'s>) -> Option<(SyntaxToken, &'s Binding)> {
-    let name = used_name(node)?;
+    let name = name_token(node)?;
     let binding = (scope.binding)(scope.file, name.span().start)?;
     Some((name, binding))
 }
@@ -691,7 +691,7 @@ fn names_constants(scope: &Scope, (module, declaration): (usize, usize)) -> Vec<
         .descendants()
         .filter(|node| matches!(node.kind(), SyntaxKind::NameExpr | SyntaxKind::NamedType))
         .filter_map(|node| {
-            let name = used_name(&node)?;
+            let name = name_token(&node)?;
             match (scope.binding)(file, name.span().start)? {
                 Binding::Declarations {
                     module,
@@ -807,7 +807,7 @@ pub(crate) fn written_type<'s>(
             {
                 return None;
             }
-            let name = used_name(node)?;
+            let name = name_token(node)?;
             match binding(file, name.span().start)? {
                 Binding::Local {
                     at,
