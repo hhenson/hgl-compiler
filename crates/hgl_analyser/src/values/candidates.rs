@@ -11,7 +11,8 @@ use super::constants::{constant_text, default_at, generic_default};
 use super::control::value_of_branch;
 use super::expressions::takes_its_type;
 use super::fit::{accepts_float, arithmetic, is_integer_literal, negated, not_null, whole};
-use super::inference::{bare_parameter, infer, placed};
+use super::inference::{bare_parameter, infer, mentions, placed};
+use super::operators::unreadable;
 use super::requirements::{Condition, holds};
 use crate::constant::Fault;
 use crate::declared::{names_parameter, substitute_within};
@@ -63,7 +64,7 @@ impl<'a> Typer<'a> {
                 let widens = |decided: &Type, later: &Type| self.widens(decided, later);
                 let defaults =
                     |generic: &GenericParameter| self.default_constant(candidate, generic);
-                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.read_constant(node, ty);
+                let constant = |node: &SyntaxNode, ty: Option<&Type>| self.given_constant(node, ty);
                 let Some((taken, generics, defaulted)) = instance(
                     signature,
                     public,
@@ -509,7 +510,7 @@ impl<'a> Typer<'a> {
                 .iter()
                 .position(|&place| place == Place::Parameter(index));
             if let Some(position) = argument {
-                return this.read_constant(&given[position].node, Some(ty)).ok();
+                return this.given_constant(&given[position].node, Some(ty)).ok();
             }
             // A default and the file it is written in: the candidate's,
             // or else the operator's.
@@ -604,6 +605,363 @@ impl<'a> Typer<'a> {
         let fits = self.take_back(mark, false);
         fits && (widening || !widens_an_entry(&value))
     }
+
+    /// The constant a call's argument `node` comes to, as
+    /// [`Typer::read_constant`] reads it, with what the instance being
+    /// read gives each generic value parameter of the declaration in
+    /// place ([`Typer::instance`]): `mode: M` in an instance for
+    /// `M = .medium` is `.medium`.
+    fn given_constant(
+        &self,
+        node: &SyntaxNode,
+        expected: Option<&Type>,
+    ) -> Result<ConstantValue, Fault> {
+        let read = self.read_constant(node, expected)?;
+        if self.instance.is_empty() {
+            return Ok(read);
+        }
+        Ok(read.substituted(&|at| {
+            self.instance
+                .iter()
+                .find(|(declared, _)| *declared == at)
+                .and_then(|(_, given)| match given {
+                    Argument::Constant(given) => Some(given.value.clone()),
+                    Argument::Type(_) => None,
+                })
+        }))
+    }
+
+    /// Records the call of `operator` with the arguments `given`, which
+    /// asks `wanted` of its result, for each instance of the generic
+    /// declaration being read to select its candidate for itself, where
+    /// which candidates admit it cannot be told here because it names a
+    /// generic parameter of that declaration. `requested` is what the
+    /// call itself requests of the output (GEN-8), and `at` the call's
+    /// form, where it is written, and where it names its operator. What
+    /// the call gives in the generic body is returned: the operator's
+    /// result, as far as the arguments say it; `None` where the call is
+    /// not one to select for each instance.
+    ///
+    /// GEN-3: "under negation/disjunction it only tests already-resolved
+    /// data": a condition of a candidate over a parameter not given here,
+    /// `!(T == i64)` of a `T` that is the declaration's `U`, or `mode ==
+    /// .slow` of a `mode` that is its `M`, is neither held nor refused
+    /// here. It is told where an instance gives the parameter (GEN-6:
+    /// "A call admits the candidate only where that holds for the
+    /// parameter's value at the call"), and the instance selects among
+    /// all the candidates with its own types (GEN-5).
+    ///
+    /// An argument read as the type of its place is read again in the
+    /// instance, where no local is in scope: one that is no constant,
+    /// `[x]`, leaves the call not judged, as it was.
+    pub(super) fn select_per_instance(
+        &mut self,
+        operator: OperatorRef,
+        given: &[Given],
+        (wanted, requested): (&Wanted, Option<&Type>),
+        (form, at, name): (Form, Location, Location),
+    ) -> Option<Type> {
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
+        if own.is_empty() {
+            return None;
+        }
+        let names_own = given.iter().any(|given| {
+            mentions(&given.value.ty, &own)
+                || self
+                    .read_constant(&given.node, None)
+                    .is_ok_and(|value| value.names_one_of(&own))
+        }) || wanted.place.is_some_and(|place| mentions(place, &own));
+        let constants = given.iter().all(|given| {
+            !given.by_place
+                || !matches!(
+                    self.read_constant(&given.node, None),
+                    Err(Fault::NotConstant)
+                )
+        });
+        if !names_own || !constants {
+            return None;
+        }
+        let Some(Detail::Callable(public)) = self.program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return None;
+        };
+        // What the call gives: the operator's result with what the
+        // arguments say of its generic parameters, each given to the
+        // operator's parameter in its place or of its name (GEN-4).
+        let mut found: Vec<Option<Argument>> = vec![None; public.generics.len()];
+        for (index, parameter) in public.parameters.iter().enumerate() {
+            let argument = given.iter().find(|given| match &given.key {
+                Key::Position(position) => *position == index,
+                Key::Name(name) => *name == parameter.name,
+            });
+            if let Some(argument) = argument.filter(|argument| !argument.by_place) {
+                infer(
+                    &parameter.ty,
+                    &argument.value.ty,
+                    &public.generics,
+                    &mut found,
+                );
+            }
+        }
+        let explicit: Vec<Argument> = found
+            .into_iter()
+            .zip(&public.generics)
+            .map(|(found, generic)| {
+                found.unwrap_or_else(|| match generic.kind {
+                    GenericKind::Value(_) => Argument::Constant(Constant {
+                        text: "_".to_string(),
+                        value: ConstantValue::Unknown,
+                    }),
+                    _ => Argument::Type(Type::Unknown),
+                })
+            })
+            .collect();
+        let operator_own: Vec<Location> =
+            public.generics.iter().map(|generic| generic.at).collect();
+        let map: Vec<(Location, &Argument)> = operator_own.iter().copied().zip(&explicit).collect();
+        // Known all the way down: no part of it, and no constant in it,
+        // left unsaid.
+        let known = |ty: &Type| {
+            whole(ty)
+                && !ty.any_part(&|_| false, &|constant| {
+                    matches!(constant.value, ConstantValue::Unknown)
+                })
+        };
+        let gives = public
+            .result
+            .as_ref()
+            .map(|result| placed(substitute_within(result, &map), &operator_own))
+            .filter(|result| known(result))
+            .or_else(|| requested.filter(|requested| known(requested)).cloned())
+            .unwrap_or(Type::Unknown);
+        self.selecting.borrow_mut().push(Selecting {
+            at,
+            name,
+            operator,
+            form,
+            arguments: given
+                .iter()
+                .map(|given| {
+                    let name = match &given.key {
+                        Key::Name(name) => Some(name.clone()),
+                        Key::Position(_) => None,
+                    };
+                    (name, given.node.clone(), given.value.ty.clone())
+                })
+                .collect(),
+            place: wanted.place.cloned(),
+            among: wanted.among.clone(),
+            graph: self.graph,
+        });
+        Some(gives)
+    }
+
+    /// The candidate the call `selecting` selects in one instance of the
+    /// generic declaration it is written in, read with what the
+    /// instance gives that declaration's generic parameters
+    /// ([`Typer::instance`]). `values` is each argument's value in the
+    /// instance, in the order written, where the call is to be built;
+    /// without them each is read as of its type there alone.
+    ///
+    /// GEN-5: "Select exactly one most-specific admitted candidate ...
+    /// No match rejects; tied most-specific candidates are ambiguous."
+    /// `None` where not exactly one is selected, or which candidates
+    /// admit the call is not told, as it is not where the call is
+    /// written with those types: a constant it compares this compiler
+    /// does not work out.
+    pub(super) fn select_at_instance(
+        &mut self,
+        selecting: &Selecting,
+        values: Option<Vec<Expr>>,
+    ) -> Option<(Chosen<'a>, Vec<Given>)> {
+        let own: Vec<Location> = self.instance.iter().map(|(at, _)| *at).collect();
+        let given_types: Vec<(Location, Argument)> = self.instance.clone();
+        let map: Vec<(Location, &Argument)> = given_types
+            .iter()
+            .map(|(at, argument)| (*at, argument))
+            .collect();
+        let in_place = |ty: &Type| placed(substitute_within(ty, &map), &own);
+        self.graph = selecting.graph;
+        let operator = selecting.operator;
+        let program = self.program;
+        let Some(Detail::Callable(public)) = program.modules[operator.module]
+            .details
+            .get(operator.declaration)
+        else {
+            return None;
+        };
+        let candidates = self.value_candidates(operator);
+        if unreadable(public, &candidates) {
+            return None;
+        }
+        let built = values.is_some();
+        let mut values = values.map(Vec::into_iter);
+        let mut position = 0;
+        let given: Vec<Given> = selecting
+            .arguments
+            .iter()
+            .map(|(name, node, ty)| {
+                let key = match name {
+                    Some(name) => Key::Name(name.clone()),
+                    None => {
+                        position += 1;
+                        Key::Position(position - 1)
+                    }
+                };
+                let by_place = typed_by_place(node);
+                let value = values
+                    .as_mut()
+                    .and_then(Iterator::next)
+                    .unwrap_or_else(|| Expr {
+                        kind: ExprKind::Unread,
+                        ty: in_place(ty),
+                        at: Location::new(self.file, node.span()),
+                    });
+                Given {
+                    key,
+                    node: node.clone(),
+                    by_place,
+                    value,
+                    // Where the call is built, an argument read as the
+                    // type of its place is read again as the selected
+                    // candidate's parameter.
+                    retried: built && by_place,
+                }
+            })
+            .collect();
+        let place = selecting.place.as_ref().map(in_place);
+        let wanted = Wanted {
+            place: place.as_ref(),
+            among: selecting
+                .among
+                .as_ref()
+                .map(|among| among.iter().map(in_place).collect()),
+        };
+        let (mut selected, untold) = self.admitted(operator, &candidates, &given, &wanted);
+        if untold || self.rereads == 0 && given.iter().any(|given| given.by_place) {
+            return None;
+        }
+        match (selected.pop(), selected.is_empty()) {
+            (Some(chosen), true) => Some((chosen, given)),
+            _ => None,
+        }
+    }
+}
+
+/// A call of an operator, in the body of a generic declaration, whose
+/// candidate a generic parameter of that declaration selects: which
+/// candidates admit it is not told there, and each instance of the
+/// declaration selects it with its own types ([`Typer::select_per_instance`]).
+#[derive(Debug, Clone)]
+pub(crate) struct Selecting {
+    /// Where the call is written: the expression the body has for it,
+    /// a call with no callee.
+    pub(crate) at: Location,
+    /// Where it names its operator, or where its symbol stands: what a
+    /// report of it points at.
+    pub(crate) name: Location,
+    /// The operator called.
+    pub(crate) operator: OperatorRef,
+    /// How the call is written.
+    pub(crate) form: Form,
+    /// Its arguments as written, each with its name where it is given
+    /// one, and the type it has in the generic body.
+    pub(crate) arguments: Vec<(Option<String>, SyntaxNode, Type)>,
+    /// The output the call asks of a candidate in the generic body
+    /// ([`Wanted::place`]).
+    pub(crate) place: Option<Type>,
+    /// What the operator's own requirement admits for its result there
+    /// ([`Wanted::among`]).
+    pub(crate) among: Option<Vec<Type>>,
+    /// True in composition, where a call selects among the temporal
+    /// candidates too (GEN-5).
+    pub(crate) graph: bool,
+}
+
+/// Puts in `body`, the body of an instance of `declaration` of `module`
+/// for `generics`, the call of the candidate that each call it
+/// selects for each instance ([`Selecting`]) selects there: as the call
+/// would be read with those types in place (GEN-5). `after` is given
+/// each call so put, for the instance's arguments to be put in place in
+/// what it holds. A call that selects no one candidate is left with no
+/// callee; the analyser has reported it (`instances_hold`).
+pub(crate) fn select_in_instance(
+    program: &crate::program::Program,
+    (module, declaration): (usize, usize),
+    generics: &[Argument],
+    body: &mut hir::Body,
+    after: &dyn Fn(&mut Expr),
+) {
+    let unit = &program.modules[module];
+    let Some(calls) = unit
+        .selecting
+        .get(declaration)
+        .filter(|calls| !calls.is_empty())
+    else {
+        return;
+    };
+    let Some(Detail::Callable(signature)) = unit.details.get(declaration) else {
+        return;
+    };
+    let (bindings, written, arguments) = super::tables(unit);
+    let selecting = std::cell::RefCell::new(Vec::new());
+    // What is reported here has been reported where the program was
+    // checked, if it is to be at all.
+    let mut diagnostics = hgl_diagnostics::Diagnostics::new();
+    let mut typer = Typer::bare(
+        program,
+        unit,
+        &unit.declarations[declaration],
+        signature,
+        super::Tables {
+            bindings: &bindings,
+            written: &written,
+            calls: &arguments,
+            selecting: &selecting,
+        },
+        &mut diagnostics,
+    );
+    typer.instance = signature
+        .generics
+        .iter()
+        .map(|generic| generic.at)
+        .zip(generics.iter().cloned())
+        .collect();
+    // The instance's own locals, which its arguments read: each has a
+    // value where a call reads it (EXPR-3).
+    typer.locals = body.locals.clone();
+    typer.assigned = vec![true; body.locals.len()];
+    hir::walk_statements_mut(&mut body.statements, &mut |expression| {
+        let ExprKind::Call {
+            callee: Callee::Unread,
+            arguments,
+            ..
+        } = &expression.kind
+        else {
+            return;
+        };
+        let Some(call) = calls.iter().find(|call| call.at == expression.at) else {
+            return;
+        };
+        let values: Vec<Expr> = arguments
+            .iter()
+            .map(|argument| argument.value.clone())
+            .collect();
+        let Some((chosen, given)) = typer.select_at_instance(call, Some(values)) else {
+            return;
+        };
+        let (kind, ty) = typer.called(call.operator, chosen, given, (call.form, call.name));
+        expression.kind = kind;
+        expression.ty = ty;
+        after(expression);
+    });
 }
 
 /// One argument of an operator's call, before a candidate is selected.

@@ -186,7 +186,10 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
         // which no requirement speaks for.
         "const fn option<T>(a: T) -> T\n",
         "    requires div_(T, T) -> T => div_(a, a, zero: .fail)\n",
-        // A symbol is its call: `+`, `<` and a minus need theirs stated.
+        // A symbol is its call: `+` and a minus need theirs stated. GEN-3:
+        // `<` has a candidate for any `T` in a set of types, which is not
+        // told of a `T` not given: each instance selects it (see
+        // `tests/generics_wave3.rs`).
         "const fn plus<T>(a: T, b: T) -> T => a + b\n",
         "const fn less<T>(a: T, b: T) -> bool => a < b\n",
         "const fn minus<T>(a: T) -> T => -a\n",
@@ -207,7 +210,6 @@ fn a_requirement_is_the_call_it_names_and_no_other() {
             "m.hgl:16:55 operator/operator.no_candidate OPS-1",
             "m.hgl:18:33 operator/operator.no_candidate GEN-5",
             "m.hgl:19:40 operator/operator.no_candidate OPS-1",
-            "m.hgl:20:43 operator/operator.no_candidate OPS-2",
             "m.hgl:21:33 operator/operator.no_candidate OPS-1",
         ]
     );

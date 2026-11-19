@@ -6216,3 +6216,31 @@ fn a_constant_under_any_is_written_whole() {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }
 }
+
+/// How a candidate is selected for each instance of a generic function,
+/// where a generic parameter of that function selects it (GEN-3, GEN-5,
+/// GEN-6). Its tests run on hgraph with every fixture's
+/// (`the_generated_tests_pass_on_hgraph`).
+const GENERICS_FIXES_WAVE3: (&str, &str) = fixture!("demo.generics_fixes_wave3.hgl");
+
+/// GEN-3: "under negation/disjunction it only tests already-resolved
+/// data": `!(T == i64)` is not told of a `U` not given, so the body of
+/// `wrap<U>` selects no candidate of `kind_of`. GEN-5: "Select exactly
+/// one most-specific admitted candidate. Concrete types outrank
+/// variables." Each instance is written with the candidate it selects:
+/// for an `i64` the concrete one, for any other the generic one; in an
+/// instance reached through another; in a graph, lifted (FN-6); and for
+/// core's `<`, whose candidate is for the ordered types.
+#[test]
+fn a_candidate_a_type_parameter_selects_is_written_for_each_instance() {
+    let emitted = emit_clean(&[GENERICS_FIXES_WAVE3]);
+    let python = emitted.module("demo.generics_fixes_wave3");
+    python.assert_writes(&[
+        "def _inst_wrap__i64(value):\n    return _impl_kind_of_i64(value=value)",
+        "def _inst_wrap__bool(value):\n    return _impl_kind_of_T(value=value)",
+        "def _inst_twice__f64(value):\n    return _core.add__i64_i64(lhs=_impl_kind_of_T(value=value), rhs=_impl_kind_of_T(value=value))",
+        "def _inst_relay__i64(value):\n    return _inst_wrap__i64(value=value)",
+        "(value: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    return _impl_kind_of_T(value=value.value)",
+        "def _inst_less__str(a, b):\n    return _core.lt__T_T(lhs=a, rhs=b)",
+    ]);
+}

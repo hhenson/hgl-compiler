@@ -1,0 +1,33 @@
+module demo.generics_fixes_wave3
+
+# How a candidate is selected for each instance of a generic function,
+# where a generic parameter of that function selects it.
+
+operator kind_of<T>(value: T) -> i64
+impl const fn kind_of(value: i64) -> i64 => 1
+impl const fn kind_of<T>(value: T) -> i64 requires !(T == i64) => 2
+
+# GEN-3: "under negation/disjunction it only tests already-resolved
+# data": `!(T == i64)` is not told of `U` while `U` is not given. Each
+# instance selects its own candidate (GEN-5: "Concrete types outrank
+# variables"), through another instance too, in a graph, and for a
+# symbol: core's `<` is for a `T` among the ordered types.
+const fn wrap<U>(value: U) -> i64 => kind_of(value)
+const fn twice<U>(value: U) -> i64 => kind_of(value) + kind_of(value)
+const fn relay<V>(value: V) -> i64 => wrap(value)
+fn wired<U>(value: U) -> i64 => kind_of(value)
+const fn less<T>(a: T, b: T) -> bool => a < b
+
+test a_type_parameter_selects_a_candidate_for_each_instance {
+    assert wrap(5) == 1
+    assert wrap(true) == 2
+    assert wrap("s") == 2
+    assert twice(5) == 2
+    assert twice(1.5) == 4
+    assert relay(5) == 1
+    assert relay(false) == 2
+    assert eval(wired(value: [5, 6])) == [1, 1]
+    assert eval(wired(value: [true])) == [2]
+    assert less(1, 2)
+    assert !less("b", "a")
+}

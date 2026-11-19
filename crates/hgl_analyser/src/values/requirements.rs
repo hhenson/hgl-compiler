@@ -1182,7 +1182,18 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     }
     // The declarations whose calls reach a `requires` with what they
     // are given: an instance of any other makes none to tell.
-    let mut reaching: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    // A body with a call whose candidate each instance selects reaches
+    // one wherever it is called: the candidate's.
+    let mut reaching: std::collections::HashSet<(usize, usize)> = program
+        .modules
+        .iter()
+        .enumerate()
+        .flat_map(|(index, module)| {
+            (0..module.declarations.len())
+                .filter(|&position| module.selects_per_instance(position))
+                .map(move |position| (index, position))
+        })
+        .collect();
     loop {
         let more: Vec<(usize, usize)> = passed
             .iter()
@@ -1246,12 +1257,22 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                 past_the_limit(&from, diagnostics);
                 break;
             }
-            let Some(inner) = passed.get(&made.callee) else {
+            let inner = passed.get(&made.callee).map_or(&[][..], Vec::as_slice);
+            let selecting = program.modules.get(made.callee.0).map_or(&[][..], |unit| {
+                unit.selecting
+                    .get(made.callee.1)
+                    .map_or(&[][..], Vec::as_slice)
+            });
+            if inner.is_empty() && selecting.is_empty() {
                 continue;
-            };
+            }
             let declared = own(made.callee);
             let map: Vec<(Location, &Argument)> =
                 declared.iter().copied().zip(&made.generics).collect();
+            // What each call of the instance calls, with what it gives
+            // the callee's generic parameters and what answers the
+            // callee's requirements there, and where it is written.
+            let mut calls: Vec<Resolved> = Vec::new();
             for call in inner {
                 // A call of an operation the body requires is a call of
                 // the candidate this instance's caller answers it with
@@ -1284,22 +1305,74 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                             .collect(),
                     ),
                 };
-                let call = Made {
+                calls.push(Resolved {
                     callee,
-                    generics: Vec::new(),
-                    answers: Vec::new(),
-                    required: None,
+                    generics,
+                    answers,
                     at: call.at,
+                });
+            }
+            // GEN-5: a call whose candidate a generic parameter of the
+            // body selects is selected here, with this instance's types
+            // ([`Typer::select_at_instance`]).
+            if !selecting.is_empty() {
+                let (module, declaration) = made.callee;
+                let unit = &program.modules[module];
+                let signature = match unit.details.get(declaration) {
+                    Some(Detail::Callable(signature)) => signature,
+                    _ => &empty,
                 };
-                let key = format!("{:?}{generics:?}{answers:?}", call.callee);
+                let (bindings, written, arguments) = &tables[module];
+                let sink = std::cell::RefCell::new(Vec::new());
+                let mut typer = super::Typer::bare(
+                    program,
+                    unit,
+                    &unit.declarations[declaration],
+                    signature,
+                    super::Tables {
+                        bindings,
+                        written,
+                        calls: arguments,
+                        selecting: &sink,
+                    },
+                    diagnostics,
+                );
+                typer.instance = declared
+                    .iter()
+                    .copied()
+                    .zip(made.generics.iter().cloned())
+                    .collect();
+                for call in selecting {
+                    let Some((chosen, _)) = typer.select_at_instance(call, None) else {
+                        continue;
+                    };
+                    let answers =
+                        typer.answers(chosen.module, chosen.declaration, &chosen.generics);
+                    calls.push(Resolved {
+                        callee: (chosen.module, chosen.declaration),
+                        generics: chosen.generics,
+                        answers,
+                        at: call.name,
+                    });
+                }
+            }
+            for Resolved {
+                callee,
+                generics,
+                answers,
+                at,
+            } in calls
+            {
+                let key = format!("{callee:?}{generics:?}{answers:?}");
                 if key.len() > ARGUMENTS {
                     exhausted = true;
                     break;
                 }
-                if required(program, call.callee).is_some() {
-                    let (module, declaration) = call.callee;
+                if required(program, callee).is_some() {
+                    let (module, declaration) = callee;
                     let unit = &program.modules[module];
-                    let (bindings, written, calls) = &tables[module];
+                    let (bindings, written, arguments) = &tables[module];
+                    let sink = std::cell::RefCell::new(Vec::new());
                     let mut typer = super::Typer::bare(
                         program,
                         unit,
@@ -1308,17 +1381,18 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
                         super::Tables {
                             bindings,
                             written,
-                            calls,
+                            calls: arguments,
+                            selecting: &sink,
                         },
                         diagnostics,
                     );
-                    for &at in &from {
-                        typer.instance_met((at, call.at), call.callee, &generics);
+                    for &root in &from {
+                        typer.instance_met((root, at), callee, &generics);
                     }
                 }
-                if reaching.contains(&call.callee) && seen.insert(key) {
+                if reaching.contains(&callee) && seen.insert(key) {
                     waiting.push_back(Made {
-                        callee: call.callee,
+                        callee,
                         generics,
                         answers,
                         required: None,
@@ -1332,6 +1406,16 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             }
         }
     }
+}
+
+/// A call an instance makes: what it calls, with what it gives the
+/// callee's generic parameters and what answers the callee's
+/// requirements, and where it is written ([`instances_hold`]).
+struct Resolved {
+    callee: (usize, usize),
+    generics: Vec<Argument>,
+    answers: Vec<hir::Answer>,
+    at: Location,
 }
 
 /// Reports each call in `from` whose instances go past what is followed

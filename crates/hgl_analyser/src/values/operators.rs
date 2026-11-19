@@ -329,9 +329,22 @@ impl<'a> Typer<'a> {
         // source result type during source checking." An option a
         // candidate's condition reads is given here as no constant this
         // pass reads: which candidates admit the call cannot be told,
-        // and the call is not judged.
+        // and the call is not judged. GEN-3: where that is for a generic
+        // parameter of the declaration being read, each instance of it
+        // selects the candidate ([`Typer::select_per_instance`]).
         if untold {
-            return (self.unselected(given, Form::Named), Type::Unknown);
+            let named = Location::new(self.file, name.span());
+            let written = list.parent().map_or(named, |call| self.at(&call));
+            let gives = self.select_per_instance(
+                operator,
+                &given,
+                (&wanted, requested.as_ref()),
+                (Form::Named, written, named),
+            );
+            return (
+                self.unselected(given, Form::Named),
+                gives.unwrap_or(Type::Unknown),
+            );
         }
         // An argument could not be tried once the function's readings
         // were used up (`REREADS`): the call is then not judged.
