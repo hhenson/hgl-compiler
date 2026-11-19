@@ -11,7 +11,7 @@
 //! by it, and any connection is given to a `signal`. Neither holds of an
 //! ordinary value, which is read where it is given.
 
-use crate::types::{Argument, Type};
+use crate::types::Type;
 
 /// True when a connection of `given` is taken by a temporal place of
 /// `expected` across a reference boundary or by a `signal`. `admits`
@@ -99,30 +99,7 @@ impl Type {
 
 /// True when `ty` is or holds a `ref`, at any depth.
 pub(crate) fn holds_ref(ty: &Type) -> bool {
-    match ty {
-        Type::Ref(_) => true,
-        Type::Named { arguments, .. } => arguments.iter().any(|argument| match argument {
-            Argument::Type(argument) => holds_ref(argument),
-            Argument::Constant(_) => false,
-        }),
-        Type::Tuple(elements) => elements.iter().any(holds_ref),
-        Type::List { element: inner, .. }
-        | Type::Set(inner)
-        | Type::Endpoint(inner)
-        | Type::Atomic(inner)
-        | Type::Delta(inner)
-        | Type::Trace { cell: inner, .. }
-        | Type::Nullable(inner)
-        | Type::RollingWindow { value: inner, .. } => holds_ref(inner),
-        Type::Dict { key, value } => holds_ref(key) || holds_ref(value),
-        Type::Result { value, error } => holds_ref(value) || holds_ref(error),
-        Type::Scalar(_)
-        | Type::Parameter { .. }
-        | Type::Signal
-        | Type::Error
-        | Type::ErrorContext
-        | Type::Unknown => false,
-    }
+    ty.any_part(&|part| matches!(part, Type::Ref(_)), &|_| false)
 }
 
 /// `ty` with every reference boundary removed, at any depth (GEN-11):
