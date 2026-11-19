@@ -3282,9 +3282,11 @@ impl<'a> Typer<'a> {
             SyntaxKind::TypeCall => self.type_call(node),
             SyntaxKind::TryExpr => self.propagation(node),
             // An anonymous function's body is for a later part. What it
-            // captures of a capability is reported here.
+            // captures of a capability is reported here, and what it
+            // reads of a node's inputs where it is written.
             SyntaxKind::FnExpr => {
                 self.captured_capabilities(node);
+                self.anonymous_reads(node);
                 (ExprKind::Unread, Type::Unknown)
             }
             SyntaxKind::ImpliedMember => self.implied_member(node, expected),
@@ -3778,6 +3780,81 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The body of the anonymous function `function`, read where it is
+    /// written in a node, for what it reads there.
+    ///
+    /// FN-14: "An anonymous function's scope is the scope around it
+    /// plus its parameters ... its body uses only parameters, generic
+    /// parameters, `let` locals, and iteration bindings." A temporal
+    /// input is a parameter: in a hook it is the payload (FN-3), and
+    /// TIME-1: "A payload read requires admission/readability". So each
+    /// read is held to the admission where the function is written: its
+    /// `when` header, the guards around it and those in the body itself
+    /// (TIME-4), `start` and `stop` (TIME-5), a `state`'s or a
+    /// `cache`'s initializer (TIME-5, TIME-1). An input's validity does
+    /// not change within an evaluation, so a read proved where the
+    /// function is written is proved wherever it is called in that
+    /// evaluation.
+    ///
+    /// The function's parameters and result take their types from its
+    /// accepting form (FN-7), which is not read, and so do its `return`
+    /// and its `?` (CTRL-5, ERR-5). A parameter is of the type written
+    /// for it, or of none known. What the body declares, assigns or
+    /// proves is taken back, and of what the walk reports only the
+    /// reads of the node's inputs stand: the rest would depend on those
+    /// types, and is not judged here.
+    fn anonymous_reads(&mut self, function: &SyntaxNode) {
+        /// The reports of a read of a node's input where nothing admits
+        /// it (TIME-1, TIME-4, TIME-5).
+        const READS: [&str; 4] = [
+            codes::PAYLOAD_UNGUARDED,
+            codes::INPUT_LIFECYCLE,
+            codes::STATE_INPUT_READ,
+            codes::local::CACHE_INPUT_READ,
+        ];
+        if !(self.hook.is_some() || self.initializing || self.caching) {
+            return;
+        }
+        let mark = self.mark();
+        let undriven = self.undriven.len();
+        let parameters = child(function, SyntaxKind::ParamList)
+            .into_iter()
+            .flat_map(|list| list.children())
+            .filter(|parameter| parameter.kind() == SyntaxKind::LambdaParam);
+        for parameter in parameters {
+            let Some(name) = tokens(&parameter).find(|token| token.kind() == SyntaxKind::Ident)
+            else {
+                continue;
+            };
+            let ty = parameter
+                .children()
+                .find(|part| is_type(part.kind()))
+                .and_then(|part| self.written.get(&(self.file, part.span().start)))
+                .map_or(Type::Unknown, |ty| (*ty).clone());
+            let at = Location::new(self.file, name.span());
+            self.declare(name.text(), at, LocalKind::Parameter, ty, true);
+        }
+        let body = function.children().find_map(|part| match part.kind() {
+            SyntaxKind::ArrowBody => part.children().next(),
+            SyntaxKind::Block => Some(part),
+            _ => None,
+        });
+        if let Some(body) = body {
+            self.flow(&body, Some(&Type::Unknown), false);
+        }
+        let reads: Vec<_> = self.diagnostics.as_slice()[mark.diagnostics..]
+            .iter()
+            .filter(|diagnostic| READS.contains(&diagnostic.code.as_str()))
+            .cloned()
+            .collect();
+        self.take_back(mark, false);
+        // A `modified([])` of the body is no selector of the node's.
+        self.undriven.truncate(undriven);
+        for diagnostic in reads {
+            self.diagnostics.emit(diagnostic);
+        }
+    }
+
     /// How the capability named at `node` is retained where it stands,
     /// in a few words for the message; `None` where it is used and not
     /// retained.
@@ -3928,12 +4005,24 @@ impl<'a> Typer<'a> {
                 self.payload_read(local, at);
             }
         }
-        // TIME-7: "`start` neither reads nor writes it".
-        if Some(local) == self.out && self.hook == Some(Hook::Start) {
-            self.out_lifecycle(
-                at,
-                "`out` is neither read nor written in `start`".to_string(),
-            );
+        // TIME-7: "`out` is read in a `when` and in `stop` ... `start`
+        // neither reads nor writes it". Nor does a `state`'s or a
+        // `cache`'s initializer, which gives it its first value on
+        // every start (TIME-6), before the node has published.
+        if Some(local) == self.out {
+            if self.hook == Some(Hook::Start) {
+                self.out_lifecycle(
+                    at,
+                    "`out` is neither read nor written in `start`".to_string(),
+                );
+            } else if self.initializing || self.caching {
+                self.out_lifecycle(
+                    at,
+                    "`out` is read in a `when` and in `stop`, and a `state` or a `cache` is \
+                     given its first value on every start, before the node has published"
+                        .to_string(),
+                );
+            }
         }
         // TIME-3: the node's scheduler or alarm used in `start` is what
         // may wake a handler that subscribes to no input. "Any use in
@@ -5845,6 +5934,12 @@ impl<'a> Typer<'a> {
                 && let Some(operation) = EndpointOperation::language_form(name.text())
             {
                 return self.endpoint(operation, &name, &list);
+            }
+            // `(fn(x) => x + 1)(7)` (FN-10), and the call of what one
+            // gives, `(fn(a) => fn(b) => a + b)(1)(2)`: the function is
+            // read where it is written, for what it reads (FN-14).
+            if calls_anonymous(&callee) {
+                self.expression(&callee, Some(&Type::Unknown));
             }
             return self.unread_call(&list);
         };
@@ -12476,6 +12571,19 @@ impl Written {
             Written::Duration => "a `duration`".to_string(),
             Written::Member(name) => format!("the enum member `.{name}`"),
         }
+    }
+}
+
+/// True when the callee `node` is an anonymous function, in
+/// parentheses or not, or a call of one, or of what such a call gives.
+fn calls_anonymous(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::FnExpr => true,
+        SyntaxKind::ParenExpr | SyntaxKind::CallExpr => node
+            .children()
+            .next()
+            .is_some_and(|inner| calls_anonymous(&inner)),
+        _ => false,
     }
 }
 
