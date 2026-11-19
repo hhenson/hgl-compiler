@@ -9,9 +9,11 @@
 //! TYPE-11); a delta's key (TYPE-16); a tuple's index (EXPR-7); an
 //! enum's number (TYPE-7). Each of those places reads it here, with
 //! [`read`], and holds what it comes to as a
-//! [`ConstantValue`]: the value, not how it is written. Two are
-//! compared with [`ConstantValue::same`], the one comparison every
-//! place asks.
+//! [`ConstantValue`]: the value, not how it is written. UNIT-13: "Two
+//! compile-time constants are one where those values are the same,
+//! however each is written", which [`ConstantValue::same`] asks, and
+//! "An equality the program writes, in a `requires` as elsewhere, is the
+//! language's `==` (GEN-3)", which [`ConstantValue::equals`] asks.
 //!
 //! The reader is given the type the constant's place expects. EXPR-5:
 //! "An integer literal is an `f64` where one is expected", so `1` given
@@ -1844,8 +1846,9 @@ pub(crate) fn combined(
     }
     // NUM-5: "NaN is neither equal nor close to any value, including
     // itself", and core's comparisons are false for a NaN operand but
-    // `!=`. A NaN is a constant (hhenson/hgl_spec#139), and is told
-    // here before a number is ordered.
+    // `!=`. A NaN is a constant, UNIT-13: "any two NaNs, `0.0 / 0.0`
+    // among them, are one constant, though `==` holds for no NaN". It is
+    // told here before a number is ordered.
     let number = |value: &ConstantValue| matches!(value, V::Int(_) | V::Float(_));
     let nan = |value: &ConstantValue| matches!(value, V::Float(value) if value.is_nan());
     if matches!(
@@ -1918,7 +1921,7 @@ pub(crate) fn combined(
         // NUM-3: `/` of numbers is true division, an `f64`, under the
         // `ieee` zero policy by default: a finite nonzero numerator by a
         // zero is a signed infinity, and zero by zero a NaN, which is a
-        // constant, the same as any NaN constant (hhenson/hgl_spec#139).
+        // constant, the same as any NaN constant (UNIT-13).
         (Op::Divide, V::Int(left), V::Int(right)) => float(divided(*left, *right)),
         // NUM-1: "Unconfigured mixed i64/f64 and f64 arithmetic returns
         // f64": the `i64` as the `f64` nearest it.
@@ -2066,9 +2069,8 @@ fn floored(left: f64, right: f64) -> (f64, f64) {
     (floor, remainder)
 }
 
-/// An `f64` result as a constant: a NaN and an infinity too
-/// (hhenson/hgl_spec#139: "A NaN constant is the same constant as a NaN
-/// constant").
+/// An `f64` result as a constant: a NaN and an infinity too (UNIT-13:
+/// "any two NaNs, `0.0 / 0.0` among them, are one constant").
 fn float(value: f64) -> Option<ConstantValue> {
     Some(ConstantValue::Float(value))
 }
@@ -2212,13 +2214,14 @@ impl ConstantValue {
     /// ask (GEN-8, TYPE-3). A comparison the program makes asks
     /// [`ConstantValue::equals`].
     ///
-    /// Two values of one type are the same where they are the same value
-    /// of it, however each is written: `1.0` and `1.00`, `60s` and `1m`,
-    /// `1Y` and `12M` (TYPE-17). Two temporal values are compared by
-    /// [`same_temporal`]. "The same is the same value, not `==`: `-0.0`
-    /// and `0.0` are different constants ... A NaN constant is the same
-    /// constant as a NaN constant" (hhenson/hgl_spec#139, written in
-    /// UNIT-13): two `f64` are compared by [`same_float`].
+    /// UNIT-13: "Two compile-time constants are one where those values
+    /// are the same, however each is written: `1`, `1.0` and `1.00` as an
+    /// `f64`; `60s` and `1m`", and `1Y` and `12M` (TYPE-17). Two temporal
+    /// values are compared by [`same_temporal`]. "The same value is not
+    /// `==` ...: `-0.0` and `0.0` are two constants, though `-0.0 ==
+    /// 0.0`, and any two NaNs, `0.0 / 0.0` among them, are one constant,
+    /// though `==` holds for no NaN": two `f64` are compared by
+    /// [`same_float`].
     ///
     /// What is not valued is neither: [`ConstantValue::Unevaluated`]
     /// gives `None` beside anything. So does a generic value parameter,
@@ -2234,9 +2237,13 @@ impl ConstantValue {
     /// Whether two constants are equal as the language's `==` compares
     /// them (OPS-2): what a `requires` asks of an option, and what a
     /// `switch` label's duplicates and a delta's overlap ask, which the
-    /// program compares as it runs. "`requires X == 0.0` is the
-    /// language's `==`: it holds for `-0.0`" (hhenson/hgl_spec#139): it
-    /// is [`ConstantValue::same`] but that two `f64` are equal as numbers
+    /// program compares as it runs. UNIT-13: "An equality the program
+    /// writes, in a `requires` as elsewhere, is the language's `==`
+    /// (GEN-3)", and GEN-3: "with `const k: f64`, `requires k == 0.0`
+    /// holds where `k` is `-0.0`". For a label and a delta's keys that is
+    /// proposed (CTRL-6, TYPE-16: "Proposed: ... and not by their
+    /// sameness as constants"). It is [`ConstantValue::same`] but that
+    /// two `f64` are equal as numbers
     /// (NUM-5: "opposite signed zeros are equal", and "NaN is neither
     /// equal nor close to any value, including itself").
     ///
@@ -2358,17 +2365,16 @@ impl ConstantValue {
 }
 
 /// Whether two `f64` are the same constant: the same value, which is not
-/// `==` (hhenson/hgl_spec#139, written in UNIT-13). `-0.0` and `0.0` are
-/// two constants, and two NaN are one: a NaN is not told apart by its
-/// bits. This is the one place that says it.
+/// `==` (UNIT-13: "`-0.0` and `0.0` are two constants, though `-0.0 ==
+/// 0.0`, and any two NaNs ... are one constant"): a NaN is not told
+/// apart by its bits. This is the one place that says it.
 pub(crate) fn same_float(left: f64, right: f64) -> bool {
     left.to_bits() == right.to_bits() || (left.is_nan() && right.is_nan())
 }
 
 /// Whether two temporal constants are one value: two values of one
-/// type, equal by that type's own equality (the owner's decision of
-/// 2026-11-19 on hhenson/hgl-compiler#211, "two datetimes are equal as
-/// instants"; https://github.com/hhenson/hgl-compiler/issues/211#issuecomment-7008815914).
+/// type, equal by that type's own equality. UNIT-13: "the `datetime`s
+/// `@2026-09-03T09:30Z` and `@2026-09-03T10:30+01:00`, one instant".
 ///
 /// TYPE-2: a `datetime` is a "UTC-instant", so two are one where they
 /// are one instant: `@2024-01-01T01:00+01:00` is `@2024-01-01T00:00Z`.
@@ -2852,10 +2858,10 @@ mod tests {
         assert_eq!(divided(i64::MIN, -1), (None, Some("0".to_string())));
     }
 
-    /// hhenson/hgl_spec#139, written in UNIT-13: "The same is the same
-    /// value, not `==`: `-0.0` and `0.0` are different constants ... A
-    /// NaN constant is the same constant as a NaN constant." "`requires
-    /// X == 0.0` is the language's `==`: it holds for `-0.0`."
+    /// UNIT-13: "The same value is not `==` ...: `-0.0` and `0.0` are
+    /// two constants, though `-0.0 == 0.0`, and any two NaNs, `0.0 / 0.0`
+    /// among them, are one constant, though `==` holds for no NaN."
+    /// GEN-3: "`requires k == 0.0` holds where `k` is `-0.0`."
     #[test]
     fn the_same_constant_is_not_the_languages_equality() {
         use ConstantValue as V;

@@ -6173,14 +6173,15 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
     );
 }
 
-// ---- Constants by value (hhenson/hgl-compiler#211) ----
+// ---- Constants by value (UNIT-13) ----
 
-/// The owner's decision on hhenson/hgl-compiler#211: two constants are
-/// the same where, read as values of the type their place gives them,
-/// they are equal, and "when writing transpiled code, we would write the
-/// code one way, i.e. f=1.0". EXPR-5: `1` where an `f64` is expected is
-/// `1.0`. So `FBox<1>` and `FBox<1.00>` are one class, and `scaled<1>`
-/// and `scaled<1.0>` one instance, which writes the value as `1.0`.
+/// UNIT-13: "A compile-time constant ... is one value of the type its
+/// place gives it (EXPR-5): `1` where an `f64` is expected is `1.0`. Two
+/// compile-time constants are one where those values are the same,
+/// however each is written", and "That sameness gives type identity
+/// (TYPE-3) and the instance a call makes (GEN-13)". So `FBox<1>` and
+/// `FBox<1.00>` are one class, and `scaled<1>` and `scaled<1.0>` one
+/// instance, which writes the value as `1.0`.
 #[test]
 fn a_constant_argument_is_written_by_its_value() {
     let emitted = emit(&[(
@@ -6212,10 +6213,11 @@ fn a_constant_argument_is_written_by_its_value() {
     assert_eq!(python.matches("def _inst_scaled__").count(), 2, "{python}");
 }
 
-/// hhenson/hgl_spec#139: "`-0.0` and `0.0` are different constants:
-/// different type arguments, different instances." Each instance is
-/// written with its own constant, whichever call is met first: core's
-/// `1.0 / -0.0` is negative infinity and `1.0 / 0.0` positive.
+/// UNIT-13: "`-0.0` and `0.0` are two constants, though `-0.0 ==
+/// 0.0`", and GEN-13: "arguments that differ make another" instance.
+/// Each instance is written with its own constant, whichever call is met
+/// first: core's `1.0 / -0.0` is negative infinity and `1.0 / 0.0`
+/// positive.
 #[test]
 fn a_negative_zero_is_an_instance_of_its_own() {
     let emitted = emit(&[(
@@ -6236,6 +6238,107 @@ fn a_negative_zero_is_an_instance_of_its_own() {
     );
     assert!(python.contains("div__f64_f64(lhs=x, rhs=-0.0)"), "{python}");
     assert!(python.contains("div__f64_f64(lhs=x, rhs=0.0)"), "{python}");
+}
+
+/// GEN-13's fragment, `const fn reciprocal<const k: f64>() -> f64 =>
+/// 1.0 / k`, with its calls in the order `first` gives them and in the
+/// other: "`reciprocal<1>()` and `reciprocal<1.0>()` call one instance.
+/// `reciprocal<0.0>()` is positive infinity and `reciprocal<-0.0>()`
+/// negative infinity, whichever is called first." Each program's test
+/// asserts the two infinities by their text (OPS-6: "the infinities are
+/// `inf` and `-inf`").
+fn reciprocal_calls(first: &str, second: &str) -> String {
+    format!(
+        "module m\n\
+         const fn reciprocal<const k: f64>() -> f64 => 1.0 / k\n\
+         const fn shown() -> list<str, 4> => [\n    \
+         convert<str>({first}), convert<str>({second}),\n    \
+         convert<str>(reciprocal<1>()), convert<str>(reciprocal<1.0>()),\n]\n\
+         test signs {{\n    \
+         assert shown() == [\"{}\", \"{}\", \"1.0\", \"1.0\"]\n}}\n",
+        if first.contains('-') { "-inf" } else { "inf" },
+        if second.contains('-') { "-inf" } else { "inf" },
+    )
+}
+
+/// The two orders of `reciprocal_calls`: each zero is an instance of its
+/// own, written with its own constant, and `1` and `1.0` are one.
+#[test]
+fn the_reciprocal_of_each_zero_is_an_instance_of_its_own_in_either_order() {
+    for (first, second) in [
+        ("reciprocal<0.0>()", "reciprocal<-0.0>()"),
+        ("reciprocal<-0.0>()", "reciprocal<0.0>()"),
+    ] {
+        let text = reciprocal_calls(first, second);
+        let emitted = emit(&[("m.hgl", text.as_str())]);
+        assert_eq!(emitted.reported, Vec::<String>::new());
+        let python = emitted.text("_hgl/_m_m/__init__.py");
+        for expected in [
+            "def _inst_reciprocal__0_0():\n    return _core.div__f64_f64(lhs=1.0, rhs=0.0, zero=\"ieee\")\n",
+            "def _inst_reciprocal___0_0():\n    return _core.div__f64_f64(lhs=1.0, rhs=-0.0, zero=\"ieee\")\n",
+            "def _inst_reciprocal__1_0():\n",
+        ] {
+            assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+        }
+        assert_eq!(
+            python.matches("def _inst_reciprocal__").count(),
+            3,
+            "{python}"
+        );
+    }
+}
+
+/// The same two programs run on hgraph: positive infinity and negative
+/// infinity whichever is called first. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn the_reciprocal_of_each_zero_runs_in_either_order() {
+    for (name, first, second) in [
+        (
+            "hgraph_reciprocal_zero_first",
+            "reciprocal<0.0>()",
+            "reciprocal<-0.0>()",
+        ),
+        (
+            "hgraph_reciprocal_minus_zero_first",
+            "reciprocal<-0.0>()",
+            "reciprocal<0.0>()",
+        ),
+    ] {
+        let hgraph = on_hgraph(name);
+        let text = reciprocal_calls(first, second);
+        let emitted = emit_clean(&[("m.hgl", text.as_str())]);
+        assert_eq!(hgraph.run_all(&emitted), [Ran::Passed], "{first} first");
+    }
+}
+
+/// TIME-7: a node's delta of a value that holds an unsized list and a
+/// dictionary is published with both shapes, so that a delta that names
+/// no change of the dictionary, "Where it is valid ... is no tick"
+/// (`demo.pins2_wave3` runs it). A value that holds no dictionary or set
+/// is told none.
+#[test]
+fn a_delta_beside_an_unsized_list_is_told_where_its_dictionaries_are() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn books(step: i64) -> tuple<list<i64>, dict<str, dict<str, i64>>> {\n",
+            "    when { return (null, delta<dict<str, dict<str, i64>>>(updated: [\"a\": delta<dict<str, i64>>()])) }\n",
+            "}\n",
+            "fn counts(step: i64) -> tuple<i64, list<i64>> {\n",
+            "    when { return (null, delta<list<i64>>()) }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "(\"list\", None,), entries=(\"positions\", (None, (\"entries\", \"entries\"),)))\n",
+        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",))\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
 }
 
 /// GEN-13: a constant given a `list<any>` is written whole, however

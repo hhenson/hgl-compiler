@@ -602,10 +602,10 @@ fn forwarded_packs_too_long_to_sum_are_still_counted() {
 }
 
 /// TYPE-3: "Generic applications are invariant by origin and complete
-/// canonical arguments." Two applications are one type when their
-/// arguments are the same: a constant by its value (the owner's decision
-/// on hhenson/hgl-compiler#211), and one with no value known is the same
-/// as no other.
+/// canonical arguments, a value argument by its value (UNIT-13)." Two
+/// applications are one type when their arguments are the same: a
+/// constant by its value, and one with no value known is the same as no
+/// other.
 #[test]
 fn a_generic_application_is_known_by_its_arguments() {
     let checked = module(concat!(
