@@ -181,6 +181,7 @@ transpiler: done
 transpiler: done
 
 - hgraph: a target not after the one before it, a skipped one among them, is `yield.non_increasing_time`; a past target is skipped, a current one published at once, and a future one keeps its payload until the node's scheduler wakes it there
+- A due payload is published through the node's output before the generator is resumed: where the statements after the `yield` fail, the publication stands (ERR-8)
 
 ## SOURCE-4
 

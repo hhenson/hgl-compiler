@@ -2133,11 +2133,11 @@ fn a_source_is_a_generator_a_node_resumes() {
         concat!(
             "@_hg.compute_node\n",
             "def _source_two_values(_begin: _hg.TS[_py.bool], _state: _hg.STATE = None, ",
-            "_clock: _hg.EvaluationClock = None, _scheduler: _hg.SCHEDULER = None) ",
-            "-> _hg.TS[_py.int]:\n",
-            "    _published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)\n",
-            "    if _published is not None:\n",
-            "        return _published[0]\n",
+            "_clock: _hg.EvaluationClock = None, _scheduler: _hg.SCHEDULER = None, ",
+            "_output: _hg.TS_OUT[_py.int] = None) -> _hg.TS[_py.int]:\n",
+            // SOURCE-3: "On wake it publishes and resumes after yield":
+            // the provider publishes through `_output`, then resumes.
+            "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output)\n",
         ),
         concat!(
             "@_source_two_values.start\n",
@@ -4916,7 +4916,7 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "(_core.valid_of(pair, (\"list\", None)) and pair.all_valid)",
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
-        "        return _core.published_into(_output, _published[0], \"list\")",
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
         "        return _core.removed(pair.delta_value)",
     ]);
 }
@@ -4977,7 +4977,7 @@ fn a_growing_list_is_an_unbounded_tsl() {
         "        _core.list_child(_output, 1).value = 9\n".to_string(),
         "        _output.value = _core.list_applied(_output, _core.list_delta(size_modified=_core.neg__i64(value=1)))\n".to_string(),
         // SOURCE-1: what a source yields is applied as it is due.
-        "        return _core.published_into(_output, _published[0], \"list\")\n".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")\n".to_string(),
         // FN-3: a branch's constant is the provider's node.
         format!("        return _core.constant_of({list})(_hg.const(True), given=_core.Held((_core.copied(no_values()), \"list\")))\n"),
         // A lifted helper's empty result ticks through its `_output`.
@@ -5115,7 +5115,7 @@ fn a_growing_lists_position_is_an_endpoint_of_its_own() {
         "_core.checked_child_result(_core.list_position(values, index.value), lambda _port: ".to_string(),
         "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",))\n".to_string(),
         "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"})".to_string(),
-        "        return _core.published_into(_output, _published[0], {\"items\": \"list\"})\n".to_string(),
+        "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, {\"items\": \"list\"})\n".to_string(),
         "_core.bundled(Basket(owner=\"b\", items=[]), {\"owner\": None, \"items\": \"list\"}, _core.DEFERRED)".to_string(),
         "        _core.invalidated(_output, \"list\")\n".to_string(),
         "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
