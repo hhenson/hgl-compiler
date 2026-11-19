@@ -1,0 +1,32 @@
+module m
+abstract struct Shape { id: i64 }
+struct Circle : Shape { radius: i64 }
+struct Quote { bid: i64 }
+fn whole(shape: Shape) -> i64 {
+    when {
+        let held = shape
+        return held.id
+    }
+}
+const fn id_of(shape: Shape) -> i64 => shape.id
+fn shaped(id: i64) -> Shape {
+    when { return delta<Shape>(id: id) }
+}
+fn lifted(value: i64) -> i64 => id_of(shaped(value))
+fn configured(const shape: Shape, value: i64) -> i64 {
+    when { return value }
+}
+fn changes(pairs: list<tuple<i64, i64>, 2>) -> i64 {
+    when {
+        let change = delta_value(pairs)
+        return 1
+    }
+}
+fn keyed(key: str, bid: i64) -> dict<str, Quote> {
+    inject out
+    when { out[key].bid = bid }
+}
+fn first(pair: tuple<i64, Quote>) -> i64 {
+    when all_valid(pair) { return pair[0] }
+}
+fn made(a: i64) -> i64 => first((a, Quote(bid: 1)))

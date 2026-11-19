@@ -1,0 +1,12 @@
+module m
+struct Quote {
+    bid: i64
+}
+fn quoted(key: str, bid: i64) -> dict<str, Quote> {
+    when { return delta<dict<str, Quote>>(updated: [key: delta<Quote>(bid: bid)]) }
+}
+const fn fixed() -> dict<str, Quote> => ["a": Quote(bid: 0)]
+fn chosen(take: bool, key: str, bid: i64) -> dict<str, Quote> {
+    if take { return quoted(key, bid) }
+    return fixed()
+}

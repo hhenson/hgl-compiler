@@ -1,0 +1,48 @@
+module demo.caps
+
+fn counted(value: i64) -> i64 {
+    cache seen: i64 = 0
+    inject logger
+    when {
+        seen += 1
+        # A `%` in a message is text.
+        log_info(logger, "seen 100% of it")
+        return seen
+    }
+    stop { if seen > 1 { log(logger, .debug, "more than one") } }
+}
+
+fn stamped(value: i64) -> datetime {
+    inject clock
+    when { return clock.evaluation_time }
+}
+
+fn next_step(value: i64) -> duration {
+    inject clock
+    when { return clock.next_cycle_evaluation_time - clock.evaluation_time }
+}
+
+fn remembered(value: i64) -> i64 {
+    inject global_state
+    when {
+        let before: i64 =
+            if has(global_state, "last") { get<i64>(global_state, "last") } else { 0 }
+        put(global_state, "last", value)
+        return before
+    }
+}
+
+fn levelled(value: i64) -> bool {
+    inject logger
+    when { return logger.level == .debug || logger.level != .debug }
+}
+
+test capabilities {
+    assert eval(counted(value: [7, _, 7])) == [1, _, 2]
+    assert eval(stamped(value: [1, _, 3])) == [earliest_start, _, earliest_start + 2us]
+    assert eval(next_step(value: [1])) == [1us]
+    # CRUN-7: a run's store is empty when its graph is built.
+    assert eval(remembered(value: [5, 6, _, 7])) == [0, 5, _, 6]
+    assert eval(remembered(value: [8])) == [0]
+    assert eval(levelled(value: [1])) == [true]
+}

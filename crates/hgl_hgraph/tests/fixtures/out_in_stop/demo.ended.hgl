@@ -1,0 +1,21 @@
+module demo.ended
+fn totalled(value: i64, const expected: i64) -> i64 {
+    inject out
+    state sum: i64 = 0
+    state ended: i64 = 0
+    when {
+        sum += value
+        out = sum
+    }
+    stop {
+        if valid(out) { ended = 1 // (if out == expected { 1 } else { 0 }) }
+    }
+}
+test reads_what_was_published {
+    assert eval(totalled(value: [1, 2, 3], expected: 6)) == [1, 3, 6]
+    # Nothing was published: `out` is not valid, and is not read.
+    assert eval(totalled(value: [_, _], expected: 6)) == []
+}
+test reads_no_other {
+    assert eval(totalled(value: [1, 2, 3], expected: 7)) == [1, 3, 6]
+}

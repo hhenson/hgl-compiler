@@ -1,0 +1,5 @@
+application demo.ticks.backtest
+use demo.ticks::{doubled}
+const rounds: i64 = 3
+# RUN-3: `eval` is a simulation.
+eval(doubled(upto: rounds), RunConfig(length: 10s))
