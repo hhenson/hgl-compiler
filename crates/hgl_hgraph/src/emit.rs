@@ -4247,12 +4247,12 @@ impl Emitter<'_> {
         match statement {
             Stmt::Declare { local, value } => {
                 if let Some(value) = value {
-                    // ERR-7: a capture of a graph given a wiring-time
-                    // value is written with a graph of its own, before
-                    // the statement.
+                    // ERR-7: a capture of a node, of a lifted call or of
+                    // a graph given a wiring-time value is of a graph
+                    // of the target's own, written before the statement.
                     let captured = match &value.kind {
                         ExprKind::Capture(call) if function.mode == Mode::Graph => {
-                            self.captured_graph(function, call, depth)
+                            self.captured_call(function, call, depth)
                         }
                         _ => None,
                     };
@@ -5747,16 +5747,22 @@ impl Emitter<'_> {
     /// child's evaluation only, and the child is evaluated again on its
     /// next input. The nearest `try_except` catches a failure, once.
     ///
-    /// The call is a node or a graph of the program, or a value
-    /// function of the program lifted over a connection (FN-6), whose
-    /// node is captured as any node is. A graph given a wiring-time
-    /// value, which hgraph's `try_except` does not take, is written
-    /// apart where the capture is the value of a `let`
-    /// (`Emitter::captured_graph`); anywhere else it is reported, as is
-    /// a lifted operator or native function.
+    /// Written here is the capture of a graph of the program, or of a
+    /// source, given no wiring-time value: hgraph's `try_except` makes
+    /// the child a graph of its own. Any other capture is written where
+    /// it is the value of a `let` (`Emitter::captured_call`), and
+    /// reported anywhere else; so is one in a test outside an eval, and
+    /// one of a lifted operator or native function.
     fn capture(&mut self, function: &Function, call: &Expr) -> String {
         let at = call.at;
         let program = self.program;
+        // TST-3: a test is a composition block, and a capture there, as
+        // a temporal call there, makes a connection Python has no
+        // graph to make in.
+        if function.mode == Mode::Test {
+            self.unsupported(at, "a capture in a test, outside an eval");
+            return "None".to_string();
+        }
         let ExprKind::Call {
             callee:
                 Callee::Function {
@@ -5789,46 +5795,22 @@ impl Emitter<'_> {
             self.unsupported(at, "this capture");
             return "None".to_string();
         };
-        // FN-6: "A selected value helper ... with temporal arguments in
-        // composition is lifted": the node the call is written as, the
-        // same node a call of it outside a capture is, with the same
-        // arguments. ERR-7: a value function given no connection
-        // composes nothing, which the analyser rejects
-        // (`capture.phase`).
-        if declared.kind.role() == Some(Role::Value)
-            && bodied
-            && arguments
-                .iter()
-                .any(|argument| self.connects(function, &argument.value))
-        {
-            let (written, bound) = self.bound(function, signature, arguments, |emitter, value| {
-                emitter.connects(function, value).then(|| value.ty.clone())
-            });
-            let result = signature.result.as_ref().map(|_| &call.ty);
-            let node = self.lifted(
-                (module, declaration),
-                Lifts::Function(generics),
-                signature,
-                &bound,
-                result,
-                at,
-            );
-            let given = [node].into_iter().chain(written).collect::<Vec<_>>();
-            return self.attempted(&given.join(", "), signature.result.is_none());
-        }
-        if declared.kind.role() != Some(Role::Temporal) || !bodied {
+        let temporal = declared.kind.role() == Some(Role::Temporal);
+        if !bodied || !(temporal || declared.kind.role() == Some(Role::Value)) {
             self.unsupported(at, "a capture of a lifted operator or native function");
             return "None".to_string();
         }
-        if !self.is_node((module, declaration))
-            && signature
+        if !temporal
+            || self.is_node((module, declaration))
+            || signature
                 .parameters
                 .iter()
                 .any(|parameter| parameter.constant)
         {
             self.unsupported(
                 at,
-                "a capture of a graph given a wiring-time value, other than as the value of a `let`",
+                "a capture of a node, of a lifted call or of a graph given a wiring-time \
+                 value, other than as the value of a `let`",
             );
             return "None".to_string();
         }
@@ -5859,7 +5841,8 @@ impl Emitter<'_> {
     /// failure of a child's `start` or `stop` that it meets while it
     /// evaluates what it captures, a branch of a `switch_` selected or
     /// left: the provider's `captured` wires beside it what raises such
-    /// a failure again.
+    /// a failure again. ERR-1: so it does a failure that is no HGL
+    /// error, which no capture takes.
     fn attempted(&mut self, given: &str, outputless: bool) -> String {
         self.hgraph = true;
         self.natives = true;
@@ -5871,18 +5854,24 @@ impl Emitter<'_> {
         }
     }
 
-    /// `let seen = capture(child, value, 2)` in a graph, where `child`
-    /// is a graph that takes a `const` parameter (ERR-7). Writes what
-    /// the capture needs before the statement at `depth`, and gives the
-    /// capture; `None` where `call` is no such call, which
-    /// [`Emitter::capture`] writes.
+    /// `let seen = capture(child, value, 2)` in a graph (ERR-7), where
+    /// `child` is a node, a value function lifted over a connection
+    /// (FN-6), or a graph or a source given a wiring-time value. Writes
+    /// what the capture needs before the statement at `depth`, and
+    /// gives the capture; `None` where `call` is a graph or a source
+    /// given none, which [`Emitter::capture`] writes.
     ///
-    /// hgraph's `try_except` does not take a graph with a scalar input,
-    /// so the capture is of a graph of the target's own, `_capture_0`,
+    /// The capture is of a graph of the target's own, `_capture_0`,
     /// whose inputs are the child's temporal parameters and which calls
-    /// the child with each wiring-time value bound. "capturing a graph
-    /// covers failures that leave that subgraph": the subgraph is the
-    /// child's, called as it is anywhere else.
+    /// the child with each wiring-time value bound; hgraph's
+    /// `try_except` makes it a graph of its own. A node called there is
+    /// one no call outside the capture shares: hgraph makes one node of
+    /// two calls of a node with the same inputs and the same scalars in
+    /// one graph, and `try_except` given a node directly would capture
+    /// the failures of every call it is made of. And `try_except` takes
+    /// no graph with a scalar input. "capturing a graph covers failures
+    /// that leave that subgraph": the subgraph is the child's, called as
+    /// it is anywhere else.
     ///
     /// EXPR-13: the arguments are evaluated once, in the order written,
     /// where the capture is: before the `let`'s own line. Each
@@ -5891,7 +5880,7 @@ impl Emitter<'_> {
     /// as it is; any other is held too, in its place in the order. The
     /// defaults of what the call leaves out are evaluated after, in
     /// the graph's call of the child, as a call evaluates them.
-    fn captured_graph(&mut self, function: &Function, call: &Expr, depth: usize) -> Option<String> {
+    fn captured_call(&mut self, function: &Function, call: &Expr, depth: usize) -> Option<String> {
         let at = call.at;
         let program = self.program;
         let ExprKind::Call {
@@ -5924,14 +5913,22 @@ impl Emitter<'_> {
             declared.kind,
             DeclarationKind::Implementation(..) | DeclarationKind::Function(_)
         );
-        if declared.kind.role() != Some(Role::Temporal)
-            || !bodied
-            || self.is_node(callee)
-            || !signature
-                .parameters
+        let node = self.is_node(callee);
+        // FN-6: "A selected value helper ... with temporal arguments in
+        // composition is lifted". ERR-7: a value function given no
+        // connection composes nothing, which the analyser rejects
+        // (`capture.phase`).
+        let lifted = declared.kind.role() == Some(Role::Value)
+            && bodied
+            && arguments
                 .iter()
-                .any(|parameter| parameter.constant)
-        {
+                .any(|argument| self.connects(function, &argument.value));
+        let constants = signature
+            .parameters
+            .iter()
+            .any(|parameter| parameter.constant);
+        let temporal = declared.kind.role() == Some(Role::Temporal) && bodied;
+        if !(lifted || temporal && (node || constants)) {
             return None;
         }
         if signature
@@ -5939,43 +5936,89 @@ impl Emitter<'_> {
             .iter()
             .any(|parameter| parameter.pack.is_some())
         {
-            self.unsupported(
-                at,
-                "a capture of a graph with a pack, given a wiring-time value",
-            );
+            self.unsupported(at, "a capture of a call of a function with a pack");
             return Some("None".to_string());
         }
         let number = self.captured;
         self.captured += 1;
         let graph = format!("_capture_{number}");
+        // Each argument as `(argument, parameter, value, input)`: the
+        // position of its parameter, what it is written as, and whether
+        // it is an input of the child, a connection, or its
+        // configuration.
+        let mut written: Vec<(&Argument, usize, String, bool)> = Vec::new();
+        // What a node is given inside `_core.Held(...)`; a lifted node
+        // holds its configuration itself (`bound`).
+        let kept = if lifted {
+            vec![false; signature.parameters.len()]
+        } else {
+            self.kept_configuration(callee, generics, signature)
+        };
+        let child = if lifted {
+            let (values, bound) = self.bound(function, signature, arguments, |emitter, value| {
+                emitter.connects(function, value).then(|| value.ty.clone())
+            });
+            let result = signature.result.as_ref().map(|_| &call.ty);
+            let node = self.lifted(
+                callee,
+                Lifts::Function(generics),
+                signature,
+                &bound,
+                result,
+                at,
+            );
+            // `bound` writes each argument as `name=value`, in the order
+            // of `arguments`, a pack's left out.
+            let given = arguments.iter().filter_map(|argument| {
+                let index = argument.parameter?;
+                signature.parameters[index]
+                    .pack
+                    .is_none()
+                    .then_some((argument, index))
+            });
+            for ((argument, index), value) in given.zip(values) {
+                let value = value
+                    .split_once('=')
+                    .map_or(value.clone(), |(_, value)| value.to_string());
+                let input = matches!(bound[index], Some(Bound::Input(_)));
+                written.push((argument, index, value, input));
+            }
+            node
+        } else {
+            for argument in arguments {
+                let Some(index) = argument.parameter else {
+                    continue;
+                };
+                let value = self.expression(function, &argument.value);
+                let value = if kept[index] {
+                    format!("_core.Held({value})")
+                } else {
+                    value
+                };
+                let input = !signature.parameters[index].constant;
+                written.push((argument, index, value, input));
+            }
+            self.called_name(callee, generics, at)
+        };
         // The child's graph is given its inputs by name, and the graph
         // of the capture is given them as `try_except` is.
         let mut inputs = Vec::new();
         let mut given = Vec::new();
         let mut called = Vec::new();
-        for argument in arguments {
-            let Some(parameter) = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index))
-            else {
-                continue;
-            };
-            let python = name(&parameter.name);
-            let value = self.expression(function, &argument.value);
+        for (argument, index, value, input) in written {
+            let python = name(&signature.parameters[index].name);
             let plain = matches!(
                 argument.value.kind,
                 ExprKind::Local(_) | ExprKind::Literal(_)
             );
-            let value = if parameter.constant || !plain {
+            let value = if !input || !plain {
                 let held = format!("{graph}_{python}");
                 self.line(depth, &format!("{held} = {value}"));
                 held
             } else {
                 value
             };
-            if parameter.constant {
-                called.push(format!("{python}={value}"));
-            } else {
+            if input {
                 // A type the target does not write is reported there.
                 let Some(annotation) = self.annotation(&argument.value.ty, true, at) else {
                     return Some("None".to_string());
@@ -5983,17 +6026,29 @@ impl Emitter<'_> {
                 inputs.push(format!("{python}: {annotation}"));
                 given.push(format!("{python}={value}"));
                 called.push(format!("{python}={python}"));
+            } else {
+                called.push(format!("{python}={value}"));
             }
         }
-        for (index, parameter) in signature.parameters.iter().enumerate() {
-            if arguments
-                .iter()
-                .any(|argument| argument.parameter == Some(index))
-            {
-                continue;
-            }
-            if let Some(value) = self.left_out(callee, index, parameter) {
-                called.push(format!("{}={value}", name(&parameter.name)));
+        // A lifted node binds what its call leaves out itself.
+        if !lifted {
+            for (index, parameter) in signature.parameters.iter().enumerate() {
+                if arguments
+                    .iter()
+                    .any(|argument| argument.parameter == Some(index))
+                {
+                    continue;
+                }
+                if let Some(value) = self.left_out(callee, index, parameter) {
+                    // A node keeps a default of its configuration as it
+                    // keeps one given (`kept_configuration`).
+                    let value = if kept[index] {
+                        format!("_core.Held({value})")
+                    } else {
+                        value
+                    };
+                    called.push(format!("{}={value}", name(&parameter.name)));
+                }
             }
         }
         let result = match &signature.result {
@@ -6003,7 +6058,6 @@ impl Emitter<'_> {
             },
             None => "None".to_string(),
         };
-        let child = self.called_name(callee, generics, at);
         self.hgraph = true;
         self.line(depth, "@_hg.graph");
         self.line(
@@ -6650,36 +6704,7 @@ impl Emitter<'_> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
-        // A node keeps its configuration: a list, a tuple or a
-        // dictionary is given to it inside an object hgraph keeps as
-        // it is. What a parameter is of is read from the instance the
-        // call names, where the node is written by instance: a
-        // parameter declared a `T` is a list where `T` is one (GEN-2),
-        // and the node written for it takes the list out.
-        let node = self.is_node(callee);
-        let kept: Vec<bool> = {
-            let instances = self.instances;
-            let instance = instances
-                .instanced(self.program, callee.0, callee.1)
-                .then(|| instances.find(self.program, callee, generics))
-                .flatten();
-            let taken = instance.map_or(signature, |instance| &instance.signature);
-            signature
-                .parameters
-                .iter()
-                .enumerate()
-                .map(|(index, parameter)| {
-                    let ty = taken
-                        .parameters
-                        .get(index)
-                        .map_or(&parameter.ty, |parameter| &parameter.ty);
-                    node && parameter.constant && held(ty)
-                })
-                .collect()
-        };
-        if kept.contains(&true) {
-            self.natives = true;
-        }
+        let kept = self.kept_configuration(callee, generics, signature);
         let kept = |index: usize, value: String| {
             if kept[index] {
                 format!("_core.Held({value})")
@@ -6791,6 +6816,46 @@ impl Emitter<'_> {
             }
         }
         written.join(", ")
+    }
+
+    /// For each parameter of `callee`, a module and a declaration of it,
+    /// whether a call gives it inside `_core.Held(...)`.
+    ///
+    /// A node keeps its configuration: a list, a tuple or a dictionary
+    /// is given to it inside an object hgraph keeps as it is. What a
+    /// parameter is of is read from the instance the call names, where
+    /// the node is written by instance: a parameter declared a `T` is a
+    /// list where `T` is one (GEN-2), and the node written for it takes
+    /// the list out.
+    fn kept_configuration(
+        &mut self,
+        callee: (usize, usize),
+        generics: &[GenericArgument],
+        signature: &Signature,
+    ) -> Vec<bool> {
+        let node = self.is_node(callee);
+        let instances = self.instances;
+        let instance = instances
+            .instanced(self.program, callee.0, callee.1)
+            .then(|| instances.find(self.program, callee, generics))
+            .flatten();
+        let taken = instance.map_or(signature, |instance| &instance.signature);
+        let kept: Vec<bool> = signature
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                let ty = taken
+                    .parameters
+                    .get(index)
+                    .map_or(&parameter.ty, |parameter| &parameter.ty);
+                node && parameter.constant && held(ty)
+            })
+            .collect();
+        if kept.contains(&true) {
+            self.natives = true;
+        }
+        kept
     }
 
     /// True when `callee`, a module and a declaration of it, is written
