@@ -159,3 +159,52 @@ test two_writes_that_end_where_they_began_are_no_tick {
     assert eval(flagged_follow(flag: [true, true, false, true], a: [1, _, _, 5], b: [2, _, _, _])) ==
         [2, _, 1, 2]
 }
+
+# END-4: "Invalidation clears validity, modification, payload, and
+# delta ... Repeated invalidation while invalid is silent. Within a
+# producer evaluation the last action determines the state". FN-16,
+# proposed: "`out` of a `ref` result is as a `ref` parameter is: the
+# endpoint operations take it". `invalidate(out)` leaves the result
+# designating nothing: a reader is bound to nothing, and a `ref`
+# parameter given it is not valid, and modified.
+fn maybe(flag: bool, ref x: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag { return x }
+        invalidate(out)
+    }
+}
+
+fn last_action(flag: bool, ref x: i64) -> ref i64 {
+    inject out
+    when modified(flag) {
+        if flag {
+            invalidate(out)
+            out = x
+        } else {
+            out = x
+            invalidate(out)
+        }
+    }
+}
+
+fn checked_any(ref target: i64) -> bool {
+    when valid([]) { return valid(target) }
+}
+
+fn maybe_followed(flag: bool, x: i64) -> i64 => follow(maybe(flag, x))
+fn maybe_checked(flag: bool, x: i64) -> bool => checked_any(maybe(flag, x))
+fn maybe_designations(flag: bool, x: i64) -> i64 => designations_any(maybe(flag, x))
+fn last_followed(flag: bool, x: i64) -> i64 => follow(last_action(flag, x))
+fn last_checked(flag: bool, x: i64) -> bool => checked_any(last_action(flag, x))
+
+test invalidating_a_ref_result_designates_nothing {
+    # `x`'s 2 does not reach the reader, and the next designation
+    # samples it.
+    assert eval(maybe_followed(flag: [true, false, _, true], x: [1, _, 2, _])) == [1, _, _, 2]
+    assert eval(maybe_checked(flag: [true, false, false, true], x: [1, _, _, _])) ==
+        [true, false, _, true]
+    assert eval(maybe_designations(flag: [true, false, false, true], x: [1, _, _, _])) == [1, 2, _, 3]
+    assert eval(last_followed(flag: [true, false, true], x: [1, _, 3])) == [1, _, 3]
+    assert eval(last_checked(flag: [true, false, true], x: [1, _, _])) == [true, false, true]
+}

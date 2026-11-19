@@ -42,6 +42,7 @@ from hgraph import (
     TSL as _TSL,
     TSLDelta as _TSLDelta,
     TS_OUT as _TS_OUT,
+    TimeSeriesReference as _TimeSeriesReference,
     TimeSeriesSchema as _TimeSeriesSchema,
     set_delta as _set_delta,
     compute_node as _compute_node,
@@ -1203,6 +1204,15 @@ class Designation:
     `out = a; out = b` while it holds `b` is no tick. hgraph's reference
     output would tick for each write, and a `ref` parameter given it
     would be modified.
+
+    Where the result designates nothing, after `invalidate(out)`, it is
+    given hgraph's empty reference and then invalidated. END-4:
+    "Invalidation clears validity": a `ref` parameter given it is not
+    valid, and modified. hgraph keeps an ordinary input bound to a
+    reference output that is invalidated bound to what it designated,
+    and unbinds it for the empty reference; it does not notify the
+    input's node that it is no longer valid, where END-4 has "The
+    transition to invalid notifies active subscribers".
     """
 
     __slots__ = ("_output", "_state", "_ports", "_held", "_pending", "_key")
@@ -1273,13 +1283,15 @@ class Designation:
 
     def published(self):
         """What the node returns as it ends its evaluation: the
-        designation where it changed, `None` where it did not. Where it
-        designates nothing the output is invalidated here."""
+        designation where it changed, `None` where it did not. One of
+        nothing is published here: the empty reference, which unbinds a
+        reader, then the invalidation."""
         self._state._designates = self._key
         pending = self._pending
         if pending is _UNCHANGED or _same_designation(pending, self._held):
             return None
         if pending is None:
+            self._output.value = _TimeSeriesReference.make()
             self._output.invalidate()
             return None
         return pending
