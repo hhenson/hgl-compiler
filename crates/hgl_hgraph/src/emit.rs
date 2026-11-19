@@ -6705,6 +6705,10 @@ impl Emitter<'_> {
         arguments: &[Argument],
     ) -> String {
         let kept = self.kept_configuration(callee, generics, signature);
+        // Whether the callee is a node: a node keeps what a graph
+        // gives it that is no connection, so such an argument is
+        // copied below.
+        let node = self.is_node(callee);
         let kept = |index: usize, value: String| {
             if kept[index] {
                 format!("_core.Held({value})")
