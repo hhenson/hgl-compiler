@@ -6265,6 +6265,35 @@ fn the_reciprocal_of_each_zero_runs_in_either_order() {
     }
 }
 
+/// TIME-7: a node's delta of a value that holds an unsized list and a
+/// dictionary is published with both shapes, so that a delta that names
+/// no change of the dictionary, "Where it is valid ... is no tick"
+/// (`demo.pins2_wave3` runs it). A value that holds no dictionary or set
+/// is told none.
+#[test]
+fn a_delta_beside_an_unsized_list_is_told_where_its_dictionaries_are() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn books(step: i64) -> tuple<list<i64>, dict<str, dict<str, i64>>> {\n",
+            "    when { return (null, delta<dict<str, dict<str, i64>>>(updated: [\"a\": delta<dict<str, i64>>()])) }\n",
+            "}\n",
+            "fn counts(step: i64) -> tuple<i64, list<i64>> {\n",
+            "    when { return (null, delta<list<i64>>()) }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "(\"list\", None,), entries=(\"positions\", (None, (\"entries\", \"entries\"),)))\n",
+        "return _core.published_into(_output, (None, _core.list_delta(),), (None, \"list\",))\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+}
+
 /// GEN-13: a constant given a `list<any>` is written whole, however
 /// deep: a nested list, a tuple and a member each say their own type.
 #[test]

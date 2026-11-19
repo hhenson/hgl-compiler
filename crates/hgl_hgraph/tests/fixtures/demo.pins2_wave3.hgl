@@ -433,3 +433,88 @@ test a_delta_that_names_no_change_beside_an_unsized_list_ticks_only_where_it_mak
         _, [true, true, false], [true, true, true], _, _, _, _, [false, false, false], [true, true, false],
     ]
 }
+
+# A source's, which publishes what it yields when it is due, a second
+# after the one before (SOURCE-2): the dictionary is made valid by the
+# delta that names no change, its next one is no tick, and a removal of
+# what it does not hold neither.
+fn listed_book_source() -> tuple<list<i64>, dict<str, i64>> {
+    {
+        yield 0s: (delta<list<i64>>(updated: [0: 1]), null)
+        yield 1s: (null, delta<dict<str, i64>>())
+        yield 1s: (null, delta<dict<str, i64>>())
+        yield 1s: (null, delta<dict<str, i64>>(removed: ["z"]))
+        yield 1s: (null, delta<dict<str, i64>>(updated: ["a": 1]))
+    }
+}
+
+fn listed_book_source_seen() -> list<bool, 3> => listed_book_woken(listed_book_source())
+
+test a_sources_delta_that_names_no_change_beside_an_unsized_list_ticks_only_where_it_makes_a_child_valid {
+    assert eval(listed_book_source_seen(), RunConfig(length: 5s)) == [
+        0s: [true, true, false],
+        1s: [true, true, true],
+        4s: [true, true, true],
+    ]
+}
+
+# Within a dictionary there, by a node and by a source: an entry whose
+# delta names no change, where the entry is valid, is left out, as a
+# dictionary given one for a key ticks (core's END-3: "it ticks what holds
+# one given such a change"); one that removes only what it does not hold
+# names no change, as proposed.
+fn publish_shelved_books(step: i64) -> tuple<list<i64>, dict<str, dict<str, i64>>> {
+    inject out
+    when {
+        if step == 0 { return (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(updated: ["x": 1])])) }
+        if step == 1 { return (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>()])) }
+        if step == 2 { return (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(removed: ["q"])])) }
+        if step == 3 { return (null, delta<dict<str, dict<str, i64>>>(updated: ["b": delta<dict<str, i64>>()])) }
+        invalidate(out)
+    }
+}
+
+fn shelved_books_woken(pair: tuple<list<i64>, dict<str, dict<str, i64>>>) -> list<bool, 2> {
+    when valid([]) { return [valid(pair[1]), valid(pair[1]["b"])] }
+}
+
+fn shelved_books_watched(step: i64) -> list<bool, 2> => shelved_books_woken(publish_shelved_books(step))
+
+struct Rack {
+    items: list<i64>
+    books: dict<str, dict<str, i64>>
+}
+
+fn publish_rack(step: i64) -> Rack {
+    inject out
+    when {
+        if step == 0 { return delta<Rack>(books: delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(updated: ["x": 1])])) }
+        if step == 1 { return delta<Rack>(books: delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>()])) }
+        if step == 2 { return delta<Rack>(books: delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(removed: ["q"])])) }
+        if step == 3 { return delta<Rack>(books: delta<dict<str, dict<str, i64>>>(updated: ["b": delta<dict<str, i64>>()])) }
+        invalidate(out)
+    }
+}
+
+fn rack_woken(rack: Rack) -> list<bool, 2> {
+    when valid([]) { return [valid(rack.books), valid(rack.books["b"])] }
+}
+
+fn rack_watched(step: i64) -> list<bool, 2> => rack_woken(publish_rack(step))
+
+fn shelved_books_source() -> tuple<list<i64>, dict<str, dict<str, i64>>> {
+    {
+        yield 0s: (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(updated: ["x": 1])]))
+        yield 1s: (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>()]))
+        yield 1s: (null, delta<dict<str, dict<str, i64>>>(updated: ["a": delta<dict<str, i64>>(removed: ["q"])]))
+        yield 1s: (null, delta<dict<str, dict<str, i64>>>(updated: ["b": delta<dict<str, i64>>()]))
+    }
+}
+
+fn shelved_books_source_seen() -> list<bool, 2> => shelved_books_woken(shelved_books_source())
+
+test an_entry_that_names_no_change_beside_an_unsized_list_is_left_out {
+    assert eval(shelved_books_watched(step: [0, 1, 2, 3])) == [[true, false], _, _, [true, true]]
+    assert eval(rack_watched(step: [0, 1, 2, 3])) == [[true, false], _, _, [true, true]]
+    assert eval(shelved_books_source_seen(), RunConfig(length: 4s)) == [0s: [true, false], 3s: [true, true]]
+}
