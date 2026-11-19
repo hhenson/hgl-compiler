@@ -553,7 +553,7 @@ impl Emitter<'_> {
 /// the provider's `bundled` reads it (`Emitter::whole_shape`).
 pub(super) struct Shape {
     /// The provider's text for it: `None`, a `dict`, a tuple or `[None]`.
-    text: String,
+    pub(super) text: String,
     /// True for a part that publishes whole, as it is.
     leaf: bool,
     /// True where each of its own parts is a leaf.

@@ -207,8 +207,11 @@ pub(super) fn whole_scalar(ty: &Type) -> bool {
 }
 
 /// True where a cell of a trace of `trace` holds a value of `ty` whole:
-/// the trace's cell is the `delta<T>` of a list, a set, a dictionary or
-/// a struct, a type of its own, and the value is of T (TST-5).
+/// the trace's cell is the `delta<T>` of a list, a set, a dictionary, a
+/// struct or a tuple, and the value is of T (TST-5: "A list, a tuple, a
+/// struct and a dictionary are each written either way"). A tuple's
+/// trace names its T, `delta<tuple<A, B>>`, where the delta is a tuple
+/// of its own (`Type::trace_cell`).
 pub(super) fn whole_cell(trace: &Type, ty: &Type) -> bool {
     matches!(
         trace,
@@ -219,6 +222,7 @@ pub(super) fn whole_cell(trace: &Type, ty: &Type) -> bool {
                 Type::List { .. }
                     | Type::Set(_)
                     | Type::Dict { .. }
+                    | Type::Tuple(_)
                     | Type::Named {
                         kind: NamedKind::Struct,
                         ..

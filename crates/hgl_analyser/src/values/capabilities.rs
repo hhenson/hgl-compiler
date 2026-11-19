@@ -118,7 +118,6 @@ impl<'a> Typer<'a> {
             return;
         }
         let mark = self.mark();
-        let undriven = self.undriven.len();
         let parameters = child(function, SyntaxKind::ParamList)
             .into_iter()
             .flat_map(|list| list.children())
@@ -150,8 +149,6 @@ impl<'a> Typer<'a> {
             .cloned()
             .collect();
         self.take_back(mark, false);
-        // A `modified([])` of the body is no selector of the node's.
-        self.undriven.truncate(undriven);
         for diagnostic in reads {
             self.diagnostics.emit(diagnostic);
         }
