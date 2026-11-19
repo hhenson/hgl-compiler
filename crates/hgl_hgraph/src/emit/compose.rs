@@ -5,6 +5,7 @@
 //! `emit` writes a module with them.
 
 use super::*;
+use hgl_analyser::hir::LabelValue;
 
 impl Emitter<'_> {
     /// CTRL-10: "A block whose last statement is an expression has that
@@ -493,7 +494,7 @@ impl Emitter<'_> {
                 default,
                 at,
             } if self.connects(function, selector) => {
-                if self.labels_repeat(cases) {
+                if self.label_not_valued(cases) || self.labels_repeat(cases) {
                     return Branched::Ended;
                 }
                 let mut branches: Vec<(String, &[Stmt])> = Vec::new();
@@ -653,17 +654,9 @@ impl Emitter<'_> {
     /// resolve, a generic value parameter, is in an instance the literal
     /// or the member the call gives it (GEN-13), which is read as it is.
     fn repeated_label(cases: &[Case]) -> Option<Location> {
-        use hgl_analyser::hir::LabelValue;
         let mut seen: Vec<LabelValue> = Vec::new();
         for case in cases {
-            let value = case.value.clone().or_else(|| match &case.label.kind {
-                ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
-                ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
-                ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
-                ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
-                _ => None,
-            });
-            let Some(value) = value else {
+            let Some(value) = Self::label_value(case) else {
                 continue;
             };
             if seen.contains(&value) {
@@ -672,6 +665,42 @@ impl Emitter<'_> {
             seen.push(value);
         }
         None
+    }
+
+    /// The value of `case`'s label: the one the analyser resolved it to
+    /// (`Case::value`), or, for a label it could not resolve, the
+    /// literal or the member an instance has in its place (GEN-13).
+    /// `None` for any other, a constant a `const fn` computes among them.
+    fn label_value(case: &Case) -> Option<LabelValue> {
+        case.value.clone().or_else(|| match &case.label.kind {
+            ExprKind::Literal(Value::Int(value)) => Some(LabelValue::Int(*value)),
+            ExprKind::Literal(Value::Bool(value)) => Some(LabelValue::Bool(*value)),
+            ExprKind::Literal(Value::Str(value)) => Some(LabelValue::Str(value.clone())),
+            ExprKind::EnumMember { member, .. } => Some(LabelValue::Member(*member)),
+            _ => None,
+        })
+    }
+
+    /// Reports a `switch` over a connection with a label whose value is
+    /// not known here ([`Emitter::label_value`]) beside another label,
+    /// and says whether it did. CTRL-6: "Duplicate values reject", and
+    /// hgraph's `switch_` keys its branches by each label's value and
+    /// keeps the last of two of one value, where a `switch` over an
+    /// ordinary value takes the first: the label may be another's value,
+    /// and the case selected would then not be the language's. A label
+    /// alone repeats none.
+    fn label_not_valued(&mut self, cases: &[Case]) -> bool {
+        if cases.len() < 2 {
+            return false;
+        }
+        let Some(case) = cases.iter().find(|case| Self::label_value(case).is_none()) else {
+            return false;
+        };
+        self.unsupported(
+            case.label.at,
+            "a `switch` over a connection with a label whose value the compiler does not work out",
+        );
+        true
     }
 
     /// Reports a `switch` two of whose labels have one value (see

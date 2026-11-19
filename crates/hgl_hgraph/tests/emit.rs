@@ -5596,6 +5596,56 @@ fn a_control_form_that_would_be_wrong_is_reported() {
     );
 }
 
+/// CTRL-6: "Switch labels are typed source constants, compared by
+/// resolved value ... Duplicate values reject." A `switch` over a
+/// connection is hgraph's `switch_`, whose branches are keyed by each
+/// label's value: of two labels of one value it keeps the last, where a
+/// `switch` over an ordinary value takes the first. So a label whose
+/// value the analyser has not worked out, a constant a `const fn`
+/// computes or a negation by a candidate of the program's own, is
+/// reported beside another label: it may be another's value. A label
+/// alone, and labels whose values are worked out, are written.
+const UNVALUED_LABELS: (&str, &str) =
+    fixture!("a_switch_label_not_worked_out_is_reported", "m.hgl");
+
+#[test]
+fn a_switch_label_not_worked_out_is_reported() {
+    let emitted = emit(&[UNVALUED_LABELS]);
+    let unvalued = "the hgraph target does not write a `switch` over a connection with a label whose value the compiler does not work out yet";
+    assert_eq!(
+        emitted.reported,
+        [
+            format!("m.hgl:10:14 target.unsupported: {unvalued}"),
+            format!("m.hgl:17:14 target.unsupported: {unvalued}"),
+            format!("m.hgl:39:14 target.unsupported: {unvalued}"),
+        ]
+    );
+    assert_eq!(
+        emitted.blocked("graph_path_int"),
+        Some(format!("m.hgl:10:14 {unvalued}"))
+    );
+    assert_eq!(
+        emitted.blocked("graph_path_enum"),
+        Some(format!("m.hgl:17:14 {unvalued}"))
+    );
+    assert_eq!(emitted.blocked("graph_path_valued"), None);
+}
+
+/// The `switch`es of [`UNVALUED_LABELS`] that are written select the
+/// case of the selector's value. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_switch_whose_labels_are_worked_out_selects_by_value() {
+    let hgraph = on_hgraph("hgraph_unvalued_labels");
+    let emitted = emit(&[UNVALUED_LABELS]);
+    let tests = [emitted.test("graph_path_valued").0];
+    let ran = hgraph.run(&emitted, &tests);
+    assert_eq!(
+        outcomes(&emitted, &tests, &ran),
+        ["graph_path_valued passed"]
+    );
+}
+
 /// EXPR-15: "In a graph, an assignment into a place of a `var` is copy
 /// on write ... `point.x = price` rebinds `point` to a new connection".
 /// A struct's, a tuple's and a fixed list's connection is made anew of
