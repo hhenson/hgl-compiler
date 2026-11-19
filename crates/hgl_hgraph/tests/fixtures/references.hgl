@@ -1,0 +1,189 @@
+module demo.references
+
+struct Quote {
+    bid: i64
+    ask: i64
+}
+
+# TYPE-12: a `ref<T>` input is given the designation, and a node that
+# returns one re-points what follows it.
+fn pick(use_left: bool, left: ref<i64>, right: ref<i64>) -> ref<i64> {
+    when {
+        if use_left { return left }
+        return right
+    }
+}
+
+# TIME-10: a reference ticks on a changed designation, not on every
+# tick of its target.
+fn designations(target: ref<i64>) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen = seen + 1
+        return seen
+    }
+}
+
+# A designation passed through a node: bound to a `let`, published again.
+fn kept(target: ref<i64>) -> ref<i64> {
+    when {
+        let held = target
+        return held
+    }
+}
+
+fn checked(target: ref<i64>) -> bool {
+    when modified(target) { return valid(target) }
+}
+
+# GEN-11: a generic input given a reference follows its target; a
+# `ref<T>` pattern binds the type under it; a requested output binds
+# its variable whole.
+fn ticks<T>(value: T) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen = seen + 1
+        return seen
+    }
+}
+
+fn ref_ticks<T>(value: ref<T>) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen = seen + 1
+        return seen
+    }
+}
+
+fn same<T>(value: T) -> T {
+    when { return value }
+}
+
+const fn doubled(value: i64) -> i64 => value * 2
+
+# TYPE-12: a `signal` input wakes its node and holds no payload.
+fn sample(value: i64, tick: signal) -> i64 {
+    when modified(tick) && valid(value) { return value }
+}
+
+fn counted(tick: signal) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen = seen + 1
+        return seen
+    }
+}
+
+# A `signal?` left out is never valid (UNIT-8).
+fn maybe_sampled(value: i64, tick: signal?) -> i64 {
+    when modified(tick) && valid(value) { return value }
+    when modified(value) && valid(value) { return -value }
+}
+
+fn quoted(bid: i64, ask: i64) -> Quote {
+    when { return Quote(bid: bid, ask: ask) }
+}
+
+# TYPE-9: `atomic<V>` publishes the whole V, and a hook reads it as a V.
+const fn width(quote: Quote) -> i64 => quote.ask - quote.bid
+
+fn snapshot(bid: i64, ask: i64) -> atomic<Quote> {
+    when { return Quote(bid: bid, ask: ask) }
+}
+
+fn snapshot_width(quote: atomic<Quote>) -> i64 {
+    when { return width(quote) }
+}
+
+fn raised(quote: atomic<Quote>) -> atomic<Quote> {
+    when {
+        let held: Quote = quote
+        return Quote(bid: held.bid + 1, ask: held.ask)
+    }
+}
+
+# `out` read back whole, as a V (TIME-7).
+fn widened(bid: i64) -> atomic<Quote> {
+    inject out
+    when {
+        out = Quote(bid: bid, ask: bid + 2)
+        let whole: Quote = out
+        out = Quote(bid: whole.bid, ask: out.ask + width(out))
+    }
+}
+
+# TYPE-16: an atomic's delta is the whole value, the field that did not
+# change among it.
+fn whole_ask(quote: atomic<Quote>) -> i64 {
+    when { return delta_value(quote).ask }
+}
+
+fn followed(use_left: bool, left: i64, right: i64) -> i64 => pick(use_left, left, right)
+fn repointed(use_left: bool, left: i64, right: i64) -> i64 => designations(pick(use_left, left, right))
+fn kept_of(use_left: bool, left: i64, right: i64) -> i64 => kept(pick(use_left, left, right))
+fn checked_of(use_left: bool, left: i64, right: i64) -> bool => checked(pick(use_left, left, right))
+fn doubled_of(use_left: bool, left: i64, right: i64) -> i64 => doubled(pick(use_left, left, right))
+fn designated(left: ref<i64>) -> i64 => left
+fn as_reference(left: i64) -> ref<i64> => left
+fn through_graphs(use_left: bool, left: i64, right: i64) -> i64 =>
+    designated(pick(use_left, as_reference(left), right))
+fn generic_follows(use_left: bool, left: i64, right: i64) -> i64 => ticks(pick(use_left, left, right))
+fn generic_designates(use_left: bool, left: i64, right: i64) -> i64 =>
+    ref_ticks(pick(use_left, left, right))
+fn requested(left: i64) -> ref<i64> => same(left)
+fn requested_ticks(left: i64) -> i64 => ref_ticks(requested(left))
+
+fn sampled_of(value: i64, probe: bool) -> i64 => sample(value, probe)
+fn woken(value: i64) -> i64 => counted(value)
+fn woken_by_struct(bid: i64, ask: i64) -> i64 => counted(quoted(bid, ask))
+fn woken_by_reference(use_left: bool, left: i64, right: i64) -> i64 =>
+    counted(pick(use_left, left, right))
+fn passed_signal(tick: signal) -> i64 => counted(tick)
+fn passed(value: i64) -> i64 => passed_signal(value)
+fn left_out(value: i64) -> i64 => maybe_sampled(value)
+fn given(value: i64, probe: bool) -> i64 => maybe_sampled(value, probe)
+
+fn width_of(bid: i64, ask: i64) -> i64 => snapshot_width(snapshot(bid, ask))
+fn raised_bid(bid: i64, ask: i64) -> i64 => raised(snapshot(bid, ask)).bid
+fn widened_ask(bid: i64) -> i64 => widened(bid).ask
+fn whole_asks(bid: i64, ask: i64) -> i64 => whole_ask(snapshot(bid, ask))
+fn snapshots(bid: i64, ask: i64) -> i64 => counted(snapshot(bid, ask))
+
+test a_reference_ticks_on_a_changed_designation {
+    assert eval(followed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 10, 11]
+    assert eval(repointed(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, _, 2, _]
+    assert eval(kept_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 10, 11]
+    assert eval(checked_of(use_left: [true, _, false], left: [1, 2, 3], right: [10, _, _])) ==
+        [true, _, true]
+    assert eval(doubled_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [2, 4, 20, 22]
+    assert eval(through_graphs(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 10, 11]
+    assert eval(generic_follows(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 3, 4]
+    assert eval(generic_designates(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, _, 2, _]
+    assert eval(requested_ticks(left: [1, 2, 3])) == [1, _, _]
+}
+
+test a_signal_wakes_its_node {
+    assert eval(sampled_of(value: [1, 2, _, 3], probe: [_, true, true, _])) == [_, 2, 2, _]
+    assert eval(woken(value: [1, _, 2])) == [1, _, 2]
+    assert eval(woken_by_struct(bid: [1, _, 2], ask: [5, _, _])) == [1, _, 2]
+    assert eval(woken_by_reference(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 3, 4]
+    assert eval(passed(value: [1, 2])) == [1, 2]
+    assert eval(left_out(value: [1, 2])) == [-1, -2]
+    assert eval(given(value: [1, 2, _], probe: [_, true, true])) == [-1, 2, 2]
+}
+
+test an_atomic_struct_ticks_once_with_its_whole_value {
+    assert eval(width_of(bid: [1, 2, _], ask: [5, _, 9])) == [4, 3, 7]
+    assert eval(raised_bid(bid: [1, 2], ask: [5, _])) == [2, 3]
+    assert eval(widened_ask(bid: [1, 2])) == [5, 6]
+    assert eval(whole_asks(bid: [1, 2, _], ask: [5, _, 6])) == [5, 5, 6]
+    assert eval(snapshots(bid: [1, 2, 3], ask: [5, 6, _])) == [1, 2, 3]
+}

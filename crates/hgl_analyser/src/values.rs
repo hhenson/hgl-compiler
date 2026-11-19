@@ -847,6 +847,19 @@ impl<'a> Typer<'a> {
                 };
                 let value = self.expression(&written, Some(&expected));
                 let place = format!("the parameter `{}`", parameter.name);
+                // TYPE-12: "A `signal` input takes no default but
+                // `null`": it has no payload a constant could supply.
+                let signal = matches!(not_null(Some(&parameter.ty)), Some(Type::Signal));
+                if signal && !matches!(value.kind, ExprKind::Literal(Value::Null)) {
+                    self.diagnostics.emit(error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        value.at,
+                        format!("{place} is a `signal`, which takes no default but `null`"),
+                        "TYPE-12",
+                    ));
+                    return Some(value);
+                }
                 Some(self.fit(value, &expected, &place))
             })
             .collect()
@@ -1937,7 +1950,7 @@ impl<'a> Typer<'a> {
         let (value, outcome) = self.flow(node, Some(result), true);
         match outcome {
             Outcome::Value(_) => {
-                let value = self.fit(value, result, "the function's result");
+                let value = self.fit_input(value, result, "the function's result");
                 self.returned = true;
                 Stmt::Return {
                     value: Some(value),
@@ -2163,7 +2176,7 @@ impl<'a> Typer<'a> {
         }
         let value = self.expression(node, result.as_ref());
         match &result {
-            Some(result) => self.fit(value, result, "the function's result"),
+            Some(result) => self.fit_input(value, result, "the function's result"),
             None => value,
         }
     }
@@ -3585,6 +3598,7 @@ impl<'a> Typer<'a> {
         if self.is_temporal_input(local) && (self.hook.is_some() || self.initializing) {
             self.payload_read(local, at);
         }
+        self.signal_read(local, at);
         // TIME-7: "`start` neither reads nor writes it".
         if Some(local) == self.out && self.hook == Some(Hook::Start) {
             self.out_lifecycle(
@@ -3636,6 +3650,15 @@ impl<'a> Typer<'a> {
                 inner.as_ref().clone()
             }
             ty => ty.clone(),
+        };
+        // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
+        // V", and TYPE-16: "an atomic publishes whole". In a hook an
+        // atomic input's payload, and `out`'s, is that whole V, an
+        // ordinary value.
+        let endpoint = self.is_temporal_input(local) || Some(local) == self.out;
+        let ty = match ty {
+            Type::Atomic(payload) if self.hook.is_some() && endpoint => *payload,
+            ty => ty,
         };
         Expr {
             kind: ExprKind::Local(local),
@@ -4884,6 +4907,7 @@ impl<'a> Typer<'a> {
         self.fixed_arguments(kind);
         self.traces_given(kind, evaluating);
         self.store_keys(kind);
+        self.references_given(kind);
     }
 
     /// FN-9: "A graph injects `global_state` and no other, and uses it
@@ -7740,14 +7764,16 @@ impl<'a> Typer<'a> {
                 if self.may_reread() {
                     let mark = self.mark();
                     let value = as_given(self.expression(node, Some(read_as)));
-                    learn(self, &value.ty, &mut found);
+                    let says = self.inferred_from(pattern, &value, takes);
+                    learn(self, &says, &mut found);
                     self.take_back(mark, false);
                 }
                 continue;
             }
             let reported = self.diagnostics.len();
             let value = as_given(self.expression(node, Some(read_as)));
-            learn(self, &value.ty, &mut found);
+            let says = self.inferred_from(pattern, &value, takes);
+            learn(self, &says, &mut found);
             // A value with no whole type while nothing is known of its
             // place, `[1, "x"]`, has not been judged. Neither has one
             // that is read as the type of its place, a sequence or a
@@ -7867,9 +7893,14 @@ impl<'a> Typer<'a> {
                     },
                     Some(value) => {
                         let place = format!("the {} `{}`", takes.noun(), slot.name);
+                        let value = if takes == Takes::Parameters {
+                            self.fit_input(value, &slot.ty, &place)
+                        } else {
+                            self.fit(value, &slot.ty, &place)
+                        };
                         hir::Argument {
                             parameter: Some(index),
-                            value: self.fit(value, &slot.ty, &place),
+                            value,
                         }
                     }
                     None => self.argument(Some(index), node, Some((&slot, traced)), takes),
@@ -10673,7 +10704,11 @@ impl<'a> Typer<'a> {
                     value
                 } else {
                     let place = format!("the {} `{}`", takes.noun(), slot.name);
-                    self.fit(value, &slot.ty, &place)
+                    if takes == Takes::Parameters {
+                        self.fit_input(value, &slot.ty, &place)
+                    } else {
+                        self.fit(value, &slot.ty, &place)
+                    }
                 }
             }
             None => self.expression(node, Some(&Type::Unknown)),
@@ -11032,6 +11067,135 @@ impl<'a> Typer<'a> {
         }
         self.conforms(&value.ty, expected, value.at, what);
         value
+    }
+
+    /// [`Self::fit`], for a function's argument or a graph's result. In
+    /// composition a connection is taken there across a reference
+    /// boundary, and by a `signal` (`references::crosses`): TYPE-12,
+    /// "`ref<T>` designates an endpoint"; TIME-10, "Ordinary followers
+    /// observe the selected target"; TYPE-12, "`signal` is a complete
+    /// temporal input constraint with no readable payload".
+    fn fit_input(&mut self, value: Expr, expected: &Type, what: &str) -> Expr {
+        if self.composes(&value)
+            && crate::references::crosses(expected, &value.ty, &|expected, ty| {
+                self.admits(expected, ty)
+            })
+        {
+            return value;
+        }
+        self.fit(value, expected, what)
+    }
+
+    /// The type `value`, given to a place declared `pattern`, says the
+    /// generic parameters in `pattern` stand for. A connection given to
+    /// a function's parameter in composition says it across a reference
+    /// boundary (GEN-11, `references::inferred_from`): "Argument
+    /// inference removes reference boundaries recursively from an
+    /// otherwise unbound generic; such an input observes values. An
+    /// explicit ref pattern binds its underlying type."
+    fn inferred_from(&self, pattern: &Type, value: &Expr, takes: Takes) -> Type {
+        if takes == Takes::Parameters && self.composes(value) {
+            crate::references::inferred_from(pattern, &value.ty)
+        } else {
+            value.ty.clone()
+        }
+    }
+
+    /// Reports a reference given to a value function outside
+    /// composition: in a hook, where a `ref<T>` input is read as the
+    /// designation it is. TYPE-12: "`ref<T>` designates an endpoint, not
+    /// an ordinary payload type"; FN-1: a value function's parameters
+    /// are ordinary value types, so one written as a generic parameter
+    /// takes none. In a graph a connection given to one is lifted, and
+    /// followed (TIME-10). What an endpoint operation is given is the
+    /// input's endpoint, and no payload.
+    fn references_given(&mut self, kind: &ExprKind) {
+        let ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    ..
+                }
+                | Callee::Candidate {
+                    module,
+                    declaration,
+                    ..
+                },
+            arguments,
+            ..
+        } = kind
+        else {
+            return;
+        };
+        let role = self.program.modules[*module].declarations[*declaration]
+            .kind
+            .role();
+        if role != Some(Role::Value) {
+            return;
+        }
+        let given: Vec<(Location, String)> = arguments
+            .iter()
+            .filter(|argument| {
+                !matches!(argument.value.ty, Type::Endpoint(_))
+                    && !self.composes(&argument.value)
+                    && crate::references::holds_ref(&argument.value.ty)
+            })
+            .map(|argument| (argument.value.at, argument.value.ty.to_string()))
+            .collect();
+        for (at, ty) in given {
+            self.diagnostics.emit(
+                error(
+                    Category::Type,
+                    codes::TYPE_NOT_ORDINARY,
+                    at,
+                    format!(
+                        "`{ty}` is not an ordinary value type, and a value function's parameter \
+                         is one"
+                    ),
+                    "TYPE-12",
+                )
+                .with_note("a `ref` designates an endpoint: a node returns it, or gives it to an endpoint operation"),
+            );
+        }
+    }
+
+    /// Reports a read of a `signal` input's payload in a hook. TYPE-12:
+    /// "`signal` is a complete temporal input constraint with no
+    /// readable payload": it is given to an endpoint operation, as
+    /// `modified(tick)`, and read nowhere. A read in `start` is
+    /// `input.lifecycle`, reported once.
+    fn signal_read(&mut self, local: LocalId, at: Location) {
+        let signal = matches!(not_null(Some(&self.locals[local].ty)), Some(Type::Signal));
+        let hook = matches!(self.hook, Some(Hook::When | Hook::Stop));
+        if !signal || !self.is_temporal_input(local) || !hook {
+            return;
+        }
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::TYPE_NOT_ORDINARY,
+                at,
+                format!(
+                    "`{}` is a `signal`, which has no payload to read",
+                    self.locals[local].name
+                ),
+                "TYPE-12",
+            )
+            .with_note(format!(
+                "a signal is given to an endpoint operation: `modified({})`",
+                self.locals[local].name
+            )),
+        );
+    }
+
+    /// True when `value` is a connection of a graph's body: what a
+    /// temporal input or a graph's result is given in composition.
+    fn composes(&self, value: &Expr) -> bool {
+        self.graph
+            && !self.testing
+            && self.hook.is_none()
+            && self.category(value) == ValueCategory::Connection
     }
 
     /// Reports a value of type `ty` in a place that expects `expected`

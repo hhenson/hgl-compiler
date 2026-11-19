@@ -1615,6 +1615,13 @@ impl Emitter<'_> {
         // where the type under `TS[...]` is `T | None`, and a tick of
         // it may be the unset one: a published null.
         if let Type::Nullable(inner) = ty {
+            // TYPE-14: on a `ref`, a `signal` or an `atomic` the `?`
+            // marks an input that may be left out, and is no part of
+            // what is published: the input is the type under it, and
+            // one left out is never valid (UNIT-8).
+            if temporal && matches!(**inner, Type::Ref(_) | Type::Signal | Type::Atomic(_)) {
+                return self.annotation(inner, true, at);
+            }
             // As a temporal value only a scalar or an enum may be
             // unset this way: it publishes whole. A set publishes its
             // changes, which hgraph's `TS` of a set that may be unset
@@ -1638,6 +1645,24 @@ impl Emitter<'_> {
             } else {
                 format!("{inner} | None")
             });
+        }
+        // TYPE-12: "`ref<T>` designates an endpoint, not an ordinary
+        // payload type": hgraph's `REF` of the temporal T, whose value
+        // is a reference to an output. TIME-10: "A reference ticks on
+        // changed designation, not every target tick", as a `REF`
+        // input ticks when the reference it is given changes, and not
+        // when what it points at publishes.
+        if temporal && let Type::Ref(target) = ty {
+            let target = self.annotation(target, true, at)?;
+            self.hgraph = true;
+            return Some(format!("_hg.REF[{target}]"));
+        }
+        // TYPE-12: "`signal` is a complete temporal input constraint
+        // with no readable payload": hgraph's `SIGNAL`, an input bound
+        // to any output, which ticks when it does and holds no value.
+        if temporal && matches!(ty, Type::Signal) {
+            self.hgraph = true;
+            return Some("_hg.SIGNAL".to_string());
         }
         // TYPE-9: "`atomic<V>` stops expansion at a complete ordinary
         // V": hgraph's `TS[V]`, whose tick is the whole value. Its V is
@@ -1710,7 +1735,16 @@ impl Emitter<'_> {
     /// update would give it a position's change, so as a child it is
     /// reported.
     fn child_annotation(&mut self, ty: &Type, child: &Type, at: Location) -> Option<String> {
-        if growing_list(child) {
+        // A reference as a child, and an atomic field that may be left
+        // out (TYPE-14), are not written yet.
+        let under = match child {
+            Type::Nullable(inner) => inner,
+            other => other,
+        };
+        if growing_list(child)
+            || matches!(under, Type::Ref(_))
+            || matches!(child, Type::Nullable(inner) if matches!(**inner, Type::Atomic(_)))
+        {
             self.unsupported(at, &format!("the type `{ty}`"));
             return None;
         }
@@ -5202,11 +5236,52 @@ impl Emitter<'_> {
             if given || parameter.pack.is_some() {
                 continue;
             }
+            // UNIT-8: a temporal input written `T?` with no default may
+            // be left out, "an input that is then never valid".
+            let temporal = self.program.modules[callee.0].declarations[callee.1]
+                .kind
+                .role()
+                == Some(Role::Temporal);
+            if temporal
+                && !parameter.constant
+                && !parameter.has_default
+                && matches!(parameter.ty, Type::Nullable(_))
+            {
+                let instances = self.instances;
+                let instance = instances
+                    .instanced(self.program, callee.0, callee.1)
+                    .then(|| instances.find(self.program, callee, generics))
+                    .flatten();
+                let ty = instance
+                    .and_then(|instance| instance.signature.parameters.get(index))
+                    .map_or(&parameter.ty, |parameter| &parameter.ty);
+                let never = self.never_valid(ty, parameter.at);
+                written.push(format!("{}={never}", name(&parameter.name)));
+                continue;
+            }
             if let Some(value) = self.left_out(callee, index, parameter) {
                 written.push(format!("{}={}", name(&parameter.name), kept(index, value)));
             }
         }
         written.join(", ")
+    }
+
+    /// What a temporal input of `ty` left out is bound to (UNIT-8: "an
+    /// omitted temporal input is never valid"): hgraph's `nothing`, an
+    /// output of the input's type that never ticks. A `signal` is bound
+    /// to one of a `bool`, as it may be bound to any output.
+    fn never_valid(&mut self, ty: &Type, at: Location) -> String {
+        let annotation = match ty {
+            Type::Nullable(inner) if matches!(**inner, Type::Signal) => {
+                Some("_hg.TS[_py.bool]".to_string())
+            }
+            _ => self.annotation(ty, true, at),
+        };
+        let Some(annotation) = annotation else {
+            return "None".to_string();
+        };
+        self.hgraph = true;
+        format!("_hg.nothing(tp={annotation})")
     }
 
     /// True when `callee`, a module and a declaration of it, is written
@@ -5450,6 +5525,14 @@ impl Emitter<'_> {
             // The node's own output, hgraph's `_output`.
             ExprKind::Local(local) if Self::is_out(function, *local) => Some("_output".to_string()),
             ExprKind::Field { base, member } => {
+                // An atomic input is one port of the whole value, read
+                // in a hook as that value (TYPE-9), and has no port of
+                // a field.
+                if let ExprKind::Local(local) = base.kind
+                    && matches!(function.locals[local].ty, Type::Atomic(_))
+                {
+                    return None;
+                }
                 let field = field_of(self.program, &base.ty, *member)?;
                 let base = self.input_port(function, base)?;
                 Some(format!("{base}[{}]", string(&name(&field.name))))
@@ -5805,6 +5888,10 @@ impl Emitter<'_> {
                 continue;
             };
             let taken = match input(self, &argument.value) {
+                // TIME-10: "Ordinary followers observe the selected
+                // target": a reference given to a lifted function is
+                // followed by an ordinary input of what it designates.
+                Some(Type::Ref(target)) => Bound::Input(*target),
                 Some(ty) => Bound::Input(ty),
                 None => Bound::Configuration(argument.value.ty.clone()),
             };

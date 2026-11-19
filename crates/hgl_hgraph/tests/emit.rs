@@ -6042,6 +6042,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("references.hgl", REFERENCES));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -7602,6 +7603,94 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:19:19 target.unsupported",
             "m.hgl:24:44 target.unsupported",
             "m.hgl:25:4 target.unsupported",
+        ]
+    );
+}
+
+/// TYPE-12: "`ref<T>` designates an endpoint, not an ordinary payload
+/// type ... `signal` is a complete temporal input constraint with no
+/// readable payload". TIME-10: "A reference ticks on changed
+/// designation, not every target tick. Ordinary followers observe the
+/// selected target". GEN-11: argument inference removes reference
+/// boundaries. TYPE-9: "`atomic<V>` stops expansion at a complete
+/// ordinary V".
+const REFERENCES: &str = include_str!("fixtures/references.hgl");
+
+/// A reference is hgraph's `REF` of the temporal type it designates,
+/// and a `signal` its `SIGNAL`. A node returns a `REF` input's value, a
+/// reference, to re-point what follows it; a graph passes a connection
+/// across the boundary as it is, and hgraph binds an ordinary input,
+/// a lifted node's among them, to what a reference designates. A
+/// generic input given a reference is written for the type under it.
+/// A `signal?` left out is bound to an output that never ticks
+/// (UNIT-8). A hook reads an atomic input as its whole value.
+#[test]
+fn a_reference_is_a_ref_and_a_signal_a_signal() {
+    let emitted = emit(&[("references.hgl", REFERENCES)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_references/__init__.py");
+    let reference = "_hg.REF[_hg.TS[_py.int]]";
+    for expected in [
+        format!(
+            "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}) -> {reference}:"
+        ),
+        "        return left.value\n".to_string(),
+        "    held = target.value\n    return held\n".to_string(),
+        "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:".to_string(),
+        "def _lift_0_doubled(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:".to_string(),
+        "    return _lift_0_doubled(value=pick(use_left=use_left, left=left, right=right))"
+            .to_string(),
+        format!("def designated(left: {reference}) -> _hg.TS[_py.int]:\n    return left\n"),
+        "    return _inst_ticks__i64(value=pick(use_left=use_left, left=left, right=right))"
+            .to_string(),
+        format!("def _inst_ref_ticks__i64(value: {reference}, "),
+        "    return _inst_same__ref_i64_(value=left)".to_string(),
+        "    return maybe_sampled(value=value, tick=_hg.nothing(tp=_hg.TS[_py.bool]))".to_string(),
+        "    return width(quote=quote.value)".to_string(),
+        "    held = quote.value\n".to_string(),
+        "    return quote.delta_value.ask".to_string(),
+        "    whole = _output.value\n".to_string(),
+    ] {
+        assert!(
+            python.contains(&expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
+}
+
+/// What this target does not write of a reference is reported: one as
+/// a field of a temporal struct or an element of a temporal list, and
+/// an atomic field that may be left out (TYPE-14).
+#[test]
+fn a_reference_inside_a_temporal_composite_is_not_written_yet() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "struct Quote { bid: i64 }\n",
+            "struct Routed {\n",
+            "    target: ref<i64>\n",
+            "}\n",
+            "struct Maybe {\n",
+            "    quote: atomic<Quote>?\n",
+            "}\n",
+            "fn routed(value: Routed) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn maybe(value: Maybe) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+            "fn pair(values: list<ref<i64>, 2>) -> i64 {\n",
+            "    when { return 1 }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:9:11 target.unsupported",
+            "m.hgl:12:10 target.unsupported",
+            "m.hgl:15:9 target.unsupported",
         ]
     );
 }
