@@ -357,5 +357,8 @@ fn a_child_in_parentheses_is_the_same_child() {
         "    when { return (parts)[1] }\n",
         "}\n",
     ));
-    assert_eq!(checked.summary(), ["m.hgl:9:19 phase/payload.unguarded TIME-1"]);
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:9:19 phase/payload.unguarded TIME-1"]
+    );
 }
