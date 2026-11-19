@@ -696,6 +696,10 @@ struct Handler<'a> {
     /// True where its header writes a `modified` selector. One that
     /// writes none "subscribes to every temporal input".
     selects: bool,
+    /// Where its header has `modified([])` beside a `modified` selector
+    /// that names inputs, each a top-level conjunct: the specification
+    /// does not say what the two ask together, and the target reports it.
+    beside: Option<Location>,
     /// Its statements.
     body: &'a [Stmt],
 }
@@ -731,6 +735,12 @@ impl<'a> Handler<'a> {
         let mut required: Option<Vec<usize>> = None;
         let mut conditions = Vec::new();
         let mut scheduled = false;
+        // TIME-3: "The empty selection `modified([])` subscribes to no
+        // input and selects a wake from the node's scheduler or alarm",
+        // and `modified(a)` "requires a publication on" `a`. Where both
+        // stand, which of the two runs the handler is not settled.
+        let mut empty: Option<Location> = None;
+        let mut names = false;
         // TIME-3: "A header that is `scheduled()` alone is the
         // exception: it requires no input to be valid".
         let alone = matches!(
@@ -761,7 +771,10 @@ impl<'a> Handler<'a> {
                     // TIME-3: scheduling and modification are distinct. An
                     // explicit guard still checks its publications. The empty
                     // selector listens for a scheduled wake instead.
-                    if !named.as_ref().is_some_and(Vec::is_empty) {
+                    if named.as_ref().is_some_and(Vec::is_empty) {
+                        empty = empty.or(Some(conjunct.at));
+                    } else {
+                        names = true;
                         conditions.push(conjunct);
                     }
                 }
@@ -785,6 +798,7 @@ impl<'a> Handler<'a> {
             conditions,
             scheduled,
             selects,
+            beside: empty.filter(|_| names),
             body,
         }
     }
@@ -2382,13 +2396,16 @@ impl Emitter<'_> {
         }
         let stopping = stopping.join(", ");
         let lifecycle = lifecycle.join(", ");
-        // hgraph takes no node without an input. One with none, which
-        // its scheduler or its alarm wakes, is given one it is never
-        // woken by: the node is written under another name, and a graph
-        // of the function's own name gives it a constant. So is one
-        // with handlers and neither: TIME-3, "nothing wakes it: the
-        // node is dormant".
-        let hidden = inputs.is_empty() && (timer.is_some() || !handlers.is_empty());
+        for at in handlers.iter().filter_map(|handler| handler.beside) {
+            self.unsupported(at, "`modified([])` beside another `modified` selector");
+        }
+        // hgraph takes no node without an input. One with none is given
+        // one it is never woken by: the node is written under another
+        // name, and a graph of the function's own name gives it a
+        // constant. Its scheduler or its alarm wakes it, or nothing
+        // does (TIME-3: "the node is dormant"), and its `start` and
+        // `stop` run as any node's.
+        let hidden = inputs.is_empty();
         let exposed = python;
         let node_name = if hidden {
             format!("_node_{python}")
@@ -2545,6 +2562,16 @@ impl Emitter<'_> {
         );
         let before = self.text.len();
         self.unheld(signature);
+        // Core's CAP-4 has `is_scheduled` "True while a wake is
+        // pending", and the wake being delivered is pending no longer.
+        // hgraph holds that wake until the node has run, so the
+        // provider takes it as the node is entered, and keeps that it
+        // was due: the scheduler then says what is still to come, for
+        // the scheduler as for the alarm.
+        if timer.is_some() {
+            self.natives = true;
+            self.line(1, "_scheduler = _core.Wake(_scheduler)");
+        }
         if let (true, Some(woke)) = (holds_timer, &timer_woke) {
             self.line(1, &format!("_timer_woke = {woke}"));
             self.scheduled = Some("_timer_woke".to_string());
