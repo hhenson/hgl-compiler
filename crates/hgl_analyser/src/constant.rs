@@ -59,7 +59,7 @@ use crate::codes;
 use crate::hir::{BinaryOperator, CalendarDate, ClockTime, Temporal, Tenor, UnaryOperator, Value};
 use crate::program::{Binding, DeclarationKind, LocalKind, Program};
 use crate::syntax::{name_token, tokens};
-use crate::types::{ConstantValue, Detail, NamedKind, Scalar, Type};
+use crate::types::{ConstantValue, Detail, EnumOf, MemberOf, NamedKind, Scalar, Type};
 
 /// How deep one expression is read. A constant nested deeper is not
 /// valued, so that reading keeps little on the call stack whatever it
@@ -220,7 +220,9 @@ impl Fault {
 pub(crate) fn described(read: &Typed) -> String {
     match (&read.value, read.open, &read.ty) {
         (ConstantValue::Null, _, _) => "`null`".to_string(),
-        (ConstantValue::Member(name), Open::Member, _) => format!("the enum member `.{name}`"),
+        (ConstantValue::Member(member), Open::Member, _) => {
+            format!("the enum member `.{}`", member.name)
+        }
         (_, _, Some(ty)) => described_type(ty),
         _ => "a constant".to_string(),
     }
@@ -294,6 +296,11 @@ pub(crate) fn fit(
     expected: Option<&Type>,
     program: &Program,
 ) -> Result<ConstantValue, Fault> {
+    // TYPE-7: "With no enum type expected, `.member` rejects": `any` is
+    // no enum's type.
+    if read.open == Open::Member && expected == Some(&Type::Scalar(Scalar::Any)) {
+        return Err(Fault::NoEnum);
+    }
     let Some(expected) = expected.filter(|expected| !unknown(expected)) else {
         return Ok(read.value);
     };
@@ -318,9 +325,9 @@ pub(crate) fn fit(
     match (&read.value, read.open) {
         // "It does not make null an admitted value of unqualified T."
         (ConstantValue::Null, _) => return Err(Fault::Mismatch(None)),
-        (ConstantValue::Member(name), Open::Member) => {
-            return match enum_of(expected) {
-                Some(of) => member_named(program, of, name),
+        (ConstantValue::Member(member), Open::Member) => {
+            return match enum_place(expected) {
+                Some(of) => member_named(program, of, &member.name),
                 None => Err(Fault::NoEnum),
             };
         }
@@ -446,9 +453,9 @@ fn non_null(ty: &Type) -> &Type {
 }
 
 /// The enum `ty` is, under any `?`.
-fn enum_of(ty: &Type) -> Option<(usize, usize)> {
+fn enum_place(ty: &Type) -> Option<(usize, usize)> {
     match ty {
-        Type::Nullable(inner) => enum_of(inner),
+        Type::Nullable(inner) => enum_place(inner),
         Type::Named {
             module,
             declaration,
@@ -486,14 +493,17 @@ fn value(
             let Some(member) = tokens(node).last() else {
                 return Err(Fault::Reported);
             };
-            match expected.and_then(enum_of) {
+            match expected.and_then(enum_place) {
                 Some(of) => Ok(Typed::of(
                     member_named(scope.program, of, member.text())?,
                     Some(enum_type(scope.program, of)),
                 )),
                 None if expected.is_some_and(|expected| !unknown(expected)) => Err(Fault::NoEnum),
                 None => Ok(Typed {
-                    value: ConstantValue::Member(member.text().to_string()),
+                    value: ConstantValue::Member(MemberOf {
+                        of: None,
+                        name: member.text().to_string(),
+                    }),
                     ty: None,
                     open: Open::Member,
                     parts: Vec::new(),
@@ -958,13 +968,30 @@ fn members(
     }
 }
 
+/// The enum declared as `declaration` of `module`, as a constant names it.
+fn enum_of(program: &Program, (module, declaration): (usize, usize)) -> EnumOf {
+    let unit = &program.modules[module];
+    EnumOf {
+        declared: (module, declaration),
+        written: format!("{}::{}", unit.path, unit.declarations[declaration].name),
+    }
+}
+
+/// The member `name` of the enum `of`, as a constant.
+fn member_of(of: EnumOf, name: &str) -> ConstantValue {
+    ConstantValue::Member(MemberOf {
+        of: Some(of),
+        name: name.to_string(),
+    })
+}
+
 /// The member of the enum `of` named `name` (TYPE-7).
 fn member_named(program: &Program, of: (usize, usize), name: &str) -> Result<ConstantValue, Fault> {
     match members(program, of) {
         Some(members) if !members.iter().any(|member| member.name == name) => {
             Err(Fault::NoMember(format!("`{name}`")))
         }
-        Some(_) => Ok(ConstantValue::Member(name.to_string())),
+        Some(_) => Ok(member_of(enum_of(program, of), name)),
         None => Ok(ConstantValue::Unevaluated),
     }
 }
@@ -1065,6 +1092,7 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
         | ConstantValue::Constructed { .. }) => {
             return Ok(Typed::of(
                 ConstantValue::Constructed {
+                    of: enum_of(scope.program, of),
                     members: members
                         .iter()
                         .map(|member| (member.name.clone(), member.value))
@@ -1082,7 +1110,7 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
         _ => return Err(Fault::Reported),
     };
     Ok(Typed::of(
-        ConstantValue::Member(member.name.clone()),
+        member_of(enum_of(scope.program, of), &member.name),
         Some(ty),
     ))
 }
@@ -1880,7 +1908,16 @@ impl ConstantValue {
             // written": the lexer has read `1Y` as twelve months.
             (V::Tenor(left), V::Tenor(right)) => Some(left == right),
             (V::Temporal(left), V::Temporal(right)) => Some(same_temporal(left, right)),
-            (V::Member(left), V::Member(right)) => Some(left == right),
+            // TYPE-7: "Enum members are distinct typed constants": two
+            // are one where they are one enum's one member. One whose
+            // enum its place has not given it yet is of its place's.
+            (V::Member(left), V::Member(right)) => Some(
+                left.name == right.name
+                    && match (&left.of, &right.of) {
+                        (Some(left), Some(right)) => left.declared == right.declared,
+                        _ => true,
+                    },
+            ),
             (V::List(left), V::List(right)) | (V::Tuple(left), V::Tuple(right)) => all(left, right),
             // Values of two types: no one place holds both.
             _ => Some(false),
@@ -1982,7 +2019,12 @@ impl ConstantValue {
             },
             V::Tenor(Tenor::BusinessDays(days)) => format!("{days}B"),
             V::Temporal(parts) => temporal_key(parts),
-            V::Member(name) => format!(".{name}"),
+            // The enum is written, as a named type is (`m::Mode`): a
+            // place of `any` may be given members of two.
+            V::Member(member) => match &member.of {
+                Some(of) => format!("{}.{}", of.written, member.name),
+                None => format!(".{}", member.name),
+            },
             V::List(values) => format!("[{}]", all(values)?),
             V::Tuple(values) => format!("({})", all(values)?),
             V::Unbounded => "unbounded".to_string(),
@@ -2143,7 +2185,7 @@ impl ConstantValue {
             // `Side("buy")` the member of that exact name." One that
             // names none is rejected where it is called, and has no
             // value here.
-            ConstantValue::Constructed { members, from } => {
+            ConstantValue::Constructed { of, members, from } => {
                 let from = from.substituted(given);
                 let named = match &from {
                     ConstantValue::Int(number)
@@ -2154,13 +2196,14 @@ impl ConstantValue {
                     ConstantValue::Str(text) => members.iter().find(|(name, _)| name == text),
                     _ => {
                         return ConstantValue::Constructed {
+                            of: of.clone(),
                             members: members.clone(),
                             from: Box::new(from),
                         };
                     }
                 };
                 match named {
-                    Some((name, _)) => ConstantValue::Member(name.clone()),
+                    Some((name, _)) => member_of(of.clone(), name),
                     None => ConstantValue::Unevaluated,
                 }
             }

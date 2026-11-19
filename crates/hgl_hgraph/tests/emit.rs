@@ -1162,11 +1162,11 @@ fn a_generic_temporal_function_is_written_for_each_call() {
             "@_hg.graph\n",
             "def _inst_identity_sum__f64(lhs: _hg.TS[_py.float], rhs: _hg.TS[_py.float]) ",
             "-> _hg.TS[_py.float]:\n",
-            "    return _hgl_4core._inst__impl_add__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+            "    return _hgl_4core._inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity(lhs=lhs, rhs=rhs)\n",
         ),
         "def _inst_identity_sum__duration(",
         "def _inst_identity_sum__str(",
-        "    return _hgl_4core._inst__impl_sub__T_T__f64__identity(lhs=lhs, rhs=rhs)\n",
+        "    return _hgl_4core._inst__impl_sub__T_T__f64_core__InvalidInputPolicy_identity(lhs=lhs, rhs=rhs)\n",
         // A node for each type, its required `add_` the candidate.
         concat!(
             "@_hg.compute_node\n",
@@ -1201,7 +1201,7 @@ fn a_generic_temporal_function_is_written_for_each_call() {
     core.assert_writes(&[
         concat!(
             "@_hg.compute_node(valid=())\n",
-            "def _inst__impl_add__T_T__f64__identity(lhs: _hg.TS[_py.float], ",
+            "def _inst__impl_add__T_T__f64_core__InvalidInputPolicy_identity(lhs: _hg.TS[_py.float], ",
             "rhs: _hg.TS[_py.float], _output: _hg.TS_OUT[_py.float] = None) ",
             "-> _hg.TS[_py.float]:\n",
             "    if lhs.valid and rhs.valid:\n",

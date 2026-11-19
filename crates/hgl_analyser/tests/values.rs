@@ -2617,7 +2617,7 @@ fn an_option_that_selects_is_a_generic_value_parameter() {
             };
             match generics.as_slice() {
                 [Argument::Constant(constant)] => match &constant.value {
-                    ConstantValue::Member(name) => Some(name.clone()),
+                    ConstantValue::Member(member) => Some(member.name.clone()),
                     _ => None,
                 },
                 _ => None,

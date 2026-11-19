@@ -848,6 +848,47 @@ fn a_candidates_default_is_read_as_its_options_type() {
     expect(&given("3"), &["4 operator.no_candidate"]);
 }
 
+/// TYPE-7: "Enum members are distinct typed constants": a member is one
+/// of its enum, kept with it where its place's type says nothing of the
+/// enum, `any`. There `.member` names none: "With no enum type
+/// expected, `.member` rejects".
+#[test]
+fn a_member_keeps_its_enum() {
+    let shared = concat!(
+        "enum A { x }\n",
+        "enum B { x }\n",
+        "struct Box<const X: any> { v: i64 }\n",
+    );
+    expect(
+        &format!("{shared}const fn a(b: Box<A.x>) -> Box<A(0)> => b\n"),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(b: Box<A.x>) -> Box<B.x> => b\n\
+             const fn d(b: Box<.x>) -> i64 => 1\n"
+        ),
+        &["5 type.mismatch", "6 enum.context_type"],
+    );
+    let checked = module(&format!(
+        "{shared}const fn a(x: Box<A.x>, y: Box<B.x>) -> i64 => 1\n"
+    ));
+    let keys: Vec<Option<String>> = parameter_types(&checked, "a")
+        .iter()
+        .map(|ty| match ty {
+            Type::Named { arguments, .. } => match arguments.as_slice() {
+                [Argument::Constant(constant)] => constant.value.key(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        [Some("m::A.x".to_string()), Some("m::B.x".to_string())]
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

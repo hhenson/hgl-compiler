@@ -456,12 +456,10 @@ pub enum ConstantValue {
     /// A date, a time, an instant or a zone (TYPE-2): the parts its
     /// literal writes. Which type it is, the parts say (`hir::Temporal`).
     Temporal(crate::hir::Temporal),
-    /// A member of an enum, by its name. The enum is the type of the
-    /// place the constant is given to: a member of another is no value
-    /// there, and is rejected before it is held. A member is one however
-    /// it is written (TYPE-7): `.nan`, `Zero.nan`, `(Zero.nan)`,
-    /// `Zero("nan")` and `Zero(2)` may all come to `nan`.
-    Member(String),
+    /// A member of an enum, by its enum and its name. A member is one
+    /// however it is written (TYPE-7): `.nan`, `Zero.nan`, `(Zero.nan)`,
+    /// `Zero("nan")` and `Zero(2)` may all come to `nan` of `Zero`.
+    Member(MemberOf),
     /// A `list<T>`, its elements in order.
     List(Vec<ConstantValue>),
     /// A `tuple<...>`, its elements in order.
@@ -487,11 +485,13 @@ pub enum ConstantValue {
         /// Its position in that module's declarations.
         declaration: usize,
     },
-    /// A member of the enum its place is, constructed from what names a
-    /// generic value parameter: `Side(N)` (TYPE-7). Which member it is
-    /// is known once the parameter is given a value, and is looked for
-    /// then among `members`.
+    /// A member of an enum constructed from what names a generic value
+    /// parameter: `Side(N)` (TYPE-7). Which member it is is known once
+    /// the parameter is given a value, and is looked for then among
+    /// `members`.
     Constructed {
+        /// The enum.
+        of: EnumOf,
         /// The enum's members, each name with its number where that is
         /// known.
         members: Vec<(String, Option<i64>)>,
@@ -522,6 +522,42 @@ pub enum ConstantValue {
     /// a type is matched (`declared::agree`), so that nothing is reported
     /// twice; `same` gives `None` for it.
     Unknown,
+}
+
+/// An enum, as a constant's value names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumOf {
+    /// The position of its module in `Program::modules`, and its own in
+    /// that module's declarations: what it is (UNIT-4).
+    pub declared: (usize, usize),
+    /// Its name with its module's path, `m::Mode`: what a key writes.
+    pub written: String,
+}
+
+/// A member of an enum, as a constant: its enum and its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberOf {
+    /// The enum. `None` for `.member` read where its place's type was
+    /// not yet known, which that place gives one.
+    pub of: Option<EnumOf>,
+    /// The member's name.
+    pub name: String,
+}
+
+// `Deref` lets a `&MemberOf` stand where a `&str` is asked for: a member
+// is written by its name.
+impl std::ops::Deref for MemberOf {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl fmt::Display for MemberOf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
 impl fmt::Display for Constant {

@@ -14116,7 +14116,7 @@ fn label(program: &Program, value: &ConstantValue, ty: &Type) -> Option<Label> {
         ConstantValue::Bool(value) => Label::Bool(*value),
         ConstantValue::Str(value) => Label::Str(value.clone()),
         ConstantValue::Float(value) => return Label::float(*value),
-        ConstantValue::Member(name) => {
+        ConstantValue::Member(named) => {
             let Some(Type::Named {
                 module,
                 declaration,
@@ -14132,7 +14132,7 @@ fn label(program: &Program, value: &ConstantValue, ty: &Type) -> Option<Label> {
             Label::Member(
                 read.members
                     .iter()
-                    .position(|member| member.name == *name)?,
+                    .position(|member| member.name == named.name)?,
             )
         }
         _ => return None,

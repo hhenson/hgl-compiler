@@ -141,7 +141,7 @@ impl Program {
         match value {
             // TYPE-7: a member is known by its name, and the enum is
             // the parameter's type.
-            ConstantValue::Member(name) => {
+            ConstantValue::Member(named) => {
                 let Type::Named {
                     module,
                     declaration,
@@ -157,7 +157,7 @@ impl Program {
                 let member = read
                     .members
                     .iter()
-                    .position(|member| member.name == *name)?;
+                    .position(|member| member.name == named.name)?;
                 Some(ExprKind::EnumMember {
                     module: *module,
                     declaration: *declaration,
