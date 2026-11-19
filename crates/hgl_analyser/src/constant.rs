@@ -1222,7 +1222,7 @@ fn unary(
     // LEX-7: "Minus is an operator, not part of a numeric literal", and
     // the least `i64` is written as a minus before 2^63, which is itself
     // no `i64`.
-    if operator == UnaryOperator::Negate && !configured(node) && least_magnitude(&operand) {
+    if operator == UnaryOperator::Negate && !configured(node) && is_least_magnitude(&operand) {
         return Ok(match expected.filter(|expected| is_float(expected)) {
             Some(_) => Typed::scalar(ConstantValue::Float(i64::MIN as f64), Scalar::F64),
             None => Typed {
@@ -1249,11 +1249,14 @@ fn unary(
     })
 }
 
-/// True when `node` is the integer literal 2^63, which is an `i64`
-/// only under a minus (LEX-7).
-fn least_magnitude(node: &SyntaxNode) -> bool {
+/// True when `node` is the integer literal 2^63. LEX-7: "Minus is an
+/// operator, not part of a numeric literal", and the least `i64` is
+/// written as a minus before 2^63, the one magnitude that is an
+/// integer only there.
+pub(crate) fn is_least_magnitude(node: &SyntaxNode) -> bool {
     node.kind() == SyntaxKind::Literal
         && tokens(node).next().is_some_and(|token| {
+            // A literal the lexer rejected has been reported there.
             token.kind() == SyntaxKind::Int
                 && decode_integer(token.text()) == Ok(MAX_INTEGER_MAGNITUDE)
         })

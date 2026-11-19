@@ -35,11 +35,11 @@
 use std::collections::HashMap;
 
 use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
-use hgl_lexer::literal::{decode_integer, decode_string};
+use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::{FileId, Span};
 
-use crate::constant::{Fault, Scope, Typed};
+use crate::constant::{Fault, Scope, Typed, is_least_magnitude};
 use crate::declared::{agree, is_optional, names_one_of, names_parameter, substitute_within};
 use crate::hir::{
     self, BinaryOperator, Body, Callee, EndpointOperation, ErrorPart, Expr, ExprKind, Form, Hook,
@@ -14665,16 +14665,6 @@ fn same_declaration(left: &Type, right: &Type) -> bool {
         ) => (module, declaration) == (other_module, other_declaration),
         _ => false,
     }
-}
-
-/// True when `node` is the integer literal 2^63, which is one more
-/// than the greatest `i64`.
-fn is_least_magnitude(node: &SyntaxNode) -> bool {
-    node.kind() == SyntaxKind::Literal
-        && tokens(node).next().is_some_and(|token| {
-            token.kind() == SyntaxKind::Int
-                && decode_integer(token.text()) == Ok(i64::MIN.unsigned_abs())
-        })
 }
 
 /// The names of a delta's properties, for a message: `` `added` and
