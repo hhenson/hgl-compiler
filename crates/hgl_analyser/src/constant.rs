@@ -1186,6 +1186,13 @@ fn binary(
         right = widened(right);
     }
     let ty = binary_type(operator, left.ty.as_ref(), right.ty.as_ref());
+    let value = combined(operator, &left.value, &right.value);
+    // Integer literals joined by core's arithmetic are an `f64` where
+    // one is expected (EXPR-5), and that `f64` arithmetic is the integer
+    // arithmetic where each operand and the result is exact as an `f64`,
+    // within 2^53. Past that the two may differ, and the place must be
+    // known as the literals are read (`numeric_hint`).
+    let exact = |value: &ConstantValue| matches!(value, ConstantValue::Int(value) if value.unsigned_abs() <= 1 << 53);
     let open = match (operator, left.open, right.open) {
         (
             BinaryOperator::Add
@@ -1195,14 +1202,10 @@ fn binary(
             | BinaryOperator::Modulo,
             Open::Integer,
             Open::Integer,
-        ) => Open::Integer,
+        ) if exact(&left.value) && exact(&right.value) && exact(&value) => Open::Integer,
         _ => Open::No,
     };
-    Ok(Typed {
-        value: combined(operator, &left.value, &right.value),
-        ty,
-        open,
-    })
+    Ok(Typed { value, ty, open })
 }
 
 /// An integer literal as the `f64` it is where one is expected.
@@ -1398,7 +1401,7 @@ pub(crate) fn combined(
         // `ieee` zero policy by default: a finite nonzero numerator by a
         // zero is a signed infinity, and zero by zero a NaN, which is no
         // constant (NUM-5).
-        (Op::Divide, V::Int(left), V::Int(right)) => float(*left as f64 / *right as f64),
+        (Op::Divide, V::Int(left), V::Int(right)) => float(divided(*left, *right)),
         (Op::Add, V::Float(left), V::Float(right)) => float(left + right),
         (Op::Subtract, V::Float(left), V::Float(right)) => float(left - right),
         (Op::Multiply, V::Float(left), V::Float(right)) => float(left * right),
@@ -1431,6 +1434,61 @@ pub(crate) fn combined(
         _ => None,
     };
     worked_out.unwrap_or(V::Unevaluated)
+}
+
+/// `left / right` of two `i64`, true division (NUM-3): the `f64`
+/// nearest the exact quotient, a tie to the even one. Each operand is
+/// not made an `f64` first, which for one past 2^53 would round it
+/// before the division does: `9007199254740993 / 3` is
+/// `3002399751580331.0`. A zero divisor gives what IEEE division of the
+/// operands does under the default `ieee` policy.
+fn divided(left: i64, right: i64) -> f64 {
+    const EXACT: u64 = 1 << 53;
+    if right == 0 || (left.unsigned_abs() <= EXACT && right.unsigned_abs() <= EXACT) {
+        // `as` is exact for an integer of at most 53 bits, and IEEE
+        // division rounds the exact quotient once.
+        return left as f64 / right as f64;
+    }
+    if left == 0 {
+        return if right < 0 { -0.0 } else { 0.0 };
+    }
+    let negative = (left < 0) != (right < 0);
+    let (numerator, denominator) = (
+        u128::from(left.unsigned_abs()),
+        u128::from(right.unsigned_abs()),
+    );
+    let bits = |value: u128| 128 - i32::try_from(value.leading_zeros()).unwrap_or(128);
+    // The quotient times 2^scale, to 53 bits: a scale that gives 53 or
+    // 54, and one less where it gave 54. Each shifted value fits a
+    // `u128`: the numerator is at most 64 + 64 bits wide.
+    let quotient = |scale: i32| {
+        let (numerator, denominator) = if scale >= 0 {
+            (numerator << scale, denominator)
+        } else {
+            (numerator, denominator << -scale)
+        };
+        (
+            numerator / denominator,
+            numerator % denominator,
+            denominator,
+        )
+    };
+    let mut scale = 53 - (bits(numerator) - bits(denominator));
+    let (mut whole, mut remainder, mut divisor) = quotient(scale);
+    if whole >= 1 << 53 {
+        scale -= 1;
+        (whole, remainder, divisor) = quotient(scale);
+    }
+    // Round to nearest, a tie to the even one.
+    if 2 * remainder > divisor || (2 * remainder == divisor && whole % 2 == 1) {
+        whole += 1;
+    }
+    // `whole` is at most 2^53 and so exact as an `f64`, and a power of
+    // two scales it exactly: the quotient of two `i64` is far from the
+    // bounds of an `f64`.
+    #[allow(clippy::cast_precision_loss)]
+    let magnitude = whole as f64 * 2f64.powi(-scale);
+    if negative { -magnitude } else { magnitude }
 }
 
 /// An `f64` result as a constant: a NaN is none (NUM-5).
@@ -1907,6 +1965,31 @@ mod tests {
         assert_eq!(from_instant(instant(&leap).unwrap()), leap);
         let first = datetime(0, 0);
         assert_eq!(from_instant(instant(&first).unwrap()), first);
+    }
+
+    /// NUM-3: true division of two `i64` is the `f64` nearest the exact
+    /// quotient, for operands past 2^53 too.
+    #[test]
+    fn integer_true_division_rounds_once() {
+        assert_eq!(divided(9_007_199_254_740_993, 3), 3_002_399_751_580_331.0);
+        assert_eq!(divided(7, 2), 3.5);
+        assert_eq!(divided(-7, 2), -3.5);
+        assert_eq!(divided(i64::MAX, 1), 9_223_372_036_854_775_807.0);
+        assert_eq!(divided(1, i64::MIN), -(2f64.powi(-63)));
+        // 2^53 + 1 over 1 is a tie between 2^53 and 2^53 + 2: the even.
+        assert_eq!(divided(9_007_199_254_740_993, 1), 9_007_199_254_740_992.0);
+        assert_eq!(divided(9_007_199_254_740_995, 1), 9_007_199_254_740_996.0);
+        // Against the nearest `f64` to the exact quotient, worked out in
+        // `f64` where the operands are exact.
+        for (left, right) in [
+            (10_i64.pow(18) + 7, 9_007_199_254_740_993),
+            (-(10_i64.pow(17)), 3),
+        ] {
+            let exact = divided(left, right);
+            assert!((exact - left as f64 / right as f64).abs() <= exact.abs() * f64::EPSILON);
+        }
+        assert!(divided(1, 0).is_infinite());
+        assert!(divided(0, 0).is_nan());
     }
 
     /// NUM-1: floor division rounds toward negative infinity, and the

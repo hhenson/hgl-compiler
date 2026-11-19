@@ -12,6 +12,7 @@
 mod common;
 
 use common::{Checked, check};
+use hgl_analyser::hir::{Callee, Expr, ExprKind, Stmt, Value, walk_statements};
 use hgl_analyser::{Argument, ConstantValue, Detail, Type};
 
 /// Checks one file, `m.hgl`, of module `m`. The `module` line is added,
@@ -579,6 +580,85 @@ fn every_spelling_of_one_value_is_one_constant() {
         );
         expect(&differs, &["13 type.mismatch"]);
     }
+}
+
+/// GEN-13: a generic value parameter read as a value is, in an
+/// instance, the constant the call gives it, a list or a tuple among
+/// them: each element as the value it is of the element's type (EXPR-5:
+/// the `1` of a `tuple<f64, str>` is `1.0`).
+#[test]
+fn a_composite_constant_is_its_elements_in_an_instance() {
+    let checked = module(concat!(
+        "const fn values<const X: list<i64>>() -> list<i64> => X\n",
+        "const fn pair<const P: tuple<f64, str>>() -> tuple<f64, str> => P\n",
+        "const fn listed() -> list<i64> => values<[1, 0x2]>()\n",
+        "const fn paired() -> tuple<f64, str> => pair<(1, \"\\u{61}\")>()\n",
+    ));
+    assert_eq!(found(&checked), [""; 0], "{}", checked.report);
+    let returned = |name: &str| -> ExprKind {
+        let module = checked.program.module("m").expect("the module exists");
+        let index = module
+            .declarations
+            .iter()
+            .position(|declaration| declaration.name == name)
+            .expect("the function exists");
+        let body = module.bodies[index].as_ref().expect("a body");
+        let mut called = None;
+        walk_statements(&body.statements, &mut |value: &Expr| {
+            if let ExprKind::Call {
+                callee:
+                    Callee::Function {
+                        module,
+                        declaration,
+                        generics,
+                        requirements,
+                    },
+                ..
+            } = &value.kind
+            {
+                called.get_or_insert((
+                    *module,
+                    *declaration,
+                    generics.clone(),
+                    requirements.clone(),
+                ));
+            }
+        });
+        let (module, declaration, generics, requirements) = called.expect("a call");
+        let (_, instance) = checked
+            .program
+            .instance(module, declaration, &generics, &requirements)
+            .expect("the callee has a body");
+        let Some(Stmt::Return {
+            value: Some(value), ..
+        }) = instance.statements.first()
+        else {
+            panic!("a return with a value");
+        };
+        value.kind.clone()
+    };
+    let literals = |kind: ExprKind| -> Vec<ExprKind> {
+        match kind {
+            ExprKind::Sequence(entries) | ExprKind::Tuple(entries) => {
+                entries.into_iter().map(|entry| entry.kind).collect()
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(
+        literals(returned("listed")),
+        [
+            ExprKind::Literal(Value::Int(1)),
+            ExprKind::Literal(Value::Int(2))
+        ]
+    );
+    assert_eq!(
+        literals(returned("paired")),
+        [
+            ExprKind::Literal(Value::Float(1.0)),
+            ExprKind::Literal(Value::Str("a".to_string()))
+        ]
+    );
 }
 
 /// The types of the parameters of the function `name` of `m`.

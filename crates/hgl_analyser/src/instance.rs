@@ -33,7 +33,7 @@ use hgl_diagnostics::Location;
 use crate::declared::substitute_within;
 use crate::hir::{Answer, Body, Callee, Expr, ExprKind, walk_statements_mut};
 use crate::program::Program;
-use crate::types::{Argument, Constant, ConstantValue, Detail, Parameter, Signature, Type};
+use crate::types::{Argument, ConstantValue, Detail, Parameter, Signature, Type};
 
 /// Where each generic parameter of a declaration is declared, with what
 /// it stands for at one call.
@@ -109,7 +109,9 @@ impl Program {
                     Argument::Constant(given) if declared == at => Some(given),
                     _ => None,
                 });
-                if let Some(kind) = given.and_then(|given| self.constant(given, &expression.ty)) {
+                let read = given
+                    .and_then(|given| self.constant(&given.value, &expression.ty, expression.at));
+                if let Some(kind) = read {
                     expression.kind = kind;
                 }
             }
@@ -118,10 +120,25 @@ impl Program {
         }
     }
 
-    /// A constant a generic value parameter is given, as the expression
-    /// that reads it: `None` for one whose value is not held.
-    fn constant(&self, constant: &Constant, ty: &Type) -> Option<ExprKind> {
-        match &constant.value {
+    /// A constant a generic value parameter is given, `value` of type
+    /// `ty`, as the expression that reads it, written at `at`: `None`
+    /// for one whose value is not held. A list and a tuple are each
+    /// element as its own expression.
+    fn constant(&self, value: &ConstantValue, ty: &Type, at: Location) -> Option<ExprKind> {
+        // TYPE-14: "`T?` denotes an ordinary value that is either a T or
+        // null": a value of it other than null is a T.
+        let of = match ty {
+            Type::Nullable(inner) if !matches!(value, ConstantValue::Null) => inner.as_ref(),
+            other => other,
+        };
+        let element = |value: &ConstantValue, ty: &Type| -> Option<Expr> {
+            Some(Expr {
+                kind: self.constant(value, ty, at)?,
+                ty: ty.clone(),
+                at,
+            })
+        };
+        match value {
             // TYPE-7: a member is known by its name, and the enum is
             // the parameter's type.
             ConstantValue::Member(name) => {
@@ -129,7 +146,7 @@ impl Program {
                     module,
                     declaration,
                     ..
-                } = ty
+                } = of
                 else {
                     return None;
                 };
@@ -146,6 +163,30 @@ impl Program {
                     declaration: *declaration,
                     member,
                 })
+            }
+            ConstantValue::List(values) => {
+                let Type::List { element: of, .. } = of else {
+                    return None;
+                };
+                values
+                    .iter()
+                    .map(|value| element(value, of))
+                    .collect::<Option<Vec<Expr>>>()
+                    .map(ExprKind::Sequence)
+            }
+            ConstantValue::Tuple(values) => {
+                let Type::Tuple(elements) = of else {
+                    return None;
+                };
+                if elements.len() != values.len() {
+                    return None;
+                }
+                values
+                    .iter()
+                    .zip(elements)
+                    .map(|(value, of)| element(value, of))
+                    .collect::<Option<Vec<Expr>>>()
+                    .map(ExprKind::Tuple)
             }
             // A literal's value: an integer, a float, a string.
             value => value.literal().map(ExprKind::Literal),
