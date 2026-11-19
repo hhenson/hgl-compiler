@@ -388,7 +388,7 @@ pub(crate) fn names_parameter(ty: &Type) -> bool {
         Type::Dict { key, value } => names_parameter(key) || names_parameter(value),
         Type::RollingWindow { value, .. } => names_parameter(value),
         Type::Result { value, error } => names_parameter(value) || names_parameter(error),
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => false,
+        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => false,
     }
 }
 
@@ -491,7 +491,9 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
             inner @ Type::Nullable(_) => inner,
             inner => Type::Nullable(Box::new(inner)),
         },
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => ty.clone(),
+        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => {
+            ty.clone()
+        }
     }
 }
 
@@ -520,7 +522,7 @@ pub(crate) fn names_one_of(ty: &Type, declared: &[Location]) -> bool {
         Type::Dict { key, value } => inside(key) || inside(value),
         Type::RollingWindow { value, .. } => inside(value),
         Type::Result { value, error } => inside(value) || inside(error),
-        Type::Scalar(_) | Type::Signal | Type::Error | Type::Unknown => false,
+        Type::Scalar(_) | Type::Signal | Type::Error | Type::ErrorContext | Type::Unknown => false,
     }
 }
 
@@ -550,7 +552,12 @@ fn weight(ty: &Type) -> usize {
         Type::Dict { key, value } => weight(key) + weight(value),
         Type::RollingWindow { value, .. } => weight(value),
         Type::Result { value, error } => weight(value) + weight(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => 0,
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => 0,
     }
 }
 
@@ -1541,6 +1548,7 @@ impl Structs<'_> {
             | Type::Parameter { .. }
             | Type::Signal
             | Type::Error
+            | Type::ErrorContext
             | Type::Unknown => {}
         }
     }
@@ -2190,9 +2198,12 @@ fn grown(ty: &Type, in_group: &dyn Fn(Id) -> bool) -> Option<String> {
         Type::Dict { key, value } => grown(key, in_group).or_else(|| grown(value, in_group)),
         Type::RollingWindow { value, .. } => grown(value, in_group),
         Type::Result { value, error } => grown(value, in_group).or_else(|| grown(error, in_group)),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            None
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => None,
     }
 }
 

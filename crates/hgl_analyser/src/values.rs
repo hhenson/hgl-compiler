@@ -1679,6 +1679,40 @@ impl<'a> Typer<'a> {
                 self.input_lifecycle(at, &input);
             }
         }
+        // TIME-9: "`all_valid` takes only a collection; another
+        // endpoint is rejected (`endpoint.argument`)". A collection is
+        // "a list, a tuple, a struct and a dictionary".
+        if operation == EndpointOperation::AllValid
+            && let Some(inputs) = &inputs
+        {
+            for (input, given) in inputs.iter().zip(&arguments) {
+                let ty = &self.locals[*input].ty;
+                let collection = matches!(
+                    ty,
+                    Type::List { .. }
+                        | Type::Tuple(_)
+                        | Type::Dict { .. }
+                        | Type::Named {
+                            kind: NamedKind::Struct,
+                            ..
+                        }
+                        | Type::Parameter { .. }
+                        | Type::Unknown
+                );
+                if !collection {
+                    self.diagnostics.emit(
+                        error(
+                            Category::Phase,
+                            codes::ENDPOINT_ARGUMENT,
+                            self.at(given),
+                            format!("`all_valid` takes a collection, and `{ty}` is none"),
+                            "TIME-9",
+                        )
+                        .with_note("a collection is a list, a tuple, a struct or a dictionary"),
+                    );
+                }
+            }
+        }
         let writes = operation == EndpointOperation::Invalidate;
         if let (Some(inputs), Some(out)) = (&inputs, self.out)
             && inputs.contains(&out)
@@ -1696,6 +1730,7 @@ impl<'a> Typer<'a> {
         }
         let ty = match operation {
             EndpointOperation::Valid
+            | EndpointOperation::AllValid
             | EndpointOperation::Modified
             | EndpointOperation::Scheduled
             | EndpointOperation::IsActive => BOOL,
@@ -2652,6 +2687,27 @@ impl<'a> Typer<'a> {
                 ("added".to_string(), of.clone()),
                 ("removed".to_string(), of.clone()),
             ]),
+            // "`list<V>`, `list<V, N>`: ... the properties `updated`, a
+            // `dict<i64, delta<V>>` of each changed position with its
+            // delta, `removed`, a `set<i64>` of the positions that lost
+            // their value, and `size_modified`, an `i64?`".
+            Type::List { element, .. } => {
+                let position = || Box::new(Type::Scalar(Scalar::I64));
+                Some(vec![
+                    (
+                        "updated".to_string(),
+                        Type::Dict {
+                            key: position(),
+                            value: Box::new(Type::delta((**element).clone())),
+                        },
+                    ),
+                    ("removed".to_string(), Type::Set(position())),
+                    (
+                        "size_modified".to_string(),
+                        nullable(Type::Scalar(Scalar::I64)),
+                    ),
+                ])
+            }
             Type::Dict { key, value } => Some(vec![
                 (
                     "updated".to_string(),
@@ -2741,9 +2797,9 @@ impl<'a> Typer<'a> {
     ///
     /// TYPE-16: "One that is a type of its own is constructed by its
     /// properties, by name ... A property left out is empty, or null
-    /// for a struct's field and a nullable's `value`. A list's and a
-    /// tuple's delta are an ordinary dictionary and tuple, and are
-    /// written as those are." The constructor of a type that has no
+    /// for a struct's field, a nullable's `value`, and a list's
+    /// `size_modified`. A tuple's delta is an ordinary tuple, and is
+    /// written as one is." The constructor of a type that has no
     /// delta of its own is not read.
     fn delta_constructor(&mut self, node: &SyntaxNode) -> (ExprKind, Type) {
         let Some(list) = child(node, SyntaxKind::ArgList) else {
@@ -2807,7 +2863,71 @@ impl<'a> Typer<'a> {
                 value: self.fit(read, expected, &place),
             });
         }
+        self.delta_overlap(&ty, &arguments);
         (ExprKind::Delta { arguments }, ty)
+    }
+
+    /// TYPE-16: "A delta that names one member, key or position both as
+    /// added or updated and as removed is malformed. A constant one is
+    /// rejected (`delta.overlap`)." A set's `added`, a dictionary's and
+    /// a list's `updated`, are the first property, and `removed` the
+    /// second. What is compared is each entry written as a literal; one
+    /// that is not is known only as the graph runs, which "makes no
+    /// check". The later of the two entries is reported.
+    fn delta_overlap(&mut self, ty: &Type, arguments: &[hir::Argument]) {
+        let Type::Delta(of) = ty else {
+            return;
+        };
+        if !matches!(**of, Type::Set(_) | Type::Dict { .. } | Type::List { .. }) {
+            return;
+        }
+        // The literal a member, a key or a position is written as.
+        fn literal(entry: &Expr) -> Option<&Value> {
+            match &entry.kind {
+                ExprKind::Literal(value) => Some(value),
+                ExprKind::Widen(inner) => literal(inner),
+                _ => None,
+            }
+        }
+        // Each entry of the property at `index`: a set's members, or a
+        // dictionary's keys.
+        let entries = |index: usize| -> Vec<&Expr> {
+            arguments
+                .iter()
+                .filter(|argument| argument.parameter == Some(index))
+                .flat_map(|argument| match &argument.value.kind {
+                    ExprKind::Sequence(items) => items.iter().collect(),
+                    ExprKind::Pairs(pairs) => pairs.iter().map(|(key, _)| key).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        let removed = entries(1);
+        for changed in entries(0) {
+            let Some(value) = literal(changed) else {
+                continue;
+            };
+            let clash = removed
+                .iter()
+                .find(|gone| literal(gone).is_some_and(|other| other == value));
+            if let Some(gone) = clash {
+                let later = if gone.at.span.start > changed.at.span.start {
+                    gone.at
+                } else {
+                    changed.at
+                };
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::DELTA_OVERLAP,
+                        later,
+                        format!("`{of}`'s delta names this both as changed and as removed"),
+                        "TYPE-16",
+                    )
+                    .with_note("a delta that names one entry both ways is malformed"),
+                );
+            }
+        }
     }
 
     /// What a place reaches into that takes no assignment, and the rule
@@ -2815,8 +2935,18 @@ impl<'a> Typer<'a> {
     /// (NATIVE-6), or a delta that is a type of its own (TYPE-16). The
     /// place is a property of one or something inside one, however the
     /// value is reached: `items[0].size`, with `items` a list of a
-    /// native type, is one.
+    /// native type, is one. ERR-4: "`.context` is a read-only nullable
+    /// record": an error's context and its parts are read-only too.
     fn read_only_inside(place: &Expr) -> Option<(String, &'static str)> {
+        if let ExprKind::ErrorPart { part, .. } = &place.kind {
+            return match part {
+                ErrorPart::Context => Some(("`error`".to_string(), "ERR-4")),
+                ErrorPart::Node | ErrorPart::Phase | ErrorPart::EvaluationTime => {
+                    Some(("an error's context".to_string(), "ERR-4"))
+                }
+                ErrorPart::Message | ErrorPart::Code => None,
+            };
+        }
         let (ExprKind::Field { base, .. } | ExprKind::Index { base, .. }) = &place.kind else {
             return None;
         };
@@ -6035,14 +6165,13 @@ impl<'a> Typer<'a> {
     }
 
     /// `.message`, `.code` or `.context` of an error (ERR-4):
-    /// "`.message` is the `str` and `.code` the `str?`."
+    /// "`.message` is the `str` and `.code` the `str?`. `.context` is a
+    /// read-only nullable record", an `error context?`.
     fn error_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
         let (part, ty) = match name.text() {
             "message" => (ErrorPart::Message, Type::Scalar(Scalar::Str)),
             "code" => (ErrorPart::Code, nullable(Type::Scalar(Scalar::Str))),
-            // "`.context` is a read-only nullable record": what it is
-            // read as is for a later part.
-            "context" => return (ExprKind::Unread, Type::Unknown),
+            "context" => (ErrorPart::Context, nullable(Type::ErrorContext)),
             other => {
                 self.diagnostics.emit(error(
                     Category::Name,
@@ -6050,6 +6179,36 @@ impl<'a> Typer<'a> {
                     Location::new(self.file, name.span()),
                     format!(
                         "an `error` has no `{other}`: it has `.message`, `.code` and `.context`"
+                    ),
+                    "ERR-4",
+                ));
+                return (ExprKind::Unread, Type::Unknown);
+            }
+        };
+        let kind = ExprKind::ErrorPart {
+            base: Box::new(base),
+            part,
+        };
+        (kind, ty)
+    }
+
+    /// `.node`, `.phase` or `.evaluation_time` of an error's context
+    /// (ERR-4): "a read-only nullable record of `.node: str`, `.phase:
+    /// str`, one of `"evaluate"`, `"start"`, and `"stop"`, and
+    /// `.evaluation_time: datetime`". `base` has been proved present.
+    fn context_part(&mut self, base: Expr, name: &SyntaxToken) -> (ExprKind, Type) {
+        let (part, ty) = match name.text() {
+            "node" => (ErrorPart::Node, Type::Scalar(Scalar::Str)),
+            "phase" => (ErrorPart::Phase, Type::Scalar(Scalar::Str)),
+            "evaluation_time" => (ErrorPart::EvaluationTime, Type::Scalar(Scalar::Datetime)),
+            other => {
+                self.diagnostics.emit(error(
+                    Category::Name,
+                    codes::MEMBER_UNKNOWN,
+                    Location::new(self.file, name.span()),
+                    format!(
+                        "an error's context has no `{other}`: it has `.node`, `.phase` and \
+                         `.evaluation_time`"
                     ),
                     "ERR-4",
                 ));
@@ -6651,6 +6810,14 @@ impl<'a> Typer<'a> {
                         ty: cell.clone(),
                         at: self.at(&value),
                     })
+                } else if let Type::Delta(of) = cell
+                    && matches!(**of, Type::List { .. })
+                {
+                    // A list's cell is "one cycle's publication", and
+                    // TIME-7 has "a value that is a T ... published
+                    // whole": core's cases write a whole list as a
+                    // cell, `[[false, false], ...]`, as the delta is.
+                    Some(self.published(&value, of, "a cell of the trace"))
                 } else {
                     let read = self.expression(&value, Some(cell));
                     Some(self.fit(read, cell, "a cell of the trace"))
@@ -10980,6 +11147,31 @@ impl<'a> Typer<'a> {
                 return self.payload(base, &name, sides);
             }
             Type::Error => return self.error_part(base, &name),
+            Type::ErrorContext => return self.context_part(base, &name),
+            // ERR-4: "Nullable code/context observations require
+            // presence checking": a part of a context is read where a
+            // test against null has proved it present.
+            Type::Nullable(inner) if **inner == Type::ErrorContext => {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::NULLABLE_REQUIRED_PRESENCE,
+                        base.at,
+                        format!(
+                            "this is `{}`: an error's context may be null, and `.{}` is \
+                             read where it is not",
+                            base.ty,
+                            name.text()
+                        ),
+                        "ERR-4",
+                    )
+                    .with_note(
+                        "bind the context with `let` and test it against null: \
+                         `if context == null { return ... }`",
+                    ),
+                );
+                return (ExprKind::Unread, Type::Unknown);
+            }
             // TYPE-16: a set's delta has "the properties `added` and
             // `removed`, each a `set<K>`".
             Type::Delta(of) => return self.delta_property(base.clone(), &name, of),
@@ -11542,8 +11734,10 @@ fn null_tests(
         // `valid(value)`, `valid([a, b])`, `valid()`: every endpoint
         // named is valid where it holds. Where it does not, one of them
         // is not, and nothing is proved of any.
+        // TIME-9: `all_valid` is true "where every one is" valid, and
+        // so the collection with them, as `valid` proves it.
         ExprKind::Endpoint {
-            operation: EndpointOperation::Valid,
+            operation: EndpointOperation::Valid | EndpointOperation::AllValid,
             inputs: named,
         } => {
             let valid = match named {
@@ -13004,7 +13198,12 @@ fn struct_applications(ty: &Type, found: &mut Vec<((usize, usize), Vec<Argument>
             struct_applications(value, found);
             struct_applications(error, found);
         }
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {}
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => {}
     }
 }
 
@@ -14105,7 +14304,11 @@ fn whole(ty: &Type) -> bool {
         Type::Dict { key, value } => whole(key) && whole(value),
         Type::RollingWindow { value, .. } => whole(value),
         Type::Result { value, error } => whole(value) && whole(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error => true,
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext => true,
     }
 }
 
@@ -14317,9 +14520,12 @@ fn holds_trace(ty: &Type) -> bool {
         | Type::Nullable(inner) => holds_trace(inner),
         Type::Dict { key, value } => holds_trace(key) || holds_trace(value),
         Type::Result { value, error } => holds_trace(value) || holds_trace(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            false
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => false,
     }
 }
 
@@ -14655,9 +14861,12 @@ fn names_value_of(ty: &Type, own: &[Location]) -> bool {
             minimum,
         } => named(maximum) || minimum.as_ref().is_some_and(named) || inner(value),
         Type::Result { value, error } => inner(value) || inner(error),
-        Type::Scalar(_) | Type::Parameter { .. } | Type::Signal | Type::Error | Type::Unknown => {
-            false
-        }
+        Type::Scalar(_)
+        | Type::Parameter { .. }
+        | Type::Signal
+        | Type::Error
+        | Type::ErrorContext
+        | Type::Unknown => false,
     }
 }
 

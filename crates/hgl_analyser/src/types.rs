@@ -220,6 +220,12 @@ pub enum Type {
     },
     /// `error` (TYPE-13).
     Error,
+    /// What an error's `.context` holds when it is not null: "a
+    /// read-only nullable record of `.node: str`, `.phase: str` ... and
+    /// `.evaluation_time: datetime`" (ERR-4). Source writes no type for
+    /// it: it is a type of this compiler's, read through its three
+    /// parts.
+    ErrorContext,
     /// `delta<list<f64>>`
     Delta(Box<Type>),
     /// What an `eval` gives, and a trace written out for one: "a trace
@@ -275,9 +281,9 @@ impl Type {
     /// T publishes in one cycle" (TYPE-16).
     ///
     /// For most T it is another type the language has, and that type is
-    /// what this returns: `f64` for `f64`, `dict<i64, f64>` for
-    /// `list<f64>`. A nullable's, a set's, a dictionary's and a
-    /// struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
+    /// what this returns: `f64` for `f64`, `tuple<f64?, i64?>` for
+    /// `tuple<f64, i64>`. A nullable's, a list's, a set's, a
+    /// dictionary's and a struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
     /// yet known, a generic parameter's: "In a generic declaration it
     /// stays as written until T is known", and it is formed again, here,
     /// when the parameter is replaced.
@@ -289,7 +295,7 @@ impl Type {
         match of {
             // "A scalar, an enum, a `result`, an `error`, a native type,
             // a delta that is a type of its own: T itself".
-            Type::Scalar(_) | Type::Error | Type::Result { .. } => of,
+            Type::Scalar(_) | Type::Error | Type::ErrorContext | Type::Result { .. } => of,
             Type::Named {
                 kind: NamedKind::Enum | NamedKind::Native,
                 ..
@@ -302,12 +308,6 @@ impl Type {
             // "`atomic<V>`: V: an atomic publishes whole";
             // "`rolling_window<V, Max, Min>`: V: the value that arrived".
             Type::Atomic(value) | Type::RollingWindow { value, .. } => *value,
-            // "`dict<i64, delta<V>>`: for each position that changed,
-            // its delta".
-            Type::List { element, .. } => Type::Dict {
-                key: Box::new(Type::Scalar(Scalar::I64)),
-                value: Box::new(Type::delta(*element)),
-            },
             // "each position's delta, null where it did not change".
             Type::Tuple(elements) => Type::Tuple(
                 elements
@@ -331,6 +331,7 @@ impl Type {
             // delta, a `ref` or a `signal`, which is reported where it
             // is written (`delta.unsupported_shape`).
             Type::Set(_)
+            | Type::List { .. }
             | Type::Dict { .. }
             | Type::Named {
                 kind: NamedKind::Struct,
@@ -538,6 +539,8 @@ impl fmt::Display for Type {
             Type::Atomic(payload) => write!(f, "atomic<{payload}>"),
             Type::Result { value, error } => write!(f, "result<{value}, {error}>"),
             Type::Error => f.write_str("error"),
+            // No type that source writes: named in words.
+            Type::ErrorContext => f.write_str("error context"),
             Type::Delta(shape) => write!(f, "delta<{shape}>"),
             // No type that source writes: named in words.
             Type::Trace { cell, .. } => write!(f, "trace of {cell}"),

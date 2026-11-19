@@ -78,6 +78,10 @@ impl Hook {
 pub enum EndpointOperation {
     /// `valid(input)`: whether the endpoint holds a value.
     Valid,
+    /// `all_valid(input)`: whether every element, field or entry of a
+    /// list, tuple, struct or dictionary is valid, one level deep
+    /// (TIME-9, END-7).
+    AllValid,
     /// `modified(input)`: whether it published in this cycle.
     Modified,
     /// `delta_value(input)`: what it published in this cycle.
@@ -98,8 +102,9 @@ pub enum EndpointOperation {
 
 impl EndpointOperation {
     /// Every operation, with the name it is written by.
-    pub const ALL: [(&'static str, EndpointOperation); 9] = [
+    pub const ALL: [(&'static str, EndpointOperation); 10] = [
         ("valid", EndpointOperation::Valid),
+        ("all_valid", EndpointOperation::AllValid),
         ("modified", EndpointOperation::Modified),
         ("delta_value", EndpointOperation::DeltaValue),
         ("last_modified", EndpointOperation::LastModified),
@@ -517,9 +522,10 @@ pub enum ExprKind {
         /// null.
         code: Option<Box<Expr>>,
     },
-    /// `.message` or `.code` of an error (ERR-4).
+    /// `.message`, `.code` or `.context` of an error, or `.node`,
+    /// `.phase` or `.evaluation_time` of its context (ERR-4).
     ErrorPart {
-        /// The error read.
+        /// The error, or the context, read.
         base: Box<Expr>,
         /// Which of its parts.
         part: ErrorPart,
@@ -588,13 +594,24 @@ pub enum ExprKind {
     Unread,
 }
 
-/// A part of an error that source reads (ERR-4).
+/// A part of an error, or of an error's context, that source reads
+/// (ERR-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorPart {
     /// `.message`, a `str`.
     Message,
     /// `.code`, a `str?`.
     Code,
+    /// `.context`, the error's provenance: null for a constructed
+    /// error, and otherwise a record of the three parts below.
+    Context,
+    /// `.node` of a context, a `str`: the node that first failed.
+    Node,
+    /// `.phase` of a context, a `str`: `"evaluate"`, `"start"` or
+    /// `"stop"`.
+    Phase,
+    /// `.evaluation_time` of a context, a `datetime`.
+    EvaluationTime,
 }
 
 /// What a call calls.
