@@ -649,6 +649,17 @@ branch that returns to the end of its block. A read with none is
 itself rejected says nothing sure of what it admits, and its body's
 reads are not judged.
 
+The analyser records what the header asks in the `hir::Header` of its
+`Stmt::Hook`, read from the typed condition: the inputs whose tick wakes
+the handler, what it requires valid (the inputs it admits, and `out`
+where `valid(out)` names it), whether a wake of the scheduler or alarm
+runs it, and which conjuncts of its condition are checked when it runs.
+A transpiler reads it and works none of it out again. The analyser
+judges the handler's reads by the inputs it reads as admitted from the
+header before it is typed; the two agree but for a header the typed
+condition does not take apart as the syntax does (`valid(a) &&{cfg} b`,
+`c::valid(a)`).
+
 A `state`'s initializer reads no temporal input (TIME-5): one that does
 is `state.input_read`.
 
