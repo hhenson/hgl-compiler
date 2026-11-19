@@ -445,8 +445,15 @@ pub enum ConstantValue {
     },
     /// A member of the enum its place is, constructed from what names a
     /// generic value parameter: `Side(N)` (TYPE-7). Which member it is
-    /// is known once the parameter is given a value.
-    Constructed(Box<ConstantValue>),
+    /// is known once the parameter is given a value, and is looked for
+    /// then among `members`.
+    Constructed {
+        /// The enum's members, each name with its number where that is
+        /// known.
+        members: Vec<(String, Option<i64>)>,
+        /// What it is constructed from.
+        from: Box<ConstantValue>,
+    },
     /// A symbol over one operand that names a generic value parameter:
     /// `-N`. What it comes to is known once the parameter is given a
     /// value, and is worked out then.

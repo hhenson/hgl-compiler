@@ -701,6 +701,34 @@ fn a_composite_constant_is_compared_element_by_element() {
     );
 }
 
+/// TYPE-7: a member constructed from a generic value parameter,
+/// `Side(N)`, is the member the number given names, once it is given
+/// one. TYPE-10: "Size participates in identity": a list constant of
+/// another length than the size expected is of another type.
+#[test]
+fn a_constructed_member_and_a_sized_list_are_held_to_their_types() {
+    let shared = concat!(
+        "enum Side { buy, sell }\n",
+        "struct Tagged<const s: Side> { v: i64 }\n",
+        "struct Sized<const X: list<i64, 2>> { v: i64 }\n",
+        "const fn mk<const N: i64>() -> Tagged<Side(N)> => Tagged<Side(N)>(v: 1)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Tagged<.sell> => mk<1>()\n\
+             const fn c(x: Sized<[1, 2]>) -> i64 => 1\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> Tagged<.buy> => mk<1>()\n\
+             const fn c(x: Sized<[1, 2, 3]>) -> i64 => 1\n"
+        ),
+        &["6 type.mismatch", "7 type.mismatch"],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

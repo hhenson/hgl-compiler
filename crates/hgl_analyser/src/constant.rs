@@ -320,6 +320,27 @@ pub(crate) fn fit(
         }
         _ => {}
     }
+    // TYPE-10: "Size participates in identity": a list of another
+    // length than the size expected is no value of it.
+    if let (
+        ConstantValue::List(values),
+        Type::List {
+            element,
+            size: Some(size),
+        },
+    ) = (&read.value, expected)
+        && let ConstantValue::Int(count) = size.value
+        && i64::try_from(values.len()).ok() != Some(count)
+    {
+        let length = values.len().to_string();
+        return Err(Fault::Mismatch(Some(Box::new(Type::List {
+            element: element.clone(),
+            size: Some(crate::types::Constant {
+                text: length.clone(),
+                value: ConstantValue::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+            }),
+        }))));
+    }
     match &read.ty {
         Some(ty) if !fits(ty, expected) => Err(Fault::Mismatch(Some(Box::new(ty.clone())))),
         _ => Ok(read.value),
@@ -795,15 +816,32 @@ pub(crate) fn written_type<'s>(
         }
         SyntaxKind::NullableType => Some(Type::Nullable(Box::new(part(node)?))),
         SyntaxKind::ListType => {
-            let sizes = node
+            // TYPE-10: a size is an `i64` constant, or `unbounded`.
+            let size = node
                 .children()
-                .filter(|child| !crate::read::is_type(child.kind()));
-            if sizes.count() > 0 {
-                return None;
-            }
+                .find(|child| !crate::read::is_type(child.kind()))
+                .map(|size| {
+                    let constants = Constants::default();
+                    // A closure, so that what it gives lives as long as
+                    // this reading needs and no longer.
+                    let binding = |file: FileId, offset: u32| binding(file, offset);
+                    let scope = Scope {
+                        program,
+                        file,
+                        binding: &binding,
+                        parameter: &|_| None,
+                        constants: &constants,
+                    };
+                    let value = read(&size, Some(&Type::Scalar(Scalar::I64)), &scope)
+                        .unwrap_or(ConstantValue::Unknown);
+                    crate::types::Constant {
+                        text: size.text().to_string().trim().to_string(),
+                        value,
+                    }
+                });
             Some(Type::List {
                 element: Box::new(part(node)?),
-                size: None,
+                size,
             })
         }
         SyntaxKind::TupleType => node
@@ -975,9 +1013,15 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
         given @ (ConstantValue::Parameter { .. }
         | ConstantValue::Unary(..)
         | ConstantValue::Binary(..)
-        | ConstantValue::Constructed(..)) => {
+        | ConstantValue::Constructed { .. }) => {
             return Ok(Typed::of(
-                ConstantValue::Constructed(Box::new(given)),
+                ConstantValue::Constructed {
+                    members: members
+                        .iter()
+                        .map(|member| (member.name.clone(), member.value))
+                        .collect(),
+                    from: Box::new(given),
+                },
                 Some(ty),
             ));
         }
@@ -1307,7 +1351,7 @@ fn negated_or_not(operator: UnaryOperator, value: &ConstantValue) -> ConstantVal
             _,
             V::Parameter { .. }
             | V::Named { .. }
-            | V::Constructed(..)
+            | V::Constructed { .. }
             | V::Unary(..)
             | V::Binary(..),
         ) => {
@@ -1351,7 +1395,7 @@ pub(crate) fn combined(
             value,
             V::Parameter { .. }
                 | V::Named { .. }
-                | V::Constructed(..)
+                | V::Constructed { .. }
                 | V::Unary(..)
                 | V::Binary(..)
         )
@@ -1563,7 +1607,7 @@ fn scaled_tenor(tenor: Tenor, factor: i64) -> Option<Tenor> {
 pub(crate) fn worked_out(value: &ConstantValue) -> bool {
     match value {
         ConstantValue::Unevaluated => false,
-        ConstantValue::Unary(_, operand) | ConstantValue::Constructed(operand) => {
+        ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
             worked_out(operand)
         }
         ConstantValue::Binary(_, left, right) => worked_out(left) && worked_out(right),
@@ -1642,11 +1686,13 @@ impl ConstantValue {
                 &[(**left).clone(), (**right).clone()],
                 &[(**other_left).clone(), (**other_right).clone()],
             )),
-            (V::Constructed(left), V::Constructed(right)) => alike(left.same(right)),
+            (V::Constructed { from: left, .. }, V::Constructed { from: right, .. }) => {
+                alike(left.same(right))
+            }
             (
                 V::Parameter { .. }
                 | V::Named { .. }
-                | V::Constructed(..)
+                | V::Constructed { .. }
                 | V::Unary(..)
                 | V::Binary(..),
                 _,
@@ -1655,7 +1701,7 @@ impl ConstantValue {
                 _,
                 V::Parameter { .. }
                 | V::Named { .. }
-                | V::Constructed(..)
+                | V::Constructed { .. }
                 | V::Unary(..)
                 | V::Binary(..),
             ) => None,
@@ -1779,7 +1825,7 @@ impl ConstantValue {
             V::Unbounded => "unbounded".to_string(),
             V::Parameter { .. }
             | V::Named { .. }
-            | V::Constructed(..)
+            | V::Constructed { .. }
             | V::Unary(..)
             | V::Binary(..)
             | V::Unevaluated
@@ -1899,7 +1945,7 @@ impl ConstantValue {
     pub(crate) fn names_one_of(&self, own: &[Location]) -> bool {
         match self {
             ConstantValue::Parameter { at, .. } => own.contains(at),
-            ConstantValue::Unary(_, operand) | ConstantValue::Constructed(operand) => {
+            ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
                 operand.names_one_of(own)
             }
             ConstantValue::Binary(_, left, right) => {
@@ -1930,10 +1976,30 @@ impl ConstantValue {
                 &left.substituted(given),
                 &right.substituted(given),
             ),
-            // Which member a number or a name gives is the enum's to
-            // say, which is not known here: it is held as constructed.
-            ConstantValue::Constructed(from) => {
-                ConstantValue::Constructed(Box::new(from.substituted(given)))
+            // TYPE-7: "`Side(1)` is the member whose number is 1, and
+            // `Side("buy")` the member of that exact name." One that
+            // names none is rejected where it is called, and has no
+            // value here.
+            ConstantValue::Constructed { members, from } => {
+                let from = from.substituted(given);
+                let named = match &from {
+                    ConstantValue::Int(number)
+                        if members.iter().all(|(_, value)| value.is_some()) =>
+                    {
+                        members.iter().find(|(_, value)| *value == Some(*number))
+                    }
+                    ConstantValue::Str(text) => members.iter().find(|(name, _)| name == text),
+                    _ => {
+                        return ConstantValue::Constructed {
+                            members: members.clone(),
+                            from: Box::new(from),
+                        };
+                    }
+                };
+                match named {
+                    Some((name, _)) => ConstantValue::Member(name.clone()),
+                    None => ConstantValue::Unevaluated,
+                }
             }
             // `[N, 1]`: each element given its value.
             ConstantValue::List(values) => ConstantValue::List(

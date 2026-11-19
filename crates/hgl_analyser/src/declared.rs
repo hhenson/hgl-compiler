@@ -432,7 +432,7 @@ fn substitute(ty: &Type, map: &[(Location, &Argument)]) -> Type {
         | ConstantValue::Binary(..)
         | ConstantValue::List(_)
         | ConstantValue::Tuple(_)
-        | ConstantValue::Constructed(_) => {
+        | ConstantValue::Constructed { .. } => {
             let value = constant
                 .value
                 .substituted(&|at| given(at).map(|given| given.value.clone()));
