@@ -581,7 +581,8 @@ statement is read as value code, with three things of a source's own:
 | In a source | Read as | Rule |
 | --- | --- | --- |
 | `yield time: value` | `Stmt::Yield`: the value is of the result's type, and is not a capability. What the time may be is proposed, and is not judged | SOURCE-1, SOURCE-2 |
-| `return` with no value | Ends the source. One with a value is read and not judged: what it is there is proposed | SOURCE-4 |
+| `return` with no value | Ends the source. One with a value is the local `source.return_value` | SOURCE-4 |
+| A `yield` inside a block or an `if` whose value is used | The local `yield.in_value`: it stands inside a value expression | SOURCE-4 |
 | `while { }` with no condition | A loop with none | CTRL-15 |
 
 A temporal function called there is `call.role`, a `?`
@@ -1071,7 +1072,9 @@ convert<T, V, O>(value: V) -> O requires O in {T, result<T, error>}`.
 With the generic arguments a call writes in place (GEN-8), a candidate
 is admitted only when its result is one of those types, which tells
 `convert<f64>(count)` from `convert<str>(count)` where the arguments do
-not.
+not. `convert<list<B>>(values)` of a `list<A>`, `A` a struct that
+inherits from the abstract struct `B`, has no candidate in core (OPS-6):
+it is read as `ExprKind::ParentList`, of type `list<B>`, with no option.
 
 A candidate with generic parameters is admitted with each resolved from
 the call (GEN-2): from the type the place expects of the result, then
@@ -1197,8 +1200,7 @@ that needs it. An argument tried may hold a call that tries its own, so
 the readings are counted for the whole function: past a thousand a call
 that needs a trial is not judged, and the pass ends whatever it is given.
 The typed body records the operator and the candidate selected. No
-candidate is `operator.no_candidate`, and a tie `operator.ambiguous`. The
-analyser has no local code.
+candidate is `operator.no_candidate`, and a tie `operator.ambiguous`.
 A symbol selects as a call by name does: see "Symbols" above.
 
 The five names `ok`, `err`, `is_ok`, `is_err` and `capture` are
@@ -1357,8 +1359,11 @@ reports the catalogue's one code for the grammar, `syntax.expected_token`,
 and its two for documentation comments, `doc.unattached` and
 `doc.repeated` (SDOC-1). Its one local code is `syntax.nesting_limit`:
 the limit is the compiler's, not the language's. The analyser's codes
-are all catalogued (`hgl_analyser::codes`), one of them a warning, and its
-tests check each diagnostic's category and code against the catalogue.
+are catalogued (`hgl_analyser::codes`), one of them a warning, but for
+the local ones in `codes::local`, for rejections the catalogue has no
+row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
+`source.return_value` and `yield.in_value` (SOURCE-4). Its tests check each diagnostic's category and code against
+the catalogue, or that list.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of
 them fails a test.

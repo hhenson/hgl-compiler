@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use hgl_diagnostics::{Category, Code, Diagnostics, Location};
+use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 use hgl_lexer::literal::{
     decode_duration, decode_float, decode_integer, decode_string, decode_temporal, decode_tenor,
 };
@@ -504,6 +504,10 @@ struct Typer<'a> {
     /// (SOURCE-1): there a `yield` is a statement, a `return` with no
     /// value ends the source, and a `while` may have no condition.
     generating: bool,
+    /// How many blocks and `if`s whose value is used are being read
+    /// around what is read now: a `yield` there stands inside a value
+    /// expression (SOURCE-4).
+    valued: u32,
     /// The locals a capture is bound to, each with what its `.value`
     /// is (ERR-7: "What it gives is bound with `let` and read through
     /// two connections").
@@ -599,6 +603,7 @@ impl<'a> Typer<'a> {
             testing: false,
             integration: false,
             generating: false,
+            valued: 0,
             captures: HashMap::new(),
             callable: None,
             evaluating: false,
@@ -2113,15 +2118,46 @@ impl<'a> Typer<'a> {
             SyntaxKind::ReturnStmt if self.testing => self.unread(node),
             // A `yield` is a statement of a source's own (SOURCE-1). In
             // a hook it is reported by the phase pass, and not read.
-            SyntaxKind::YieldStmt if self.generating => self.yield_statement(node),
-            // SOURCE-1 has `yield` write a source's output: what a
-            // `return` is there is proposed (SOURCE-4), and is not
-            // judged. Its value is read for what it reports itself.
+            SyntaxKind::YieldStmt if self.generating => {
+                // SOURCE-4: "A valued return and yield inside a value
+                // expression reject."
+                if self.valued > 0 {
+                    self.diagnostics.emit(
+                        Diagnostic::error(
+                            Category::Phase,
+                            Code::Local(codes::local::YIELD_IN_VALUE),
+                            self.at(node),
+                            "a `yield` is a statement of the source, and this one stands inside \
+                             a block or an `if` whose value is used"
+                                .to_string(),
+                        )
+                        .with_rule("SOURCE-4"),
+                    );
+                }
+                self.yield_statement(node)
+            }
+            // SOURCE-4: "A bare return or body completion finishes the
+            // source ... A valued return ... reject[s]": a source writes
+            // its output with `yield` (SOURCE-1). The value is read for
+            // what it reports itself.
             SyntaxKind::ReturnStmt if self.generating => {
                 let value = node
                     .children()
                     .next()
                     .map(|value| self.expression(&value, Some(&Type::Unknown)));
+                if let Some(value) = &value {
+                    self.diagnostics.emit(
+                        Diagnostic::error(
+                            Category::Phase,
+                            Code::Local(codes::local::SOURCE_RETURN_VALUE),
+                            value.at,
+                            "a source writes its output with `yield`: its `return` takes no \
+                             value"
+                                .to_string(),
+                        )
+                        .with_rule("SOURCE-4"),
+                    );
+                }
                 self.returned = true;
                 Stmt::Return {
                     value,
@@ -3309,6 +3345,9 @@ impl<'a> Typer<'a> {
             ExprKind::Unary { operand, .. } => self.category(operand),
             ExprKind::Binary { left, right, .. } => join(self.category(left), self.category(right)),
             ExprKind::Widen(inner) => self.category(inner),
+            // OPS-6: the list converted is what it is given, lifted
+            // over a connection as a conversion is (FN-6).
+            ExprKind::ParentList(inner) => self.category(inner),
             ExprKind::Field { base, .. } => self.category(base),
             // An enum constructed from a connection is lifted (FN-6).
             ExprKind::EnumFrom { value, .. } => self.category(value),
@@ -8456,6 +8495,8 @@ impl<'a> Typer<'a> {
         // output requested, in GEN-2's order: what the call writes, then
         // what its place expects, then its arguments, and the default
         // where none of them says."
+        // What the call writes, before its place says anything.
+        let explicit = written.clone();
         let mut found = written;
         from_place(public, expected, &mut found);
         let candidates = self.value_candidates(operator);
@@ -8488,6 +8529,19 @@ impl<'a> Typer<'a> {
             .any(|given| !given.by_place && open(&given.value.ty));
         if faulty || unknown {
             return (self.unselected(given, Form::Named), Type::Unknown);
+        }
+        // Core's OPS-6: "`convert<list<B>>(values)` is admitted too,
+        // where `values` is a `list<A>` and the struct `A` inherits from
+        // the abstract struct `B`; it yields the same elements." Core
+        // declares no candidate for it.
+        if let Some(ty) = self.parent_list(operator, public, &explicit, &given, expected) {
+            // The value as `called` has an argument: read again where
+            // its first reading was taken back, so that the locals it
+            // declares are this reading's.
+            let value = given.swap_remove(0);
+            let converted = value.value.ty.clone();
+            let value = self.argument_value(value, &converted, "the value converted");
+            return (ExprKind::ParentList(Box::new(value)), ty);
         }
         // The generic arguments the call writes, for a requirement to
         // agree with (GEN-8).
@@ -8665,6 +8719,108 @@ impl<'a> Typer<'a> {
             return (self.unselected(given, Form::Named), Type::Unknown);
         };
         self.called(operator, chosen, given, (Form::Named, at))
+    }
+
+    /// The list a call of `operator` converts its one argument to, where
+    /// the call is core's `convert<list<B>>(values)` of a `list<A>` and
+    /// the struct `A` inherits from the abstract struct `B` (core's
+    /// OPS-6). `public` is the operator's signature, `explicit` the
+    /// generic arguments the call writes, in its order, and `expected`
+    /// what its place expects.
+    ///
+    /// Core declares no candidate for it: "A list of structs to a list
+    /// of their parent is not declared here." It takes no option, and
+    /// "yields the same elements", so it cannot fail and is the list
+    /// asked for (OPS-8: "A conversion that cannot fail returns T"); a
+    /// place that expects another type, a `result` among them, is
+    /// matched by no candidate (GEN-5). So is another generic argument
+    /// the call writes: the value's type, `V`, is what it is given, and
+    /// the output, `O`, is T. A list of a struct converted to a list of
+    /// that struct, a list of a size, and a list of nullable elements
+    /// are none of it.
+    fn parent_list(
+        &self,
+        operator: OperatorRef,
+        public: &Signature,
+        explicit: &[Option<Argument>],
+        given: &[Given],
+        expected: Option<&Type>,
+    ) -> Option<Type> {
+        let program = self.program;
+        let declared = &program.modules[operator.module].declarations[operator.declaration];
+        if Some(operator.module) != program.core() || declared.name != "convert" {
+            return None;
+        }
+        let Some(Argument::Type(
+            asked @ Type::List {
+                element: parent,
+                size: None,
+            },
+        )) = explicit.first()?
+        else {
+            return None;
+        };
+        if expected.is_some_and(|expected| !self.admits(expected, asked)) {
+            return None;
+        }
+        // The one argument, by position or by the operator's name for
+        // its parameter (EXPR-2).
+        let ([value], [parameter]) = (given, public.parameters.as_slice()) else {
+            return None;
+        };
+        let named = match &value.key {
+            Key::Position(position) => *position == 0,
+            Key::Name(name) => *name == parameter.name,
+        };
+        if !named {
+            return None;
+        }
+        let Type::List {
+            element: child,
+            size: None,
+        } = &value.value.ty
+        else {
+            return None;
+        };
+        // Each other generic argument the call writes: the parameter's
+        // type, which is the value's, or the result, which is T.
+        for (generic, written) in public.generics.iter().zip(explicit).skip(1) {
+            let Some(written) = written else {
+                continue;
+            };
+            let names = |ty: &Type| matches!(ty, Type::Parameter { at, .. } if *at == generic.at);
+            let stands_for = if names(&parameter.ty) {
+                &value.value.ty
+            } else if public.result.as_ref().is_some_and(names) {
+                asked
+            } else {
+                return None;
+            };
+            if !matches!(written, Argument::Type(ty) if agree(ty, stands_for)) {
+                return None;
+            }
+        }
+        let (
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            },
+            Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            },
+        ) = (&**child, &**parent)
+        else {
+            return None;
+        };
+        let abstract_parent = has_token(
+            &program.modules[*module].declarations[*declaration].syntax,
+            SyntaxKind::KwAbstract,
+        );
+        (abstract_parent && !agree(child, parent) && self.inherits(child, parent))
+            .then(|| asked.clone())
     }
 
     /// The declarations the name of `node` is bound to, when it is a
@@ -9338,16 +9494,11 @@ impl<'a> Typer<'a> {
                 };
                 let parameter = &signature.parameters[index];
                 let place = format!("the parameter `{}`", parameter.name);
-                let value = if given.retried {
-                    // Read where it stands, as the parameter's type.
-                    let value = self.expression(&given.node, Some(&parameter.ty));
-                    self.fit(value, &parameter.ty, &place)
-                } else {
-                    self.fit(given.value, &parameter.ty, &place)
-                };
+                let named = matches!(given.key, Key::Name(_));
+                let value = self.argument_value(given, &parameter.ty, &place);
                 // A `const` parameter given a connection is reported as
                 // one where the call is read (FN-3).
-                if lifted && !parameter.constant && matches!(given.key, Key::Name(_)) {
+                if lifted && !parameter.constant && named {
                     self.configuration_input(form, &parameter.name, &value);
                 }
                 Some(hir::Argument {
@@ -10333,6 +10484,20 @@ impl<'a> Typer<'a> {
             form,
         };
         (kind, result.unwrap_or(Type::Unknown))
+    }
+
+    /// The argument `given` as the value of a parameter of type `ty`,
+    /// fitted to it (EXPR-5). One whose first reading was taken back
+    /// (`retried`) is read again where it stands, as that type: what
+    /// the first reading declared is gone, and the value read again
+    /// declares its own. `place` names the parameter for messages.
+    fn argument_value(&mut self, given: Given, ty: &Type, place: &str) -> Expr {
+        if given.retried {
+            let value = self.expression(&given.node, Some(ty));
+            self.fit(value, ty, place)
+        } else {
+            self.fit(given.value, ty, place)
+        }
     }
 
     /// The call of an operator for which no candidate is selected: its
@@ -13651,7 +13816,11 @@ impl<'a> Typer<'a> {
     /// value is dropped: a statement, or the last expression of a
     /// function that declares no result (FN-7).
     fn flow(&mut self, node: &SyntaxNode, expected: Option<&Type>, used: bool) -> (Expr, Outcome) {
-        match node.kind() {
+        // SOURCE-4: a block or an `if` whose value is used is a value
+        // expression, and a `yield` inside it is reported.
+        let valued = used && matches!(node.kind(), SyntaxKind::Block | SyntaxKind::IfExpr);
+        self.valued += u32::from(valued);
+        let read = match node.kind() {
             SyntaxKind::Block => self.block(node, expected, used),
             SyntaxKind::IfExpr => self.conditional(node, expected, used),
             SyntaxKind::ParenExpr if node.children().next().is_some() => {
@@ -13664,7 +13833,9 @@ impl<'a> Typer<'a> {
                 let ty = value.ty.clone();
                 (value, Outcome::Value(ty))
             }
-        }
+        };
+        self.valued -= u32::from(valued);
+        read
     }
 
     /// CTRL-10: "A block whose last statement is an expression has that
