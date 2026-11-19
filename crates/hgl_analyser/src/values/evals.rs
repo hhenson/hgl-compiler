@@ -510,11 +510,11 @@ impl<'a> Typer<'a> {
             );
         }
         // "Each cell is one cycle's publication": the `delta<T>` of the
-        // result's type. One not known stays so.
+        // result's type, with a tuple's T named. One not known stays so.
         let cell = if open(&call.ty) {
             call.ty.clone()
         } else {
-            Type::delta(call.ty.clone())
+            Type::trace_cell(call.ty.clone())
         };
         let ty = Type::Trace {
             cell: Box::new(cell),
@@ -819,6 +819,7 @@ impl<'a> Typer<'a> {
                         Type::List { .. }
                             | Type::Set(_)
                             | Type::Dict { .. }
+                            | Type::Tuple(_)
                             | Type::Named {
                                 kind: NamedKind::Struct,
                                 ..
@@ -830,9 +831,12 @@ impl<'a> Typer<'a> {
                     // published whole, or a `delta<T>` (TYPE-16),
                     // published as that change. A list, a tuple, a
                     // struct and a dictionary are each written either
-                    // way". A cell's type says which it is. A tuple's
-                    // delta is a tuple of its positions, and a whole
-                    // tuple reads as that.
+                    // way". As a `return` is: "a value that is a T is
+                    // published whole", and one that is no T and is a
+                    // `delta<T>` as that change. So a tuple written
+                    // `(2, null)` of a `tuple<i64, i64?>` is the whole
+                    // tuple, its null a published null, and `(null, 3)`
+                    // of a `tuple<i64, i64>` its delta.
                     Some(self.published(&value, of, "a cell of the trace"))
                 } else {
                     let read = self.expression(&value, Some(cell));
@@ -966,9 +970,10 @@ impl<'a> Typer<'a> {
 /// for a result type T a `list<tuple<datetime, delta<T>>>`, one tuple
 /// for each publication, in time order."
 ///
-/// A value that is a trace becomes that list. A trace's cell is already
-/// the `delta<T>` of what it is of (TST-5). Any other value, one that
-/// holds a trace among them, is as it was.
+/// A value that is a trace becomes that list. A trace's cell is the
+/// `delta<T>` of what it is of (TST-5), a tuple's named by its T
+/// (`Type::trace_cell`), whose delta is formed here. Any other value, one
+/// that holds a trace among them, is as it was.
 pub(super) fn publications(value: hir::Expr) -> hir::Expr {
     let Type::Trace { cell, .. } = &value.ty else {
         return value;
@@ -976,7 +981,7 @@ pub(super) fn publications(value: hir::Expr) -> hir::Expr {
     let ty = Type::List {
         element: Box::new(Type::Tuple(vec![
             Type::Scalar(Scalar::Datetime),
-            (**cell).clone(),
+            Type::cell_delta(cell),
         ])),
         size: None,
     };

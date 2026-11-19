@@ -55,19 +55,22 @@ class _Whole:
     input held" (TST-9), and an expectation's is "compared ... with the
     value the result holds once its cycle has published"."""
 
-    __slots__ = ("value", "fixed")
+    __slots__ = ("value", "fixed", "shape")
 
-    def __init__(self, value, fixed):
+    def __init__(self, value, fixed, shape):
         self.value = value
         self.fixed = fixed
+        self.shape = shape
 
 
-def whole(value, fixed=False):
+def whole(value, fixed=False, shape=None):
     """A trace's cell written as the whole value `value` (TST-5); `fixed`
-    where it is a fixed list's, whose delta is each position's."""
+    where it is a fixed list's, whose delta is each position's; `shape`
+    where it is a tuple's, how hgraph's bundle takes each position (see
+    `_core.bundled`)."""
     # The cell keeps the value it is given: a copy, so that what the
     # program goes on changing does not change the trace (TYPE-5).
-    return _Whole(_core.copied(value), fixed)
+    return _Whole(_core.copied(value), fixed, shape)
 
 
 class _Published:
@@ -165,7 +168,9 @@ def _deltas(cells):
         if isinstance(published, _Published):
             published = published.delta
         if isinstance(published, _Whole):
-            published = _core.whole_delta(published.value, keys, published.fixed, size)
+            published = _core.whole_delta(
+                published.value, keys, published.fixed, size, published.shape
+            )
         if isinstance(published, _hg.TSLDelta):
             size = _core.list_size(size, published)
         if isinstance(published, dict):
