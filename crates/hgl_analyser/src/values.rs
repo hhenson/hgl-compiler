@@ -271,6 +271,22 @@ struct Called<'a> {
     generics: Option<&'a CallArguments>,
 }
 
+/// What a finished call selected, looked up once for the checks
+/// `finished_call` runs ([`Callee::declaration`]).
+struct Selected<'e> {
+    /// The position of the function's or the candidate's module in
+    /// `Program::modules`.
+    module: usize,
+    /// Its position in that module's `declarations`.
+    declaration: usize,
+    /// What each of its generic parameters stands for at the call.
+    generics: &'e [crate::types::Argument],
+    /// Its signature; `None` where what was read of it is none.
+    signature: Option<&'e Signature>,
+    /// The call's arguments, each with the parameter it is given to.
+    arguments: &'e [hir::Argument],
+}
+
 /// What the earlier passes found of a module, each by the file and
 /// offset it is written at. It holds references only, so it is copied
 /// to each `Typer` (`Copy`).
@@ -991,18 +1007,8 @@ impl<'a> Typer<'a> {
         else {
             return false;
         };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            _ => return false,
+        let Some((module, declaration)) = callee.declaration() else {
+            return false;
         };
         let put = Some(module) == self.program.core()
             && self.program.modules[module].declarations[declaration].name == "put";
@@ -5281,13 +5287,35 @@ impl<'a> Typer<'a> {
     /// written by name, with generic arguments, by a symbol, as a link
     /// of a chain `a + b + c`, or by a compound assignment.
     fn finished_call(&mut self, kind: &ExprKind, evaluating: bool) {
-        self.places_given(kind);
+        // A call of a function or a candidate: an operation a
+        // declaration requires has no candidate here, and a call that
+        // is not read no parameters to judge.
+        let selected = match kind {
+            ExprKind::Call {
+                callee, arguments, ..
+            } => callee.declaration().map(|(module, declaration)| Selected {
+                module,
+                declaration,
+                generics: callee.generics(),
+                signature: match self.program.modules[module].details.get(declaration) {
+                    Some(Detail::Callable(signature)) => Some(signature),
+                    _ => None,
+                },
+                arguments,
+            }),
+            _ => None,
+        };
+        let Some(selected) = selected else {
+            self.store_call(kind);
+            return;
+        };
+        self.places_given(&selected);
         self.store_call(kind);
-        self.capabilities_given(kind);
-        self.fixed_arguments(kind);
-        self.traces_given(kind, evaluating);
-        self.store_keys(kind);
-        self.references_given(kind);
+        self.capabilities_given(&selected);
+        self.fixed_arguments(&selected);
+        self.traces_given(&selected, evaluating);
+        self.store_keys(&selected);
+        self.references_given(&selected);
     }
 
     /// FN-9: "A graph injects `global_state` and no other, and uses it
@@ -5340,31 +5368,16 @@ impl<'a> Typer<'a> {
     /// (`argument.place`)." And "A function that declares one is not
     /// lifted (FN-6) ... No argument of such a call is a connection
     /// (`connection.as_constant`)".
-    fn places_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration, generics) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                generics,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                generics,
-                ..
-            } => (*module, *declaration, generics),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
+    fn places_given(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
+            generics,
+            arguments,
+            ..
+        } = selected;
         let program = self.program;
-        let Some(Detail::Callable(signature)) = program.modules[module].details.get(declaration)
-        else {
+        let Some(signature) = selected.signature else {
             return;
         };
         if !signature.parameters.iter().any(|parameter| parameter.var) {
@@ -5547,29 +5560,11 @@ impl<'a> Typer<'a> {
     /// are no keys. A key written out is judged here. One that is a
     /// `const` parameter of the function it is in is known where the
     /// graph is built, which no pass reads yet.
-    fn store_keys(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+    fn store_keys(&mut self, selected: &Selected) {
+        let &Selected {
+            module, arguments, ..
+        } = selected;
+        let Some(signature) = selected.signature else {
             return;
         };
         let Some(store) = self.program.capability_type("global_state") else {
@@ -5627,26 +5622,14 @@ impl<'a> Typer<'a> {
     /// there (TST-16), and is held to the parameter's type where the
     /// argument is read: see `publications`. A value that holds one,
     /// `[seen]`, is given as it is and not held to the parameter's type.
-    fn traces_given(&mut self, kind: &ExprKind, evaluating: bool) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
+    fn traces_given(&mut self, selected: &Selected, evaluating: bool) {
+        let &Selected {
+            module,
+            declaration,
+            arguments,
+            signature,
+            ..
+        } = selected;
         // FN-1: a value function, or a value candidate.
         let value = matches!(
             self.program.modules[module].declarations[declaration]
@@ -5657,12 +5640,13 @@ impl<'a> Typer<'a> {
         if value {
             return;
         }
-        let constant = |index: usize| match self.program.modules[module].details.get(declaration) {
-            Some(Detail::Callable(signature)) => signature
-                .parameters
-                .get(index)
-                .is_some_and(|parameter| parameter.constant),
-            _ => false,
+        let constant = |index: usize| {
+            signature.is_some_and(|signature| {
+                signature
+                    .parameters
+                    .get(index)
+                    .is_some_and(|parameter| parameter.constant)
+            })
         };
         let escaped: Vec<Location> = arguments
             .iter()
@@ -5692,32 +5676,16 @@ impl<'a> Typer<'a> {
     /// connection, is `constants_of`'s. This is the other half: where
     /// values are those of one evaluation, in a hook, a source or a
     /// value function.
-    fn fixed_arguments(&mut self, kind: &ExprKind) {
+    fn fixed_arguments(&mut self, selected: &Selected) {
         if self.graph {
             return;
         }
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+        let &Selected {
+            arguments,
+            signature,
+            ..
+        } = selected;
+        let Some(signature) = signature else {
             return;
         };
         let given: Vec<(Location, String)> = arguments
@@ -5802,31 +5770,13 @@ impl<'a> Typer<'a> {
     /// call or a symbol selected. A capability given to a parameter of
     /// another type written out does not fit it, and is reported as any
     /// value is (EXPR-5).
-    fn capabilities_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee, arguments, ..
-        } = kind
-        else {
-            return;
-        };
-        let (module, declaration) = match callee {
-            Callee::Function {
-                module,
-                declaration,
-                ..
-            }
-            | Callee::Candidate {
-                module,
-                declaration,
-                ..
-            } => (*module, *declaration),
-            // What a requirement's operator selects is not known here,
-            // and a call that is not read has no parameters to judge.
-            Callee::Required { .. } | Callee::Unread => return,
-        };
-        let Some(Detail::Callable(signature)) =
-            self.program.modules[module].details.get(declaration)
-        else {
+    fn capabilities_given(&mut self, selected: &Selected) {
+        let &Selected {
+            arguments,
+            signature,
+            ..
+        } = selected;
+        let Some(signature) = signature else {
             return;
         };
         let mut given: Vec<(Location, String, String)> = Vec::new();
@@ -11818,26 +11768,14 @@ impl<'a> Typer<'a> {
     /// takes none. In a graph a connection given to one is lifted, and
     /// followed (TIME-10). What an endpoint operation is given is the
     /// input's endpoint, and no payload.
-    fn references_given(&mut self, kind: &ExprKind) {
-        let ExprKind::Call {
-            callee:
-                Callee::Function {
-                    module,
-                    declaration,
-                    ..
-                }
-                | Callee::Candidate {
-                    module,
-                    declaration,
-                    ..
-                },
+    fn references_given(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
             arguments,
             ..
-        } = kind
-        else {
-            return;
-        };
-        let role = self.program.modules[*module].declarations[*declaration]
+        } = selected;
+        let role = self.program.modules[module].declarations[declaration]
             .kind
             .role();
         if role != Some(Role::Value) {

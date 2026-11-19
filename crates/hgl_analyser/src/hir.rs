@@ -740,6 +740,39 @@ pub enum Callee {
     Unread,
 }
 
+impl Callee {
+    /// The function or the candidate the call selected: the position of
+    /// its module in `Program::modules` and its position in that
+    /// module's `declarations`. `None` for an operation the enclosing
+    /// declaration requires, whose candidate is selected where it is
+    /// called, and for no callee.
+    pub fn declaration(&self) -> Option<(usize, usize)> {
+        match self {
+            Callee::Function {
+                module,
+                declaration,
+                ..
+            }
+            | Callee::Candidate {
+                module,
+                declaration,
+                ..
+            } => Some((*module, *declaration)),
+            Callee::Required { .. } | Callee::Unread => None,
+        }
+    }
+
+    /// What each generic parameter of the function or the candidate
+    /// selected stands for at this call, in the order declared. Empty
+    /// for a callee that is neither.
+    pub fn generics(&self) -> &[GenericArgument] {
+        match self {
+            Callee::Function { generics, .. } | Callee::Candidate { generics, .. } => generics,
+            Callee::Required { .. } | Callee::Unread => &[],
+        }
+    }
+}
+
 /// What answers a requirement a call's callee states (GEN-16).
 ///
 /// A declaration's requirements are the constraint calls that hold
