@@ -1068,11 +1068,12 @@ struct Made {
     at: Location,
 }
 
-/// How many calls deep an instance is followed from a call that gives
-/// every generic argument. An instance past it makes no more: a
-/// recursion that gives a new argument each time,
-/// `count<N - 1>` in `count<const N: i64>`, makes instances without end.
-const INSTANCES_DEEP: usize = 64;
+/// How many instances are followed in all. A recursion that gives new
+/// arguments each time, `grow<N * 2>` and `grow<N * 2 + 1>` in
+/// `grow<const N: i64>`, makes instances without end; what is past this
+/// many is not told, and is reported where it is called from
+/// (`generic.instance_limit`).
+const INSTANCES: usize = 4096;
 
 /// Tells the `requires` of each instance a call makes.
 ///
@@ -1143,7 +1144,26 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             made_by(constant, &mut given);
         }
     }
-    if passed.is_empty() {
+    // The declarations whose calls reach a `requires` with what they
+    // are given: an instance of any other makes none to tell.
+    let mut reaching: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    loop {
+        let more: Vec<(usize, usize)> = passed
+            .iter()
+            .filter(|(declared, _)| !reaching.contains(*declared))
+            .filter(|(_, calls)| {
+                calls.iter().any(|call| {
+                    required(program, call.callee).is_some() || reaching.contains(&call.callee)
+                })
+            })
+            .map(|(declared, _)| *declared)
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        reaching.extend(more);
+    }
+    if reaching.is_empty() {
         return;
     }
     let tables: Vec<_> = program.modules.iter().map(super::tables).collect();
@@ -1155,9 +1175,44 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
     // Each instance followed once, by what it is: its callee and its
     // arguments.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut waiting: std::collections::VecDeque<(Made, usize)> =
-        given.into_iter().map(|made| (made, 0)).collect();
-    while let Some((made, depth)) = waiting.pop_front() {
+    let mut waiting: std::collections::VecDeque<Made> = given
+        .into_iter()
+        .filter(|made| reaching.contains(&made.callee))
+        .collect();
+    let mut followed = 0;
+    while let Some(made) = waiting.pop_front() {
+        followed += 1;
+        if followed > INSTANCES {
+            // What is not followed is not told, and is not taken to hold
+            // (GEN-3): each call it is made from is reported, once, but
+            // one already rejected for a `requires` (ERR-9: "Do not
+            // demand cascaded diagnostics").
+            let mut from: Vec<Location> = vec![made.at];
+            from.extend(waiting.iter().map(|made| made.at));
+            from.sort_by_key(|at| (at.file, at.span.start));
+            from.dedup();
+            let rejected = |at: &Location| {
+                diagnostics.as_slice().iter().any(|earlier| {
+                    earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+                        && earlier.primary.file == at.file
+                        && earlier.primary.span.start == at.span.start
+                })
+            };
+            from.retain(|at| !rejected(at));
+            for at in from {
+                diagnostics.emit(crate::local_error(
+                    Category::Constraint,
+                    codes::local::INSTANCE_LIMIT,
+                    at,
+                    format!(
+                        "this call makes more than {INSTANCES} instances, and the `requires` \
+                         of those past them are not told"
+                    ),
+                    "GEN-3",
+                ));
+            }
+            return;
+        }
         let Some(inner) = passed.get(&made.callee) else {
             continue;
         };
@@ -1173,6 +1228,19 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             let (module, declaration) = call.callee;
             let unit = &program.modules[module];
             let (bindings, written, calls) = &tables[module];
+            if required(program, call.callee).is_none() {
+                if reaching.contains(&call.callee) {
+                    let key = format!("{:?}{generics:?}", call.callee);
+                    if seen.insert(key) {
+                        waiting.push_back(Made {
+                            callee: call.callee,
+                            generics,
+                            at: made.at,
+                        });
+                    }
+                }
+                continue;
+            }
             let mut typer = super::Typer::bare(
                 program,
                 unit,
@@ -1187,15 +1255,12 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
             );
             typer.instance_met((made.at, call.at), call.callee, &generics);
             let key = format!("{:?}{generics:?}", call.callee);
-            if depth < INSTANCES_DEEP && seen.insert(key) {
-                waiting.push_back((
-                    Made {
-                        callee: call.callee,
-                        generics,
-                        at: made.at,
-                    },
-                    depth + 1,
-                ));
+            if reaching.contains(&call.callee) && seen.insert(key) {
+                waiting.push_back(Made {
+                    callee: call.callee,
+                    generics,
+                    at: made.at,
+                });
             }
         }
     }

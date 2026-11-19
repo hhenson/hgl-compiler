@@ -1162,6 +1162,30 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
     );
 }
 
+/// The instances a call makes are followed only where they reach a
+/// `requires`, and no further than this compiler follows: what is past
+/// that is not told, which is reported (local `generic.instance_limit`)
+/// and not taken to hold (GEN-3). Two calls of itself at each level, with
+/// new arguments each time, make instances without end.
+#[test]
+fn the_instances_a_call_makes_are_followed_within_a_bound() {
+    let shared = concat!(
+        "const fn need<const N: i64>(v: i64) -> i64 requires N in {1, 2, 3} => v\n",
+        "const fn grow<const N: i64>(v: i64) -> i64 => need<N>(v) + grow<N * 2>(v) + grow<N * 2 + 1>(v)\n",
+        "const fn free<const N: i64>(v: i64) -> i64 => free<N * 2>(v) + free<N * 2 + 1>(v)\n",
+        "const fn every<const N: i64>(v: i64) -> i64 requires N == N => v\n",
+        "const fn spin<const N: i64>(v: i64) -> i64 => every<N>(v) + spin<N * 2>(v) + spin<N * 2 + 1>(v)\n",
+    );
+    expect(&format!("{shared}const fn a() -> i64 => free<1>(1)\n"), &[]);
+    expect(
+        &format!(
+            "{shared}const fn a() -> i64 => grow<1>(1)\n\
+             const fn b() -> i64 => spin<1>(1)\n"
+        ),
+        &["7 requires.unmet", "8 generic.instance_limit"],
+    );
+}
+
 /// GEN-3: a `requires` "may use type/category membership, equalities,
 /// the membership of a constant in a set of constants": of two generic
 /// value parameters too, `N == M` and `N in {M, 5}`, each told by the one

@@ -497,15 +497,21 @@ pub mod codes {
         /// constant failures reject"). Local: the catalogue has no row
         /// for it.
         pub const CONSTANT_FAILURE: &str = "constant.failure";
+        /// A call makes more instances of generic functions than this
+        /// compiler follows to tell the `requires` they hold (GEN-3).
+        /// What is past that many is not told, and not taken to hold.
+        /// Local: the language sets no limit.
+        pub const INSTANCE_LIMIT: &str = "generic.instance_limit";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 6] = [
+        pub const ALL: [&str; 7] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
             SWITCH_LABEL_CONSTANT,
             CONSTANT_FAILURE,
+            INSTANCE_LIMIT,
         ];
     }
 }
