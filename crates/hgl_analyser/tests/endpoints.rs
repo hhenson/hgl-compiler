@@ -18,6 +18,7 @@ const NONE: [&str; 0] = [];
 const CORE: &str = concat!(
     "module core\n",
     "export native const fn valid<T>(input: endpoint<T>) -> bool\n",
+    "export native const fn all_valid<T>(input: endpoint<T>) -> bool\n",
     "export native const fn modified<T>(input: endpoint<T>) -> bool\n",
     "export native const fn delta_value<T>(input: endpoint<T>) -> T\n",
     "export native const fn last_modified<T>(input: endpoint<T>) -> datetime?\n",
@@ -323,4 +324,33 @@ fn the_spelling_is_active_alone_does_not_make_an_endpoint_query() {
         ),
     ]);
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
+}
+
+/// TIME-9: "`all_valid` is true where every one is, by its own `valid`,
+/// one level deep ... `all_valid` takes only a collection; another
+/// endpoint is rejected (`endpoint.argument`)." A collection is "a
+/// list, a tuple, a struct and a dictionary". A test of it, as one of
+/// `valid`, guards the payload it reads (TIME-4).
+#[test]
+fn all_valid_takes_a_collection_and_guards_it() {
+    let checked = module(concat!(
+        "struct Quote {\n    bid: f64\n    ask: f64\n}\n",
+        "fn spread(quote: Quote) -> f64 {\n",
+        "    when all_valid(quote) { return quote.ask - quote.bid }\n",
+        "}\n",
+        "fn sized(pair: list<i64, 2>, rows: list<i64>, parts: tuple<i64, i64>,\n",
+        "         table: dict<str, i64>) -> bool {\n",
+        "    when valid([]) {\n",
+        "        return all_valid(pair) && all_valid(rows) && all_valid(parts)\n",
+        "            && all_valid(table)\n",
+        "    }\n",
+        "}\n",
+        "fn scalar(price: f64) -> bool {\n",
+        "    when valid([]) { return all_valid(price) }\n",
+        "}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        ["m.hgl:17:39 phase/endpoint.argument TIME-9"]
+    );
 }

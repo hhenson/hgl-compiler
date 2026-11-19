@@ -1969,6 +1969,9 @@ impl Emitter<'_> {
         }
         // TIME-7: "`inject out` exposes that same result": hgraph's own
         // `_output`, which it gives the node and its `stop`.
+        // An unsized list's delta is applied to what the node last
+        // published (see `bundled`), which it reads from `_output`.
+        let has_out = has_out || signature.result.as_ref().is_some_and(growing_list);
         let output = has_out.then(|| {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
@@ -2191,16 +2194,6 @@ impl Emitter<'_> {
             if valid.len() != inputs.len() && !handlers.is_empty() {
                 options.push(format!("valid={}", names(&valid)));
             }
-            // A fixed list is valid once each of its positions is
-            // (`validity`): hgraph's `all_valid`.
-            let ready: Vec<usize> = valid
-                .iter()
-                .copied()
-                .filter(|&local| validity(&body.locals[local].ty) == "all_valid")
-                .collect();
-            if !ready.is_empty() && !handlers.is_empty() {
-                options.push(format!("all_valid={}", names(&ready)));
-            }
         }
         let decorator = if result.is_some() {
             "compute_node"
@@ -2263,8 +2256,7 @@ impl Emitter<'_> {
             }
             for &local in &handler.required {
                 if !valid.contains(&local) {
-                    let validity = validity(&body.locals[local].ty);
-                    guards.push(format!("{}.{validity}", endpoint(local)));
+                    guards.push(format!("{}.valid", endpoint(local)));
                 }
             }
             for condition in &handler.conditions {
@@ -4118,7 +4110,9 @@ impl Emitter<'_> {
                     Mode::Stop => {
                         matches!(
                             operation,
-                            EndpointOperation::Valid | EndpointOperation::LastModified
+                            EndpointOperation::Valid
+                                | EndpointOperation::AllValid
+                                | EndpointOperation::LastModified
                         ) || (endpoint.kind != LocalKind::Inject
                             && matches!(
                                 operation,
@@ -4139,9 +4133,18 @@ impl Emitter<'_> {
                     name(&endpoint.name)
                 };
                 match operation {
-                    EndpointOperation::Valid => {
-                        format!("{input}.{}", validity(&endpoint.ty))
+                    // TIME-9, END-7: "`valid` of a collection is true where any
+                    // element, field or entry is valid", as hgraph's
+                    // `valid` of a `TSL`, a `TSB` and a `TSD` is.
+                    EndpointOperation::Valid => format!("{input}.valid"),
+                    // TIME-9: "`all_valid` is true where every one is, by
+                    // its own `valid`, one level deep": hgraph's
+                    // `all_valid`. An unsized list ticks whole here
+                    // (`list_annotation`): it is valid with each element.
+                    EndpointOperation::AllValid if growing_list(&endpoint.ty) => {
+                        format!("{input}.valid")
                     }
+                    EndpointOperation::AllValid => format!("{input}.all_valid"),
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta." hgraph's own
                     // `modified` of an input in the cycle it is
@@ -4158,17 +4161,17 @@ impl Emitter<'_> {
                     EndpointOperation::Activate => format!("{input}.make_active()"),
                     EndpointOperation::Passivate => format!("{input}.make_passive()"),
                     EndpointOperation::IsActive => format!("{input}.active"),
-                    // TYPE-16: a list's delta is "`dict<i64, delta<V>>`:
-                    // for each position that changed". An unsized list
-                    // here ticks whole (`list_annotation`), and does not
-                    // say which positions changed.
+                    // TYPE-16: a list's delta has `updated`, `removed` and
+                    // `size_modified`. An unsized list here ticks whole
+                    // (`list_annotation`), and does not say which
+                    // positions changed.
                     EndpointOperation::DeltaValue if growing_list(&endpoint.ty) => {
                         self.unsupported(value.at, "the delta of an unsized list");
                         "None".to_string()
                     }
                     // END-3: what the input published this cycle. A
                     // fixed list's is hgraph's `dict` of each position
-                    // that changed, as TYPE-16's is, and a dictionary's
+                    // that changed, its `updated` (see `list_delta`), and a dictionary's
                     // hgraph's `dict` of each key changed, with `REMOVE`
                     // for each removed (see `dict_delta`).
                     EndpointOperation::DeltaValue => format!("{input}.delta_value"),
@@ -4422,6 +4425,32 @@ impl Emitter<'_> {
                 // TYPE-16: a dictionary's delta has `updated` and
                 // `removed`, read through the provider from hgraph's
                 // `dict` of both (see `delta`).
+                // TYPE-16: a list's delta has `updated`, `removed` and
+                // `size_modified` (see `list_delta`). hgraph's bounded
+                // `TSL` does not report a position that became invalid,
+                // so a fixed list's `removed` is not read; its size
+                // does not move, so its `size_modified` is null.
+                if let Type::Delta(of) = &base.ty
+                    && let Type::List { size, .. } = &**of
+                {
+                    let read = match (*member, size) {
+                        (0, _) => "updated",
+                        (1, None) => "removed",
+                        (2, None) => "size_modified",
+                        (2, Some(_)) => return "None".to_string(),
+                        _ => {
+                            self.unsupported(
+                                value.at,
+                                "the `removed` of a fixed list's delta: hgraph's bounded `TSL` \
+                                 does not report a position that became invalid",
+                            );
+                            return "None".to_string();
+                        }
+                    };
+                    self.natives = true;
+                    let base = self.expression(function, base);
+                    return format!("_core.{read}({base})");
+                }
                 if matches!(&base.ty, Type::Delta(of) if matches!(**of, Type::Dict { .. })) {
                     let read = if *member == 0 { "updated" } else { "removed" };
                     self.natives = true;
@@ -5634,13 +5663,22 @@ impl Emitter<'_> {
         if !matches!(function.mode, Mode::Node | Mode::Source) {
             return written;
         }
-        // TYPE-16: a list's delta is "`dict<i64, delta<V>>`: for each
-        // position that changed", and an unsized list is a whole tuple
-        // here (`list_annotation`), which takes no position's change.
+        // TYPE-16: a list's delta has `updated`, `removed` and
+        // `size_modified`. An unsized list is a whole tuple here
+        // (`list_annotation`): the provider applies the delta to the
+        // list the node last published, its `_output` (see
+        // `list_applied`), and publishes the whole list made.
         if let Some(result) = result
             && growing_list(result)
             && result != &value.ty
         {
+            // A source's generator has no `_output` to apply it to.
+            if function.mode == Mode::Node
+                && matches!(&value.ty, Type::Delta(of) if growing_list(of))
+            {
+                self.natives = true;
+                return format!("_core.list_applied(_output, {written})");
+            }
             self.unsupported(value.at, "a delta published to an unsized list");
             return written;
         }
@@ -5959,7 +5997,6 @@ impl Emitter<'_> {
         // makes.
         let mut parameters = Vec::new();
         let mut required = Vec::new();
-        let mut all_valid = Vec::new();
         let mut inputs = 0;
         let mut passed = Vec::new();
         for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -5974,21 +6011,14 @@ impl Emitter<'_> {
                     // What the input holds, a struct's value made
                     // from its bundle's fields (TYPE-9).
                     let read = self.port_value(ty, &python);
-                    // Core: a "Fixed-size list ... has not met its type's
-                    // readiness contract" until each position is valid,
-                    // and "lifting does not admit unreadable required
-                    // data": hgraph's `all_valid` of it.
-                    let valid = validity(ty);
-                    let fixed = valid == "all_valid";
+                    // FN-12: "A fixed-size list is valid as any list is
+                    // (TIME-9)": hgraph's `valid` of it.
                     match self.left_out(target, index, parameter) {
                         Some(fallback) => passed.push(format!(
-                            "{python}=({read} if {python}.{valid} else {fallback})"
+                            "{python}=({read} if {python}.valid else {fallback})"
                         )),
                         None => {
                             passed.push(format!("{python}={read}"));
-                            if fixed {
-                                all_valid.push(python.clone());
-                            }
                             required.push(python);
                         }
                     }
@@ -6030,9 +6060,6 @@ impl Emitter<'_> {
         let mut options = Vec::new();
         if required.len() != inputs {
             options.push(format!("valid={}", tuple(&required)));
-        }
-        if !all_valid.is_empty() {
-            options.push(format!("all_valid={}", tuple(&all_valid)));
         }
         let options = if options.is_empty() {
             String::new()
@@ -6595,6 +6622,38 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.dict_delta({})", written.join(", "));
         }
+        // TYPE-16: a list's delta has "`updated`, each changed position
+        // with its delta; `removed`, the positions that lost their
+        // value ... and `size_modified`". The provider makes it as
+        // hgraph's delta of a `TSL`, a `dict` of each position updated,
+        // which holds the other two (see `list_delta`). hgraph's bounded
+        // `TSL` takes no removed position and no size.
+        if let Type::Delta(of) = &value.ty
+            && let Type::List { size, .. } = &**of
+        {
+            const PROPERTIES: [&str; 3] = ["updated", "removed", "size_modified"];
+            let mut written = Vec::new();
+            for argument in arguments {
+                let given = self.expression(function, &argument.value);
+                let Some(index) = argument.parameter.filter(|index| *index < PROPERTIES.len())
+                else {
+                    continue;
+                };
+                if size.is_some() && index > 0 {
+                    self.unsupported(
+                        argument.value.at,
+                        &format!(
+                            "the `{}` of a fixed list's delta: hgraph's bounded `TSL` takes no \
+                             removed position and no size",
+                            PROPERTIES[index]
+                        ),
+                    );
+                }
+                written.push(format!("{}={given}", PROPERTIES[index]));
+            }
+            self.natives = true;
+            return format!("_core.list_delta({})", written.join(", "));
+        }
         let element = match &value.ty {
             Type::Delta(of) => match &**of {
                 Type::Set(element) => Some(&**element),
@@ -6605,7 +6664,7 @@ impl Emitter<'_> {
         let Some(element) = element else {
             self.unsupported(
                 value.at,
-                "a delta that is not a set's, a nullable's, a dictionary's or a struct's",
+                "a delta that is not a set's, a list's, a nullable's, a dictionary's or a struct's",
             );
             return "None".to_string();
         };
@@ -7082,18 +7141,6 @@ fn publishes_whole(ty: &Type) -> bool {
             ..
         } => true,
         other => scalar(other).is_some(),
-    }
-}
-
-/// The attribute of hgraph's input of a temporal `ty` that says it is
-/// valid. Core: a "Fixed-size list ... has not met its type's readiness
-/// contract" until each position is valid, so a fixed list's is
-/// `all_valid`; any other's is `valid`.
-fn validity(ty: &Type) -> &'static str {
-    if matches!(ty, Type::List { size: Some(_), .. }) {
-        "all_valid"
-    } else {
-        "valid"
     }
 }
 

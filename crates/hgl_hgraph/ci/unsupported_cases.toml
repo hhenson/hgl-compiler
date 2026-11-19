@@ -6,3 +6,7 @@
 "the candidate `mul_(str, i64)`" = [
     "core_implementation::reverse_scaling",
 ]
+# A tuple as a temporal type, a `TSL` of its positions, is not written yet.
+"the type `tuple<i64, i64>`" = [
+    "conformance::a_tuple_is_valid_once_one_position_is_and_all_valid_once_both_are",
+]
