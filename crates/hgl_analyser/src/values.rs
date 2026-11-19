@@ -261,6 +261,9 @@ pub(crate) fn check(program: &mut Program, diagnostics: &mut Diagnostics) {
         program.modules[index].store_body = store_body;
         program.modules[index].defaults = defaults;
     }
+    // GEN-3: a `requires` not told where a call passes on a generic
+    // parameter of its own is told where each call gives that one.
+    requirements::instances_hold(program, diagnostics);
 }
 
 /// What the earlier passes found of `module`, by where each is written:
@@ -482,7 +485,38 @@ impl<'a> Typer<'a> {
         tables: Tables<'a>,
         diagnostics: &'a mut Diagnostics,
     ) -> Typer<'a> {
-        let mut typer = Typer {
+        let mut typer = Typer::bare(program, module, declaration, signature, tables, diagnostics);
+        for parameter in &signature.parameters {
+            // What a pack holds is for the pass that reads calls.
+            let ty = match parameter.pack {
+                Some(_) => Type::Unknown,
+                None => parameter.ty.clone(),
+            };
+            // FN-15: "In the function the parameter is a `var`, whose
+            // first value is the place's".
+            let kind = if parameter.var {
+                LocalKind::Var
+            } else {
+                LocalKind::Parameter
+            };
+            typer.declare(&parameter.name, parameter.at, kind, ty, true);
+        }
+        typer.applications();
+        typer
+    }
+
+    /// A reader that has declared nothing and checked nothing: for what
+    /// is asked of the typed program as a whole, the `requires` of each
+    /// instance a call makes ([`requirements::instances_hold`]).
+    fn bare(
+        program: &'a Program,
+        module: &'a Module,
+        declaration: &'a Declaration,
+        signature: &'a Signature,
+        tables: Tables<'a>,
+        diagnostics: &'a mut Diagnostics,
+    ) -> Typer<'a> {
+        Typer {
             program,
             module,
             file: module.files[declaration.file].file,
@@ -522,24 +556,7 @@ impl<'a> Typer<'a> {
             candidates: HashMap::new(),
             constants: Default::default(),
             diagnostics,
-        };
-        for parameter in &signature.parameters {
-            // What a pack holds is for the pass that reads calls.
-            let ty = match parameter.pack {
-                Some(_) => Type::Unknown,
-                None => parameter.ty.clone(),
-            };
-            // FN-15: "In the function the parameter is a `var`, whose
-            // first value is the place's".
-            let kind = if parameter.var {
-                LocalKind::Var
-            } else {
-                LocalKind::Parameter
-            };
-            typer.declare(&parameter.name, parameter.at, kind, ty, true);
         }
-        typer.applications();
-        typer
     }
 
     fn at(&self, node: &SyntaxNode) -> Location {

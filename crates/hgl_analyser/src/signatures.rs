@@ -25,6 +25,7 @@ use crate::{codes, error};
 
 /// Checks the signature of every callable of the program.
 pub(crate) fn check(program: &Program, diagnostics: &mut Diagnostics) {
+    constant_failures(program, diagnostics);
     generic_defaults(program, diagnostics);
     option_kinds(program, diagnostics);
     var_parameters(program, diagnostics);
@@ -215,6 +216,61 @@ fn var_parameters(program: &Program, diagnostics: &mut Diagnostics) {
 /// constant a `requires` compares a generic value parameter with is a
 /// value of that parameter's type too (EXPR-5): `requires mode == 1` of
 /// an enum's `mode` rejects.
+/// Reports each module constant whose evaluation fails where the
+/// compiler works it out: `const BIG: i64 = 9223372036854775807 + 1`
+/// (NUM-2), `const DIV: i64 = 1 // 0` (NUM-12). UNIT-13: "a failure in
+/// evaluating it is a required-constant failure (ERR-9)", and ERR-9:
+/// "Required constant failures reject where specified". Where it is
+/// read, it says nothing more.
+fn constant_failures(program: &Program, diagnostics: &mut Diagnostics) {
+    let everywhere: HashMap<(FileId, u32), &Binding> = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.uses)
+        .map(|used| ((used.at.file, used.at.span.start), &used.binding))
+        .collect();
+    let binding = |file: FileId, offset: u32| everywhere.get(&(file, offset)).copied();
+    let constants = Constants::default();
+    for (index, module) in program.modules.iter().enumerate() {
+        for (position, declaration) in module.declarations.iter().enumerate() {
+            if declaration.kind != DeclarationKind::Constant {
+                continue;
+            }
+            let file = module.files[declaration.file].file;
+            let scope = Scope {
+                program,
+                file,
+                binding: &binding,
+                parameter: &|_| None,
+                constants: &constants,
+            };
+            if !crate::constant::fails_to_evaluate(&scope, (index, position)) {
+                continue;
+            }
+            // The expression: the child that is not the written type.
+            let written = crate::read::type_child(&declaration.syntax);
+            let Some(expression) = declaration
+                .syntax
+                .children()
+                .find(|child| Some(child) != written.as_ref())
+            else {
+                continue;
+            };
+            diagnostics.emit(crate::local_error(
+                Category::Type,
+                codes::local::CONSTANT_FAILURE,
+                Location::new(file, expression.span()),
+                format!(
+                    "evaluating `{}` fails: an operation in it is out of its type's range, \
+                     or divides by zero",
+                    declaration.name
+                ),
+                "UNIT-13",
+            ));
+        }
+    }
+}
+
 fn generic_defaults(program: &Program, diagnostics: &mut Diagnostics) {
     let everywhere: HashMap<(FileId, u32), &Binding> = program
         .modules
