@@ -53,7 +53,8 @@ transpiler: partial
 - In a node that injects one, a handler with no `modified` selector is guarded by an input's wake: one published or was invalidated
 - `scheduled()` under a negation or in a disjunction sets nothing: the handler keeps the defaults, is run by an input's wake and not by a wake of the scheduler or alarm alone, and requires every input valid
 - In a node that injects neither, a handler that subscribes to no input is never run, and not written: a node no handler of which subscribes to an input is `active=()`, and one with no input is given one that never wakes it
-- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` read as a bool, in a body or under a negation or a disjunction, which TIME-3 has true in a cycle where no temporal input was modified, and in the body of a handler that selects it true at a wake that lands with an input's tick too, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
+- `modified([])` read as a bool is `True` in the body of a handler whose header selects it, at a wake that lands with an input's tick too; elsewhere, in another body or under a negation or a disjunction, it is that no temporal input is modified as `modified(input)` asks it, `(not ((a.modified and a.valid) or ...))`, so an invalidation is none and a `ref` parameter is modified where its designation changed, and `True` in a node with no input
+- Left: `modified([])` beside a `modified` selector that names inputs, which is reported: the rule does not say what the two ask together; `modified([])` in `start` or `stop`, which are no cycle of the node, and is reported; `valid` or `modified` with no argument or with several, as a bool under a negation or in a disjunction
 
 ## TIME-4
 
@@ -128,6 +129,7 @@ analyser: partial
 - `inject` names one of the listed capabilities and binds each but `out` to a local of the type core declares for it; `alarm` and `scheduler` in one node are rejected (`inject.alarm_and_scheduler`)
 - A capability type written other than as the whole type of a parameter of a `const fn` or a native value function, and a capability that is the value of a `state` or `cache`, an entry of a tuple, list, set, dictionary or struct, returned, or published, is rejected (`capability.as_value`); a `let` and an argument of a parameter of its type are uses, one given to a parameter written as a generic parameter or `any` is rejected (hhenson/hgl_spec#73), and a property is read with its type (NATIVE-6)
 - A capture by an anonymous function is reported: of the injected name by the resolver (`name.captured`, FN-14), and of a `let` it is bound to or a parameter of its type here
+- A wake asked of the scheduler or the alarm, a call of core's `schedule`, with a duration the compiler sees, a literal, a constant or a constant expression of them, that is not more than zero rejects (`schedule.non_positive_duration`, proposed): in `start` a negative one, and in a `when` or `stop` zero too; in a value function given the capability a negative one, and a zero is left to the target, since the rule does not say whether a call there is in `start`
 
 transpiler: partial
 
@@ -136,7 +138,8 @@ transpiler: partial
 - `inject scheduler` and `inject alarm` are both hgraph's `SCHEDULER`: it has one for a node, and no cheaper one; given to a function or bound to a `let` it is passed as it is
 - A source injects neither (SOURCE-1)
 - A zero duration asked of the scheduler or the alarm in `start` wakes the node's first evaluation, and a wake asked for at a `datetime` before the evaluation time is dropped, with no failure
-- Left, reported: a wake asked for outside `start` with a duration that may not be more than zero, a literal or one the node reads as it runs, which TIME-8 rejects or fails (`schedule.non_positive_duration`, proposed)
+- A wake's duration that the target does not work out, an input, a local or a `const` parameter, is checked as the program runs, by the provider's `schedule` once every argument is evaluated (`_starting=`): one not more than zero fails the call with `schedule.non_positive_duration`, but a zero in `start`; hgraph 0.9.5 drops such a wake with no failure
+- Left, reported: a wake asked for in a value function with a duration that may be zero, anything but one the target works out to be more than zero, a literal, a constant or core's `+`, `-` and `*` by an `i64` of those, since the rule does not say whether a call there is in `start`
 
 ## TIME-9
 
@@ -147,10 +150,11 @@ analyser: partial
 - Core declares the endpoint operations, including `delta_value` (UNIT-12)
 - `scheduled()` in a node that injects neither `scheduler` nor `alarm` is `inject.no_scheduler`: in a hook, a `state`'s or a `cache`'s initialiser, and a source's body (SOURCE-1)
 - `scheduled()` in a value function, a graph or a test, which is no node, is local `scheduled.outside_node` (FN-9): the catalogue has no row for it
+- `scheduled()` in `start` or `stop` is `scheduled.lifecycle`, wherever it stands in the hook, beside `inject.no_scheduler` in a node that injects neither
 - `is_active`, `activate` and `passivate` take only a direct temporal input, and `all_valid` only a list, tuple, struct, dictionary or window (`endpoint.argument`); a test of `all_valid` guards as one of `valid` does
 - The core function `is_active` resolves by its declaration and returns a `bool` in a handler or in stop
 - In a guard it sets neither subscription nor validity
-- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in `start` and `stop` (`scheduled.lifecycle`), and in the initialiser of a node that injects one, which the rule does not place
+- Left: which place a selector stands in; an operator's candidate with an `endpoint<T>` parameter; that an endpoint is not retained; `scheduled()` in the initialiser of a node that injects one, which the rule does not place
 
 transpiler: partial
 
@@ -159,9 +163,8 @@ transpiler: partial
 - Under a negation, in a disjunction and in a handler's body `scheduled()` is that bool, read once where the node is entered (`_timer_woke`): a handler that asks again under the tag that is due leaves it true, and `scheduler.is_scheduled_now` with it (CAP-4)
 - The endpoint operations are the input's own properties: `valid` of a struct is hgraph's `valid`, true once any child is, and `all_valid` hgraph's `all_valid`
 - Where a list, fixed or unsized, is in the value, `valid` and `all_valid` are the provider's (`_core.valid_of`, `_core.all_valid_of`): hgraph's `TSL` stays valid once every position has lost its value or a size alone has grown it, where the language's list is not; a handler's and a lifted helper's admission of such an input is too
-- `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4)
+- `is_scheduled_now` stays true for the rest of a wake after `un_schedule` or `reset` in it (CAP-4), read as the property, by a function given the scheduler, and as `scheduled()` in a body and in a later handler: hgraph 0.9.5's own is false once the wake due is cancelled
 - A window's `valid` and `all_valid` are the `TSW`'s, of ticks and of a duration (TYPE-11)
-- Left: `scheduled()` in `start` and `stop`, where no wake is due and the rule does not say what it is
 - `all_valid` asks no optional child, a `T?` or a field TYPE-4 makes optional, a generic one given a `T?` among them: of a struct or a tuple with one, the provider asks the others (`_core.all_valid_of`), and of one whose every child is optional, a list or a dictionary of a `T?` among them, it is the value's `valid`
 
 ## TIME-10

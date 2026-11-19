@@ -152,6 +152,7 @@ pub(crate) fn module(
         unrolling: 0,
         results: Vec::new(),
         scheduled: None,
+        empty_selected: false,
         designated: Vec::new(),
         candidates: BTreeSet::new(),
         propagates: false,
@@ -433,6 +434,10 @@ struct Emitter<'a> {
     /// woke the node is held under where the node is entered. `None`
     /// elsewhere, `start` and `stop` among them.
     scheduled: Option<String>,
+    /// True while the body of a handler whose header selects
+    /// `modified([])` is written: there it is true (TIME-3, "what the
+    /// header selected is taken as nothing modified").
+    empty_selected: bool,
     /// While the `when`s of a node with a `ref` result are written, each
     /// input it designates and the Python name of the `REF` input the
     /// provider's `Designation` reads it through (FN-16,

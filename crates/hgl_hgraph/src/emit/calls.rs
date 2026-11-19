@@ -4,6 +4,8 @@
 //! an eval or a run of the harness. Part of the transpiler, the last
 //! stage: `emit` writes a module with them.
 
+use std::collections::HashMap;
+
 use super::*;
 
 impl<'a> Emitter<'a> {
@@ -15,59 +17,139 @@ impl<'a> Emitter<'a> {
         (Some(module) == self.program.core() && provides(&python)).then_some(python)
     }
 
-    /// Reports a wake asked of the scheduler or the alarm, a call of
-    /// core's `schedule` (CAP-4, CAP-5), with a duration that may not be
-    /// more than zero outside `start`. TIME-8: "A wake asked for with a
+    /// The argument that has a call of core's `schedule` (CAP-4, CAP-5)
+    /// check the duration it is given as the program runs, `_starting=`
+    /// and whether the call is written in `start`; `None` where it checks
+    /// none. TIME-8: "A wake asked for with a
     /// `duration` takes one more than zero, but in `start`, which takes
-    /// zero too ... A duration that is not admitted ... rejects where the
-    /// compiler sees its value ... and elsewhere fails the call as the
-    /// program runs." Neither is written yet, so a duration there that is
-    /// a literal of no more than zero, or that reads what the node holds
-    /// as it runs, an input, a local or a state, is reported. One made of
-    /// literals, constants and `const` parameters, its configuration, is
-    /// not: its value is the program's to keep more than zero.
-    fn wake_durations(
+    /// zero too ... A duration that is not admitted, a negative one in
+    /// `start` included, rejects where the compiler sees its value, a
+    /// literal or a constant (UNIT-13), and elsewhere fails the call as
+    /// the program runs."
+    ///
+    /// In a hook a duration whose value this target works out
+    /// (`known_duration`) and that is admitted there is given as it is;
+    /// for any other the provider's function checks it (`_wake_delay`),
+    /// once every argument of the call is evaluated (EXPR-2), and fails
+    /// the call where it is not admitted. One that is worked out
+    /// and not admitted is what an instance gives a generic value
+    /// parameter, which the analyser did not see. A value function is
+    /// given the capability by a parameter, and whether a zero there is
+    /// "in `start`" the rule does not say: a duration there that may be
+    /// zero, any but one worked out to be more than zero, is reported.
+    fn wake_duration(
         &mut self,
         function: &Function,
         callee: (usize, usize),
         signature: &Signature,
         arguments: &[Argument],
-    ) {
+    ) -> Option<String> {
         let program = self.program;
         if Some(callee.0) != program.core()
             || program.modules[callee.0].declarations[callee.1].name != "schedule"
-            || function.mode == Mode::Lifecycle
         {
-            return;
+            return None;
         }
-        for argument in arguments {
-            let duration = argument
-                .parameter
-                .and_then(|index| signature.parameters.get(index))
-                .is_some_and(|parameter| parameter.ty == Type::Scalar(Scalar::Duration));
-            let not_positive = matches!(
-                argument.value.kind,
-                ExprKind::Literal(Value::Duration(micros)) if micros <= 0
-            );
-            let mut runtime = false;
-            argument.value.walk(&mut |part| {
-                if let ExprKind::Local(local) = part.kind {
-                    let declared = &function.locals[local];
-                    let configuration = declared.kind == LocalKind::Parameter
-                        && function.signature.is_some_and(|own| {
-                            own.parameters.iter().any(|parameter| {
-                                parameter.name == declared.name && parameter.constant
-                            })
-                        });
-                    runtime |= !configuration;
-                }
-            });
-            if duration && (not_positive || runtime) {
-                self.unsupported(
-                    argument.value.at,
-                    "a wake asked for with a duration that may not be more than zero (TIME-8)",
-                );
+        let given = arguments.iter().find_map(|argument| {
+            let parameter = signature.parameters.get(argument.parameter?)?;
+            (parameter.ty == Type::Scalar(Scalar::Duration)).then_some(&argument.value)
+        })?;
+        let known = self.known_duration(given, &mut HashMap::new());
+        match function.mode {
+            Mode::Node | Mode::Stop | Mode::Lifecycle => {
+                let starting = function.mode == Mode::Lifecycle;
+                let admitted = known.is_some_and(|micros| micros > 0 || (micros == 0 && starting));
+                let starting = if starting { "True" } else { "False" };
+                (!admitted).then(|| format!("_starting={starting}"))
             }
+            _ => {
+                if !known.is_some_and(|micros| micros > 0) {
+                    self.unsupported(
+                        given.at,
+                        "a wake asked for with a duration that may be zero in a value function \
+                         (TIME-8)",
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    /// The value of `value` in microseconds, where it is a duration this
+    /// target works out from how it is written: a literal, a constant
+    /// followed to what it is written as, and core's `-value`, `+` and
+    /// `-` of two of them and `*` of one by an `i64` literal (OPS-1), with
+    /// checked arithmetic. `None` for any other: a local, a call of
+    /// another function, one that overflows. The analyser has rejected a
+    /// constant that depends on itself (`constant.cycle`), so a chain of
+    /// constants ends. `known` holds what each constant, by its module
+    /// and declaration, came to, so that one named many times, `D0 + D0`,
+    /// is worked out once.
+    fn known_duration(
+        &self,
+        value: &Expr,
+        known: &mut HashMap<(usize, usize), Option<i64>>,
+    ) -> Option<i64> {
+        let program = self.program;
+        match &value.kind {
+            ExprKind::Literal(Value::Duration(micros)) => Some(*micros),
+            ExprKind::Constant {
+                module,
+                declaration,
+            } => {
+                if let Some(value) = known.get(&(*module, *declaration)) {
+                    return *value;
+                }
+                let value = match program.modules[*module].constants.get(*declaration) {
+                    Some(Some(constant)) => self.known_duration(constant, known),
+                    _ => None,
+                };
+                known.insert((*module, *declaration), value);
+                value
+            }
+            ExprKind::Call {
+                callee, arguments, ..
+            } => {
+                let (module, declaration) = callee.declaration()?;
+                if Some(module) != program.core() {
+                    return None;
+                }
+                // An operand that is a duration, or an `i64` literal.
+                let mut operand =
+                    |argument: &Argument| match (&argument.value.ty, &argument.value.kind) {
+                        (Type::Scalar(Scalar::Duration), _) => self
+                            .known_duration(&argument.value, known)
+                            .map(Operand::Duration),
+                        (Type::Scalar(Scalar::I64), ExprKind::Literal(Value::Int(count))) => {
+                            Some(Operand::Count(*count))
+                        }
+                        _ => None,
+                    };
+                // In the order of the parameters, however they are
+                // written: `sub_(rhs: a, lhs: b)` is `b - a`.
+                let mut ordered: Vec<&Argument> = arguments.iter().collect();
+                ordered.sort_by_key(|argument| argument.parameter);
+                let operands: Option<Vec<Operand>> =
+                    ordered.into_iter().map(&mut operand).collect();
+                let name = program.modules[module].declarations[declaration]
+                    .name
+                    .as_str();
+                match (name, operands?.as_slice()) {
+                    ("neg_", [Operand::Duration(micros)]) => micros.checked_neg(),
+                    ("add_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
+                        lhs.checked_add(*rhs)
+                    }
+                    ("sub_", [Operand::Duration(lhs), Operand::Duration(rhs)]) => {
+                        lhs.checked_sub(*rhs)
+                    }
+                    ("mul_", [Operand::Duration(micros), Operand::Count(count)])
+                    | ("mul_", [Operand::Count(count), Operand::Duration(micros)]) => {
+                        micros.checked_mul(*count)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -88,7 +170,7 @@ impl<'a> Emitter<'a> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
-        self.wake_durations(function, callee, signature, arguments);
+        let checked_delay = self.wake_duration(function, callee, signature, arguments);
         let kept = self.kept_configuration(callee, generics, signature);
         // Whether the callee is a node: a node keeps what a graph
         // gives it that is no connection, so such an argument is
@@ -214,6 +296,10 @@ impl<'a> Emitter<'a> {
                 written.push(format!("{}={value}", name(&parameter.name)));
             }
         }
+        // TIME-8: the wake's duration checked as the program runs, by
+        // the provider's function once each argument is evaluated
+        // (`wake_duration`).
+        written.extend(checked_delay);
         written.join(", ")
     }
 
@@ -1304,4 +1390,13 @@ pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     };
     let (module, declaration) = callee.declaration()?;
     Some((module, declaration, arguments))
+}
+
+/// An operand of core's arithmetic on durations, as `known_duration`
+/// works it out: a duration in microseconds, or an `i64` count.
+enum Operand {
+    /// A duration, in microseconds.
+    Duration(i64),
+    /// An `i64`.
+    Count(i64),
 }
