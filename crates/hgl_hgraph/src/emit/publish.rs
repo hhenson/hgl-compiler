@@ -107,7 +107,8 @@ impl Emitter<'_> {
         }
         // TIME-7: "A value published whole, the same again or empty, is
         // no delta, and ticks as any publication does": a node's whole
-        // empty set ticks on its `_output` (see `set_replaced`).
+        // set ticks on its `_output`, where it keeps its members too (see
+        // `set_replaced`).
         if function.mode == Mode::Node
             && result == Some(&value.ty)
             && matches!(value.ty, Type::Set(_))
@@ -297,8 +298,10 @@ impl Emitter<'_> {
     /// publishes it: a struct's fields as hgraph's bundle takes them
     /// (TYPE-9), and any other value as it is. `port` is the port of the
     /// node's output it is published to, through which an unsized list
-    /// in it ticks where it is published empty (`_whole_list`): with none
-    /// such a list fails as the graph runs.
+    /// in it ticks where it is published empty (`_whole_list`), and a set
+    /// where it keeps its members (`_whole_set`): with none such a list
+    /// fails as the graph runs, and such a set is published as it is, as
+    /// a constant's one publication is.
     pub(super) fn bundle_of(
         &mut self,
         ty: &Type,
@@ -315,9 +318,22 @@ impl Emitter<'_> {
             self.natives = true;
             return format!("_core.only_value({written}, {class})");
         }
-        // The port is read only where an unsized list is in the value.
-        let port = port.filter(|_| holds_growing_list(self.program, ty));
+        // The port is read only where an unsized list or a set is in the
+        // value.
+        let port = port.filter(|_| published_through_port(self.program, ty));
         match ty {
+            // TIME-7: "A value published whole, the same again or empty,
+            // is no delta, and ticks as any publication does": a whole
+            // set is published to its port cleared first (`set_replaced`).
+            Type::Set(_) => {
+                return match port {
+                    Some(port) => {
+                        self.natives = true;
+                        format!("_core.set_replaced({port}, {written})")
+                    }
+                    None => written,
+                };
+            }
             // TIME-7: a whole unsized list "replaces" what the list held,
             // as a tuple made of it, which hgraph's unbounded `TSL` takes
             // position by position, dropping the tail past it: hgraph
@@ -377,14 +393,15 @@ impl Emitter<'_> {
     /// provider's `bundled` reads it: `None` for a part that publishes
     /// whole, a `dict` of each field's for a struct, a tuple of each
     /// position's for a tuple, `[None]` for a fixed list of elements
-    /// that publish whole and `"list"` for an unsized one. `None`,
-    /// reported, for a part not written yet.
+    /// that publish whole, `"list"` for an unsized one and `"set"` for a
+    /// set. `None`, reported, for a part not written yet.
     ///
     /// TIME-7: a complete value is "published whole". TYPE-9 maps a
     /// struct's and a tuple's parts "to child fields", so a whole value
     /// sets each part: a struct's or a tuple's field by its own parts, a
     /// fixed list by a tuple of its elements, and a set as the members
-    /// it has now, hgraph's `TSS` removing those it no longer has. A
+    /// it has now, hgraph's `TSS` removing those it no longer has, which
+    /// ticks where it keeps them (`_whole_set`). A
     /// field of an abstract struct is a field of the struct below it
     /// that the value is, read by its name. A dictionary's `TSD` would
     /// take its keys' changes, and not remove a key the value has not,
@@ -452,6 +469,13 @@ impl Emitter<'_> {
                 );
                 None
             }
+            // A set as its members, which tick through its own port,
+            // cleared first (`_whole_set`).
+            Type::Set(_) => Some(Shape {
+                text: "\"set\"".to_string(),
+                leaf: false,
+                flat: true,
+            }),
             // A node's whole dictionary of values that publish whole is
             // written (`bundled`); one of composites is not.
             Type::Dict { value, .. } if !publishes_whole(value) => {

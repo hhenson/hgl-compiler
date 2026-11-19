@@ -1633,19 +1633,13 @@ def dict_replaced(output, value):
 
 def set_replaced(output, value):
     """What a temporal set publishes for a whole value of it, given its
-    own output (TIME-7: "a complete value of the result's type T,
-    published whole"): the members of `value`, a `frozenset`, which
-    hgraph's `TSS` takes as what it now holds.
-
-    TIME-7: "A value published whole, the same again or empty, is no
-    delta, and ticks as any publication does". hgraph's `TSS` does not
-    tick for an empty one where it holds none, valid or not, and is made
-    to (`clear`), which publishes the set emptied; nothing more is then
-    published. One the same again that is not empty does not tick."""
-    if value:
-        return value
-    output.clear()
-    return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
+    own port, `output` (TIME-7: "a complete value of the result's type
+    T, published whole"): the members of `value`, a `frozenset`, which
+    hgraph's `TSS` takes as what it now holds, the set cleared first so
+    that it ticks where they are the members it holds, the empty one
+    among them (`_whole_set`): a node's result, a part of its `out`, and
+    a lifted function's result."""
+    return _whole_set(output, value)
 
 
 def whole_delta(value, keys, fixed=False, size=0, shape=None):
@@ -1748,16 +1742,18 @@ def bundled(value, shape=None, port=None):
     names the fields of the type and not of the struct below it that a
     value of an abstract one is; a tuple of each position's for a tuple,
     which hgraph's bundle takes position by position; `[None]` for a
-    fixed list of elements that publish whole, as a tuple of them; and
-    `"list"` for an unsized list of them (see `_whole_list`). A set is
-    given as the set it is, which hgraph's `TSS` takes as its members
-    now, removing those it no longer has.
+    fixed list of elements that publish whole, as a tuple of them;
+    `"list"` for an unsized list of them (see `_whole_list`); and `"set"`
+    for a set, given as the set it is, which hgraph's `TSS` takes as its
+    members now, removing those it no longer has.
 
     `port` is the port of the output the value is published to, where
     the node has one: an unsized list in the value is made to tick
-    through its own (`_whole_list`). A source's statements give
-    `DEFERRED`, and its node publishes the value through its port when
-    it is due (`published_into`)."""
+    through its own (`_whole_list`), and so is a set, cleared first
+    (`_whole_set`). A source's statements give `DEFERRED`, and its node
+    publishes the value through its port when it is due
+    (`published_into`, `_whole_sets`); with no port a set is given as it
+    is, as a constant's one publication is."""
     if shape is None:
         # Each field publishes whole.
         shape = dict.fromkeys(value._hgl_fields)
@@ -1769,6 +1765,8 @@ def _bundled(value, shape, port):
         return published(value)
     if shape == "list":
         return _whole_list(value, port)
+    if shape == "set":
+        return value if port is None or port is DEFERRED else _whole_set(port, value)
     if port is None or port is DEFERRED:
         within = lambda key: port  # noqa: E731
     else:

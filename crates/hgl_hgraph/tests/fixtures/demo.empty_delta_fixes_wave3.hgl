@@ -154,3 +154,162 @@ fn yielded_bag_members() -> i64 => bag_members(yielded_bags())
 test a_sources_struct_with_an_empty_set_ticks_its_set {
     assert eval(yielded_bag_members(), RunConfig(length: 3s)) == [1s: 0, 2s: 0]
 }
+
+# ---- 3. A whole value published again, unchanged ----
+#
+# TIME-7: "A value published whole, the same again or empty, is no delta,
+# and ticks as any publication does". Each way a node and a source
+# publish one: it ticks, and the value is as it was.
+fn returned_members(step: i64) -> set<i64> {
+    when {
+        if step == 0 { return [] }
+        return [1, 2]
+    }
+}
+
+fn assigned_members(step: i64) -> set<i64> {
+    inject out
+    when {
+        if step == 0 { out = [] }
+        if step == 1 { out = [1, 2] }
+    }
+}
+
+fn returned_members_read(step: i64) -> i64 => members_read(returned_members(step))
+fn assigned_members_read(step: i64) -> i64 => members_read(assigned_members(step))
+fn returned_members_unchanged(step: i64) -> bool => unchanged_members(returned_members(step))
+
+fn returned_book(step: i64) -> dict<str, i64> {
+    when {
+        if step == 0 { return [] }
+        return ["a": 1, "b": 2]
+    }
+}
+
+fn assigned_book(step: i64) -> dict<str, i64> {
+    inject out
+    when {
+        if step == 0 { out = [] }
+        if step == 1 { out = ["a": 1, "b": 2] }
+    }
+}
+
+fn returned_book_read(step: i64) -> i64 => book_read(returned_book(step))
+fn assigned_book_read(step: i64) -> i64 => book_read(assigned_book(step))
+
+fn returned_readings(step: i64) -> list<i64> {
+    when {
+        if step == 0 { return [] }
+        return [1, 2]
+    }
+}
+
+fn assigned_readings(step: i64) -> list<i64> {
+    inject out
+    when {
+        if step == 0 { out = [] }
+        if step == 1 { out = [1, 2] }
+    }
+}
+
+fn returned_readings_read(step: i64) -> i64 => readings_read(returned_readings(step))
+fn assigned_readings_read(step: i64) -> i64 => readings_read(assigned_readings(step))
+
+test a_whole_value_returned_or_assigned_again_ticks_and_keeps_the_value {
+    assert eval(returned_members_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    assert eval(assigned_members_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    assert eval(returned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    assert eval(assigned_book_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    assert eval(returned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    assert eval(assigned_readings_read(step: [1, 1, 0, 0, 1])) == [23, 23, 0, 0, 23]
+    # The set's delta names what the value changed: nothing, again.
+    assert eval(returned_members_unchanged(step: [1, 1, 0])) == [false, true, false]
+}
+
+fn yielded_again_members() -> set<i64> {
+    yield 1s: [1, 2]
+    yield 1s: [1, 2]
+    yield 1s: [2]
+}
+
+fn yielded_again_readings() -> list<i64> {
+    yield 1s: [1, 2]
+    yield 1s: [1, 2]
+    yield 1s: []
+    yield 1s: []
+}
+
+fn yielded_again_members_read() -> i64 => members_read(yielded_again_members())
+fn yielded_again_readings_read() -> i64 => readings_read(yielded_again_readings())
+
+test a_whole_value_yielded_again_ticks_and_keeps_the_value {
+    assert eval(yielded_again_members_read(), RunConfig(length: 4s)) == [1s: 23, 2s: 23, 3s: 12]
+    assert eval(yielded_again_readings_read(), RunConfig(length: 5s)) == [1s: 23, 2s: 23, 3s: 0, 4s: 0]
+}
+
+# Inside a struct or a tuple published whole, from a `return`, from
+# `out =`, from an assignment to the part, and from a lifted function:
+# the set ticks as the value does.
+fn returned_bag(step: i64) -> Bag {
+    when { return Bag(members: [1, 2], count: step) }
+}
+
+fn assigned_bag(step: i64) -> Bag {
+    inject out
+    when { out = Bag(members: [1, 2], count: step) }
+}
+
+fn assigned_bag_part(step: i64) -> Bag {
+    inject out
+    when {
+        out.count = step
+        out.members = [1, 2]
+    }
+}
+
+fn returned_pair(step: i64) -> tuple<i64, set<i64>> {
+    when { return (step, [1, 2]) }
+}
+
+struct Tags {
+    members: set<i64>
+}
+
+fn returned_tags(step: i64) -> Tags {
+    when { return Tags(members: [1]) }
+}
+
+fn tags_woken(tags: Tags) -> bool {
+    when valid([]) { return valid(tags.members) }
+}
+
+const fn both(step: i64) -> set<i64> {
+    return [1, 2]
+}
+
+fn returned_bag_members(step: i64) -> i64 => bag_members(returned_bag(step))
+fn assigned_bag_members(step: i64) -> i64 => bag_members(assigned_bag(step))
+fn assigned_bag_part_members(step: i64) -> i64 => bag_members(assigned_bag_part(step))
+fn returned_pair_members(step: i64) -> i64 => pair_members(returned_pair(step))
+fn returned_tags_woken(step: i64) -> bool => tags_woken(returned_tags(step))
+fn lifted_members_read(step: i64) -> i64 => members_read(both(step))
+
+test a_set_inside_a_whole_value_published_again_ticks {
+    assert eval(returned_bag_members(step: [1, 1])) == [23, 23]
+    assert eval(assigned_bag_members(step: [1, 1])) == [23, 23]
+    assert eval(assigned_bag_part_members(step: [1, 1])) == [23, 23]
+    assert eval(returned_pair_members(step: [1, 1])) == [23, 23]
+    assert eval(returned_tags_woken(step: [1, 1])) == [true, true]
+    assert eval(lifted_members_read(step: [1, 1])) == [23, 23]
+}
+
+fn yielded_full_bags() -> Bag {
+    yield 1s: Bag(members: [1, 2], count: 1)
+    yield 1s: Bag(members: [1, 2], count: 1)
+}
+
+fn yielded_full_bag_members() -> i64 => bag_members(yielded_full_bags())
+
+test a_set_inside_a_whole_value_yielded_again_ticks {
+    assert eval(yielded_full_bag_members(), RunConfig(length: 3s)) == [1s: 23, 2s: 23]
+}

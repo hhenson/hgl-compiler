@@ -339,6 +339,42 @@ pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
     within(program, ty, 0)
 }
 
+/// True where a whole value of `ty` is published through the port of
+/// the output it goes to: where it holds an unsized list or a set as a
+/// part at any depth, itself among them (`holds_growing_list`). TIME-7,
+/// as the specification's `main` has it (hhenson/hgl_spec#124): "A value
+/// published whole, the same again or empty, is no delta, and ticks as
+/// any publication does", which hgraph's unbounded `TSL` does not for an
+/// empty list and its `TSS` does not for a set that keeps its members:
+/// the provider makes each tick through its own port (`_whole_list`,
+/// `_whole_set`).
+pub(super) fn published_through_port(program: &Program, ty: &Type) -> bool {
+    fn holds_set(program: &Program, ty: &Type, depth: usize) -> bool {
+        if depth > HELD_DEPTH {
+            return false;
+        }
+        match ty {
+            Type::Set(_) => true,
+            Type::Nullable(inner) | Type::Delta(inner) => holds_set(program, inner, depth + 1),
+            Type::List { element, .. } => holds_set(program, element, depth + 1),
+            Type::Dict { value, .. } => holds_set(program, value, depth + 1),
+            Type::Tuple(elements) => elements
+                .iter()
+                .any(|element| holds_set(program, element, depth + 1)),
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => program
+                .field_types(ty)
+                .unwrap_or_default()
+                .iter()
+                .any(|field| holds_set(program, field, depth + 1)),
+            _ => false,
+        }
+    }
+    holds_growing_list(program, ty) || holds_set(program, ty, 0)
+}
+
 /// Where a temporal value of `ty`, an unsized list, a struct or a tuple,
 /// holds an unsized list through its own fields and positions, the
 /// provider's shape of it for `published_into` and `invalidated`:
