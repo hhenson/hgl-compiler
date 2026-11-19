@@ -1444,7 +1444,8 @@ is `_hgl/_m_examples/_m_tests/__init__.py`. A package holds a module's
 declarations and the packages of the modules under it side by side, and
 the `_m_` keeps the two apart, so `module demo` may declare a `util`
 beside `module demo.util`. Beside the modules are the support files a
-generated module imports: `_hgl/_core_native.py` and `_hgl/_harness.py`.
+generated module imports: `_hgl/_core_native.py`, the `_hgl/_core_support.py`
+it imports, and `_hgl/_harness.py`.
 A name that starts with `_` is the target's own: no module's or
 declaration's Python name does.
 
@@ -1591,7 +1592,11 @@ Core's native functions are the target's to provide (NATIVE-7):
 `_hgl/_core_native.py` is that provider, written by hand in the crate and
 copied out beside the modules. It holds the `i64` operations to core's
 numeric contract, which neither wraps nor promotes. The transpiler reads
-the names it defines, and a candidate it has no function for is reported.
+the names it defines, a `def` or a line `name = other`, and a candidate
+it has no function for is reported. What the generated code names by
+hand, errors, structs, deltas, places and copies, is in
+`_hgl/_core_support.py`, which the provider imports: a module reaches
+both as `_core.name`.
 It is written when a module calls a function of it, and whenever the
 harness is written: the harness imports it, to know an HGL error by its
 class.

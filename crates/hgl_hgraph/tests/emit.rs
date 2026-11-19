@@ -260,6 +260,7 @@ fn a_module_is_written_as_python() {
             // with.
             "_hgl/_m_core/__init__.py",
             "_hgl/_core_native.py",
+            "_hgl/_core_support.py",
             "_hgl/_harness.py"
         ]
     );
@@ -608,7 +609,7 @@ fn a_constant_is_a_function_run_once_and_a_read_calls_it() {
     // file of this repository, whose line ends are the checkout's.
     assert!(
         emitted
-            .text("_hgl/_core_native.py")
+            .text("_hgl/_core_support.py")
             .contains("def constant(function):")
     );
 }
@@ -691,7 +692,7 @@ fn a_module_takes_no_other_packages_name() {
     );
     assert!(
         emitted
-            .text("_hgl/_core_native.py")
+            .text("_hgl/_core_support.py")
             .contains("class HglError")
     );
     assert_eq!(hgl_hgraph::python_module("hgraph"), "_hgl._m_hgraph");
@@ -747,6 +748,7 @@ fn modules_nest_and_empty_forms_have_a_body() {
             "_hgl/_m_core/__init__.py",
             // The harness, and the provider it imports.
             "_hgl/_core_native.py",
+            "_hgl/_core_support.py",
             "_hgl/_harness.py"
         ]
     );
@@ -3666,7 +3668,7 @@ fn scheduled_in_a_lifecycle_hook_is_reported() {
         [
             "m.hgl:5:20 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write `scheduled()` outside a `when` yet",
-            "m.hgl:17:11 target.unsupported: the hgraph target does not write this expression yet",
+            "m.hgl:17:11 target.unsupported: the hgraph target does not write `modified([])` as a value yet",
         ]
     );
 }
@@ -3693,8 +3695,8 @@ fn every_inputless_node_has_a_hidden_input() {
         "    _node_started_only(_begin=_hg.const(True))\n",
         "    _scheduler = _core.Wake(_scheduler)\n",
     ]);
-    let native = emitted.text("_hgl/_core_native.py");
-    assert!(native.contains("return None if tag is None else \"#\" + tag"));
+    let support = emitted.text("_hgl/_core_support.py");
+    assert!(support.contains("return None if tag is None else \"#\" + tag"));
 }
 
 /// TIME-3: what `modified([])` asks beside a `modified` selector that
@@ -3989,10 +3991,19 @@ fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
     let hgraph = on_hgraph("hgraph_no_hgl_error");
-    fs::create_dir_all(&hgraph.directory).unwrap();
+    // The provider, as the target writes it: its natives and what the
+    // generated code names by hand, in the package `_hgl`.
+    let package = hgraph.directory.join("_hgl");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
     fs::write(
-        hgraph.directory.join("_core_native.py"),
+        package.join("_core_native.py"),
         include_str!("../support/core_native.py"),
+    )
+    .unwrap();
+    fs::write(
+        package.join("_core_support.py"),
+        include_str!("../support/core_support.py"),
     )
     .unwrap();
     let script = hgraph.directory.join("escapes.py");
@@ -4803,7 +4814,7 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
             "m.hgl:5:45 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` takes no removed position and no size yet",
             "m.hgl:9:23 target.unsupported: the hgraph target does not write the delta of an unsized list yet",
             "m.hgl:11:11 target.unsupported: the hgraph target does not write the type `list<Quote>` yet",
-            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary published to a temporal dictionary yet",
+            "m.hgl:15:19 target.unsupported: the hgraph target does not write a whole dictionary of composites yet",
             "m.hgl:18:19 target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet",
             "m.hgl:23:44 target.unsupported: the hgraph target does not write a list's element at a position that ticks yet",
             "m.hgl:24:4 target.unsupported: the hgraph target does not write the type `dict<str, list<i64>>` yet",
@@ -4914,7 +4925,7 @@ fn collection_validity_and_a_lists_delta_are_written() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta published to an unsized list yet",
+            "m.hgl:9:15 target.unsupported: the hgraph target does not write a delta of an unsized list yielded by a source yet",
             "m.hgl:12:19 target.unsupported: the hgraph target does not write the `removed` of a fixed list's delta: hgraph's bounded `TSL` does not report a position that became invalid yet"
         ]
     );
@@ -5466,7 +5477,7 @@ fn a_collection_form_not_written_yet_is_reported_by_this_lane() {
             "m.hgl:13:12 target.unsupported: the hgraph target does not write an assignment inside an entry of `out` yet",
             "m.hgl:21:31 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
             "m.hgl:21:70 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
-            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of composites yet",
+            "m.hgl:21:96 target.unsupported: the hgraph target does not write a whole trace cell of a list of nullables yet",
             "m.hgl:29:36 target.unsupported: the hgraph target does not write a whole trace cell of a struct below its type yet",
         ]
     );
