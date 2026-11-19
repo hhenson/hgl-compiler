@@ -9581,7 +9581,7 @@ pub(crate) fn by_value(program: &Program, module: usize, declaration: usize) -> 
 /// True for a struct whose value `port_value` makes anew from its
 /// bundle, every part of it: each field is of a type nothing changes
 /// where it is, or such a struct itself. Any other type is not.
-fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
+pub(crate) fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
     let Type::Named {
         module,
         declaration,
@@ -9604,7 +9604,7 @@ fn built_anew(program: &Program, ty: &Type, depth: usize) -> bool {
 
 /// True for a type that is a struct changed where it is: one that is
 /// no value ([`by_value`]).
-fn struct_in_place(program: &Program, ty: &Type) -> bool {
+pub(crate) fn struct_in_place(program: &Program, ty: &Type) -> bool {
     matches!(
         ty,
         Type::Named { module, declaration, kind: NamedKind::Struct, .. }
@@ -9656,7 +9656,7 @@ fn held_types<'a>(program: &'a Program, ty: &'a Type) -> Option<Vec<&'a Type>> {
 /// function puts into the place it is given is copied only where this
 /// holds: `append(rows, row)` keeps `row`, and `extend(values, more)`
 /// keeps the numbers `more` holds.
-fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
+pub(crate) fn may_hold(program: &Program, holder: &Type, given: &Type) -> bool {
     // Every type inside `ty`, itself left out; `None` where a part of
     // it does not say what it holds. A struct may hold itself inside a
     // list: a type this deep is not followed further.

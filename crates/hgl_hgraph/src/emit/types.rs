@@ -51,7 +51,7 @@ pub(super) fn held(ty: &Type) -> bool {
 /// True where another struct of the program inherits from the struct
 /// `declaration` of `module`: a value of that type may be of the other
 /// struct, with fields this one has not.
-pub(super) fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
+pub(crate) fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
     program.modules.iter().any(|module_of| {
         module_of.details.iter().any(|detail| {
             matches!(detail, Detail::Struct(other) if other.parents.iter().any(|parent| {
