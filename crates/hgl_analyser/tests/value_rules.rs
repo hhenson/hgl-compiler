@@ -245,8 +245,9 @@ fn literal_constants_in_defaults_are_compared_by_value() {
 /// compile-time constant, and is compared by its value, not its text:
 /// in parentheses or not, after a minus or as a negative argument, with
 /// an underscore in its digits, by the name of an `i64` constant, or as
-/// an integer where an `f64` is wanted (EXPR-5). Each is checked both
-/// ways: one value agrees, and another is reported.
+/// an integer where an `f64` is wanted (EXPR-5). A minus before a
+/// number is that negative number, by symbol or by `neg_`. Each is
+/// checked both ways: one value agrees, and another is reported.
 #[test]
 fn constants_in_defaults_are_compared_by_value_however_written() {
     let checked = module(concat!(
@@ -278,6 +279,12 @@ fn constants_in_defaults_are_compared_by_value_however_written() {
         "struct DigitsSame : Counts<1_000>, Thousand {}\n",
         "struct NamedSame : Counts<limit>, Thousand {}\n",
         "struct NamedClash : Counts<limit + 1>, Thousand {}\n",
+        // A negation by symbol and by core's operator's name is one
+        // (EXPR-10).
+        "abstract struct ByName : Scaled { scale = neg_(0.5) }\n",
+        "abstract struct ByNameOther : Scaled { scale = neg_(0.25) }\n",
+        "struct NegationSame : Negative, ByName {}\n",
+        "struct NegationClash : Negative, ByNameOther {}\n",
     ));
     assert_eq!(
         checked.summary(),
@@ -287,6 +294,7 @@ fn constants_in_defaults_are_compared_by_value_however_written() {
             "m.hgl:19:36 local:type/default.conflict UNIT-9",
             "m.hgl:22:35 local:type/default.conflict UNIT-9",
             "m.hgl:29:40 local:type/default.conflict UNIT-9",
+            "m.hgl:33:34 local:type/default.conflict UNIT-9",
         ]
     );
 }

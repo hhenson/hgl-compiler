@@ -237,7 +237,7 @@ fn bound(program: &Program, default: &InheritedDefault, place: Location) -> Opti
                     ExprKind::Literal(Value::Int(whole)) => Some(Value::Float(whole as f64)),
                     _ => None,
                 },
-                kind => negated(kind),
+                kind => negated(program, kind),
             };
             if let Some(literal) = literal {
                 expression.kind = ExprKind::Literal(literal);
@@ -364,17 +364,29 @@ fn member(program: &Program, ty: &Type, name: &str) -> Option<ExprKind> {
     })
 }
 
-/// The negative number `kind` writes, where it is a minus before a
-/// number literal: by symbol, read as core's `neg_`, or not read as a
-/// call. `None` for any other, and for the negation of the least `i64`,
-/// which is no `i64`.
-fn negated(kind: &ExprKind) -> Option<Value> {
+/// The negative number `kind` writes, where it is core's negation of a
+/// number literal: `-0.5`, read as a call of `neg_` or not read as one,
+/// and `neg_(0.5)`, which binds the same operator (EXPR-10). `None` for
+/// any other, and for the negation of the least `i64`, which is no
+/// `i64`.
+fn negated(program: &Program, kind: &ExprKind) -> Option<Value> {
+    // Core's `neg_`, the operator `-` before an operand stands for.
+    let negation = |(module, declaration): (usize, usize)| {
+        Some(module) == program.core()
+            && program.modules[module].declarations[declaration].name
+                == UnaryOperator::Negate.identity()
+    };
     let operand = match kind {
         ExprKind::Call {
             form: Form::Unary(UnaryOperator::Negate),
             arguments,
             ..
         } if arguments.len() == 1 => &arguments[0].value,
+        ExprKind::Call {
+            callee: Callee::Candidate { operator, .. },
+            arguments,
+            ..
+        } if arguments.len() == 1 && negation(*operator) => &arguments[0].value,
         ExprKind::Unary {
             operator: UnaryOperator::Negate,
             operand,
