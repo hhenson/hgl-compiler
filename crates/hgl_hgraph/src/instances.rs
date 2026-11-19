@@ -131,7 +131,8 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
             Callee::Function {
                 module,
                 declaration,
-                ..
+                generics,
+                requirements,
             },
         arguments,
         ..
@@ -143,10 +144,20 @@ pub(crate) fn run_wiring(program: &Program, call: &Expr, eval: &Type) -> Option<
     else {
         return None;
     };
+    // A generic target's parameters as this call takes them (GEN-2):
+    // a window's type is read from its parameter.
+    let instance = if generics.is_empty() {
+        None
+    } else {
+        program.instance(*module, *declaration, generics, requirements)
+    };
+    let parameters = instance
+        .as_ref()
+        .map_or(&signature.parameters, |(taken, _)| &taken.parameters);
     let inputs = arguments
         .iter()
         .filter_map(|argument| {
-            let parameter = signature.parameters.get(argument.parameter?)?;
+            let parameter = parameters.get(argument.parameter?)?;
             let payload = trace_payload(&argument.value.ty)?;
             // TYPE-16: a window's delta is "V: the value that arrived",
             // so a trace of one is a trace of V: the window is the

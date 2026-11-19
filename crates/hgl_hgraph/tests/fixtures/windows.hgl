@@ -85,6 +85,7 @@ test a_window_publishes_each_value_that_arrives {
     assert eval(relayed(price: [1.0, _, 2.0, 3.0, 4.0])) == [1.0, _, 2.0, 3.0, 4.0]
     assert eval(relayed_side(side: [.buy, .sell, .sell])) == [.buy, .sell, .sell]
     assert eval(relayed_generic(value: [1, 2, 3, 4, 5])) == [1, 2, 3, 4, 5]
+    assert eval(windowed<i64, 4>(value: [1, 2])) == [1, 2]
     assert eval(latest(price: [1.0, 2.0])) == [1.0, 2.0]
 }
 
