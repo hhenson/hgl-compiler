@@ -31,7 +31,7 @@ transpiler: partial
 - hgraph: a `duration` is a `timedelta`, a count of whole microseconds, as a value, as a constant and as what a connection ticks; its literal is written by its count
 - A `date`, a `time`, a `datetime` and a `civil_datetime` are Python's `date`, `time` and `datetime`, written by the parts the literal has; an instant is a `datetime` in UTC that names no zone, as hgraph has them, and one written with another offset is moved to UTC
 - A `timezone`, a `zoned_datetime` and a `zoned_time` are the provider's frozen dataclasses: a zone by its name, so aliases are distinct, and a zoned datetime its UTC instant and zone, equal where both are
-- Left, reported: core's `eq_` and `ne_` of two zoned datetimes, with the option `utc` (OPS-2), which `==`, `!=` and `=={utc: true}` of two select
+- Two zoned datetimes compared are core's `eq_` and `ne_` for them (OPS-2): equal where the instants and the zones are, and with `utc` where the instants are. A set's members, a dictionary's keys, and what a list or a struct holds are told apart by instant and zone. A duration moves the instant across a change of offset
 - Each is a value, configuration and a temporal value
 - Left: a literal instant outside the years 1 to 9999 in UTC, which is reported: a Python `datetime` holds no other
 

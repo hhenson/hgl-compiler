@@ -1455,32 +1455,32 @@ fn a_candidate_with_a_body_is_a_function() {
 }
 
 /// What core holds that the target does not write is the program's to
-/// report only where the program reaches it: here a candidate of core
-/// whose body calls a native one the provider has no function for.
-/// The report is core's own, at core's source.
+/// report only where the program reaches it: here the instance of core's
+/// identity addition (OPS-9) for a type whose publication the target
+/// does not write, which the program's graph reaches. The report is
+/// core's own, at core's source. A test that does not reach it is run,
+/// and a program that reaches none of it has no report.
 #[test]
 fn what_core_lacks_is_reported_where_a_program_reaches_it() {
     let emitted = emit(&[fixture!(
         "what_core_lacks_is_reported_where_a_program_reaches_it",
-        "demo.repeats.hgl"
+        "demo.kept.hgl"
     )]);
     assert_eq!(emitted.reported.len(), 1, "{:?}", emitted.reported);
     assert!(
         emitted.reported[0].starts_with("<core>/core/core.hgl:")
             && emitted.reported[0].ends_with(
-                " target.unsupported: the hgraph target does not write the candidate `mul_(str, i64)` yet"
+                " target.unsupported: the hgraph target does not write a whole list published where an element is temporal composite or nullable yet"
             ),
         "{:?}",
         emitted.reported
     );
     assert_eq!(emitted.blocked("doubles"), None);
-    let blocked = emitted
-        .blocked("repeats")
-        .expect("the test reaches core's candidate");
-    assert!(
-        blocked.ends_with("the hgraph target does not write the candidate `mul_(str, i64)` yet"),
-        "{blocked}"
-    );
+    let emitted = emit(&[fixture!(
+        "a_candidate_with_a_body_is_a_function",
+        "demo.plain.hgl"
+    )]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
 }
 
 /// Divisions, each with the zero policy it is given or takes by
@@ -5478,22 +5478,73 @@ fn what_a_ref_cannot_be_given_yet_is_reported() {
     );
 }
 
+/// Two zoned datetimes compared (TYPE-2, OPS-2), a duration moving a
+/// zoned instant (OPS-10), the order of the temporal scalars (OPS-2) and
+/// a string times a count (OPS-1). Its tests run on hgraph with every
+/// fixture's (`the_generated_tests_pass_on_hgraph`).
+const SCALARS_WAVE3: (&str, &str) = fixture!("demo.scalars_wave3.hgl");
+
 /// TYPE-2: "Two `zoned_datetime` values are equal when both their
 /// instants and their zone names are ... Compared as UTC, they are equal
 /// when their instants are. That comparison is written `a =={utc: true}
-/// b`". Core's candidates of `eq_` and `ne_` for two zoned datetimes take
-/// the option `utc` (OPS-2), and are not written yet: reported.
+/// b`". OPS-2: "The option is `utc`, a `bool` that is false unless given
+/// ... declared by the candidates of `eq_` and `ne_` for two zoned
+/// datetimes." Each is the provider's function for the candidate, given
+/// `utc` by name: the default where it is left out. EXPR-13: "left
+/// operand, configuration entries in their written order, then right
+/// operand", which Python evaluates the arguments in. In a graph the
+/// option is configuration of the lifted node (EXPR-14), and an
+/// argument of a call by name given a connection an input that takes
+/// the default while it is invalid (FN-11).
 #[test]
-fn a_zoned_equality_is_not_written_yet() {
-    let emitted = emit(&[fixture!("a_zoned_equality_is_not_written_yet", "m.hgl")]);
-    assert_eq!(
-        emitted.reported,
-        [
-            "m.hgl:6:12 target.unsupported: the hgraph target does not write the candidate `ne_(zoned_datetime, zoned_datetime, bool)` yet",
-            "m.hgl:7:12 target.unsupported: the hgraph target does not write the candidate `eq_(zoned_datetime, zoned_datetime, bool)` yet",
-            "m.hgl:8:12 target.unsupported: the hgraph target does not write the candidate `eq_(zoned_datetime, zoned_datetime, bool)` yet",
-        ]
-    );
+fn two_zoned_datetimes_are_compared_by_cores_candidates() {
+    let emitted = emit_clean(&[SCALARS_WAVE3]);
+    let python = emitted.module("demo.scalars_wave3");
+    python.assert_writes(&[
+        "def same(a, b):\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, rhs=b, utc=False)",
+        "def apart(a, b):\n    return _core.ne__zoned_datetime_zoned_datetime_bool(lhs=a, rhs=b, utc=False)",
+        "def same_instant(a, b):\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, utc=True, rhs=b)",
+        "def same_as(a, b, as_utc):\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, utc=as_utc, rhs=b)",
+        "def _inst_same_by__true(a, b):\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, utc=True, rhs=b)",
+        "def named(a, b, as_utc):\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=a, rhs=b, utc=as_utc)",
+        "return _core.ne__zoned_datetime_zoned_datetime_bool(lhs=a.value, utc=flag.value, rhs=b.value)",
+        "rhs: _hg.TS[_core.ZonedDatetime], utc: _py.bool) -> _hg.TS[_py.bool]:\n    return _core.eq__zoned_datetime_zoned_datetime_bool(lhs=lhs.value, rhs=rhs.value, utc=utc)",
+        "def wired_as_utc(a: _hg.TS[_core.ZonedDatetime], b: _hg.TS[_core.ZonedDatetime]) -> _hg.TS[_py.bool]:",
+        "utc=(utc.value if utc.valid else False)",
+        "return _core.mul__str_i64(lhs=text, rhs=count)",
+    ]);
+}
+
+/// OPS-1: "`*` | `str` and `i64`, in either order | `str`", core's
+/// string repetition. The pinned contract says nothing of a count below
+/// zero, so the provider does not write one: it fails, with no HGL
+/// error, where it is met, in a value function and in a lifted node.
+/// Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_string_times_a_count_below_zero_is_not_written() {
+    let hgraph = on_hgraph("hgraph_negative_repetition");
+    let emitted = emit_clean(&[fixture!(
+        "a_string_times_a_count_below_zero_is_not_written",
+        "m.hgl"
+    )]);
+    let ran = hgraph.run_all(&emitted);
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let described = outcomes(&emitted, &all, &ran);
+    let expected = [
+        "below_zero_in_a_value_function failed m.hgl:6:5",
+        "below_zero_in_a_graph failed m.hgl:10:5",
+    ];
+    assert_eq!(described.len(), expected.len(), "{described:#?}");
+    for (outcome, start) in described.iter().zip(expected) {
+        assert!(
+            outcome.starts_with(start)
+                && outcome.contains(
+                    "NotImplementedError: the hgraph target does not write a string times a count below zero yet"
+                ),
+            "{outcome}"
+        );
+    }
 }
 
 /// A field that may be left out because its type is no ordinary value,
