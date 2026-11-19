@@ -1,0 +1,3 @@
+application demo.shown.printed
+use demo.shown::{numbers}
+eval(numbers(), RunConfig(length: 10s))

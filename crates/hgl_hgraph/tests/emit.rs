@@ -3233,6 +3233,50 @@ fn an_application_runs_on_hgraph() {
     assert!(live.iter().all(|(at, _)| at.as_str() > "2000-"), "{live:?}");
 }
 
+/// CRUN-8: a run's output is each publication, "its instant and then
+/// what was published", and what was published is written as the
+/// language writes it. OPS-6: an `f64` "has an exponent where the number
+/// is 1e16 or more, or below 1e-4 and not zero", `1e21` and `1e-5`,
+/// which Python's own text writes `1e+21` and `1e-05`. Needs hgraph, as
+/// above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_published_number_is_written_as_the_language_writes_it() {
+    let hgraph = on_hgraph("hgraph_shown");
+    let emitted = emit_clean(&[
+        fixture!(
+            "a_published_number_is_written_as_the_language_writes_it",
+            "demo.shown.hgl"
+        ),
+        fixture!(
+            "a_published_number_is_written_as_the_language_writes_it",
+            "demo.shown.printed.hgl"
+        ),
+    ]);
+    let application = emitted
+        .output
+        .applications
+        .iter()
+        .position(|application| application.path == "demo.shown.printed")
+        .expect("the application is written");
+    let ran = run_application(
+        &hgraph.python,
+        &hgraph.directory,
+        &emitted.output,
+        application,
+        &Stop::new(),
+    );
+    let RanApplication::Stopped {
+        output: Some(published),
+        by_host: false,
+    } = ran
+    else {
+        panic!("the run ends: {ran:?}");
+    };
+    let values: Vec<&str> = published.iter().map(|(_, value)| value.as_str()).collect();
+    assert_eq!(values, ["1e21", "1e-5", "2.5"]);
+}
+
 /// END-4 and TIME-3: a transition to invalid wakes an active node, but no
 /// publication occurred. Explicit modification guards are checked at evaluation.
 const NOTIFIED: (&str, &str) = fixture!("demo.notified.hgl");
