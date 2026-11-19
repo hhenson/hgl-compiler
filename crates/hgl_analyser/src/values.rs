@@ -1237,11 +1237,103 @@ impl<'a> Typer<'a> {
         };
         self.present.truncate(frame);
         self.hook = before;
+        let header = (hook == Hook::When).then(|| self.header_of(condition.as_ref()));
         Stmt::Hook {
             hook,
             condition,
+            header,
             body,
             at,
+        }
+    }
+
+    /// What a `when` header asks of its node, read from its typed
+    /// condition for the stages after the analyser: see
+    /// [`hir::Header`]. `condition` is `None` for a `when` with no
+    /// header.
+    ///
+    /// TIME-3: "A selector sets subscription or admission when it
+    /// stands alone in the header or appears as a top-level conjunct.
+    /// Selectors under negation or disjunction leave the default in
+    /// place." A selector is an endpoint operation the condition was
+    /// typed as (TIME-9). The inputs it admits are read from the header
+    /// before it is typed, by [`Typer::admission`], for the condition's
+    /// own reads are judged by them.
+    fn header_of(&self, condition: Option<&Expr>) -> hir::Header {
+        let conjuncts = condition.map(Expr::conjuncts).unwrap_or_default();
+        let inputs = self.temporal_inputs();
+        // Every selector among the conjuncts adds what it names:
+        // `valid(a) && valid(b)` requires both. One with no argument
+        // names every input, and `valid([])` none. With no selector of
+        // a kind, its default stands.
+        let add = |set: &mut Option<Vec<LocalId>>, named: &Option<Vec<LocalId>>| {
+            let set = set.get_or_insert_with(Vec::new);
+            for &local in named.as_deref().unwrap_or(&inputs) {
+                if !set.contains(&local) {
+                    set.push(local);
+                }
+            }
+        };
+        let mut subscribed: Option<Vec<LocalId>> = None;
+        let mut required: Option<Vec<LocalId>> = None;
+        let mut conditions = Vec::new();
+        let mut scheduled = false;
+        // TIME-3: "The empty selection `modified([])` subscribes to no
+        // input and selects a wake from the node's scheduler or alarm",
+        // and `modified(a)` "requires a publication on" `a`. Where both
+        // stand, which of the two runs the handler is not settled.
+        let mut empty: Option<Location> = None;
+        let mut names = false;
+        // TIME-3: "A header that is `scheduled()` alone is the
+        // exception: it requires no input to be valid".
+        let alone = matches!(
+            conjuncts.as_slice(),
+            [Expr {
+                kind: ExprKind::Endpoint {
+                    operation: EndpointOperation::Scheduled,
+                    ..
+                },
+                ..
+            }]
+        );
+        for (position, conjunct) in conjuncts.iter().enumerate() {
+            match &conjunct.kind {
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Modified,
+                    inputs: named,
+                } => {
+                    add(&mut subscribed, named);
+                    // TIME-3: scheduling and modification are distinct.
+                    // An explicit guard still checks its publications;
+                    // the empty selector listens for a scheduled wake
+                    // instead.
+                    if named.as_ref().is_some_and(Vec::is_empty) {
+                        empty = empty.or(Some(conjunct.at));
+                    } else {
+                        names = true;
+                        conditions.push(position);
+                    }
+                }
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Valid,
+                    inputs: named,
+                } => add(&mut required, named),
+                // The node says what `scheduled()` is: it depends on
+                // which of the scheduler and the alarm it injects.
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Scheduled,
+                    ..
+                } => scheduled = true,
+                _ => conditions.push(position),
+            }
+        }
+        hir::Header {
+            selects: subscribed.is_some(),
+            subscribed: subscribed.unwrap_or_else(|| inputs.clone()),
+            required: required.unwrap_or_else(|| if alone { Vec::new() } else { inputs.clone() }),
+            scheduled,
+            beside: empty.filter(|_| names),
+            conditions,
         }
     }
 

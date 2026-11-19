@@ -16,8 +16,8 @@ use std::collections::BTreeSet;
 
 use hgl_analyser::hir::{
     Argument, BinaryOperator, Body, CalendarDate, Callee, Case, Cell, ClockTime, EndpointOperation,
-    ErrorPart, Expr, ExprKind, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator, Value,
-    ValueCategory,
+    ErrorPart, Expr, ExprKind, Header, Hook, Local, Run, Stmt, Temporal, Tenor, UnaryOperator,
+    Value, ValueCategory,
 };
 use hgl_analyser::{
     Argument as GenericArgument, Constant, ConstantValue, Declaration, DeclarationKind, Detail,
