@@ -267,22 +267,35 @@ def _phase_of(failure):
     return "evaluate"
 
 
+class Escaped(Exception):
+    """A failure that is no HGL error, let out of every capture.
+
+    ERR-1: "Distinguish source rejection, execution failure, ordinary
+    result data, and test/infrastructure failure." An execution failure
+    is an `HglError`; anything else a node raises, a form the target
+    does not write or a fault of the target's own, is no failure of the
+    program, and a capture does not take it (ERR-7). It carries no code,
+    so no `assert raises` takes it either (TST-11).
+    """
+
+
 def error_of(failure, evaluation_time):
     """The `error` a capture gives for hgraph's `NodeError` `failure`,
     met at `evaluation_time` (ERR-4, ERR-7).
 
-    An `HglError` says its error in the last note of the traceback (see
-    `HglError`). "On first graph failure, attach original node identity,
-    phase, and evaluation time; propagation/capture preserve them": an
-    error with no context of its own is given the failing node's, in
-    the phase it was met in (`_phase_of`). Any other failure is an error
-    of the traceback's last line, with no code.
+    An `HglError` says its error in the note it carries, which is the
+    last line of the traceback (see `HglError`); the note of one met
+    while another exception was handled is not. "On first graph
+    failure, attach original node identity, phase, and evaluation time;
+    propagation/capture preserve them": an error with no context of its
+    own is given the failing node's, in the phase it was met in
+    (`_phase_of`). Any other failure is no HGL error, and is raised
+    again as `Escaped`.
     """
     lines = failure.error_msg.rstrip().splitlines()
-    written = next((line for line in reversed(lines) if line.startswith(_NOTE)), None)
+    written = lines[-1] if lines and lines[-1].startswith(_NOTE) else None
     if written is None:
-        context = ErrorContext(failure.label, _phase_of(failure), evaluation_time)
-        return Error(lines[-1] if lines else "", None, context)
+        raise Escaped(f"{failure.label} failed with what is no HGL error:\n{failure.error_msg}")
     written = _json.loads(written[len(_NOTE):])
     context = written.get("context")
     if context is None:
@@ -304,14 +317,17 @@ def captured_error(failure: _TS[_NodeError], _clock: _EvaluationClock = None) ->
 
 
 @_sink_node
-def _lifecycle_escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
-    """ERR-8: "Start/stop failures escape, including lifecycle work
+def _escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None):
+    """What hgraph's `try_except` captures and a capture does not.
+
+    ERR-8: "Start/stop failures escape, including lifecycle work
     triggered during evaluation". hgraph's `try_except` captures the
     failure of a `start` or a `stop` it meets while it evaluates the
     child: it is raised again here, with its error and the context of
-    its first failure, which says its phase. A capture around this one
-    meets the failure again, as this node's, and its context says the
-    phase again: each boundary lets it out."""
+    its first failure, which says its phase. ERR-1: a failure that is no
+    HGL error is raised again too, as `Escaped` (`error_of`). A capture
+    around this one meets the failure again, as this node's, and lets it
+    out again: each boundary lets it out."""
     error = error_of(failure.value, _clock.evaluation_time)
     if error.context.phase != "evaluate":
         raise HglError(error.message, code=error.code, context=error.context)
@@ -319,9 +335,9 @@ def _lifecycle_escapes(failure: _TS[_NodeError], _clock: _EvaluationClock = None
 
 def captured(attempt):
     """A capture: `attempt`, what hgraph's `try_except` gives, with what
-    lets the failures of the child's `start` and `stop` out of it
-    (`_lifecycle_escapes`) wired beside it (ERR-7, ERR-8)."""
-    _lifecycle_escapes(attempt.exception)
+    lets out of it the failures no capture takes (`_escapes`) wired
+    beside it (ERR-1, ERR-7, ERR-8)."""
+    _escapes(attempt.exception)
     return attempt
 
 
