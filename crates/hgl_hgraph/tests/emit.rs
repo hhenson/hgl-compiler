@@ -5300,7 +5300,9 @@ fn configuration_of_a_generic_type_is_held_by_what_the_type_is() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_tagged/__init__.py");
     for expected in [
-        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(tags))\n",
+        // A node keeps what a graph gives it: a copy of the graph's
+        // parameter, which its caller may go on changing.
+        "    return _inst_tagged__list_i64_(value=value, tag=_core.Held(_core.copied(tags)))\n",
         "    return _inst_optional__list_i64_(value=value, tag=_core.Held(None))\n",
         // The node written for a list takes it out; the one for an
         // `i64` has nothing to take out.
@@ -6370,12 +6372,91 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
             "        book = _core.set_at(book, ((\"f\", \"best\"), (\"f\", \"size\"),), lambda: _given[1])\n",
             "        _core.raise_if_failed(_given[0])\n",
         ),
+        // No copy: a struct read whole from its bundle is made anew.
+        "            _state.saved = Ticket(id=current[\"id\"].value, size=current[\"size\"].value, price=current[\"price\"].value)\n",
+        // A copy: a result that may be the function's own `var` or its
+        // parameter, a constant or what a loop over one gives.
+        "def pick(p, flag):\n    mine = [0]\n    x = (mine if flag else p)\n    return _core.copied(x)\n",
+        "        return _core.copied(x)\n",
+        // In a graph, an ordinary value: a `var` and a `let` of one, a
+        // call given it twice, a loop over what its body grows, and
+        // what a node or a source keeps. A graph that gives on what it
+        // was given gives it as it is: the node copies it.
+        "    b = _core.copied(a)\n",
+        "    snap = _core.copied(a)\n",
+        "    _given = add_twice(into=a, more=_core.copied(a))\n",
+        "    for value in _core.copied(a):\n",
+        "    n = summed(values=_core.Held(_core.copied(cfg)), tick=tick)\n",
+        "    return summed(values=_core.Held(_core.copied(values)), tick=tick)\n",
+        "    n = relayed(values=cfg, tick=tick)\n",
+        "_core.Held(_core.copied(values)))\n",
     ] {
         assert!(
             python.contains(expected),
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
+
+/// Every copy the target writes for `copy_points.hgl` is needed: with
+/// any one of them taken out, a test of the fixture fails on hgraph. So
+/// the fixture shows each copy point it has, and the claim that each
+/// copy is needed is checked, not asserted. Needs hgraph, as above.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn every_copy_the_copy_points_fixture_makes_is_needed() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_copy_points");
+    fs::remove_dir_all(&directory).ok();
+    let emitted = emit(&[("copy_points.hgl", COPY_POINTS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    // A test that a copy taken out sends round a loop without end is
+    // stopped: it has not passed.
+    let limit = |_: &Test| Some(std::time::Duration::from_secs(30));
+    let ran = run_within(
+        Path::new(&python),
+        &directory.join("whole"),
+        &emitted.output,
+        &all,
+        &limit,
+    );
+    assert!(ran.iter().all(|ran| *ran == Ran::Passed), "{ran:?}");
+    let module = "_hgl/_m_demo/_m_copy_points/__init__.py";
+    let text = emitted.text(module);
+    let copy = "_core.copied";
+    let copies: Vec<usize> = text.match_indices(copy).map(|(at, _)| at).collect();
+    assert!(
+        copies.len() > 20,
+        "the fixture makes {} copies",
+        copies.len()
+    );
+    let mut needless = Vec::new();
+    for (number, &at) in copies.iter().enumerate() {
+        // `_core.copied(x)` taken out is `(x)`, the value itself.
+        let mut output = emitted.output.clone();
+        let file = output
+            .files
+            .iter_mut()
+            .find(|file| file.path == module)
+            .expect("the module is written");
+        file.text.replace_range(at..at + copy.len(), "");
+        let ran = run_within(
+            Path::new(&python),
+            &directory.join(format!("without_{number}")),
+            &output,
+            &all,
+            &limit,
+        );
+        // A copy is shown needed by a test that ran and failed: one
+        // that did not run shows nothing.
+        if !ran.iter().any(|ran| matches!(ran, Ran::Failed { .. })) {
+            let line = text[..at].matches('\n').count() + 1;
+            let written = text.lines().nth(line - 1).unwrap_or_default().trim();
+            needless.push(format!("line {line}: {written}: {ran:?}"));
+        }
+    }
+    assert_eq!(needless, Vec::<String>::new());
 }
 
 /// TIME-9, core's CAP-4 and CAP-5: nodes that a scheduler or an alarm
@@ -6772,7 +6853,10 @@ fn a_capture_is_a_try_except() {
     }
     let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
     let expected = concat!(
-        "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(drop, value=value)))\n",
+        "    @_hg.graph\n",
+        "    def _capture_0(value: _hg.TS[_py.int]) -> None:\n",
+        "        return drop(value=value)\n",
+        "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(_capture_0, value=value)))\n",
         "    return _core.captured_error(boundary.exception)\n",
     );
     assert!(sink.contains(expected), "{expected}\nnot in\n{sink}");
@@ -6784,51 +6868,104 @@ fn a_capture_is_a_try_except() {
 /// non-finite numbers as data.
 const ERRORS: &str = include_str!("fixtures/errors.hgl");
 
-/// hgraph's `try_except` does not take a graph with a scalar input.
-/// ERR-7: a capture of a graph given a wiring-time value, bound with
-/// `let`, is of a graph of the target's own that binds the value: the
-/// arguments are evaluated in the order written, before the statement
-/// (EXPR-13), a wiring-time value and a connection that is a call each
-/// held, and the defaults left out in the call of the child. FN-6: a
-/// lifted value function is captured as its node.
+/// hgraph's `try_except` does not take a graph with a scalar input,
+/// and makes one node of two calls of a node with the same inputs.
+/// ERR-7: a capture of a node, of a lifted value function (FN-6) or of
+/// a graph given a wiring-time value, bound with `let`, is of a graph
+/// of the target's own that calls it, binding each wiring-time value:
+/// the arguments are evaluated in the order written, before the
+/// statement (EXPR-13), a wiring-time value and a connection that is a
+/// call each held, and the defaults left out in the call of the child.
 #[test]
 fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
     let emitted = emit(&[("errors.hgl", ERRORS)]);
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_errors/__init__.py");
     for expected in [
+        // A node is called in a graph of the capture's own, which no
+        // call outside it shares.
         concat!(
-            "    _capture_0_by = 3\n",
             "    @_hg.graph\n",
             "    def _capture_0(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
-            "        return scaled(value=value, by=_capture_0_by)\n",
+            "        return checked_node(value=value)\n",
             "    boundary = _core.captured(_hg.try_except(_capture_0, value=value))\n",
         ),
         concat!(
-            "    _capture_1_by = by\n",
-            "    _capture_1_value = forward(value=value)\n",
+            "    _capture_3_by = 3\n",
             "    @_hg.graph\n",
-            "    def _capture_1(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
-            "        return offset(by=_capture_1_by, value=value, plus=10)\n",
-            "    boundary = _core.captured(_hg.try_except(_capture_1, value=_capture_1_value))\n",
+            "    def _capture_3(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return scaled(value=value, by=_capture_3_by)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_3, value=value))\n",
         ),
         concat!(
-            "    def _capture_5(value: _hg.TS[_py.int]) -> None:\n",
-            "        return sink_of(value=value, by=_capture_5_by)\n",
-            "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(_capture_5, value=value)))\n",
+            "    _capture_4_by = by\n",
+            "    _capture_4_value = forward(value=value)\n",
+            "    @_hg.graph\n",
+            "    def _capture_4(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return offset(by=_capture_4_by, value=value, plus=10)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_4, value=_capture_4_value))\n",
         ),
-        "    boundary = _core.captured(_hg.try_except(_lift_5_hundredth, value=value))\n",
+        concat!(
+            "    def _capture_8(value: _hg.TS[_py.int]) -> None:\n",
+            "        return sink_of(value=value, by=_capture_8_by)\n",
+            "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(_capture_8, value=value)))\n",
+        ),
+        concat!(
+            "    def _capture_9(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return _lift_5_hundredth(value=value)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_9, value=value))\n",
+        ),
         "    return _core.lifted_is_err(value)\n",
     ] {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }
 }
 
-/// ERR-7: a capture of a graph given a wiring-time value anywhere but as
-/// the value of a `let` is reported, and not written; so is a capture of
-/// a lifted operator.
+/// ERR-1: "Distinguish source rejection, execution failure, ordinary
+/// result data, and test/infrastructure failure." ERR-7: a capture takes
+/// a failure of the program, an HGL error, and no other: what the
+/// provider's `captured` wires beside a `try_except` raises any other
+/// failure again, through a capture around it too. The script runs a
+/// node that raises an HGL error and Python's `NotImplementedError`
+/// behind the provider's own capture. Needs hgraph, as above.
 #[test]
-fn a_capture_of_a_graph_given_a_constant_outside_a_let_is_reported() {
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_failure_that_is_no_hgl_error_escapes_every_capture() {
+    let python = python_with_hgraph();
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hgraph_no_hgl_error");
+    fs::remove_dir_all(&directory).ok();
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("_core_native.py"),
+        include_str!("../support/core_native.py"),
+    )
+    .unwrap();
+    let script = directory.join("escapes.py");
+    fs::write(&script, include_str!("fixtures/escapes.py")).unwrap();
+    let ran = std::process::Command::new(&python)
+        .arg("-I")
+        .arg("-B")
+        .arg(&script)
+        .arg(&directory)
+        .output()
+        .expect("the interpreter starts");
+    assert!(
+        ran.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "[None, 'negative demo.negative', None]\nescaped\nescaped\n"
+    );
+}
+
+/// ERR-7: a capture of a node, of a lifted call or of a graph given a
+/// wiring-time value anywhere but as the value of a `let` is reported,
+/// and not written; so is a capture of a lifted operator, and one in a
+/// test outside an eval (TST-3), as a temporal call there is.
+#[test]
+fn a_capture_outside_a_let_is_reported() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
@@ -6841,13 +6978,23 @@ fn a_capture_of_a_graph_given_a_constant_outside_a_let_is_reported() {
             "    let boundary = capture(add_, value, 1)\n",
             "    return boundary.value\n",
             "}\n",
+            "fn forward(value: i64) -> i64 { when { return value } }\n",
+            "fn inline(value: i64) -> i64 {\n",
+            "    return capture(forward, value).value\n",
+            "}\n",
+            "test outside_an_eval {\n",
+            "    let seen = capture(forward, 1)\n",
+            "    assert true\n",
+            "}\n",
         ),
     )]);
     assert_eq!(
         emitted.reported,
         [
             "m.hgl:4:12 target.unsupported",
-            "m.hgl:7:20 target.unsupported"
+            "m.hgl:7:20 target.unsupported",
+            "m.hgl:12:12 target.unsupported",
+            "m.hgl:15:16 target.unsupported",
         ]
     );
 }
