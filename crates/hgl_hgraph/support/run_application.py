@@ -41,7 +41,6 @@ import datetime
 import enum
 import importlib
 import json
-import math
 import os
 import signal
 import sys
@@ -53,15 +52,15 @@ def _escape(text):
 
 
 def _described(error):
-    """An error as a person reads it: the HGL error under what hgraph
-    raised, where there is one."""
-    seen = set()
-    found = error
-    while found is not None and id(found) not in seen:
-        seen.add(id(found))
-        if getattr(found, "code", None) is not None and type(found).__name__ == "HglError":
-            return f"{found.code}: {found}"
-        found = found.__cause__ or found.__context__
+    """An error as a person reads it: the HGL error with a code under
+    what hgraph raised, where there is one."""
+    # An HGL error is the provider's: where one was raised, the provider
+    # is loaded.
+    core = sys.modules.get("_hgl._core_native")
+    if core is not None:
+        for found in core._causes(error):
+            if isinstance(found, core.HglError) and found.code is not None:
+                return f"{found.code}: {found}"
     return f"{type(error).__name__}: {error}"
 
 
@@ -92,21 +91,18 @@ def _duration(value):
     return sign + "".join(parts)
 
 
-def _shown(value):
+def _shown(value, core):
     """A published value as text, written as HGL writes one where it has
-    a way to."""
+    a way to. A scalar that converts to `str` is its conversion, the
+    provider `core`'s (OPS-6)."""
     if value is None or type(value).__name__ == "_Null":
         return "null"
     if isinstance(value, bool):
-        return "true" if value else "false"
+        return core.convert_bool_to_str(value)
     if isinstance(value, int):
-        return str(value)
+        return core.convert_i64_to_str(value)
     if isinstance(value, float):
-        if math.isnan(value):
-            return "nan"
-        if math.isinf(value):
-            return "inf" if value > 0 else "-inf"
-        return repr(value)
+        return core.convert_f64_to_str(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, datetime.datetime):
@@ -120,23 +116,25 @@ def _shown(value):
     kind = type(value)
     fields = getattr(kind, "_hgl_fields", None)
     if fields is not None:
-        inside = ", ".join(f"{field}: {_shown(getattr(value, field))}" for field in fields)
+        inside = ", ".join(f"{field}: {_shown(getattr(value, field), core)}" for field in fields)
         return f"{kind.__name__}({inside})"
     if kind.__name__ == "Ok" and hasattr(value, "value"):
-        return f"ok({_shown(value.value)})"
+        return f"ok({_shown(value.value, core)})"
     if kind.__name__ == "Err" and hasattr(value, "error"):
-        return f"err({_shown(value.error)})"
+        return f"err({_shown(value.error, core)})"
     if hasattr(value, "added") and hasattr(value, "removed"):
         # A set's delta: what the publication added and what it removed.
-        return f"delta(added: {_shown(set(value.added))}, removed: {_shown(set(value.removed))})"
+        added, removed = _shown(set(value.added), core), _shown(set(value.removed), core)
+        return f"delta(added: {added}, removed: {removed})"
     if isinstance(value, tuple):
-        return "(" + ", ".join(_shown(part) for part in value) + ")"
+        return "(" + ", ".join(_shown(part, core) for part in value) + ")"
     if isinstance(value, list):
-        return "[" + ", ".join(_shown(part) for part in value) + "]"
+        return "[" + ", ".join(_shown(part, core) for part in value) + "]"
     if isinstance(value, (set, frozenset)):
-        return "{" + ", ".join(sorted(_shown(part) for part in value)) + "}"
+        return "{" + ", ".join(sorted(_shown(part, core) for part in value)) + "}"
     if isinstance(value, dict):
-        return "{" + ", ".join(f"{_shown(key)}: {_shown(held)}" for key, held in value.items()) + "}"
+        shown = (f"{_shown(key, core)}: {_shown(held, core)}" for key, held in value.items())
+        return "{" + ", ".join(shown) + "}"
     return str(value)
 
 
@@ -163,6 +161,9 @@ def main(directory, module_name, function_name, results, mode):
             module = importlib.import_module(module_name)
             function = getattr(module, function_name)
             harness = importlib.import_module("_hgl._harness")
+            # The provider, which the harness imports: its conversions
+            # write what is published.
+            core = importlib.import_module("_hgl._core_native")
         except Exception as error:
             say("unloaded", _escape(_described(error)))
             return 1
@@ -223,7 +224,7 @@ def main(directory, module_name, function_name, results, mode):
             say("stopped", "none")
             return 0
         for at, published in output:
-            say("published", _instant(at), _escape(_shown(published)))
+            say("published", _instant(at), _escape(_shown(published, core)))
         say("stopped")
         return 0
 

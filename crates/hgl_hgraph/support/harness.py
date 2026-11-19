@@ -520,14 +520,11 @@ def _escaping_code(error):
     enclosing raises", and no more can any other failure that is no HGL
     error with a code.
     """
-    seen = set()
-    while error is not None and id(error) not in seen:
-        seen.add(id(error))
-        if isinstance(error, AssertionError) or getattr(error, _REFUSED, False):
+    for found in _core._causes(error):
+        if isinstance(found, AssertionError) or getattr(found, _REFUSED, False):
             return None
-        if isinstance(error, _core.HglError):
-            return error.code
-        error = error.__cause__ or error.__context__
+        if isinstance(found, _core.HglError):
+            return found.code
     return None
 
 
