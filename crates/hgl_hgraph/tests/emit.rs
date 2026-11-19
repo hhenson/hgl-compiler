@@ -6015,6 +6015,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("wrapped.hgl", WRAPPED));
     files.push(("converted.hgl", CONVERSIONS));
     files.push(("timers.hgl", TIMERS));
+    files.push(("timer_selectors.hgl", TIMER_SELECTORS));
     files.push(("copies.hgl", COPIES));
     files.push(("temporal_structs.hgl", TEMPORAL_STRUCTS));
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
@@ -6288,6 +6289,91 @@ fn a_timer_wakes_its_own_handlers() {
             "the module has:\n{expected}\nin:\n{python}"
         );
     }
+}
+
+/// TIME-3 and TIME-9: `scheduled()` under a negation and in a
+/// disjunction, a dormant handler, and a dormant node.
+const TIMER_SELECTORS: &str = include_str!("fixtures/timer_selectors.hgl");
+
+/// TIME-3: "Selectors under negation or disjunction leave the default in
+/// place", so such a handler subscribes to every input and is run by an
+/// input's wake. TIME-9: `scheduled()` there is what woke the node, held
+/// where it is entered. With neither a scheduler nor an alarm "nothing
+/// wakes it: the node is dormant".
+#[test]
+fn scheduled_is_a_bool_where_it_selects_nothing() {
+    let emitted = emit(&[("timer_selectors.hgl", TIMER_SELECTORS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_timer_selectors/__init__.py");
+    for expected in [
+        // An input's wake, and no wake of the scheduler due.
+        concat!(
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
+            "    if (value.modified or value.invalidated) and (not _timer_woke):\n",
+        ),
+        // With an alarm, no input ticked.
+        concat!(
+            "    _timer_woke = _scheduler.is_scheduled_now and not (value.modified or value.invalidated)\n",
+            "    if (value.modified or value.invalidated) and (not _timer_woke):\n",
+        ),
+        // A disjunction: every input subscribed, and each required valid.
+        concat!(
+            "@_hg.compute_node\n",
+            "def either(a: _hg.TS[_py.int], b: _hg.TS[_py.int], _scheduler: _hg.SCHEDULER = None) -> _hg.TS[_py.int]:\n",
+            "    _timer_woke = _scheduler.is_scheduled_now\n",
+            "    if (a.modified or a.invalidated or b.modified or b.invalidated) and ((a.modified and a.valid) or _timer_woke):\n",
+        ),
+        // In a body, after asking again under the tag that is due.
+        "        return _timer_woke\n",
+        // No input wakes a handler that subscribes to none, and it is not
+        // written; a node that nothing wakes is never active.
+        "@_hg.sink_node(active=())\ndef null_sink(a: _hg.TS[_py.float]):\n    pass\n",
+        "def half_dormant(a: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n    if a.modified:\n",
+        "@_hg.compute_node(active=(), valid=())\ndef _node_idle(_begin: _hg.TS[_py.bool]) -> _hg.TS[_py.int]:\n    pass\n",
+    ] {
+        assert!(
+            python.contains(expected),
+            "the module has:\n{expected}\nin:\n{python}"
+        );
+    }
+}
+
+/// TIME-9 says what `scheduled()` is in an evaluation, and nothing of it
+/// in `start` or `stop`; TIME-3 says what `modified([])` subscribes to,
+/// and not what it is as a bool. Each is reported.
+#[test]
+fn scheduled_in_a_lifecycle_hook_is_reported() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn first(value: i64) -> bool {\n",
+            "    state seen: bool = false\n",
+            "    inject scheduler\n",
+            "    start { seen = scheduled() }\n",
+            "    when { return seen }\n",
+            "}\n",
+            "fn last(value: i64) -> bool {\n",
+            "    state seen: bool = false\n",
+            "    inject alarm\n",
+            "    when { return seen }\n",
+            "    stop { seen = scheduled() }\n",
+            "}\n",
+            "fn unwoken(value: i64) -> bool {\n",
+            "    inject scheduler\n",
+            "    start { schedule(scheduler, 1s) }\n",
+            "    when !modified([]) { return true }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:5:20 target.unsupported",
+            "m.hgl:12:19 target.unsupported",
+            "m.hgl:17:11 target.unsupported",
+        ]
+    );
 }
 
 /// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection
