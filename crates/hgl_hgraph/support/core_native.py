@@ -1,8 +1,11 @@
 """Core's native value functions, for the hgraph target.
 
-Written by the hgl compiler beside the modules it generates. Each function
-is one native candidate of core's `hgl/native/scalar_operators.hgl`, named
-after the candidate and the types of its parameters: `add__i64_i64` is
+Written by the hgl compiler beside the modules it generates. It has two
+parts. The first is what the compiler names by hand: errors and results,
+structs, deltas, endpoints, places and copies, sources and the classes of
+capabilities. The second is core's natives: each function is one native
+candidate of core's `hgl/native/`, named after the candidate and the
+types of its parameters: `add__i64_i64` is
 `native impl const fn add_(lhs: i64, rhs: i64) -> i64`. A conversion is
 named with what it gives too, `convert_i64_to_f64`: core's candidates of
 `convert` take one type and give different ones (OPS-4).
@@ -78,6 +81,9 @@ _I64_MAX = 2**63 - 1
 _MICROSECOND = _datetime.timedelta(microseconds=1)
 _NAN = float("nan")
 _INFINITY = float("inf")
+
+
+# ==== What the compiler names by hand ====
 
 
 def constant(function):
@@ -1138,7 +1144,7 @@ def resume(source, now, scheduler):
                 raise HglError(
                     "a `yield` after a negative duration", code="yield.negative_duration"
                 )
-            target = _moved(now, time)
+            target = _shifted(now, time)
         else:
             target = time
         if source.previous is not None and target <= source.previous:
@@ -1336,7 +1342,7 @@ def _put(holder, kind, key, value):
     return holder
 
 
-def _changed(holder, steps, at, change):
+def _changed_inside(holder, steps, at, change):
     """What `holder` is to be once the value `steps[at:]` leads to inside
     it has been changed by `change`.
 
@@ -1352,7 +1358,7 @@ def _changed(holder, steps, at, change):
         return change(holder)
     kind, key = steps[at]
     inner = _step(holder, kind, key)
-    changed = _changed(inner, steps, at + 1, change)
+    changed = _changed_inside(inner, steps, at + 1, change)
     return holder if changed is inner else _put(holder, kind, key, changed)
 
 
@@ -1369,7 +1375,7 @@ def set_at(root, steps, value, /):
     """`place = value` where the place is inside the value a `var`, a
     `state` or a `cache` holds, more than one step in: `book.bids[price]
     = size`, `rows[key][0] = 2` (EXPR-3). Each collection on the way is
-    changed where it is (`_changed`).
+    changed where it is (`_changed_inside`).
 
     `steps` is the way in, each step its kind and what it names: `"f"`
     a struct's field, `"k"` a dictionary's key, and `"i"` a list's index
@@ -1395,7 +1401,7 @@ def set_at(root, steps, value, /):
             _index(key, len(holder))
         return _put(holder, kind, key, new)
 
-    return _changed(root, steps[:-1], 0, assign)
+    return _changed_inside(root, steps[:-1], 0, assign)
 
 
 def given_at(root, steps, function, place, arguments, /):
@@ -1421,7 +1427,7 @@ def given_at(root, steps, function, place, arguments, /):
         result.append(given[0])
         return given[1]
 
-    changed = _changed(root, steps, 0, change)
+    changed = _changed_inside(root, steps, 0, change)
     return (result[0], changed)
 
 
@@ -1491,6 +1497,10 @@ def nullable(port, scalar):
 
         _NULLABLE[scalar] = node
     return node(value=port)
+
+
+# ==== Core's natives, each named after its candidate ====
+
 
 def Clock_evaluation_time(clock):
     """CAP-3: a clock's four properties, each read from hgraph's
@@ -2365,7 +2375,7 @@ def convert_bytes_to_str(value, invalid):
     return _converted(text, invalid)
 
 
-def _moved(instant, duration):
+def _shifted(instant, duration):
     """An instant a duration on from another (OPS-1).
 
     OPS-10: an instant result "outside its type's range is an HGL error
@@ -2388,15 +2398,15 @@ def instant(written, minutes):
     that far from what its date and time say. An instant is a `datetime`
     in UTC that names no zone, as hgraph has them.
     """
-    return _moved(written, -_datetime.timedelta(minutes=minutes))
+    return _shifted(written, -_datetime.timedelta(minutes=minutes))
 
 
 def add__datetime_duration(lhs, rhs):
-    return _moved(lhs, rhs)
+    return _shifted(lhs, rhs)
 
 
 def sub__datetime_duration(lhs, rhs):
-    return _moved(lhs, -rhs)
+    return _shifted(lhs, -rhs)
 
 
 def sub__datetime_datetime(lhs, rhs):
@@ -2404,11 +2414,11 @@ def sub__datetime_datetime(lhs, rhs):
 
 
 def add__civil_datetime_duration(lhs, rhs):
-    return _moved(lhs, rhs)
+    return _shifted(lhs, rhs)
 
 
 def sub__civil_datetime_duration(lhs, rhs):
-    return _moved(lhs, -rhs)
+    return _shifted(lhs, -rhs)
 
 
 def sub__civil_datetime_civil_datetime(lhs, rhs):
@@ -2429,11 +2439,11 @@ def add__date_duration(lhs, rhs):
     """OPS-10: a `date` with a `duration` added or taken away "is the
     `civil_datetime` that far from the start of the date, whatever the
     duration"."""
-    return _moved(_datetime.datetime.combine(lhs, _datetime.time()), rhs)
+    return _shifted(_datetime.datetime.combine(lhs, _datetime.time()), rhs)
 
 
 def sub__date_duration(lhs, rhs):
-    return _moved(_datetime.datetime.combine(lhs, _datetime.time()), -rhs)
+    return _shifted(_datetime.datetime.combine(lhs, _datetime.time()), -rhs)
 
 
 # TYPE-2: "named `timezone`, resolved `zoned_datetime`, and
@@ -2552,11 +2562,11 @@ def add__zoned_datetime_duration(lhs, rhs):
     """OPS-1: a `zoned_datetime` and a `duration` give "that instant's
     type". A duration is elapsed time, so the instant moves by it and
     the zone is kept; the offset is the zone's at the new instant."""
-    return ZonedDatetime(_moved(lhs.instant, rhs), lhs.zone)
+    return ZonedDatetime(_shifted(lhs.instant, rhs), lhs.zone)
 
 
 def sub__zoned_datetime_duration(lhs, rhs):
-    return ZonedDatetime(_moved(lhs.instant, -rhs), lhs.zone)
+    return ZonedDatetime(_shifted(lhs.instant, -rhs), lhs.zone)
 
 
 @_dataclasses.dataclass(frozen=True, repr=False)
