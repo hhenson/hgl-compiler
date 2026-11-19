@@ -4117,7 +4117,24 @@ impl Emitter<'_> {
     fn made_anew(&self, function: &Function, value: &Expr) -> bool {
         matches!(function.mode, Mode::Node | Mode::Stop)
             && self.input_port(function, value).is_some()
-            && built_anew(self.program, &value.ty, 0)
+            && built_anew(self.program, Self::port_type(function, value), 0)
+    }
+
+    /// The type of what the port `value` reads in a hook holds: an
+    /// input's or `out`'s declared type, and not the type the analyser
+    /// reads it as, an atomic's V (TYPE-9) or the type under a `?` that
+    /// marks omission (TYPE-14). hgraph keeps an atomic's value whole in
+    /// its port, and its read is that value, not one made anew. Any
+    /// other read is of its own type.
+    fn port_type<'f>(function: &'f Function, value: &'f Expr) -> &'f Type {
+        match value.kind {
+            ExprKind::Local(local)
+                if Self::is_input(function, local) || Self::is_out(function, local) =>
+            {
+                &function.locals[local].ty
+            }
+            _ => &value.ty,
+        }
     }
 
     /// True where `value` is a connection of a graph: hgraph's wiring,

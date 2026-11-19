@@ -125,6 +125,26 @@ fn bid_or(value: i64, quote: atomic<Quote>?) -> i64 {
     }
 }
 
+# A `var` given an atomic input's value has a value of its own (the
+# owner's copy rule): changing it leaves the input's as it was.
+struct Triple {
+    a: i64
+    b: i64
+    c: i64
+}
+
+fn tripled(a: i64) -> atomic<Triple> {
+    when { return Triple(a: a, b: a, c: a) }
+}
+
+fn changed_copy(triple: atomic<Triple>) -> i64 {
+    when {
+        var saved: Triple = triple
+        saved.a = saved.a + 100
+        return triple.a + saved.a
+    }
+}
+
 # TYPE-16: an atomic's delta is the whole value, the field that did not
 # change among it.
 fn whole_ask(quote: atomic<Quote>) -> i64 {
@@ -168,6 +188,7 @@ fn width_of(bid: i64, ask: i64) -> i64 => snapshot_width(snapshot(bid, ask))
 fn raised_bid(bid: i64, ask: i64) -> i64 => raised(snapshot(bid, ask)).bid
 fn widened_ask(bid: i64) -> i64 => widened(bid).ask
 fn whole_asks(bid: i64, ask: i64) -> i64 => whole_ask(snapshot(bid, ask))
+fn changed_copy_of(a: i64) -> i64 => changed_copy(tripled(a))
 fn bids(value: i64, bid: i64, ask: i64) -> i64 => bid_or(value, snapshot(bid, ask))
 fn bids_left_out(value: i64) -> i64 => bid_or(value)
 # A lifted helper given a reference that may be left out follows it:
@@ -219,6 +240,7 @@ test an_atomic_struct_ticks_once_with_its_whole_value {
     assert eval(raised_bid(bid: [1, 2], ask: [5, _])) == [2, 3]
     assert eval(widened_ask(bid: [1, 2])) == [5, 6]
     assert eval(whole_asks(bid: [1, 2, _], ask: [5, _, 6])) == [5, 5, 6]
+    assert eval(changed_copy_of(a: [1, 2])) == [102, 104]
     assert eval(bids(value: [1, 2], bid: [5, _], ask: [6, _])) == [5, 5]
     assert eval(bids_left_out(value: [1, 2])) == [-1, -2]
     assert eval(snapshots(bid: [1, 2, 3], ask: [5, 6, _])) == [1, 2, 3]
