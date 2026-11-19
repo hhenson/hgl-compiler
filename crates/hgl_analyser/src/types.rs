@@ -275,9 +275,9 @@ impl Type {
     /// T publishes in one cycle" (TYPE-16).
     ///
     /// For most T it is another type the language has, and that type is
-    /// what this returns: `f64` for `f64`, `dict<i64, f64>` for
-    /// `list<f64>`. A nullable's, a set's, a dictionary's and a
-    /// struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
+    /// what this returns: `f64` for `f64`, `tuple<f64?, i64?>` for
+    /// `tuple<f64, i64>`. A nullable's, a list's, a set's, a
+    /// dictionary's and a struct's delta is a type of its own, `Type::Delta`. So is the delta of a type not
     /// yet known, a generic parameter's: "In a generic declaration it
     /// stays as written until T is known", and it is formed again, here,
     /// when the parameter is replaced.
@@ -302,12 +302,6 @@ impl Type {
             // "`atomic<V>`: V: an atomic publishes whole";
             // "`rolling_window<V, Max, Min>`: V: the value that arrived".
             Type::Atomic(value) | Type::RollingWindow { value, .. } => *value,
-            // "`dict<i64, delta<V>>`: for each position that changed,
-            // its delta".
-            Type::List { element, .. } => Type::Dict {
-                key: Box::new(Type::Scalar(Scalar::I64)),
-                value: Box::new(Type::delta(*element)),
-            },
             // "each position's delta, null where it did not change".
             Type::Tuple(elements) => Type::Tuple(
                 elements
@@ -331,6 +325,7 @@ impl Type {
             // delta, a `ref` or a `signal`, which is reported where it
             // is written (`delta.unsupported_shape`).
             Type::Set(_)
+            | Type::List { .. }
             | Type::Dict { .. }
             | Type::Named {
                 kind: NamedKind::Struct,

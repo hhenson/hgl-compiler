@@ -78,6 +78,10 @@ impl Hook {
 pub enum EndpointOperation {
     /// `valid(input)`: whether the endpoint holds a value.
     Valid,
+    /// `all_valid(input)`: whether every element, field or entry of a
+    /// list, tuple, struct or dictionary is valid, one level deep
+    /// (TIME-9, END-7).
+    AllValid,
     /// `modified(input)`: whether it published in this cycle.
     Modified,
     /// `delta_value(input)`: what it published in this cycle.
@@ -98,8 +102,9 @@ pub enum EndpointOperation {
 
 impl EndpointOperation {
     /// Every operation, with the name it is written by.
-    pub const ALL: [(&'static str, EndpointOperation); 9] = [
+    pub const ALL: [(&'static str, EndpointOperation); 10] = [
         ("valid", EndpointOperation::Valid),
+        ("all_valid", EndpointOperation::AllValid),
         ("modified", EndpointOperation::Modified),
         ("delta_value", EndpointOperation::DeltaValue),
         ("last_modified", EndpointOperation::LastModified),

@@ -7530,11 +7530,12 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
         "    return _core.item(_py.list(values.value), 1)".to_string(),
         "    return _py.tuple(doubled(values=_py.list(values.value)))".to_string(),
         format!("-> {pair}:"),
-        "    change = {slot.value: reading.value}\n    return change".to_string(),
+        "    return _core.list_delta(updated={slot.value: reading.value})".to_string(),
         "    return _py.tuple([low.value, _core.add__i64_i64(lhs=low.value, rhs=1)])".to_string(),
-        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef pair_span(pair: {pair})"),
-        "store=pair.delta_value, key=1".to_string(),
-        format!("@_hg.compute_node(all_valid=(\"pair\",))\ndef _lift_3_pair_total(pair: {pair})"),
+        // TIME-9: a fixed list is valid once any position is.
+        format!("@_hg.compute_node\ndef pair_span(pair: {pair})"),
+        "store=_core.updated(pair.delta_value), key=1".to_string(),
+        format!("@_hg.compute_node\ndef _lift_3_pair_total(pair: {pair})"),
         "    return one_position(slot=slot, reading=reading)[0]".to_string(),
         format!("-> {prices}:"),
         "        return _core.dict_delta(removed=_py.frozenset((key.value,)))".to_string(),
@@ -7553,7 +7554,8 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
 }
 
 /// What this target does not write of a temporal list or dictionary
-/// is reported: an unsized list's delta, published or read (it ticks
+/// is reported: a removed position written to a fixed list (hgraph's
+/// bounded `TSL` takes none), an unsized list's delta read (it ticks
 /// whole here), an unsized list of composite elements, a whole
 /// dictionary published, a nullable element of a fixed list published
 /// whole, a list's element at a position that ticks, and an unsized
@@ -7565,14 +7567,13 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
         concat!(
             "module m\n",
             "struct Quote { bid: i64 }\n",
-            "fn grown(slot: i64) -> list<i64> {\n",
+            "fn grown(slot: i64) -> list<i64, 2> {\n",
             "    when {\n",
-            "        let change: delta<list<i64>> = [slot: 1]\n",
-            "        return change\n",
+            "        return delta<list<i64, 2>>(removed: [slot])\n",
             "    }\n",
             "}\n",
             "fn grown_delta(values: list<i64>) -> i64? {\n",
-            "    when { return get(delta_value(values), 0) }\n",
+            "    when { return get(delta_value(values).updated, 0) }\n",
             "}\n",
             "fn quotes(values: list<Quote>) -> i64 {\n",
             "    when { return 1 }\n",
@@ -7595,13 +7596,50 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
     assert_eq!(
         emitted.reported,
         [
-            "m.hgl:6:16 target.unsupported",
-            "m.hgl:10:23 target.unsupported",
-            "m.hgl:12:11 target.unsupported",
-            "m.hgl:16:19 target.unsupported",
-            "m.hgl:19:19 target.unsupported",
-            "m.hgl:24:44 target.unsupported",
-            "m.hgl:25:4 target.unsupported",
+            "m.hgl:5:45 target.unsupported",
+            "m.hgl:9:23 target.unsupported",
+            "m.hgl:11:11 target.unsupported",
+            "m.hgl:15:19 target.unsupported",
+            "m.hgl:18:19 target.unsupported",
+            "m.hgl:23:44 target.unsupported",
+            "m.hgl:24:4 target.unsupported",
         ]
     );
+}
+
+/// TIME-9: "`valid` of a collection is true where any element, field or
+/// entry is valid ... `all_valid` is true where every one is", hgraph's
+/// `valid` and `all_valid`. TYPE-16: "A delta written with a smaller
+/// `size_modified` and no `removed` shrinks the list": an unsized list
+/// applies it to what it last published. A fixed list's `removed` is
+/// not read: hgraph's bounded `TSL` does not report it.
+#[test]
+fn collection_validity_and_a_lists_delta_are_written() {
+    let emitted = emit(&[(
+        "m.hgl",
+        concat!(
+            "module m\n",
+            "fn both(probe: bool, pair: list<i64, 2>) -> bool {\n",
+            "    when modified(probe) && valid([]) { return valid(pair) && all_valid(pair) }\n",
+            "}\n",
+            "fn resized(size: i64) -> list<i64> {\n",
+            "    when { return delta<list<i64>>(size_modified: size) }\n",
+            "}\n",
+            "fn lost(pair: list<i64, 2>) -> set<i64> {\n",
+            "    when { return delta_value(pair).removed }\n",
+            "}\n",
+        ),
+    )]);
+    assert_eq!(emitted.reported, ["m.hgl:9:19 target.unsupported"]);
+    let python = emitted.text("_hgl/_m_m/__init__.py");
+    for expected in [
+        "pair.valid and pair.all_valid",
+        "_output: _hg.TS_OUT[_py.tuple[_py.int, ...]] = None",
+        "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
+    ] {
+        assert!(
+            python.contains(expected),
+            "missing {expected} in:\n{python}"
+        );
+    }
 }

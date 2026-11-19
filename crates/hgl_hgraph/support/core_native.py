@@ -421,6 +421,67 @@ def dict_delta(updated=None, removed=()):
     return made
 
 
+class ListDelta(dict):
+    """A list's delta (the language's TYPE-16), as hgraph's delta of a
+    `TSL`: a `dict` of each position updated with its delta, and of each
+    removed with `REMOVE`. It also holds `size_modified`, "the new size
+    where the size changed, else null", which hgraph's `dict` has no
+    place for."""
+
+    size_modified = None
+
+
+def list_delta(updated=None, removed=(), size_modified=None):
+    """A list's delta made from its properties (TYPE-16: "`updated`,
+    each changed position with its delta; `removed`, the positions that
+    lost their value ... and `size_modified`"). A property left out is
+    empty, or null for `size_modified`. What is updated is copied: the
+    program may go on changing the dictionary it was given in."""
+    made = ListDelta({} if updated is None else copied(updated))
+    for position in removed:
+        made[position] = _REMOVE
+    made.size_modified = size_modified
+    return made
+
+
+def size_modified(delta):
+    """The property `size_modified` of a list's delta (TYPE-16): the
+    new size, or null where the size did not change."""
+    return getattr(delta, "size_modified", None)
+
+
+def list_applied(output, delta):
+    """The whole list an unsized list publishes for `delta`, applied to
+    what it last published, `output`'s value (TYPE-16). "A delta written
+    with a smaller `size_modified` and no `removed` shrinks the list", and
+    one whose `removed` is the whole tail does too. This target writes an
+    unsized list as a whole tuple, which holds no position without a
+    value: a position removed short of the end, or one that growth leaves
+    with no value, is not written yet."""
+    held = list(output.value) if output.valid else []
+    gone = {position for position, change in delta.items() if _removes(change)}
+    size = size_modified(delta)
+    if size is None:
+        size = min(gone) if gone else len(held)
+    if any(position < size for position in gone):
+        raise NotImplementedError(
+            "the hgraph target does not write a position removed inside an unsized list yet"
+        )
+    made = held[:size]
+    for position in range(len(made), size):
+        if position not in delta:
+            raise NotImplementedError(
+                "the hgraph target does not write an unsized list grown with no value yet"
+            )
+        made.append(None)
+    for position, change in delta.items():
+        if not _removes(change):
+            if not 0 <= position < size:
+                raise HglError(f"the position {position} is outside a list of {size}")
+            made[position] = change
+    return tuple(made)
+
+
 def _removes(change):
     return change is _REMOVE or change is _REMOVE_IF_EXISTS
 
