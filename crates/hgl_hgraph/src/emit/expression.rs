@@ -718,6 +718,15 @@ impl Emitter<'_> {
                     format!("{capture}.out")
                 }
             }
+            // TIME-3 says what `modified([])` selects in a header, and
+            // not what it is as a value: under `!`, say.
+            ExprKind::Endpoint {
+                operation: EndpointOperation::Modified,
+                inputs: Some(inputs),
+            } if inputs.is_empty() => {
+                self.unsupported(value.at, "`modified([])` as a value");
+                "None".to_string()
+            }
             _ => {
                 self.unsupported(value.at, "this expression");
                 "None".to_string()
@@ -1604,9 +1613,27 @@ impl Emitter<'_> {
                     // A whole value of composites, a struct with a struct
                     // field or a dictionary of dictionaries, would replace
                     // each part it holds in turn, which the harness does
-                    // not follow yet.
-                    if !self.parts_publish_whole(&value.ty) || !self.whole_readable(&value.ty) {
-                        self.unsupported(value.at, "a whole trace cell of composites");
+                    // not follow yet; so would a list of nullables, whose
+                    // whole tuple holds no null (`parts_publish_whole`).
+                    // One this target does not read whole has no reader
+                    // (`whole_readable`).
+                    let unwritten = if !self.parts_publish_whole(&value.ty) {
+                        Some(match &value.ty {
+                            Type::List { element, .. } if publishes_whole(element) => {
+                                "a whole trace cell of a list of nullables"
+                            }
+                            _ => "a whole trace cell of composites",
+                        })
+                    } else if !self.whole_readable(&value.ty) {
+                        Some(
+                            "a whole trace cell of an abstract struct, or of a generic one \
+                             whose arguments are not known",
+                        )
+                    } else {
+                        None
+                    };
+                    if let Some(unwritten) = unwritten {
+                        self.unsupported(value.at, unwritten);
                         return "None".to_string();
                     }
                     let fixed = matches!(value.ty, Type::List { size: Some(_), .. });
