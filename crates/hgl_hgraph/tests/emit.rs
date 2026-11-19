@@ -6043,6 +6043,7 @@ fn the_generated_tests_pass_on_hgraph() {
     files.push(("temporal_collections.hgl", TEMPORAL_COLLECTIONS));
     files.push(("conditionals.hgl", CONDITIONALS));
     files.push(("captures.hgl", CAPTURES));
+    files.push(("errors.hgl", ERRORS));
     files.extend(MODULES);
     files.extend(NESTED);
     files.push(("shadow.hgl", SHADOW));
@@ -6407,7 +6408,8 @@ const CAPTURES: &str = include_str!("fixtures/captures.hgl");
 /// ERR-7: "`capture(callable, args...)` creates a temporal error
 /// boundary", hgraph's `try_except`, whose `out` is `.value` and whose
 /// failures, each made an `error` by the provider, are `.error`. A
-/// capture of an outputless call is read the same way.
+/// capture of an outputless call is read the same way. ERR-8: the
+/// provider's `captured` lets the failures of a `start` or a `stop` out.
 #[test]
 fn a_capture_is_a_try_except() {
     let emitted = emit(&[
@@ -6427,37 +6429,93 @@ fn a_capture_is_a_try_except() {
     assert_eq!(emitted.reported, Vec::<String>::new());
     let python = emitted.text("_hgl/_m_demo/_m_captures/__init__.py");
     for expected in [
-        "    boundary = _hg.try_except(doubled, value=value)\n    return boundary.out\n",
+        "    boundary = _core.captured(_hg.try_except(doubled, value=value))\n    return boundary.out\n",
         "    return is_negative(failure=_core.captured_error(boundary.exception))\n",
-        "    outer = _hg.try_except(handled, value=value, repeat=repeat)\n",
+        "    outer = _core.captured(_hg.try_except(handled, value=value, repeat=repeat))\n",
         "def handled(value: _hg.TS[_py.int], repeat: _hg.TS[_py.bool]) -> _hg.TS[_core.Error]:\n",
     ] {
         assert!(python.contains(expected), "{expected}\nnot in\n{python}");
     }
     let sink = emitted.text("_hgl/_m_demo/_m_sink/__init__.py");
     let expected = concat!(
-        "    boundary = _hg.combine(exception=_hg.try_except(drop, value=value))\n",
+        "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(drop, value=value)))\n",
         "    return _core.captured_error(boundary.exception)\n",
     );
     assert!(sink.contains(expected), "{expected}\nnot in\n{sink}");
 }
 
-/// hgraph's `try_except` does not take a graph given a wiring-time
-/// value: that capture is reported, and not written.
+/// ERR-4, ERR-7, ERR-8, ERR-11 and TYPE-13: an error's context,
+/// captures of a graph given a wiring-time value and of a lifted value
+/// function, lifecycle failures that escape, a temporal `result`, and
+/// non-finite numbers as data.
+const ERRORS: &str = include_str!("fixtures/errors.hgl");
+
+/// hgraph's `try_except` does not take a graph with a scalar input.
+/// ERR-7: a capture of a graph given a wiring-time value, bound with
+/// `let`, is of a graph of the target's own that binds the value: the
+/// arguments are evaluated in the order written, before the statement
+/// (EXPR-13), a wiring-time value and a connection that is a call each
+/// held, and the defaults left out in the call of the child. FN-6: a
+/// lifted value function is captured as its node.
 #[test]
-fn a_capture_of_a_graph_given_a_constant_is_reported() {
+fn a_capture_binds_a_wiring_time_value_in_a_graph_of_its_own() {
+    let emitted = emit(&[("errors.hgl", ERRORS)]);
+    assert_eq!(emitted.reported, Vec::<String>::new());
+    let python = emitted.text("_hgl/_m_demo/_m_errors/__init__.py");
+    for expected in [
+        concat!(
+            "    _capture_0_by = 3\n",
+            "    @_hg.graph\n",
+            "    def _capture_0(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return scaled(value=value, by=_capture_0_by)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_0, value=value))\n",
+        ),
+        concat!(
+            "    _capture_1_by = by\n",
+            "    _capture_1_value = forward(value=value)\n",
+            "    @_hg.graph\n",
+            "    def _capture_1(value: _hg.TS[_py.int]) -> _hg.TS[_py.int]:\n",
+            "        return offset(by=_capture_1_by, value=value, plus=10)\n",
+            "    boundary = _core.captured(_hg.try_except(_capture_1, value=_capture_1_value))\n",
+        ),
+        concat!(
+            "    def _capture_5(value: _hg.TS[_py.int]) -> None:\n",
+            "        return sink_of(value=value, by=_capture_5_by)\n",
+            "    boundary = _core.captured(_hg.combine(exception=_hg.try_except(_capture_5, value=value)))\n",
+        ),
+        "    boundary = _core.captured(_hg.try_except(_lift_5_hundredth, value=value))\n",
+        "    return _core.lifted_is_err(value)\n",
+    ] {
+        assert!(python.contains(expected), "{expected}\nnot in\n{python}");
+    }
+}
+
+/// ERR-7: a capture of a graph given a wiring-time value anywhere but as
+/// the value of a `let` is reported, and not written; so is a capture of
+/// a lifted operator.
+#[test]
+fn a_capture_of_a_graph_given_a_constant_outside_a_let_is_reported() {
     let emitted = emit(&[(
         "m.hgl",
         concat!(
             "module m\n",
             "fn scaled(value: i64, const by: i64) -> i64 { return value * by }\n",
             "fn watched(value: i64) -> i64 {\n",
-            "    let boundary = capture(scaled, value, 2)\n",
+            "    return capture(scaled, value, 2).value\n",
+            "}\n",
+            "fn added(value: i64) -> i64 {\n",
+            "    let boundary = capture(add_, value, 1)\n",
             "    return boundary.value\n",
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:4:20 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:4:12 target.unsupported",
+            "m.hgl:7:20 target.unsupported"
+        ]
+    );
 }
 
 /// CTRL-15: over a connection "each case is a child graph selected at
