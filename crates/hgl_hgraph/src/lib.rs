@@ -185,8 +185,13 @@ pub fn test_function(name: &str) -> String {
     format!("test_{name}")
 }
 
-/// Core's native value functions for this target, as Python.
+/// Core's native value functions for this target, as Python: the file
+/// whose names [`provides`] reads.
 const CORE_NATIVE: &str = include_str!("../support/core_native.py");
+
+/// What the generated code names by hand, as Python: errors, structs,
+/// deltas, places and copies, which the natives' file imports.
+const CORE_SUPPORT: &str = include_str!("../support/core_support.py");
 
 /// The eval harness a generated test calls.
 const HARNESS: &str = include_str!("../support/harness.py");
@@ -228,6 +233,11 @@ pub const ROOT_FILE: &str = "_hgl/__init__.py";
 /// a module calls one of its functions, and with the harness, which
 /// imports it.
 pub const CORE_NATIVE_FILE: &str = "_hgl/_core_native.py";
+
+/// The support file that holds what the generated code names by hand,
+/// which [`CORE_NATIVE_FILE`] imports and a generated module reaches
+/// through it, as `_core.name`. It is written with that file.
+pub const CORE_SUPPORT_FILE: &str = "_hgl/_core_support.py";
 
 /// The support file that holds the eval harness. It is written when a
 /// test calls it.
@@ -368,6 +378,10 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
             path: CORE_NATIVE_FILE.to_string(),
             text: CORE_NATIVE.to_string(),
         });
+        files.push(File {
+            path: CORE_SUPPORT_FILE.to_string(),
+            text: CORE_SUPPORT.to_string(),
+        });
     }
     if harness {
         files.push(File {
@@ -430,16 +444,30 @@ fn blocked(modules: &[Option<emit::Written>], test: &emit::Piece) -> Option<Diag
 }
 
 /// True where the provider of core's natives defines the function
-/// `name`. What it defines is read from its text once: the name after
-/// each `def` at the start of a line, but for the private ones.
+/// `name`. What it defines is read from the natives' file once, the
+/// file of nothing else (`core_native.py`): at the start of a line, the
+/// name after each `def`, and the name a line `name = other` gives
+/// another function too, but for the private ones.
 pub(crate) fn provides(name: &str) -> bool {
+    /// True for text that is one Python name.
+    fn one_name(text: &str) -> bool {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    }
     // `LazyLock` works its value out the first time it is read, and
     // keeps it for every read after.
     static PROVIDED: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         CORE_NATIVE
             .lines()
-            .filter_map(|line| line.strip_prefix("def "))
-            .filter_map(|rest| rest.split('(').next())
+            .filter_map(|line| match line.strip_prefix("def ") {
+                Some(rest) => rest.split('(').next(),
+                None => line
+                    .split_once(" = ")
+                    .filter(|(name, other)| one_name(name) && one_name(other))
+                    .map(|(name, _)| name),
+            })
             .filter(|name| !name.starts_with('_'))
             .collect()
     });
