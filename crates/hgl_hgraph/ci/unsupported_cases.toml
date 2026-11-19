@@ -1,16 +1,5 @@
 # Each key completes the hgraph emitter's diagnostic "the hgraph target
 # does not write ... yet". A case is allowed only for the listed reason.
-"the candidate `mul_(str, i64)`" = [
-    "core_implementation::reverse_scaling",
-]
-# TYPE-2, OPS-2: two zoned datetimes compared by instant and zone, or as
-# UTC; core's candidates take the option `utc`.
-"the candidate `eq_(zoned_datetime, zoned_datetime, bool)`" = [
-    "core_implementation::reverse_instant_addition",
-    "core_implementation::a_duration_moves_a_zoned_instant",
-    "core_implementation::zoned_datetimes_are_equal_by_instant_and_zone",
-    "core_implementation::zoned_datetimes_compared_as_utc_are_equal_by_instant",
-]
 "`all_valid` of a value with an optional child (TIME-9)" = [
     "conformance::a_struct_with_an_optional_field_is_all_valid_and_read_whole",
 ]
