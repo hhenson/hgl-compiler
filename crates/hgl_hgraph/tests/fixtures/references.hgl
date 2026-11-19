@@ -127,6 +127,9 @@ fn designated(left: ref<i64>) -> i64 => left
 fn as_reference(left: i64) -> ref<i64> => left
 fn through_graphs(use_left: bool, left: i64, right: i64) -> i64 =>
     designated(pick(use_left, as_reference(left), right))
+# A graph's `if` returns a reference where its result is the type under it.
+fn branched(flag: bool, left: ref<i64>, right: i64) -> i64 => if flag { left } else { right }
+fn branched_of(flag: bool, left: i64, right: i64) -> i64 => branched(flag, left, right)
 fn generic_follows(use_left: bool, left: i64, right: i64) -> i64 => ticks(pick(use_left, left, right))
 fn generic_designates(use_left: bool, left: i64, right: i64) -> i64 =>
     ref_ticks(pick(use_left, left, right))
@@ -161,6 +164,8 @@ test a_reference_ticks_on_a_changed_designation {
     assert eval(doubled_of(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [2, 4, 20, 22]
     assert eval(through_graphs(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
+        [1, 2, 10, 11]
+    assert eval(branched_of(flag: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 10, 11]
     assert eval(generic_follows(use_left: [true, _, false, _], left: [1, 2, 3, _], right: [10, _, _, 11])) ==
         [1, 2, 3, 4]

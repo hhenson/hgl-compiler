@@ -13312,7 +13312,10 @@ impl<'a> Typer<'a> {
                 match (outcome, expected) {
                     (Outcome::Value(_), Some(expected)) if !open(expected) => {
                         let reported = self.diagnostics.len();
-                        let value = self.fit(value, expected, "the value of this block");
+                        // A branch of a graph's `if` or `switch` gives
+                        // its connection across a reference as the
+                        // place it stands in does (TIME-10).
+                        let value = self.fit_input(value, expected, "the value of this block");
                         let ty = if self.diagnostics.len() == reported {
                             value.ty.clone()
                         } else {

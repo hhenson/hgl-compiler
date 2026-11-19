@@ -86,7 +86,8 @@ const NODES: &str = concat!(
 /// type", so a graph gives a `ref<T>` input a connection of `T`, which
 /// it designates. TIME-10: "Ordinary followers observe the selected
 /// target": a `ref<T>` is given to an input of `T`, a lifted value
-/// function's among them, and returned where a graph's result is `T`.
+/// function's among them, and returned where a graph's result is `T`,
+/// from a branch of an `if` or a `switch` too.
 /// TYPE-12: "`signal` is a complete temporal input constraint with no
 /// readable payload": any connection is given to one.
 #[test]
@@ -108,6 +109,13 @@ fn a_graph_gives_a_connection_across_a_reference_and_to_a_signal() {
             "fn woken_by_struct(bid: i64) -> i64 => counted(quoted(bid))\n",
             "fn woken_by_reference(left: ref<i64>) -> i64 => counted(left)\n",
             "fn passed_on(tick: signal) -> i64 => counted(tick)\n",
+            "fn branched(flag: bool, left: ref<i64>, right: i64) -> i64 => if flag { left } else { right }\n",
+            "fn switched(flag: bool, left: ref<i64>, right: ref<i64>) -> i64 {\n",
+            "    switch flag {\n",
+            "        case true: { return left }\n",
+            "        default: { return right }\n",
+            "    }\n",
+            "}\n",
         )
     ));
     assert_eq!(checked.summary(), NONE);
