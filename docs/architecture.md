@@ -854,6 +854,14 @@ its type, and a node wherever the source leaves a step unwritten, such
 as an `i64` taken as an `f64`. It names no target. It is what the stages
 after the analyser read; the syntax tree stays for the formatter.
 
+It is the module `values` (`crates/hgl_analyser/src/values.rs`): its
+`Typer` reads one body, and each part of what it reads is a module of
+`values/`: `statements`, `expressions`, `symbols`, `calls`,
+`arguments`, `inference`, `operators`, `candidates`, `requirements`,
+`call_checks`, `constants`, `lifting`, `control`, `members`, `deltas`,
+`fit`, `results`, `evals`, `node`, `endpoints`, `children` and
+`capabilities`.
+
 The pass is built form by form. So far it reads:
 
 | Form | Rule | What is done |
