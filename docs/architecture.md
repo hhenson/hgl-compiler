@@ -1,9 +1,9 @@
 # Architecture
 
-Status: stages 1 (lexing) and 2 (parsing) are implemented, the first
-passes of stage 3 (analysis): modules, declarations, imports and name
-resolution, and the test runner's rejection cases. Everything marked *planned* is a plan, not
-a contract; it changes as stages are built.
+Status: the lexer, the parser, the analyser, the test runner and the
+hgraph transpiler are implemented, the last three in part:
+[rules.md](rules.md) says what each leaves. Everything marked *planned* is
+a plan, not a contract; it changes as stages are built.
 
 ## Pipeline
 
@@ -13,7 +13,7 @@ source text
 tokens
     |  hgl_parser
 syntax tree ---------> formatter (planned) ---------> source text
-    |  hgl_analyser (first pass)
+    |  hgl_analyser
 analysed program ----> error reporting (`check`)
     |  optimiser (planned)
 analysed program
@@ -38,12 +38,12 @@ Rules for every stage:
 | `hgl_diagnostics` | Diagnostic model, sink, terminal rendering | implemented |
 | `hgl_lexer` | Source text to tokens; literal text to values | implemented |
 | `hgl_parser` | Tokens to a lossless syntax tree | implemented |
-| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, the expressions and calls of value functions; control flow, phases and constants planned |
+| `hgl_analyser` | Syntax trees of a program to the analysed program | modules, declarations, imports, name resolution, written types, and the typed bodies of value functions, nodes, sources, graphs and tests: see "Analyser" below |
 | `hgl_runner` | The cases of a program and the outcome of each | rejection cases (`# expect-error`); executable cases handed to a target to run |
 | `hgl_cli` | The `hgl` command | `hgl tokens`, `hgl tree`, `hgl check`, `hgl test`, `hgl emit`, `hgl run` |
 | formatter | Syntax tree to source text | planned |
 | optimiser | Analysed program to analysed program | planned |
-| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | first slice: scalar and set nodes, value functions, graphs that call nodes, tests with dense evals |
+| `hgl_hgraph` | The hgraph target: the analysed program to Python wiring, and its tests run on a Python that has hgraph | in part: see "hgraph" below |
 
 A crate is created when its stage is built, not before.
 [rules.md](rules.md) lists each rule of the specification against the stage
@@ -235,14 +235,15 @@ It is built in passes:
 | Generic kinds | Whether a plain generic parameter is a type or a value; each generic argument against its parameter's kind | GEN-13, GEN-14 | done |
 | Signatures | What a callable's signature must hold once its types are read: a generic value parameter's default, and each constant its `requires` compares one with, is of its type; an option's name is one kind across an operator's candidates | GEN-13, GEN-6, GEN-3 | done |
 | Documentation | The keys of a documentation comment's `Args:` and `Type Args:` sections, against the declaration's parameters and generic parameters; nothing recorded | SDOC-3, SDOC-6 | in part: `Requires:` and `Properties:` keys are not checked |
-| Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: literals, names, operators, tuples, sequences of values, `let`, `var`, assignment, `return`, calls, constructions, members, elements |
-| Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | in part: each temporal body is classified a graph or a node. What each admits is planned: see "Temporal bodies" below |
-| Generics and operators | Generic resolution, `requires`, candidate selection | | planned |
+| Value expressions | The type of every expression of a value function and of every constant; each body written down typed | EXPR-2, EXPR-3, EXPR-5, EXPR-7, EXPR-9, NUM-1, FN-4, FN-7, TYPE-5, TYPE-7, TYPE-14, ERR-6 | in part: see "Value expressions" below |
+| Phases | Composition and runtime bodies, temporal shapes, lifting | FN-2 | FN-2 done: each temporal body is classified a graph or a node, and a node's body is held to its shape. What each admits: see "Temporal bodies" below |
+| Generics and operators | Generic resolution, `requires`, candidate selection | GEN-5, GEN-7, GEN-16 | in part: see "Symbols" and "Requirements" below |
 | Constant cycles | A constant whose value depends on itself, directly or through what working it out reads. It reads the typed program, so it runs last | UNIT-13 | done: see "Constants" below |
 | Tests and eval | Test blocks, `assert`, eval targets and traces | TST-3, TST-4, TST-5, TST-7, TST-8 | done: see "Eval" below. Running a test is the runner's |
 
-`hgl check` says which passes ran: names are resolved and written types
-are read, and what an expression is is not checked yet.
+`hgl check` says what it checked: modules, declarations, imports, names,
+written types and the bodies of value functions, nodes, sources, graphs
+and tests; it runs no test.
 
 ### Resolution
 
@@ -872,10 +873,10 @@ expected, or as an operand no candidate takes, is
 `nullable.required_presence` (ERR-12): it may be null there.
 
 What the pass does not read yet has no type, and nothing is reported of
-it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration, a
-sequence with a `_`, a call of a name nothing binds or of an operator
-that has a pack, a generic function's parameter and result types, the
-payload of a nullable, and a conversion written `str(value)`. The arguments of a call that is not
+it or of what uses it (ERR-9): `&&`, `||` or `!` given configuration,
+an anonymous function's body, a call of a name nothing binds or of an
+operator that has a pack, the payload of a nullable, and a conversion
+written `str(value)`. The arguments of a call that is not
 read are read themselves. After a form that is not read every `var` is
 taken to be assigned. An operand that is nullable is not judged: its
 guard says what it admits. One that is a generic parameter has the
@@ -1961,8 +1962,8 @@ that adds a file to core fails it until the list has the file.
 3. Analyser: modules, declarations, imports and `hgl check` (done);
    `# expect-error` matching and `hgl test` for rejection cases (done);
    name resolution (done); the checks the parser left (FN-8, NATIVE-3;
-   done); types for the scalar slice.
-4. Transpiler for hgraph (first slice done); `hgl test` running tests
+   done); the typed bodies of functions and tests (in part).
+4. Transpiler for hgraph (in part); `hgl test` running tests
    on it (done for what the target writes); the forms the rest of
    core's conformance cases need.
 5. Wider language coverage; optimiser passes; a second transpiler.

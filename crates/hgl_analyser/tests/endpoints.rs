@@ -5,8 +5,8 @@
 
 mod common;
 
-use common::{Checked, check};
-use hgl_analyser::hir::{Body, ExprKind, Stmt};
+use common::{Checked, body, check, locals};
+use hgl_analyser::hir::{ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -34,26 +34,6 @@ const CORE: &str = concat!(
 /// `m`. The `module` line is added, so the text given starts on line 2.
 fn module(text: &str) -> Checked {
     check(&[("core.hgl", CORE), ("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
-}
-
-/// The locals of `name`, as `local: type`.
-fn locals(checked: &Checked, name: &str) -> Vec<String> {
-    body(checked, name)
-        .locals
-        .iter()
-        .map(|local| format!("{}: {}", local.name, local.ty))
-        .collect()
 }
 
 /// TIME-9: "The operations on an endpoint are core's native value
