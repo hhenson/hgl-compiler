@@ -307,7 +307,7 @@ fn ticketed(size: i64) -> Ticket {
 fn saved_size(current: Ticket, save: bool) -> i64 {
     cache saved: Ticket = Ticket(id: 0, size: 0, price: 0.0)
     when modified(save) {
-        if save { saved = current }
+        if save && all_valid(current) { saved = current }
         return saved.size
     }
 }
