@@ -27,7 +27,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 
 use crate::constant::fold;
 use crate::program::{Declaration, DeclarationKind, Program};
-use crate::read::{child, has_token, is_type, tokens};
+use crate::read::is_type;
+use crate::syntax::{child, has_token, tokens};
 use crate::types::{
     Argument, Constant, ConstantValue, Detail, EnumMember, EnumType, FieldRef, GenericKind, Member,
     StructType, Type,
