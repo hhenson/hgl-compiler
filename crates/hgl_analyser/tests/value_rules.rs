@@ -331,6 +331,34 @@ fn only_two_constant_values_of_the_fields_type_are_judged() {
     );
 }
 
+/// UNIT-9: every two defaults a struct has for one field are compared,
+/// so a default that is not judged, `1 + 0`, hides no two that are,
+/// whatever order the parents are written in.
+#[test]
+fn a_default_that_is_not_judged_hides_no_conflict() {
+    let checked = module(concat!(
+        "abstract struct Sum { x: i64 = 1 + 0 }\n",
+        "abstract struct One { x: i64 = 1 }\n",
+        "abstract struct Two { x: i64 = 2 }\n",
+        "struct First : Sum, One, Two {}\n",
+        "struct Middle : One, Sum, Two {}\n",
+        "struct Agreeing : Sum, One {}\n",
+        "abstract struct Base { size: i64 }\n",
+        "abstract struct Summed : Base { size = 1 + 0 }\n",
+        "abstract struct Single : Base { size = 1 }\n",
+        "abstract struct Double : Base { size = 2 }\n",
+        "struct Paths : Summed, Single, Double {}\n",
+    ));
+    assert_eq!(
+        checked.summary(),
+        [
+            "m.hgl:5:26 local:type/default.conflict UNIT-9",
+            "m.hgl:6:27 local:type/default.conflict UNIT-9",
+            "m.hgl:12:32 local:type/default.conflict UNIT-9",
+        ]
+    );
+}
+
 /// UNIT-9 compares the defaults of one field. Two parents' fields of
 /// one name and two types are a `field.conflict` (TYPE-4), and are not
 /// reported again for their defaults.

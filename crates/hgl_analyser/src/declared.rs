@@ -838,6 +838,8 @@ impl Structs<'_> {
         // defaults two parents give one field, where they are not
         // plainly the same: they are compared once they are read.
         let mut defaults: Vec<InheritedDefaults> = Vec::new();
+        // Every default a parent gives a field, by each path, each once.
+        let mut given: Vec<Introduced> = Vec::new();
         for (via, parent) in self.parents[&id].iter().enumerate() {
             // A parent with no fields is part of a cycle of
             // inheritance, which has been reported.
@@ -877,6 +879,14 @@ impl Structs<'_> {
                     default_arguments,
                     ..field.clone()
                 };
+                let same = |other: &Introduced| {
+                    other.name == field.name
+                        && other.default_of == field.default_of
+                        && other.default_arguments == field.default_arguments
+                };
+                if field.has_default && !given.iter().any(same) {
+                    given.push(field.clone());
+                }
                 // The same field by another path is one field.
                 let listed = inherited
                     .iter_mut()
@@ -893,27 +903,24 @@ impl Structs<'_> {
                         first.default_of = field.default_of;
                         first.default_arguments = field.default_arguments;
                     }
-                    Some(first) => {
-                        if let Some(pair) = self.inherited_defaults(id, first, &field) {
-                            defaults.push(pair);
-                        }
-                    }
+                    Some(_) => {}
                     None => inherited.push(field),
                 }
             }
         }
-        // Two parents' fields of one name that are not one field, each
-        // with a default (TYPE-4: they have "one type and
-        // optionality"). Two of different types are a `field.conflict`,
-        // and their defaults are not compared too.
-        for (index, later) in inherited.iter().enumerate() {
-            let earlier = inherited[..index].iter().find(|earlier| {
-                earlier.name == later.name && earlier.has_default && !differs(earlier, &later.ty)
-            });
-            if let Some(earlier) = earlier
-                && let Some(pair) = self.inherited_defaults(id, earlier, later)
-            {
-                defaults.push(pair);
+        // Each two of those for one field, whether one field by two paths
+        // or two parents' fields of one name (TYPE-4: they have "one type
+        // and optionality"): every pair, so that a default that cannot
+        // be judged hides no two that can. Two of different types are a
+        // `field.conflict`, and their defaults are not compared too.
+        for (index, later) in given.iter().enumerate() {
+            for earlier in &given[..index] {
+                if earlier.name == later.name
+                    && !differs(earlier, &later.ty)
+                    && let Some(pair) = self.inherited_defaults(id, earlier, later)
+                {
+                    defaults.push(pair);
+                }
             }
         }
         // A field this struct writes itself, with a default or a type
