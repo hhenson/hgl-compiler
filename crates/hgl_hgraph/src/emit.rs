@@ -7951,13 +7951,19 @@ impl Emitter<'_> {
     fn reads_child(&self, function: &Function, value: &Expr) -> bool {
         fn within(emitter: &Emitter<'_>, function: &Function, value: &Expr) -> bool {
             match &value.kind {
-                // An input of an `atomic<V>` or a `T?` publishes whole: its
-                // value is read in a hook as a V, and has no child.
+                // The input is a collection (TIME-9): an `atomic<V>`, a `T?`
+                // and a `ref<T>` have no child, as the analyser has it.
                 ExprKind::Local(local) => {
                     Emitter::is_input(function, *local)
-                        && !matches!(
+                        && matches!(
                             function.locals[*local].ty,
-                            Type::Atomic(_) | Type::Nullable(_)
+                            Type::List { .. }
+                                | Type::Tuple(_)
+                                | Type::Dict { .. }
+                                | Type::Named {
+                                    kind: NamedKind::Struct,
+                                    ..
+                                }
                         )
                 }
                 // An `atomic<V>`'s field is computed from the whole value
