@@ -317,9 +317,9 @@ pub enum Stmt {
     },
 }
 
-/// What a `when` header asks of its node (TIME-3, TIME-4), read once by
-/// the analyser, which judges the handler's reads by it, and given to
-/// the stages after it. TIME-3: "A selector sets subscription or
+/// What a `when` header asks of its node (TIME-3, TIME-4), read by the
+/// analyser from the typed condition and given to the stages after it,
+/// which work none of it out again. TIME-3: "A selector sets subscription or
 /// admission when it stands alone in the header or appears as a
 /// top-level conjunct. Selectors under negation or disjunction leave
 /// the default in place."
