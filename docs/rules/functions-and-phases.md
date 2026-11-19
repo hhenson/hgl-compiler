@@ -67,6 +67,7 @@ analyser: partial
 
 - A value function's `return`, arrow body and final expression are of its result type; a `return` with no value is rejected where a result is declared, and one with a value where none is; a function that declares a result returns on every path (`return.missing`)
 - In a hook a `return` with no value is accepted where a result is declared, and one with a value is of the result's type
+- No value of a type is a function: a call of one, `plus_one(x)()`, `[x][0]()` or `(1 + 2)()`, is `type.mismatch`
 - Left: a composition return; an anonymous function's context
 
 transpiler: partial
@@ -130,6 +131,7 @@ transpiler: done
 analyser: done
 
 - What an anonymous function may use from around it
+- A call's callee is read as any expression is, so an anonymous function chosen by an `if` or taken from a list reads the node's inputs where it is written (TIME-1)
 
 ## FN-15
 

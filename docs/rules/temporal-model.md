@@ -7,7 +7,7 @@
 analyser: partial
 
 - A temporal input's payload is read where its `when` header or a guard proves it valid, and nowhere else: unguarded in a `when` or in `stop` (`payload.unguarded`, TIME-4, TIME-5), in `start` (`input.lifecycle`), in a `state`'s initialiser (`state.input_read`) and in a `cache`'s, which runs on every start (local `cache.input_read`)
-- A read in an anonymous function is held to the admission where the function is written (FN-14)
+- A read in an anonymous function is held to the admission where the function is written (FN-14), the callee of a call among them, which is read as any expression is
 - An endpoint operation observes an invalid endpoint with no guard
 - A collection's child, an element, a field or an entry at any depth, is an endpoint (`ChildEndpoint`); its value or `delta_value` is read where `all_valid` of its collection or `valid` of the child holds, and at a constant index, a module's constant or a field one that is not is `payload.unguarded`; at an index known when it runs the read is `CheckedChild`, checked then
 - Left: a function value kept in a `state` or a `cache`, which carries a read into a later evaluation, and which the rules give no type

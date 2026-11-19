@@ -15,7 +15,7 @@ use super::inference::{Inferred, Places, infer, mentions, placed};
 use crate::declared::{names_parameter, substitute_within};
 use crate::hir::{self, Callee, EndpointOperation, ExprKind, Form, Hook};
 use crate::program::{Binding, DeclarationKind, OperatorRef, Role};
-use crate::syntax::{child, has_token, name_token, tokens, ungrouped};
+use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
     Argument, CallArguments, ConstantValue, Detail, GenericKind, NamedKind, Scalar, Type,
 };
@@ -57,8 +57,8 @@ impl<'a> Typer<'a> {
     ///
     /// FN-4: "runtime/value evaluation chooses the value definition."
     /// A name left for the prelude, an operator, and a callee that is
-    /// itself an expression are for later parts: their arguments are
-    /// read, and the call has no type.
+    /// itself an expression are for later parts: the callee and the
+    /// arguments are read, and the call has no type.
     pub(super) fn call(&mut self, node: &SyntaxNode, expected: Option<&Type>) -> (ExprKind, Type) {
         self.call_read(node, expected)
     }
@@ -95,11 +95,29 @@ impl<'a> Typer<'a> {
             {
                 return self.endpoint(operation, &name, &list);
             }
-            // `(fn(x) => x + 1)(7)` (FN-10), and the call of what one
-            // gives, `(fn(a) => fn(b) => a + b)(1)(2)`: the function is
-            // read where it is written, for what it reads (FN-14).
-            if calls_anonymous(&callee) {
-                self.expression(&callee, Some(&Type::Unknown));
+            // The callee is an expression like any other, and is read
+            // where it is written, for what it reads (FN-14: "An
+            // anonymous function's scope is the scope around it plus its
+            // parameters"): `(fn(x) => x + 1)(7)` (FN-10), the call of
+            // what one gives, `(fn(a) => fn(b) => a + b)(1)(2)`, and one
+            // chosen by an `if` or taken from a list, `[fn() => x][0]()`.
+            let called = self.expression(&callee, Some(&Type::Unknown));
+            // FN-7: "inference does not create a general callable value
+            // type". An anonymous function has no type here, and a value
+            // of a type is no function.
+            if !open(&called.ty) {
+                self.diagnostics.emit(
+                    error(
+                        Category::Type,
+                        codes::TYPE_MISMATCH,
+                        self.at(&callee),
+                        format!("this is `{}`, which is no function, and is called", called.ty),
+                        "FN-7",
+                    )
+                    .with_note(
+                        "what is called is a function: one a module declares, or an anonymous one",
+                    ),
+                );
             }
             return self.unread_call(&list);
         };
@@ -756,20 +774,6 @@ impl<'a> Typer<'a> {
             ),
             _ => None,
         }
-    }
-}
-
-/// True when the callee `node` is an anonymous function, in
-/// parentheses or not, or a call of one, or of what such a call gives.
-fn calls_anonymous(node: &SyntaxNode) -> bool {
-    let node = &ungrouped(node.clone());
-    match node.kind() {
-        SyntaxKind::FnExpr => true,
-        SyntaxKind::CallExpr => node
-            .children()
-            .next()
-            .is_some_and(|inner| calls_anonymous(&inner)),
-        _ => false,
     }
 }
 
