@@ -1,10 +1,12 @@
 //! What every call is held to once each of its arguments is given to its
 //! parameter ([`Typer::finished_call`]): the place a `var` parameter
 //! takes, a trace, what a `const` parameter takes, a capability, a
-//! reference, and a call on the global store (FN-1, FN-9, FN-15, TIME-8,
-//! TST-3, TYPE-12). Part of the typing pass ([`super`]).
+//! reference, a call on the global store, and the duration a wake is
+//! asked for with (FN-1, FN-9, FN-15, TIME-8, TST-3, TYPE-12). Part of
+//! the typing pass ([`super`]).
 
 use hgl_diagnostics::{Category, Location};
+use hgl_parser::HasSpan;
 
 use super::arguments::Takes;
 use super::evals::holds_trace;
@@ -12,9 +14,9 @@ use super::fit::whole;
 use super::inference::placed;
 use super::{Selected, Typer};
 use crate::declared::substitute_within;
-use crate::hir::{Expr, ExprKind, Form, LocalId, Value, ValueCategory};
+use crate::hir::{Expr, ExprKind, Form, Hook, LocalId, Value, ValueCategory};
 use crate::program::{LocalKind, Role};
-use crate::types::{Argument, Detail, Scalar, Type};
+use crate::types::{Argument, ConstantValue, Detail, Scalar, Type};
 use crate::{codes, error};
 
 impl<'a> Typer<'a> {
@@ -52,6 +54,102 @@ impl<'a> Typer<'a> {
         self.fixed_arguments(&selected);
         self.traces_given(&selected, evaluating);
         self.store_keys(&selected);
+        self.wake_durations(&selected);
+    }
+
+    /// TIME-8: "A wake asked for with a `duration` takes one more than
+    /// zero, but in `start`, which takes zero too: `schedule(scheduler,
+    /// 0s)` there asks for a wake at the start, the node's first
+    /// evaluation. A duration that is not admitted, a negative one in
+    /// `start` included, rejects where the compiler sees its value, a
+    /// literal or a constant (UNIT-13), and elsewhere fails the call as
+    /// the program runs." Core's CAP-5 holds the alarm to the same.
+    ///
+    /// A wake is asked by a call of one of core's candidates of
+    /// `schedule`, given the scheduler or the alarm. The duration the
+    /// compiler sees is a compile-time constant, of literals and
+    /// constants; any other, an input, a local or a `const` parameter,
+    /// is checked as the program runs. A value function given the
+    /// capability is no hook: a negative duration is admitted in none,
+    /// and rejects there too, but whether a zero there is "in `start`"
+    /// the rule does not say, and it is left to the target.
+    fn wake_durations(&mut self, selected: &Selected) {
+        let &Selected {
+            module,
+            declaration,
+            arguments,
+            ..
+        } = selected;
+        let Some(signature) = selected.signature else {
+            return;
+        };
+        let program = self.program;
+        if Some(module) != program.core()
+            || program.modules[module].declarations[declaration].name != "schedule"
+        {
+            return;
+        }
+        // The capability it is given, the scheduler or the alarm.
+        let timer = ["scheduler", "alarm"]
+            .iter()
+            .filter_map(|capability| program.capability_type(capability))
+            .any(|timer| {
+                signature
+                    .parameters
+                    .first()
+                    .is_some_and(|parameter| parameter.ty == timer)
+            });
+        if !timer {
+            return;
+        }
+        let duration = Type::Scalar(Scalar::Duration);
+        let given = arguments.iter().find(|argument| {
+            argument
+                .parameter
+                .and_then(|index| signature.parameters.get(index))
+                .is_some_and(|parameter| parameter.ty == duration)
+        });
+        let Some(given) = given else {
+            return;
+        };
+        // The expression as it is written: the innermost node of the
+        // argument's span, and not the argument that holds it.
+        let at = given.value.at;
+        let written = (at.file == self.file)
+            .then(|| {
+                self.declaration
+                    .syntax
+                    .descendants()
+                    .filter(|node| node.span() == at.span)
+                    .last()
+            })
+            .flatten();
+        let Some(ConstantValue::Duration(micros)) =
+            written.and_then(|node| self.read_constant(&node, Some(&duration)).ok())
+        else {
+            return;
+        };
+        let starting = self.hook == Some(Hook::Start);
+        let admitted = micros > 0 || (micros == 0 && (starting || self.hook.is_none()));
+        if admitted {
+            return;
+        }
+        let message = if micros < 0 {
+            "a wake is asked for with a duration more than zero, or zero in `start`: this one is \
+             less than zero"
+        } else {
+            "a wake is asked for with a duration more than zero outside `start`: this one is zero"
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::SCHEDULE_NON_POSITIVE_DURATION,
+                given.value.at,
+                message.to_string(),
+                "TIME-8",
+            )
+            .with_note("`schedule(scheduler, 0s)` in `start` asks for a wake at the start"),
+        );
     }
 
     /// FN-9: "A graph injects `global_state` and no other, and uses it

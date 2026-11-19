@@ -601,12 +601,18 @@ impl Emitter<'_> {
                     guards.push(self.expression(&function, condition));
                 }
             }
+            // TIME-3: "In that handler's body `modified([])`, as a bool,
+            // is true, at a wake that lands with an input's tick
+            // included: what the header selected is taken as nothing
+            // modified."
+            self.empty_selected = handler.empty;
             if guards.is_empty() {
                 self.statements(&function, handler.body, 1);
             } else {
                 self.line(1, &format!("if {}:", guards.join(" and ")));
                 self.block(&function, handler.body, 2);
             }
+            self.empty_selected = false;
         }
         // `start` and `stop` are no evaluation a wake is due in.
         self.scheduled = None;
@@ -1200,6 +1206,10 @@ struct Handler<'a> {
     /// that names inputs, each a top-level conjunct: the specification
     /// does not say what the two ask together, and the target reports it.
     beside: Option<Location>,
+    /// True where its header has `modified([])` alone or as a top-level
+    /// conjunct: the selector, which a wake of the scheduler or the
+    /// alarm runs, and in its body `modified([])` is true (TIME-3).
+    empty: bool,
     /// Its statements.
     body: &'a [Stmt],
 }
@@ -1210,6 +1220,12 @@ impl<'a> Handler<'a> {
     /// condition that are checked when it runs.
     fn of(header: &'a Header, condition: Option<&'a Expr>, body: &'a [Stmt]) -> Handler<'a> {
         let conjuncts = condition.map(Expr::conjuncts).unwrap_or_default();
+        let empty = conjuncts.iter().any(|conjunct| {
+            matches!(&conjunct.kind, ExprKind::Endpoint {
+                operation: EndpointOperation::Modified,
+                inputs: Some(inputs),
+            } if inputs.is_empty())
+        });
         Handler {
             subscribed: header.subscribed.clone(),
             required: header.required.clone(),
@@ -1221,6 +1237,7 @@ impl<'a> Handler<'a> {
             scheduled: header.scheduled,
             selects: header.selects,
             beside: header.beside,
+            empty,
             body,
         }
     }
