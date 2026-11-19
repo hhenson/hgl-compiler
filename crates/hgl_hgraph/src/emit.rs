@@ -339,13 +339,29 @@ fn float(value: f64) -> String {
 }
 
 /// The Python type of a scalar this target writes, `int` for `i64`,
-/// reached through `_py`, the target's name for Python's built-ins.
+/// reached through `_py`, the target's name for Python's built-ins, or
+/// `_core`, the provider's.
+///
+/// TYPE-1: "`bool`, signed 64-bit `i64`, binary64 `f64`, Unicode
+/// `str`, and octet-sequence `bytes` retain distinct identities": each
+/// is a Python type of its own. Python's `int` has no bound, so core's
+/// arithmetic holds an `i64` to its range (NUM-2). A Python `bytes`
+/// holds octets, each 0 to 255, and orders them as unsigned octets.
 fn scalar(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Scalar(Scalar::Bool) => Some("_py.bool"),
         Type::Scalar(Scalar::I64) => Some("_py.int"),
         Type::Scalar(Scalar::F64) => Some("_py.float"),
         Type::Scalar(Scalar::Str) => Some("_py.str"),
+        Type::Scalar(Scalar::Bytes) => Some("_py.bytes"),
+        // TYPE-17: a tenor is the provider's `Tenor`, by its counts.
+        Type::Scalar(Scalar::Tenor) => Some("_core.Tenor"),
+        // TYPE-2: "named `timezone`, resolved `zoned_datetime`, and
+        // date-independent `zoned_time`" are the provider's classes,
+        // each with its zone by name.
+        Type::Scalar(Scalar::Timezone) => Some("_core.Timezone"),
+        Type::Scalar(Scalar::ZonedDatetime) => Some("_core.ZonedDatetime"),
+        Type::Scalar(Scalar::ZonedTime) => Some("_core.ZonedTime"),
         // TYPE-2: a `duration` is elapsed time in whole microseconds,
         // which is what a `timedelta` holds.
         Type::Scalar(Scalar::Duration) => Some("_dt.timedelta"),
@@ -373,6 +389,21 @@ fn time_fields(time: ClockTime) -> String {
         "{}, {}, {}, {}",
         time.hour, time.minute, time.second, time.microsecond
     )
+}
+
+/// Whether the instant of `date` and `time` written `minutes` east of
+/// UTC is in the years 1 to 9999 in UTC, which a Python `datetime` holds.
+/// An offset is less than a day (LEX-19), so only a time on the first
+/// day written east of UTC, or on the last day written west of it, can
+/// leave them.
+fn in_calendar(date: CalendarDate, time: ClockTime, minutes: i16) -> bool {
+    let first = (date.year, date.month, date.day) == (1, 1, 1);
+    let last = (date.year, date.month, date.day) == (9999, 12, 31);
+    // The minutes of the day the time is at, its seconds aside: an
+    // offset is whole minutes, so they do not change which day it is.
+    let into_day = i32::from(time.hour) * 60 + i32::from(time.minute);
+    let minutes = i32::from(minutes);
+    !((first && into_day < minutes) || (last && into_day - minutes >= 24 * 60))
 }
 
 /// A capability a node injects (TIME-8), as hgraph gives one to a node
@@ -1783,6 +1814,7 @@ impl Emitter<'_> {
         let python = match (scalar(ty), ty) {
             (Some(python), _) => {
                 self.datetime |= python.starts_with("_dt.");
+                self.natives |= python.starts_with("_core.");
                 python.to_string()
             }
             // An enum is a scalar to hgraph, as its Python `Enum` is.
@@ -6077,12 +6109,39 @@ impl Emitter<'_> {
     /// A temporal literal, by the parts it writes (LEX-11), which are
     /// what its type goes by. TYPE-2: a `date`, a `time`, a
     /// `civil_datetime` and a `datetime` are Python's `date`, `time` and
-    /// `datetime`. A zoned datetime, a zoned time and a time zone are not
-    /// written yet.
+    /// `datetime`; a `timezone`, a `zoned_time` and a `zoned_datetime`
+    /// are the provider's, made by its functions, which check the zone
+    /// (LEX-12: "The selected run provider checks exact catalog
+    /// membership and offset consistency").
     fn temporal(&mut self, parts: &Temporal, at: Location) -> String {
-        if parts.zone.is_some() {
-            self.unsupported(at, "a zoned datetime, a zoned time or a time zone");
-            return "None".to_string();
+        if let Some(zone) = &parts.zone {
+            self.natives = true;
+            let zone = string(zone);
+            return match (parts.date, parts.time, parts.offset) {
+                (None, None, _) => format!("_core.timezone({zone})"),
+                (None, Some(time), _) => {
+                    self.datetime = true;
+                    format!("_core.zoned_time(_dt.time({}), {zone})", time_fields(time))
+                }
+                (Some(date), Some(time), Some(minutes)) => {
+                    if !in_calendar(date, time, minutes) {
+                        self.unsupported(at, "an instant outside the years 1 to 9999");
+                        return "None".to_string();
+                    }
+                    self.datetime = true;
+                    format!(
+                        "_core.zoned_datetime(_dt.datetime({}, {}), {minutes}, {zone})",
+                        date_fields(date),
+                        time_fields(time)
+                    )
+                }
+                // LEX-11: a zone follows an offset or a time, or stands
+                // alone, and the lexer reads no other.
+                _ => {
+                    self.unsupported(at, "a zone after a date with no time or no offset");
+                    "None".to_string()
+                }
+            };
         }
         self.datetime = true;
         match (parts.date, parts.time, parts.offset) {
@@ -6094,6 +6153,15 @@ impl Emitter<'_> {
                     // A local date and time, and an instant written in
                     // UTC: the parts are the value's own.
                     None | Some(0) => written,
+                    // TYPE-2: "Instants/durations use signed 64-bit
+                    // microseconds", and an instant here is a Python
+                    // `datetime`, which holds the years 1 to 9999 only.
+                    // One written near either end with an offset may be
+                    // outside them in UTC: it is not written.
+                    Some(minutes) if !in_calendar(date, time, minutes) => {
+                        self.unsupported(at, "an instant outside the years 1 to 9999");
+                        "None".to_string()
+                    }
                     // An instant written east or west of UTC is that
                     // many minutes from what its parts say. The
                     // provider works it out, with Python's calendar.
