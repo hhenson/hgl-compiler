@@ -4,9 +4,6 @@
 "this expression" = [
     "conformance::propagating_a_retained_error_preserves_its_origin",
 ]
-"a zoned datetime, a zoned time or a time zone" = [
-    "core_implementation::reverse_instant_addition",
-]
 "the candidate `mul_(str, i64)`" = [
     "core_implementation::reverse_scaling",
 ]
