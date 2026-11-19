@@ -1,0 +1,12 @@
+module demo.elements.fails
+const fn at(items: list<i64>, index: i64) -> i64 => items[index]
+const fn size(sizes: dict<str, i64>, name: str) -> i64 => sizes[name]
+const fn placed(items: list<i64>, index: i64) -> list<i64> {
+    var next = items
+    next[index] = 0
+    return next
+}
+test beyond { assert at([1, 2], 2) == 0 }
+test before { assert at([1, 2], -1) == 2 }
+test absent { assert size(["a": 1], "z") == 0 }
+test outside { assert placed([1, 2], 5) == [1, 2] }

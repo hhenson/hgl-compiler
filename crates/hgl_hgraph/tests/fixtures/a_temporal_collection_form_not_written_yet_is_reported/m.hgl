@@ -1,0 +1,26 @@
+module m
+struct Quote { bid: i64 }
+fn grown(slot: i64) -> list<i64, 2> {
+    when {
+        return delta<list<i64, 2>>(removed: [slot])
+    }
+}
+fn grown_delta(values: list<i64>) -> i64? {
+    when { return get(delta_value(values).updated, 0) }
+}
+fn quotes(values: list<Quote>) -> i64 {
+    when { return 1 }
+}
+fn whole(key: str) -> dict<str, Quote> {
+    when { return [key: Quote(bid: 1)] }
+}
+fn maybe(value: i64) -> list<i64?, 2> {
+    when { return [value, null] }
+}
+fn fixed(value: i64) -> list<i64, 2> {
+    when { return [value, value] }
+}
+fn moving(slot: i64, value: i64) -> i64 => fixed(value)[slot]
+fn nested(key: str) -> dict<str, list<i64>> {
+    when { return delta<dict<str, list<i64>>>(removed: [key]) }
+}

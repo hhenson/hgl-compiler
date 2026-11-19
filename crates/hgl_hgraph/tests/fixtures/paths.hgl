@@ -1,0 +1,11 @@
+module paths
+use a_.b as one
+use a._b as two
+use paths.util as child
+const fn util() -> i64 => 8
+const fn members() -> set<i64> => [1, 2, 1]
+const fn pair() -> set<i64> => [1, 2]
+test paths {
+    assert one::pick() + two::pick() + child::pick() + util() == 15
+    assert members() == pair()
+}

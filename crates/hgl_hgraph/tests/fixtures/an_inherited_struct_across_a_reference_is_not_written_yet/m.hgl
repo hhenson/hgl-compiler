@@ -1,0 +1,16 @@
+module m
+abstract struct Shape {
+    id: i64
+}
+struct Circle : Shape {
+    radius: i64
+}
+fn circled(id: i64) -> Circle {
+    when { return Circle(id: id, radius: 1) }
+}
+fn shape_id(shape: Shape) -> i64 {
+    when all_valid(shape) { return shape.id }
+}
+fn designated(id: i64) -> ref<Shape> => circled(id)
+fn same(id: i64) -> ref<Circle> => circled(id)
+fn followed(id: i64) -> i64 => shape_id(same(id))

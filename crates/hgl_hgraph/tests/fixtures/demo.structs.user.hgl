@@ -1,0 +1,22 @@
+module demo.structs.user
+
+use demo.structs::{Point}
+use demo.structs as shapes
+
+const fn base() -> f64 => 5.0
+
+struct Marker {
+    at: Point = shapes::origin()
+    size: f64 = base()
+    label: str
+}
+
+const fn marker(label: str) -> Marker => Marker(label: label)
+
+test markers {
+    let made = Marker(label: "a")
+    assert made.size == 5.0
+    assert made.at == shapes::origin()
+    assert made == marker("a")
+    assert marker("b").label == "b"
+}

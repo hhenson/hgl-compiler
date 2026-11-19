@@ -1,0 +1,2 @@
+module paths.util
+export const fn pick() -> i64 => 4

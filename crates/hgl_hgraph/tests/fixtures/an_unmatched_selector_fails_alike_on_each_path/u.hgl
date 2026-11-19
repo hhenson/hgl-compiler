@@ -1,0 +1,33 @@
+module u
+fn routed(route: i64, a: i64) -> i64 {
+    switch route {
+        case 1: return a
+    }
+    return a
+}
+fn counted(route: i64, a: i64) -> i64 {
+    var chosen = a
+    switch route {
+        case 1: chosen = a * 2
+    }
+    return chosen
+}
+fn sink(value: i64) { when { } }
+fn sunk(route: i64, a: i64) {
+    switch route {
+        case 1: sink(a)
+    }
+}
+fn hooked(route: i64) -> i64 {
+    when {
+        switch route {
+            case 1: return 1
+        }
+        return 0
+    }
+}
+test in_a_graph { assert eval(routed(route: [1, 3], a: [1, 2])) == [1, 2] }
+test in_an_assignment { assert eval(counted(route: [1, 3], a: [1, 2])) == [2, 2] }
+test outputless { eval(sunk(route: [1, 3], a: [1, 2])) }
+test in_a_hook { assert eval(hooked(route: [1, 3])) == [1, 0] }
+test matched { assert eval(routed(route: [1, 1], a: [1, 2])) == [1, 2] }

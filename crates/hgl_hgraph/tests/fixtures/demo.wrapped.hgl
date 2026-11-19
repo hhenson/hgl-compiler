@@ -1,0 +1,31 @@
+module demo.wrapped
+fn counted(const every: duration = 1s) -> i64 {
+    inject global_state
+    cache count: i64 = 0
+    while count < get<i64>(global_state, "limit") {
+        count += 1
+        yield every: count
+    }
+}
+fn scaled(value: i64, const factor: i64) -> i64 {
+    when { return value * factor }
+}
+fn seeded(const limit: i64) -> i64 {
+    inject global_state
+    put(global_state, "limit", limit)
+    return counted()
+}
+# What the graph reads back is a value where it is built: a node's
+# configuration.
+fn factored(value: i64, const first: i64) -> i64 {
+    inject global_state
+    put(global_state, "factor", first)
+    let factor = get<i64>(global_state, "factor")
+    return scaled(value, factor)
+}
+test the_store_is_set_where_the_graph_is_built {
+    assert eval(seeded(limit: 2)) == [1s: 1, 2s: 2]
+    # A run of its own: it reads 3, and nothing of the run before.
+    assert eval(seeded(limit: 3)) == [1s: 1, 2s: 2, 3s: 3]
+    assert eval(factored(value: [1, 2], first: 10)) == [10, 20]
+}

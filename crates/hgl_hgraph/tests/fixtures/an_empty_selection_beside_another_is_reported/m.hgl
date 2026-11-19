@@ -1,0 +1,11 @@
+module m
+fn both(a: i64) -> i64 {
+    inject scheduler
+    start { schedule(scheduler, 1s) }
+    when modified([]) && modified(a) { return a }
+}
+fn sampled(a: i64) -> i64 {
+    inject scheduler
+    start { schedule(scheduler, 1s) }
+    when modified([]) && valid([]) { return 0 }
+}
