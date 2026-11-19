@@ -8,6 +8,19 @@ on:
 permissions:
   contents: read
 
+# For every cargo command below. They change how long a build takes, not
+# what is built or what the tests check.
+env:
+  # Coloured cargo output in the logs.
+  CARGO_TERM_COLOR: always
+  # Incremental compilation pays off when a build is repeated after small
+  # edits; a CI job builds once.
+  CARGO_INCREMENTAL: 0
+  # No debug information in unoptimised builds (the test profile inherits
+  # this): less to write, link and cache. A failing test still names its
+  # file and line.
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -36,8 +49,47 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - run: cargo --version
-      - run: cargo test --workspace --locked
+      # Installs the pinned toolchain and keeps its version for the cache
+      # key: a build by another compiler is of no use.
+      - id: rust
+        shell: bash
+        run: |
+          cargo --version
+          echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      # The downloaded crates and the built dependencies a run on main
+      # saved for this system, toolchain and Cargo.lock. With them a run
+      # compiles only the workspace's own crates.
+      - id: cache
+        uses: actions/cache/restore@v6
+        with:
+          # `&cache-paths` names this list; the save step below reuses it
+          # as `*cache-paths`, so the two cannot drift apart.
+          path: &cache-paths |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ steps.rust.outputs.version }}-${{ hashFiles('Cargo.lock') }}
+      # The dependencies are built with optimisation, which makes the
+      # tests about 2.5 times quicker. The workspace's own crates stay
+      # unoptimised, as the stack-size tests assume, and debug assertions
+      # and overflow checks stay on in all of them.
+      - run: cargo test --workspace --locked --config "profile.dev.package.'*'.opt-level=3"
+      # The next two steps run only on main, and only when the cache has
+      # no entry for this key yet. Pull requests restore what main saved
+      # and save nothing, so the repository's 10 GB of cache holds one
+      # entry for each system and Cargo.lock in use.
+      #
+      # Leaves the workspace's own crates out of the cache: every run
+      # rebuilds them.
+      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        run: cargo clean --workspace
+      # Saves the downloaded crates and the built dependencies.
+      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: *cache-paths
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   hgraph:
     # The tests that run a generated program on hgraph, which the jobs
