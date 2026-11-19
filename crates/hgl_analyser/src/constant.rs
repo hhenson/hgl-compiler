@@ -403,7 +403,23 @@ fn fits(ty: &Type, expected: &Type) -> bool {
         _ if unknown(ty) || unknown(expected) => true,
         (Type::Nullable(left), Type::Nullable(right)) => fits(left, right),
         (_, Type::Nullable(inner)) => fits(ty, inner),
-        (Type::List { element, .. }, Type::List { element: other, .. }) => fits(element, other),
+        // TYPE-10: "Size participates in identity": a size known to be
+        // another is another list.
+        (
+            Type::List { element, size },
+            Type::List {
+                element: other,
+                size: other_size,
+            },
+        ) => {
+            // A list written out has no size in its type: its length is
+            // held to the size its place expects by `fit`.
+            let sizes = match (size, other_size) {
+                (Some(size), Some(other_size)) => size.value.same(&other_size.value) != Some(false),
+                _ => true,
+            };
+            sizes && fits(element, other)
+        }
         (Type::Tuple(left), Type::Tuple(right)) => {
             left.len() == right.len()
                 && left
@@ -1877,9 +1893,18 @@ impl ConstantValue {
                 &[(**left).clone(), (**right).clone()],
                 &[(**other_left).clone(), (**other_right).clone()],
             )),
-            (V::Constructed { from: left, .. }, V::Constructed { from: right, .. }) => {
-                alike(left.same(right))
-            }
+            (
+                V::Constructed {
+                    of: left_of,
+                    from: left,
+                    ..
+                },
+                V::Constructed {
+                    of: right_of,
+                    from: right,
+                    ..
+                },
+            ) if left_of.declared == right_of.declared => alike(left.same(right)),
             (
                 V::Parameter { .. }
                 | V::Named { .. }

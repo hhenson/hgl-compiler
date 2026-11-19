@@ -889,6 +889,36 @@ fn a_member_keeps_its_enum() {
     );
 }
 
+/// Siblings of the member's enum and the list's size: a member
+/// constructed from a generic value parameter is of its enum too, and a
+/// named list constant is held to the size its place expects, under a
+/// `?` too (TYPE-7, TYPE-10).
+#[test]
+fn a_constructed_members_enum_and_a_named_lists_size_count() {
+    let shared = concat!(
+        "enum A { x }\n",
+        "enum B { x }\n",
+        "struct Box<const X: any> { v: i64 }\n",
+        "struct Sized<const X: list<i64, 3>?> { v: i64 }\n",
+        "const TWO: list<i64, 2>? = [1, 2]\n",
+        "const THREE: list<i64, 3>? = [1, 2, 3]\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn f<const N: i64>(b: Box<A(N)>) -> Box<A(N)> => b\n\
+             const fn g(s: Sized<THREE>) -> i64 => 1\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn f<const N: i64>(b: Box<A(N)>) -> Box<B(N)> => b\n\
+             const fn g(s: Sized<TWO>) -> i64 => 1\n"
+        ),
+        &["8 type.mismatch", "9 type.mismatch"],
+    );
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");
