@@ -1,0 +1,7 @@
+module activity
+fn toggle(control: bool, data: i64) -> i64 {
+    when modified(control) && valid(control) {
+        if control { activate(data) } else { passivate(data) }
+    }
+    when modified(data) && valid(data) { return data }
+}

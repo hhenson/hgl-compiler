@@ -1,0 +1,41 @@
+module demo.close
+
+const fn close(a: f64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b
+const fn near(a: f64, b: f64, share: f64) -> bool => a =={rel: share} b
+const fn apart(a: f64, b: f64, tolerance: f64) -> bool => a !={abs: tolerance} b
+const fn whole(a: i64, b: i64, tolerance: f64) -> bool => a =={abs: tolerance} b
+const fn mixed(a: i64, b: f64, tolerance: f64) -> bool => a =={abs: tolerance} b
+
+fn closes(a: f64, b: f64) -> bool => a =={abs: 0.5} b
+
+test closeness {
+    assert !(1.0 == 1.005)
+    assert 1.0 =={abs: 0.01} 1.005
+    assert close(1.0, 1.005, 0.01)
+    assert !close(1.0, 1.005, 0.001)
+    # "Configured `!=` is the complement under the same options."
+    assert apart(1.0, 1.005, 0.001)
+    assert !apart(1.0, 1.005, 0.01)
+    # NUM-2: an `i64` is not rounded to an `f64` to be compared.
+    assert !(9007199254740993 == 9007199254740992.0)
+    # A relative tolerance under one never reaches zero.
+    assert !near(1.0, 0.0, 0.5)
+    # NUM-5: the difference, and the tolerance scaled, are no `f64`.
+    assert !near(1.0e308, -1.0e308, 1.9)
+    assert near(1.0e308, -1.0e308, 2.0)
+    # NUM-7: closeness is not transitive.
+    assert close(0.0, 0.75, 1.0)
+    assert close(0.75, 1.5, 1.0)
+    assert !close(0.0, 1.5, 1.0)
+    # NUM-5: an infinity is close to itself alone, NaN to nothing,
+    # and the two zeros are equal.
+    assert close(1.0 / 0.0, 1.0 / 0.0, 1.0)
+    assert !close(1.0 / 0.0, -1.0 / 0.0, 1.0)
+    assert !close(0.0 / 0.0, 0.0 / 0.0, 1.0)
+    assert close(0.0, -0.0, 0.0)
+    assert whole(7, 9, 2.0)
+    assert !whole(7, 10, 2.0)
+    assert mixed(9007199254740993, 9007199254740992.0, 1.0)
+    assert !mixed(9007199254740993, 9007199254740992.0, 0.5)
+    assert eval(closes(a: [1.0, 2.0], b: [1.4])) == [true, false]
+}

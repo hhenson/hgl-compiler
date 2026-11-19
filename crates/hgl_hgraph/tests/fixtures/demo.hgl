@@ -1,0 +1,14 @@
+module demo
+use demo.util as u
+const fn kept() -> i64? {
+    var held: i64?
+    return held
+}
+fn idle(value: i64) -> i64 {
+    start { }
+    when { return u::one() }
+}
+test nested {
+    assert kept() == null
+    assert eval(idle(value: [7])) == [1]
+}

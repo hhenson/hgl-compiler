@@ -1,0 +1,7 @@
+module m
+fn routed(route: i64, a: i64) -> i64 {
+    switch route {
+        case 1: return a
+    }
+    return a
+}

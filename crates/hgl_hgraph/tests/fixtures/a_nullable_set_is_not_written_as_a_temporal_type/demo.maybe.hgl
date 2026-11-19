@@ -1,0 +1,11 @@
+module demo.maybe
+fn taken(members: set<i64>?) -> bool {
+    when { return members == null }
+}
+fn given(command: i64) -> set<i64>? {
+    when { return null }
+}
+# A `const` one is an ordinary value.
+fn fixed(value: i64, const members: set<i64>?) -> bool {
+    when { return members == null }
+}
