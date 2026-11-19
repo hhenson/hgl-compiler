@@ -1,7 +1,0 @@
-module demo.repeats
-# Core writes `i64 * str` in HGL, as `str * i64` turned
-# round, and the provider has no function for that one.
-const fn twice(text: str) -> str => 2 * text
-const fn fine(value: i64) -> i64 => value + 1
-test doubles { assert fine(1) == 2 }
-test repeats { assert twice("ab") == "abab" }

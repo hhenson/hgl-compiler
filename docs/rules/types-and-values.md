@@ -31,7 +31,7 @@ transpiler: partial
 - hgraph: a `duration` is a `timedelta`, a count of whole microseconds, as a value, as a constant and as what a connection ticks; its literal is written by its count
 - A `date`, a `time`, a `datetime` and a `civil_datetime` are Python's `date`, `time` and `datetime`, written by the parts the literal has; an instant is a `datetime` in UTC that names no zone, as hgraph has them, and one written with another offset is moved to UTC
 - A `timezone`, a `zoned_datetime` and a `zoned_time` are the provider's frozen dataclasses: a zone by its name, so aliases are distinct, and a zoned datetime its UTC instant and zone, equal where both are
-- Left, reported: core's `eq_` and `ne_` of two zoned datetimes, with the option `utc` (OPS-2), which `==`, `!=` and `=={utc: true}` of two select
+- Two zoned datetimes compared are core's `eq_` and `ne_` for them (OPS-2): equal where the instants and the zones are, and with `utc` where the instants are. A set's members, a dictionary's keys, and what a list or a struct holds are told apart by instant and zone. A duration moves the instant across a change of offset
 - Each is a value, configuration and a temporal value
 - Left: a literal instant outside the years 1 to 9999 in UTC, which is reported: a Python `datetime` holds no other
 
@@ -165,8 +165,9 @@ transpiler: partial
 - hgraph: a window of a scalar or an enum is a `TSW` of `WindowSize[n]` ticks or of a `timedelta`, one size where no minimum is written, and `TSW_OUT` for `out`
 - A value published to it, and its `delta_value`, is the value that arrived (TYPE-16); `valid`, `modified` and `last_modified` are the `TSW`'s; an eval's replay and record are core's for the window
 - A window within a struct, a tuple, a fixed list or a dictionary is that one's child, wired by its port in a graph, and that value's validity is its children's
-- A value that holds one, at any depth, is read as an input or as `out` only where each window it holds has a minimum of one tick, all valid at its first value; a window input so read in a hook is the `list<V>` it holds, oldest first (`_core.window_values`)
-- Left, reported: such a read where a window's minimum is more than one tick or a duration, whose readiness END-9 gives; a window's value within another value, and given to a lifted helper; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
+- A window is valid at its first value and all valid at its minimum, of ticks or of its arrivals' span, the `TSW`'s own; a value leaves a window of a duration only as another arrives, and its exit is no tick; a minimum of `0s` is written as the maximum, which hgraph 0.9.5's `TSW` reads as zero
+- A window's value, of an input, of `out`, of a child where it is admitted or checked when it runs, in a `when` or `stop`, and given to a lifted helper, is the `list<V>` it holds, oldest first (`_core.window_values`), which fails with `value.unset_read` before the window is all valid, where hgraph 0.9.5 reads what it holds
+- Left, reported: a value that holds a window read whole; a window child's value where a `result` is expected, which ERR-14 does not say; a window given to a lifted parameter with a default, which FN-11 does not say; invalidating a value that holds one, which hgraph's `TSW` survives with its values; a window, alone or within, given to the graph of a branch or a loop, which hgraph's `switch_` and `map_` fail on; a window `out` written where the evaluation may publish to it again, as hgraph's `TSW` takes one value a cycle; a window of a nullable, a struct or a collection
 
 ## TYPE-12
 
