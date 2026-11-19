@@ -634,6 +634,23 @@ impl<'a> Emitter<'a> {
         result: Option<&Type>,
         at: Location,
     ) -> String {
+        // FN-1: a value function's "parameter and result types are
+        // ordinary value types", and the analyser binds a generic one
+        // given a window to the list it holds (TYPE-11). A generic
+        // declaration's own parameter may stand for a window where it
+        // calls one, and its body was checked once (GEN-7): such an
+        // instance is reported, not written with a window for the
+        // value function's `T`.
+        if let Lifts::Function(generics) = lifts
+            && generics.iter().any(|generic| {
+                matches!(generic, GenericArgument::Type(ty) if !windows_in(self.program, ty).is_empty())
+            })
+        {
+            self.unsupported(
+                at,
+                "a window that a value function's generic type parameter stands for (FN-1)",
+            );
+        }
         // The node's parameters, the inputs that must be valid, how
         // many inputs there are, and the arguments of the call it
         // makes.

@@ -4035,6 +4035,53 @@ fn a_window_read_the_rules_do_not_settle_is_reported() {
     );
 }
 
+/// FN-1: a value function's "parameter and result types are ordinary
+/// value types", and TYPE-11: a window's value "given to a lifted helper
+/// (FN-12), is a `list<V>`": a value function's `T` given a window is
+/// that list, passed as it is to a `list<V>` (`_core.window_values`).
+/// TIME-7: "`inject out` exposes that same result for reads": a window
+/// child of `out`, a field, an element, a field of an element and an
+/// entry, is read as its list. A window is no collection (TIME-9): its
+/// list indexed is no child. The fixture's tests run on hgraph.
+#[test]
+fn a_generic_given_a_window_and_outs_window_child_are_lists() {
+    let emitted = emit_clean(&[fixture!("demo.windows_fixes.hgl")]);
+    let python = emitted.module("demo.windows_fixes");
+    python.assert_writes(&[
+        "ident(value=_core.window_values(value))",
+        "same(a=_core.window_values(a), b=_core.window_values(b))",
+        "total(values=_core.window_values(_output[\"prices\"]))",
+        "        held = _core.window_values(_output[\"prices\"])\n",
+        "        for value in _core.window_values(_output[\"prices\"]):\n",
+        "_core.item(_core.window_values(_output[\"prices\"]), 0)",
+        "_core.window_values(_core.position_of(_output, slot.value))",
+        "_core.window_values(_core.position_of(_output, 0)[\"prices\"])",
+        "_core.window_values(_core.entry_port(_output, key.value))",
+        "_core.item(_core.window_values(book[\"prices\"]), 0)",
+    ]);
+}
+
+/// A generic declaration is checked once, its `T` read as a `T` (GEN-7).
+/// Where its type parameter stands for a window, a node's hook that
+/// reads the parameter's value, and a value function the declaration
+/// gives it to (FN-1), are reported: the rules do not say what the read
+/// of a `T` that is a window gives, nor that the binding rejects. A
+/// node that asks only `valid` of it is written.
+#[test]
+fn a_window_a_generic_stands_for_is_reported() {
+    let emitted = emit(&[fixture!(
+        "a_window_a_generic_stands_for_is_reported",
+        "m.hgl"
+    )]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:6:19 target.unsupported: the hgraph target does not write the value of a window that a generic type parameter stands for (GEN-7, TYPE-11) yet",
+            "m.hgl:10:28 target.unsupported: the hgraph target does not write a window that a value function's generic type parameter stands for (FN-1) yet",
+        ]
+    );
+}
+
 /// CTRL-13 to CTRL-15: a graph's `if` and `switch`, over a connection
 /// and over a `const` parameter.
 const CONDITIONALS: (&str, &str) = fixture!("demo.conditionals.hgl");
