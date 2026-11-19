@@ -608,7 +608,9 @@ fn a_tuple_cell_is_the_whole_tuple_where_it_is_one() {
 /// cell written as a T is read whole. A tuple that names a generic
 /// parameter, `tuple<T, T>`, is found from a trace an eval gave as from
 /// one written out (GEN-2: "Resolve every needed generic from actual
-/// inputs"), and its cells are then read as any tuple's are.
+/// inputs"), and its cells are then read as any tuple's are. An
+/// `atomic<tuple<A, B>>` publishes whole (TYPE-9), its cell the tuple
+/// itself, generic target or not.
 #[test]
 fn a_tuple_trace_is_given_to_a_generic_target() {
     let checked = module(concat!(
@@ -617,6 +619,12 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "}\n",
         "fn consume<T>(pair: tuple<i64, i64?>, const tag: T) -> i64 {\n",
         "    when all_valid(pair) { return pair[0] }\n",
+        "}\n",
+        "fn snap(command: i64) -> atomic<tuple<i64, i64>> {\n",
+        "    when { return (command, command) }\n",
+        "}\n",
+        "fn kept_whole<T>(pair: atomic<tuple<i64, i64>>, const tag: T) -> i64 {\n",
+        "    when { return pair[0] }\n",
         "}\n",
         "fn same_pair<T>(pair: tuple<T, T>) -> i64 {\n",
         "    when all_valid(pair) { return 1 }\n",
@@ -630,6 +638,9 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
         "    assert eval(consume(pair: [(1, null)], tag: 1)) == [1]\n",
         "    assert eval(same_pair(pair: pairs)) == [1, 1]\n",
         "    assert eval(same_pair(pair: [(1, 2), (null, 3)])) == [1, 1]\n",
+        "    let snaps = eval(snap(command: [1]))\n",
+        "    assert eval(kept_whole(pair: snaps, tag: 1)) == [1]\n",
+        "    assert eval(kept_whole(pair: [(1, 2)], tag: 1)) == [1]\n",
         "}\n",
     ));
     assert_eq!(checked.summary(), NONE, "{}", checked.report);
@@ -662,6 +673,10 @@ fn a_tuple_trace_is_given_to_a_generic_target() {
             "tuple<i64, i64>",
             "tuple<i64?, i64?>",
             "i64",
+            "i64",
+            "i64",
+            "i64",
+            "tuple<i64, i64>",
             "i64",
         ]
     );
