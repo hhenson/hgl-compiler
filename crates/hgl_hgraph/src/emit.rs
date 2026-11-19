@@ -28,7 +28,7 @@ use hgl_diagnostics::{Category, Code, Diagnostic, Diagnostics, Location};
 
 use crate::copies::{self, Copies};
 use crate::instances::Instances;
-use crate::{codes, provided, python_module, test_function};
+use crate::{codes, provides, python_module, test_function};
 
 /// What writing a module gave.
 pub(crate) struct Written {
@@ -234,6 +234,61 @@ impl Mode {
             self,
             Mode::Value | Mode::Node | Mode::Lifecycle | Mode::Stop | Mode::Source
         )
+    }
+}
+
+/// What the body of a node or a source is made of that both write
+/// alike: each `state` and `cache` with its first value, and the
+/// `start` and `stop` hooks. `rest` is every other statement, in the
+/// order written, for the node or the source to write.
+struct NodeParts<'b> {
+    /// TIME-6: "Cache is reconstructible node-local value data,
+    /// initialized on every start". hgraph's `STATE` is the node's own
+    /// and is recorded nowhere, so a `state` and a `cache` are both
+    /// fields of it, given their values in `start`, in the order
+    /// written: each local with its value.
+    states: Vec<(usize, &'b Option<Expr>)>,
+    /// The `start` hook's statements.
+    start: Option<&'b [Stmt]>,
+    /// The `stop` hook's statements.
+    stop: Option<&'b [Stmt]>,
+    /// The other statements.
+    rest: Vec<&'b Stmt>,
+}
+
+impl<'b> NodeParts<'b> {
+    /// The parts of `body`.
+    fn of(body: &'b Body) -> NodeParts<'b> {
+        let mut parts = NodeParts {
+            states: Vec::new(),
+            start: None,
+            stop: None,
+            rest: Vec::new(),
+        };
+        for statement in &body.statements {
+            match statement {
+                Stmt::Declare { local, value }
+                    if matches!(
+                        body.locals[*local].kind,
+                        LocalKind::State | LocalKind::Cache
+                    ) =>
+                {
+                    parts.states.push((*local, value));
+                }
+                Stmt::Hook {
+                    hook: Hook::Start,
+                    body,
+                    ..
+                } => parts.start = Some(body),
+                Stmt::Hook {
+                    hook: Hook::Stop,
+                    body,
+                    ..
+                } => parts.stop = Some(body),
+                other => parts.rest.push(other),
+            }
+        }
+        parts
     }
 }
 
@@ -1235,14 +1290,8 @@ impl<'a> Emitter<'a> {
         if self.instances.instanced(program, self.module, index) {
             let candidate = declaration.kind.candidate().is_some();
             if candidate
-                && !self
-                    .candidates
-                    .insert(self.definition_name(self.module, index))
+                && !self.new_candidate(self.definition_name(self.module, index), declaration.at)
             {
-                self.unsupported(
-                    declaration.at,
-                    "a candidate with the parameter types of another of its module",
-                );
                 return;
             }
             // Each instance is a piece of its own: one with a form
@@ -1269,16 +1318,9 @@ impl<'a> Emitter<'a> {
             // its own is a function as any other, under a name of the
             // target's: an operator may have many.
             (DeclarationKind::Implementation(Role::Value, _), Some(signature), Some(body)) => {
-                // Two candidates that differ only in what they require
-                // would be one Python function.
                 let python = self.definition_name(self.module, index);
-                if self.candidates.insert(python.clone()) {
+                if self.new_candidate(python.clone(), declaration.at) {
                     self.value_function(&python, signature, body);
-                } else {
-                    self.unsupported(
-                        declaration.at,
-                        "a candidate with the parameter types of another of its module",
-                    );
                 }
             }
             (DeclarationKind::Function(Role::Temporal), Some(signature), Some(body)) => {
@@ -1290,13 +1332,8 @@ impl<'a> Emitter<'a> {
             // function is, under a name of the target's.
             (DeclarationKind::Implementation(Role::Temporal, _), Some(signature), Some(body)) => {
                 let python = self.definition_name(self.module, index);
-                if self.candidates.insert(python.clone()) {
+                if self.new_candidate(python.clone(), declaration.at) {
                     self.node_or_graph(index, &python, signature, body);
-                } else {
-                    self.unsupported(
-                        declaration.at,
-                        "a candidate with the parameter types of another of its module",
-                    );
                 }
             }
             // An operator is a name for its candidates, which are the
@@ -1314,6 +1351,21 @@ impl<'a> Emitter<'a> {
                 self.unsupported(declaration.at, what);
             }
         }
+    }
+
+    /// True where `python` names no candidate of the module written
+    /// before, and records it. Two candidates that differ only in what
+    /// they require would be one Python function: the second, declared
+    /// at `at`, is reported.
+    fn new_candidate(&mut self, python: String, at: Location) -> bool {
+        if self.candidates.insert(python) {
+            return true;
+        }
+        self.unsupported(
+            at,
+            "a candidate with the parameter types of another of its module",
+        );
+        false
     }
 
     /// A temporal function or a temporal candidate, the declaration
@@ -1570,14 +1622,7 @@ impl<'a> Emitter<'a> {
             // failure returns the same E as Err." A `?` is inside an
             // expression, where Python has no `return`: the provider
             // raises, and the function returns what was raised.
-            let body: String = self.text[start..]
-                .lines()
-                .map(|line| format!("    {line}\n"))
-                .collect();
-            self.text.truncate(start);
-            self.line(1, "try:");
-            self.text.push_str(&body);
-            self.line(1, "except _core.Propagated as _left:");
+            self.tried(start, "_core.Propagated as _left");
             // What `?` passes on may hold what the function was given.
             // A result is the caller's to keep, so it is a copy, as
             // any result that is not the function's own is
@@ -1606,19 +1651,26 @@ impl<'a> Emitter<'a> {
             // each `var` parameter holds then: the call assigns each
             // place, and then raises it again
             // (`_core.raise_if_failed`).
-            let body: String = self.text[start..]
-                .lines()
-                .map(|line| format!("    {line}\n"))
-                .collect();
-            self.text.truncate(start);
             self.natives = true;
-            self.line(1, "try:");
-            self.text.push_str(&body);
-            self.line(1, "except _py.Exception as _failed:");
+            self.tried(start, "_py.Exception as _failed");
             let given = self.returned("_core.Failed(_failed)");
             self.line(2, &format!("return {given}"));
         }
         self.given_back.clear();
+    }
+
+    /// Puts the lines of a function's body written since `start` under a
+    /// `try:`, and writes the `except` that catches `caught` after them,
+    /// for the lines of its handler to follow.
+    fn tried(&mut self, start: usize, caught: &str) {
+        let body: String = self.text[start..]
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect();
+        self.text.truncate(start);
+        self.line(1, "try:");
+        self.text.push_str(&body);
+        self.line(1, &format!("except {caught}:"));
     }
 
     /// What a `return` of `value` gives: the value, or in a function
@@ -1788,6 +1840,14 @@ impl<'a> Emitter<'a> {
         Some("_given[0]".to_string())
     }
 
+    /// `python`, the name of a function of the provider of core's
+    /// natives, where what it is for is declared in core, the module
+    /// `module`, and the provider defines it (NATIVE-7). `None` for
+    /// any other.
+    fn native_function(&self, module: usize, python: String) -> Option<String> {
+        (Some(module) == self.program.core() && provides(&python)).then_some(python)
+    }
+
     /// A call of a native function of core that is given a place inside
     /// a value as its one `var` parameter, `append(book.orders, order)`
     /// (FN-15, LIST-1): the provider goes in to the place, and the
@@ -1808,13 +1868,10 @@ impl<'a> Emitter<'a> {
     ) -> Option<String> {
         let program = self.program;
         let declared = &program.modules[module].declarations[declaration];
-        let native = format!("fn_{}", declared.name);
-        if declared.kind != DeclarationKind::NativeFunction(Role::Value)
-            || Some(module) != program.core()
-            || !provided().any(|provided| provided == native)
-        {
+        if declared.kind != DeclarationKind::NativeFunction(Role::Value) {
             return None;
         }
+        let native = self.native_function(module, format!("fn_{}", declared.name))?;
         let mut places = signature
             .parameters
             .iter()
@@ -2472,9 +2529,12 @@ impl<'a> Emitter<'a> {
             .filter(|&local| function.is_input(local))
             .collect();
         // What the body is made of: the declarations, and each hook.
-        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
-        let mut start: Option<&[Stmt]> = None;
-        let mut stop: Option<&[Stmt]> = None;
+        let NodeParts {
+            states,
+            start,
+            stop,
+            rest,
+        } = NodeParts::of(body);
         let mut handlers: Vec<Handler> = Vec::new();
         let mut has_out = false;
         // TIME-8: the capabilities the node injects, each as hgraph
@@ -2482,31 +2542,8 @@ impl<'a> Emitter<'a> {
         let mut capabilities: Vec<(&str, &str)> = Vec::new();
         // TIME-9: the scheduler or the alarm, where it injects one.
         let mut timer: Option<Timer> = None;
-        for statement in &body.statements {
+        for statement in rest {
             match statement {
-                // TIME-6: "Cache is reconstructible node-local value
-                // data, initialized on every start". hgraph's `STATE`
-                // is the node's own and is recorded nowhere, so a
-                // `state` and a `cache` are both fields of it, given
-                // their values in `start`, in the order written.
-                Stmt::Declare { local, value }
-                    if matches!(
-                        body.locals[*local].kind,
-                        LocalKind::State | LocalKind::Cache
-                    ) =>
-                {
-                    states.push((*local, value));
-                }
-                Stmt::Hook {
-                    hook: Hook::Start,
-                    body,
-                    ..
-                } => start = Some(body),
-                Stmt::Hook {
-                    hook: Hook::Stop,
-                    body,
-                    ..
-                } => stop = Some(body),
                 Stmt::Hook {
                     hook: Hook::When,
                     condition,
@@ -2897,17 +2934,7 @@ impl<'a> Emitter<'a> {
             self.line(0, &format!("def _start_{python}({lifecycle}):"));
             let before = self.text.len();
             self.unheld(signature);
-            for (local, value) in &states {
-                let field = name(&body.locals[*local].name);
-                let value = match value {
-                    Some(value) => {
-                        let written = self.expression(&lifecycle_hook, value);
-                        self.kept(&lifecycle_hook, *local, value, written)
-                    }
-                    None => "None".to_string(),
-                };
-                self.line(1, &format!("_state.{field} = {value}"));
-            }
+            self.state_values(&lifecycle_hook, &states);
             if let Some(start) = start {
                 self.statements(&lifecycle_hook, start, 1);
             }
@@ -2944,6 +2971,23 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// Writes, in a node's `start`, the first value of each of its
+    /// `state`s and `cache`s, `states`, as a field of its `STATE`:
+    /// `hook` is the function `start` reads them in.
+    fn state_values(&mut self, hook: &Function, states: &[(usize, &Option<Expr>)]) {
+        for (local, value) in states {
+            let field = name(&hook.locals[*local].name);
+            let value = match value {
+                Some(value) => {
+                    let written = self.expression(hook, value);
+                    self.kept(hook, *local, value, written)
+                }
+                None => "None".to_string(),
+            };
+            self.line(1, &format!("_state.{field} = {value}"));
+        }
+    }
+
     /// A source (SOURCE-1): "a node that produces its output and has no
     /// temporal parameters". It is written as three functions and a
     /// graph that wires them, `python`:
@@ -2972,31 +3016,16 @@ impl<'a> Emitter<'a> {
         self.window_inputs(signature);
         // What the body is made of: the declarations, the hooks, and
         // the statements that yield.
-        let mut states: Vec<(usize, &Option<Expr>)> = Vec::new();
-        let mut start: Option<&[Stmt]> = None;
-        let mut stop: Option<&[Stmt]> = None;
+        let NodeParts {
+            states,
+            start,
+            stop,
+            rest,
+        } = NodeParts::of(body);
         let mut capabilities: Vec<(&str, &str)> = Vec::new();
         let mut block: Vec<Stmt> = Vec::new();
-        for statement in &body.statements {
+        for statement in rest {
             match statement {
-                Stmt::Declare { local, value }
-                    if matches!(
-                        body.locals[*local].kind,
-                        LocalKind::State | LocalKind::Cache
-                    ) =>
-                {
-                    states.push((*local, value));
-                }
-                Stmt::Hook {
-                    hook: Hook::Start,
-                    body,
-                    ..
-                } => start = Some(body),
-                Stmt::Hook {
-                    hook: Hook::Stop,
-                    body,
-                    ..
-                } => stop = Some(body),
                 Stmt::Inject { local, at } => {
                     let injected = &body.locals[*local].name;
                     match capability(injected) {
@@ -3089,17 +3118,7 @@ impl<'a> Emitter<'a> {
         self.line(0, &format!("@{node}.start"));
         self.line(0, &format!("def _start_{node}({hooks}):"));
         self.unheld(signature);
-        for (local, value) in &states {
-            let field = name(&body.locals[*local].name);
-            let value = match value {
-                Some(value) => {
-                    let written = self.expression(&lifecycle_hook, value);
-                    self.kept(&lifecycle_hook, *local, value, written)
-                }
-                None => "None".to_string(),
-            };
-            self.line(1, &format!("_state.{field} = {value}"));
-        }
+        self.state_values(&lifecycle_hook, &states);
         // The generator is made before the source's `start` runs: a
         // `return` there ends the hook, and must not leave the node
         // with nothing to resume. Making it runs none of the source's
@@ -5792,12 +5811,12 @@ impl<'a> Emitter<'a> {
                         Some(Detail::Native(read)) => read.properties.get(*member),
                         _ => None,
                     };
-                    let read = property.map(|property| format!("{native}_{}", property.name));
-                    let core = Some(*module) == program.core();
-                    return match (property, read) {
-                        (Some(property), Some(read))
-                            if core && provided().any(|provided| provided == read) =>
-                        {
+                    let read = property.and_then(|property| {
+                        self.native_function(*module, format!("{native}_{}", property.name))
+                            .map(|read| (property, read))
+                    });
+                    return match read {
+                        Some((property, read)) => {
                             self.natives = true;
                             let base = self.expression(function, base);
                             self.native_result(Some(&property.ty), format!("_core.{read}({base})"))
@@ -8674,11 +8693,10 @@ impl<'a> Emitter<'a> {
                 native = format!("{native}_to_{}", mangled(given));
                 shown = format!("{shown} -> {given}");
             }
-            let core = Some(module) == program.core();
-            if !core || !provided().any(|provided| provided == native) {
+            let Some(native) = self.native_function(module, native) else {
                 self.unsupported(at, &format!("the candidate `{shown}`"));
                 return "None".to_string();
-            }
+            };
             Some(native)
         } else {
             None
@@ -8687,16 +8705,15 @@ impl<'a> Emitter<'a> {
         // `_core.fn_log`. It binds its own name (NATIVE-3), which the
         // provider's own helpers are kept apart from by the `fn_`.
         if let DeclarationKind::NativeFunction(Role::Value) = declared.kind {
-            let native = format!("fn_{}", declared.name);
-            let core = Some(module) == program.core();
+            let native = self.native_function(module, format!("fn_{}", declared.name));
             let lifted = function.mode == Mode::Graph
                 && arguments
                     .iter()
                     .any(|argument| self.connects(function, &argument.value));
-            if !core || lifted || !provided().any(|provided| provided == native) {
+            let (Some(native), false) = (native, lifted) else {
                 self.unsupported(at, &format!("the native function `{}`", declared.name));
                 return "None".to_string();
-            }
+            };
             self.natives = true;
             let arguments = self.arguments(
                 function,
@@ -8862,14 +8879,7 @@ impl<'a> Emitter<'a> {
             let run = self.run_wired(call, ty);
             let mut given = vec![node, run];
             given.extend(written);
-            if let Some(config) = config {
-                given.push(format!("_config={}", self.expression(function, config)));
-            }
-            if real_time {
-                given.push("_real_time=True".to_string());
-            }
-            given.extend(self.held_reader(&call.ty, call.at));
-            return format!("_harness.evaluate({})", given.join(", "));
+            return self.evaluated(function, given, call, config, real_time);
         }
         let run = self.run_wired(call, ty);
         let target = self.called_name((*module, *declaration), generics, call.at);
@@ -8884,6 +8894,21 @@ impl<'a> Emitter<'a> {
         if !arguments.is_empty() {
             given.push(arguments);
         }
+        self.evaluated(function, given, call, config, real_time)
+    }
+
+    /// The harness's run of an eval of `call`, given `given`: what it
+    /// runs, the run's wiring and the arguments. After them come the
+    /// configuration, where the eval has one, `_real_time=True` for a
+    /// `run`, and how the harness reads what the run gives (`eval`).
+    fn evaluated(
+        &mut self,
+        function: &Function,
+        mut given: Vec<String>,
+        call: &Expr,
+        config: Option<&Expr>,
+        real_time: bool,
+    ) -> String {
         if let Some(config) = config {
             given.push(format!("_config={}", self.expression(function, config)));
         }
