@@ -7,8 +7,8 @@
 
 mod common;
 
-use common::{Checked, check};
-use hgl_analyser::hir::{Body, Expr, ExprKind, Stmt};
+use common::{Checked, body, check};
+use hgl_analyser::hir::{Expr, ExprKind, Stmt};
 
 /// No lines.
 const NONE: [&str; 0] = [];
@@ -33,17 +33,6 @@ const CORE: &str = concat!(
 /// `module` line is added, so the text given starts on line 2.
 fn module(text: &str) -> Checked {
     check(&[("core.hgl", CORE), ("m.hgl", &format!("module m\n{text}"))])
-}
-
-/// The typed body of the function `name` of module `m`.
-fn body<'a>(checked: &'a Checked, name: &str) -> &'a Body {
-    let module = checked.program.module("m").expect("module m exists");
-    let index = module
-        .declarations
-        .iter()
-        .position(|declaration| declaration.name == name)
-        .expect("the declaration exists");
-    module.bodies[index].as_ref().expect("it has a body")
 }
 
 /// The value the first `return` of `name`'s first hook gives.
