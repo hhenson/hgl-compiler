@@ -58,17 +58,17 @@ fn fold_at(
     }
 }
 
-/// The magnitude of an integer literal, when `node` is one.
-fn integer_magnitude(node: &SyntaxNode) -> Option<u64> {
-    if node.kind() != SyntaxKind::Literal {
-        return None;
-    }
-    let token = tokens(node).next()?;
-    if token.kind() != SyntaxKind::Int {
-        return None;
-    }
-    // A literal the lexer rejected has been reported there.
-    decode_integer(token.text()).ok()
+/// True when `node` is the integer literal 2^63. LEX-7: "Minus is an
+/// operator, not part of a numeric literal", and the least `i64` is
+/// written as a minus before 2^63, the one magnitude that is an
+/// integer only there.
+pub(crate) fn is_least_magnitude(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::Literal
+        && tokens(node).next().is_some_and(|token| {
+            // A literal the lexer rejected has been reported there.
+            token.kind() == SyntaxKind::Int
+                && decode_integer(token.text()) == Ok(MAX_INTEGER_MAGNITUDE)
+        })
 }
 
 fn literal(node: &SyntaxNode) -> ConstantValue {
@@ -116,7 +116,7 @@ fn unary(
     }
     // LEX-7: "Minus is an operator, not part of a numeric literal", and
     // the full signed minimum is written as a minus before 2^63.
-    if integer_magnitude(&operand) == Some(MAX_INTEGER_MAGNITUDE) {
+    if is_least_magnitude(&operand) {
         return ConstantValue::Int(i64::MIN);
     }
     match fold_at(&operand, name, depth + 1) {
