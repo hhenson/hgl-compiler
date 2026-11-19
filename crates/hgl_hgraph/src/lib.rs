@@ -185,8 +185,13 @@ pub fn test_function(name: &str) -> String {
     format!("test_{name}")
 }
 
-/// Core's native value functions for this target, as Python.
+/// Core's native value functions for this target, as Python: the file
+/// whose names [`provides`] reads.
 const CORE_NATIVE: &str = include_str!("../support/core_native.py");
+
+/// What the generated code names by hand, as Python: errors, structs,
+/// deltas, places and copies, which the natives' file imports.
+const CORE_SUPPORT: &str = include_str!("../support/core_support.py");
 
 /// The eval harness a generated test calls.
 const HARNESS: &str = include_str!("../support/harness.py");
@@ -228,6 +233,11 @@ pub const ROOT_FILE: &str = "_hgl/__init__.py";
 /// a module calls one of its functions, and with the harness, which
 /// imports it.
 pub const CORE_NATIVE_FILE: &str = "_hgl/_core_native.py";
+
+/// The support file that holds what the generated code names by hand,
+/// which [`CORE_NATIVE_FILE`] imports and a generated module reaches
+/// through it, as `_core.name`. It is written with that file.
+pub const CORE_SUPPORT_FILE: &str = "_hgl/_core_support.py";
 
 /// The support file that holds the eval harness. It is written when a
 /// test calls it.
@@ -367,6 +377,10 @@ pub fn transpile(program: &Program, diagnostics: &mut Diagnostics) -> Output {
         files.push(File {
             path: CORE_NATIVE_FILE.to_string(),
             text: CORE_NATIVE.to_string(),
+        });
+        files.push(File {
+            path: CORE_SUPPORT_FILE.to_string(),
+            text: CORE_SUPPORT.to_string(),
         });
     }
     if harness {

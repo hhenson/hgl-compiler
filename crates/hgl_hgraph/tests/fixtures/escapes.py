@@ -1,6 +1,6 @@
 """ERR-1, ERR-7: a failure that is no HGL error escapes every capture.
 
-Run with the directory that holds the provider, `_core_native.py`.
+Run with the directory that holds the provider's package, `_hgl`.
 """
 
 import logging
@@ -10,7 +10,7 @@ sys.path.insert(0, sys.argv[1])
 # hgraph says on the standard output as it starts and ends each run.
 logging.disable(logging.CRITICAL)
 
-import _core_native as _core
+import _hgl._core_native as _core
 from hgraph import TS, compute_node, graph, try_except
 from hgraph.test import eval_node
 
