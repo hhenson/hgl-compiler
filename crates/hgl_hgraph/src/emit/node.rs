@@ -144,14 +144,16 @@ impl Emitter<'_> {
                 .as_ref()
                 .is_some_and(|result| holds_growing_list(self.program, result));
         // A whole dictionary published replaces what the node published
-        // before, which it reads from `_output` (see `bundled`).
+        // before, which it reads from `_output`, and a whole empty
+        // dictionary or set ticks on it (see `bundled`).
         let has_out = has_out
             || signature.result.as_ref().is_some_and(|result| {
-                whole_dictionary(result) && returns_whole(&body.statements, result)
+                (whole_dictionary(result) || matches!(result, Type::Set(_)))
+                    && returns_whole(&body.statements, result)
             });
         // A delta of what holds a dictionary or a set is published on
-        // `_output`, which makes each tick where it changes nothing (see
-        // `bundled`).
+        // `_output`, which makes each that is not valid valid where the
+        // delta names no change (see `bundled`).
         let has_out = has_out
             || signature.result.as_ref().is_some_and(|result| {
                 entries_delta(self.program, result).is_some()
@@ -806,8 +808,8 @@ impl Emitter<'_> {
         let output = if result.is_some() { "_output" } else { "None" };
         let shape = grows.map_or(String::new(), |shape| format!(", {shape}"));
         // What a source publishes to a dictionary or a set, or to what
-        // holds one, ticks each where it changes nothing hgraph sees, as a
-        // node's delta does (`bundled`).
+        // holds one, makes each that is not valid valid where it names no
+        // change, as a node's delta does (`bundled`).
         let ticks = signature
             .result
             .as_ref()

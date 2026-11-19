@@ -354,7 +354,7 @@ transpiler: partial
 - A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 - A dictionary's delta removes a key with `REMOVE_IF_EXISTS`, so one it does not hold is ignored, and is no failure, a delta read from an input and published again among them (`_core.entries_published`); a set ignores a member it does not hold
-- A delta of a dictionary or a set that so changes nothing ticks, published by a node or a source, a trace's cell among them, and so does one within a dictionary, a struct, a tuple or a fixed list: hgraph 0.9.5 ticks for neither, and the provider adds and removes a key or a member it does not hold (`_core.entries_published`); a dictionary that holds each key a `bool` or an enum has, or keyed by a type the provider has no other value of, fails the run as not written
+- A delta that names no change, of a dictionary, a set or an unsized list, ticks only where it makes the value valid and empty (TIME-7 on the specification's `main`, the owner's decision on hhenson/hgl_spec#124, after the pin), by a node, a source and a trace's cell, at the top and within a dictionary, a struct, a tuple or a fixed list; so, as proposed there, does one whose every entry is an ignored removal. hgraph ticks a `TSD` and a `TSS` for neither, and `clear` makes one that is not valid valid; it ticks what holds one given such a change, so the provider leaves that child out (`_core.entries_published`); `invalidate(out)` of a dictionary or a set empties it first, as hgraph keeps its keys and members (`_core.invalidated`)
 - Left: one within a value that holds an unsized list, and a dictionary's or a set's assigned to an entry of `out`
 
 ## END-4
@@ -376,6 +376,7 @@ transpiler: partial
 - `is_active(input)` reads the receiving input's current activity, including while invalid
 - A passive input retains its value
 - Its publication can satisfy a handler when another input schedules the node
+- A delta that names no change, written where a dictionary, a set or an unsized list is valid, is no publication: nothing modified, no subscriber woken (TIME-7 on the specification's `main`, END-3)
 - Left: coalescing across structural shapes
 
 ## END-6

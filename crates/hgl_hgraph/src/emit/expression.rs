@@ -173,8 +173,16 @@ impl Emitter<'_> {
                     // hgraph's unbounded `TSL` keeps its positions when
                     // it is invalidated, which the next delta read would
                     // name removed: the provider empties each list first.
+                    // hgraph's `TSD` and `TSS` keep their keys and members
+                    // too, which a delta that names no change would leave
+                    // in what it makes valid (TIME-7): the provider
+                    // empties each.
                     EndpointOperation::Invalidate => {
-                        match list_parts_shape(self.program, &endpoint.ty) {
+                        let shape = list_parts_shape(self.program, &endpoint.ty).or_else(|| {
+                            matches!(endpoint.ty, Type::Dict { .. } | Type::Set(_))
+                                .then(|| "\"entries\"".to_string())
+                        });
+                        match shape {
                             Some(shape) => {
                                 self.natives = true;
                                 format!("_core.invalidated({input}, {shape})")

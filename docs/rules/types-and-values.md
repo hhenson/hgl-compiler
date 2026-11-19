@@ -148,7 +148,7 @@ analyser: partial
 transpiler: partial
 
 - hgraph: a temporal list of a size is a `TSL` of that size; `list<T>` grows: hgraph 0.9.5's unbounded `TSL`, `Size[-1]`, which ticks by position, a child for each position it holds
-- hgraph 0.9.5 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
+- hgraph 0.9.5 does not tick that `TSL` for a publication that changes nothing it sees, an empty list first among them: for a whole value, and for a delta that names no change where the list is not valid (TIME-7 on the specification's `main`), the provider grows it by a position and drops it again in the same evaluation, which leaves nothing in the delta read
 - A temporal tuple is no list: a `TSB` with no name and a field for each position, each of its own type (TYPE-9)
 - Left: `unbounded` and a size that is a generic parameter as a temporal shape
 
@@ -248,7 +248,7 @@ transpiler: partial
 - An unsized list's published is counted from the size the list holds, on the node's `_output` (`_core.list_applied`): a smaller `size_modified` alone shrinks it, a negative one reduces it by that count, to empty at most, an entry after the last extends it, and one further past leaves the positions between not valid (agreed on hhenson/hgl_spec#124); `removed` alone leaves the size; the delta read is hgraph's, the dropped tail in `removed`
 - A fixed list's delta made as the graph runs fails, with no code, where a position is past its bounds or a `size_modified` moves its size (`_core.list_within`); its `removed` makes the position not valid
 - A dictionary's is hgraph's delta of a `TSD`, a `dict` of each key updated with its delta and of each removed with `REMOVE_IF_EXISTS`, made from `updated` and `removed` and read by them through the provider
-- A `removed` that names a key a dictionary does not hold, or a member a set does not hold, is ignored and is no failure, and the delta ticks where it then changes nothing (`_core.entries_published`, END-3)
+- A `removed` that names a key a dictionary does not hold, or a member a set does not hold, is ignored and is no failure (`_core.entries_published`, END-3)
 - A struct's and a tuple's delta that holds an unsized list's delta is published through the node's output, each list's size counted from what it holds (`_core.published_into`), by a node and by a source when it is due
 - A removed position an unsized list does not hold is ignored, as a dictionary's absent key is (the owner's decision on hhenson/hgl_spec#124)
 - An entry at or past a `size_modified` written with it contradicts the delta and fails the write that publishes it as the graph runs, with no execution code (the owner's decision there: "a failure"; hhenson/hgl_spec#137)

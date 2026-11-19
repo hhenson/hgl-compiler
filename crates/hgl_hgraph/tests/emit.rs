@@ -4923,7 +4923,9 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
         "    _core.resume(_state._source, _clock.evaluation_time, _scheduler, _output, \"list\")",
-        "        return _core.removed(pair.delta_value)",
+        // TIME-7: a whole set ticks where it is empty and changes
+        // nothing, on the node's output.
+        "        return _core.set_replaced(_output, _core.removed(pair.delta_value))",
     ]);
 }
 

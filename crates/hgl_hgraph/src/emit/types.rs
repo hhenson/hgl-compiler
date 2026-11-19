@@ -395,10 +395,11 @@ pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
 /// `("entries", part)` for a dictionary whose values hold one,
 /// `("fields", {name: part})` for a struct, `("positions", (part, ...))`
 /// for a tuple and `("list", part)` for a fixed list, `None` for a part
-/// that holds none. `None` where `ty` holds none so: hgraph's `TSD` and
-/// `TSS` do not tick for a delta that changes nothing, and the provider
-/// makes each tick. An unsized list's is published by its size
-/// (`list_parts_shape`), and one in it is not looked for.
+/// that holds none. `None` where `ty` holds none so: hgraph's `TSD`
+/// fails the run for a `REMOVE` of a key it does not hold, and neither
+/// it nor the `TSS` is made valid by a delta that names no change. An
+/// unsized list's is published by its size (`list_parts_shape`), and one
+/// in it is not looked for.
 pub(super) fn entries_shape(program: &Program, ty: &Type) -> Option<String> {
     fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
         if depth > HELD_DEPTH {

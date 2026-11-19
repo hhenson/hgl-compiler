@@ -78,11 +78,12 @@ impl Emitter<'_> {
             None
         };
         // TIME-7: a node's delta of a value that holds a dictionary or a
-        // set is "published as that change", which ticks where it
-        // changes nothing hgraph sees, and TYPE-16: "A `removed` that
-        // names a key a dictionary does not hold is ignored, and is no
-        // failure, as one that names a member a set does not hold is."
-        // The provider publishes it on the node's `_output`
+        // set is "published as that change", and TYPE-16: "A `removed`
+        // that names a key a dictionary does not hold is ignored, and is
+        // no failure, as one that names a member a set does not hold is."
+        // TIME-7 on the specification's `main` (hhenson/hgl_spec#124): a
+        // delta that names no change "ticks only where it changes
+        // validity". The provider publishes it on the node's `_output`
         // (`entries_published`).
         if function.mode == Mode::Node
             && let Some(result) = result
@@ -103,6 +104,16 @@ impl Emitter<'_> {
         if function.mode == Mode::Node && result == Some(&value.ty) && whole_dictionary(&value.ty) {
             self.natives = true;
             return format!("_core.dict_replaced(_output, {written})");
+        }
+        // TIME-7: "A value published whole, the same again or empty, is
+        // no delta, and ticks as any publication does": a node's whole
+        // empty set ticks on its `_output` (see `set_replaced`).
+        if function.mode == Mode::Node
+            && result == Some(&value.ty)
+            && matches!(value.ty, Type::Set(_))
+        {
+            self.natives = true;
+            return format!("_core.set_replaced(_output, {written})");
         }
         // TYPE-16, TIME-7: a struct's or a tuple's delta that holds an
         // unsized list's delta is published through the node's output,
@@ -562,7 +573,9 @@ pub(super) struct Shape {
 
 /// Where a node's delta of `ty` holds a dictionary or a set, the shape
 /// of where (`entries_shape`), which the provider publishes it by
-/// (`entries_published`). `None` where it holds none, and where it holds
+/// (`entries_published`): a `REMOVE` read from an input as
+/// `REMOVE_IF_EXISTS`, and each dictionary and set made valid where the
+/// delta names no change and it is not. `None` where it holds none, and where it holds
 /// an unsized list, whose delta is published by its size
 /// (`published_into`).
 pub(super) fn entries_delta(program: &Program, ty: &Type) -> Option<String> {
