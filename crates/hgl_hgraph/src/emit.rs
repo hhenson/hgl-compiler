@@ -185,6 +185,17 @@ fn tuple(names: &[String]) -> String {
     )
 }
 
+/// How a whole value of a type is given to hgraph, part by part, as
+/// the provider's `bundled` reads it (`Emitter::whole_shape`).
+struct Shape {
+    /// The provider's text for it: `None`, a `dict`, a tuple or `[None]`.
+    text: String,
+    /// True for a part that publishes whole, as it is.
+    leaf: bool,
+    /// True where each of its own parts is a leaf.
+    flat: bool,
+}
+
 /// What kind of body is being written, which says how a name is read.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -1750,6 +1761,9 @@ impl Emitter<'_> {
             self.hgraph = true;
             return Some(format!("_hg.TSD[{key}, {child}]"));
         }
+        if temporal && let Type::Tuple(elements) = ty {
+            return self.tuple_annotation(ty, elements, at);
+        }
         if let Type::RollingWindow {
             value,
             maximum,
@@ -1812,12 +1826,11 @@ impl Emitter<'_> {
         if let Type::Named {
             module,
             declaration,
-            arguments,
             kind: NamedKind::Struct,
             ..
         } = ty
         {
-            return self.struct_annotation(ty, (*module, *declaration), arguments, temporal, at);
+            return self.struct_annotation(ty, (*module, *declaration), temporal, at);
         }
         let python = match (scalar(ty), ty) {
             (Some(python), _) => {
@@ -1997,45 +2010,58 @@ impl Emitter<'_> {
     }
 
     /// The annotation of the struct `ty`, declared at `(module,
-    /// declaration)` with `arguments`: its class as a value, and as a
+    /// declaration)`: its class as a value (`struct_class`), and as a
     /// temporal value hgraph's bundle, `TSB`.
     ///
     /// TYPE-9: "Temporalization recursively maps tuples/structs to
     /// child fields". The bundle's schema has a field for each field
     /// the struct has, a parent's first, each temporalized in turn:
-    /// `bid: f64` is a `TS[float]` of it. The provider makes the schema
-    /// once for the struct's class, beside it (`_core.schema`), so that
-    /// every annotation of the struct names one schema.
+    /// `bid: f64` is a `TS[float]` of it. A generic struct's field has
+    /// the type its arguments give it (TYPE-4), so a `Box<i64>`'s
+    /// `value: T` is a `TS[int]`. The provider makes the schema once
+    /// for the struct's class, beside it (`_core.schema`), so that
+    /// every annotation of the struct names one schema; a generic
+    /// struct's class is one for each application.
     ///
-    /// A generic struct's application and an abstract struct, whose
-    /// value may be of any struct below it, are not written yet.
+    /// An abstract struct's bundle has the fields it has itself, which
+    /// every struct below it has too: a field is read and changed by
+    /// its port, its delta has "a property for each field" (TYPE-16),
+    /// and a whole value, of a struct below it, sets those fields
+    /// (`whole_shape`). A struct's connection is given where one of an
+    /// abstract struct it inherits from is expected as a bundle of the
+    /// abstract struct's fields (`narrowed`). As a value it may be of
+    /// any struct below it, with fields its bundle has not, so a value
+    /// of it, and its temporal value read whole (`port_value`), are not
+    /// written yet.
     fn struct_annotation(
         &mut self,
         ty: &Type,
         (module, declaration): (usize, usize),
-        arguments: &[GenericArgument],
         temporal: bool,
         at: Location,
     ) -> Option<String> {
         let program = self.program;
-        if !arguments.is_empty() || inherited(program, module, declaration) {
-            self.unsupported(at, &format!("the type `{ty}`"));
-            return None;
-        }
-        let class = self.type_name(module, declaration);
-        if !temporal {
-            return Some(class);
-        }
-        let members = match program.modules[module].details.get(declaration) {
-            Some(Detail::Struct(read)) => &read.members,
+        let is_abstract = inherited(program, module, declaration);
+        let class = match self.struct_class(ty) {
+            Some(class) if temporal || !is_abstract => class,
             _ => {
                 self.unsupported(at, &format!("the type `{ty}`"));
                 return None;
             }
         };
+        if !temporal {
+            return Some(class);
+        }
+        let (Some(Detail::Struct(read)), Some(types)) = (
+            program.modules[module].details.get(declaration),
+            program.field_types(ty),
+        ) else {
+            self.unsupported(at, &format!("the type `{ty}`"));
+            return None;
+        };
         let mut fields = Vec::new();
-        for member in members {
-            let field = self.child_annotation(ty, &member.ty, at)?;
+        for (member, field) in read.members.iter().zip(&types) {
+            let field = self.child_annotation(ty, field, at)?;
             fields.push(format!("{}: {field}", string(&name(&member.name))));
         }
         self.hgraph = true;
@@ -2044,6 +2070,66 @@ impl Emitter<'_> {
             "_hg.TSB[_core.schema({class}, {{{}}})]",
             fields.join(", ")
         ))
+    }
+
+    /// The class of a value of the struct `ty`: `Quote`, and for a
+    /// generic struct the class for its arguments, `_core.applied(Box,
+    /// "i64")`. TYPE-3: "Generic applications are invariant by origin
+    /// and complete canonical arguments" (see `construct`). `None` for a
+    /// type that is no struct, and where an argument is not known as
+    /// the module is written.
+    fn struct_class(&mut self, ty: &Type) -> Option<String> {
+        let Type::Named {
+            module,
+            declaration,
+            arguments,
+            kind: NamedKind::Struct,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        let class = self.type_name(*module, *declaration);
+        if arguments.is_empty() {
+            return Some(class);
+        }
+        let texts: Vec<String> = arguments
+            .iter()
+            .map(|argument| canonical_argument(self.program, argument))
+            .collect::<Option<_>>()?;
+        self.natives = true;
+        Some(format!(
+            "_core.applied({class}, {})",
+            string(&texts.join(", "))
+        ))
+    }
+
+    /// The annotation of a temporal tuple `ty` of `elements`.
+    ///
+    /// TYPE-9: "Temporalization recursively maps tuples/structs to
+    /// child fields". TYPE-10: "A tuple retains positional identity and
+    /// is not a fixed list alias". A tuple is hgraph's bundle with no
+    /// name, `TSB["_0": ..., "_1": ...]`, a field for each position,
+    /// each temporalized in turn: hgraph's `TSL` holds children of one
+    /// type, and a bundle's fields are each valid on their own, of a
+    /// type of their own. A bundle with no name is matched by its
+    /// fields, as a tuple type is by its elements. Its tick is a `dict`
+    /// of each position that changed, which the program reads as
+    /// TYPE-16's `tuple<delta<A>?, delta<B>?>` (`positions`), and
+    /// hgraph's bundle takes a tuple, a `None` where a position does
+    /// not change, as that delta.
+    fn tuple_annotation(&mut self, ty: &Type, elements: &[Type], at: Location) -> Option<String> {
+        if elements.is_empty() {
+            self.unsupported(at, &format!("the type `{ty}`"));
+            return None;
+        }
+        let mut fields = Vec::new();
+        for (index, element) in elements.iter().enumerate() {
+            let child = self.child_annotation(ty, element, at)?;
+            fields.push(format!("{}: {child}", string(&position(index))));
+        }
+        self.hgraph = true;
+        Some(format!("_hg.TSB[{}]", fields.join(", ")))
     }
 
     /// The parameters of a temporal function as Python writes them, and
@@ -2212,13 +2298,15 @@ impl Emitter<'_> {
         let output = has_out.then(|| {
             // hgraph names the output's type after its input's:
             // `TS_OUT[int]` for `TS[int]`, `TSS_OUT[int]` for a set,
-            // `TSB_OUT[...]` for a struct's bundle, `TSL_OUT` for a
-            // list's and `TSD_OUT` for a dictionary's, `TSW_OUT` for a
-            // window's. Only the outermost is renamed: a child stays as
-            // it is.
+            // `TSB_OUT[...]` for a struct's bundle, `TSD_OUT` for a
+            // dictionary's and `TSW_OUT` for a window's. Only the
+            // outermost is renamed: a child stays as it is. hgraph has no
+            // `TSL_OUT`: a list's is its `TSL` given to `TS_OUT`, which
+            // takes a time-series type as it is.
             let annotation = match &result {
+                Some(result) if result.starts_with("_hg.TSL[") => format!("_hg.TS_OUT[{result}]"),
                 Some(result) => {
-                    let kind = ["TSS", "TSB", "TSL", "TSD", "TSW"]
+                    let kind = ["TSS", "TSB", "TSD", "TSW"]
                         .into_iter()
                         .find(|kind| result.starts_with(&format!("_hg.{kind}[")))
                         .unwrap_or("TS");
@@ -4113,7 +4201,9 @@ impl Emitter<'_> {
                             None => self.expression(function, value),
                         },
                     };
-                    let value = self.kept(function, *local, value, written);
+                    let kept = self.kept(function, *local, value, written);
+                    let ty = &function.locals[*local].ty;
+                    let value = self.narrowed(function, ty, value, kept);
                     let target = self.place(function, *local);
                     self.line(depth, &format!("{target} = {value}"));
                     self.bind(function, *local);
@@ -4155,7 +4245,8 @@ impl Emitter<'_> {
                         value
                     }
                 } else {
-                    self.kept(function, *local, assigned, value)
+                    let kept = self.kept(function, *local, assigned, value);
+                    self.narrowed(function, &declared.ty, assigned, kept)
                 };
                 let target = self.place(function, *local);
                 self.line(depth, &format!("{target} = {value}"));
@@ -4170,24 +4261,14 @@ impl Emitter<'_> {
                 value,
                 ..
             } => {
-                // A field of a temporal struct's `out` is a port of its
-                // own (TYPE-9), which is not assigned yet.
+                // TIME-7: a part of `out` is assigned through its port
+                // (`assigned_to_out`).
                 let mut root = place;
                 while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &root.kind {
                     root = base;
                 }
-                if let ExprKind::Local(local) = root.kind
-                    && Self::is_out(function, local)
-                    && matches!(
-                        function.locals[local].ty,
-                        Type::Named {
-                            kind: NamedKind::Struct,
-                            ..
-                        }
-                    )
-                {
-                    self.unsupported(place.at, "an assignment to a field of a temporal struct");
-                }
+                let to_out =
+                    matches!(root.kind, ExprKind::Local(local) if Self::is_out(function, local));
                 // EXPR-3: "A compound assignment reads the place
                 // first". The place is written once, so each index of
                 // it is evaluated once (EXPR-2), and is the index of
@@ -4225,8 +4306,13 @@ impl Emitter<'_> {
                 // The place keeps what it is given: a copy, where
                 // something else holds it.
                 let written = self.expression(function, value);
-                let value = self.copied(function, value, written);
-                if let Some((target, value)) = self.assigned(function, place, value) {
+                let copied = self.copied(function, value, written);
+                let assigned = if to_out {
+                    self.assigned_to_out(function, place, value, copied)
+                } else {
+                    self.assigned(function, place, copied)
+                };
+                if let Some((target, value)) = assigned {
                     self.hoist(depth);
                     self.line(depth, &format!("{target} = {value}"));
                 }
@@ -4254,6 +4340,13 @@ impl Emitter<'_> {
                 };
                 let value = self.given_out(function, returned, value);
                 let value = self.bundled(function, returned, value);
+                let value = match function
+                    .signature
+                    .and_then(|signature| signature.result.as_ref())
+                {
+                    Some(result) => self.narrowed(function, result, returned, value),
+                    None => value,
+                };
                 // FN-3: in a branch's graph "an ordinary value in a
                 // branch is then wired as a constant".
                 let value = if function.mode == Mode::Graph
@@ -4883,6 +4976,7 @@ impl Emitter<'_> {
             )
             && !self.connected_field(function, value)
             && !self.connected_element(function, value)
+            && !(matches!(value.kind, ExprKind::Tuple(_)) && self.connects(function, value))
         {
             self.unsupported(value.at, "this expression in a graph");
             return "None".to_string();
@@ -4918,13 +5012,13 @@ impl Emitter<'_> {
                 } else if matches!(function.mode, Mode::Node | Mode::Stop)
                     && Self::is_input(function, *local)
                 {
-                    self.port_value(&function.locals[*local].ty, &read)
+                    self.port_value(&function.locals[*local].ty, &read, value.at)
                 } else if matches!(function.mode, Mode::Node | Mode::Stop)
                     && Self::is_out(function, *local)
                 {
                     // `out` read whole: a struct's value is made from
                     // its bundle's fields (TYPE-9), as an input's is.
-                    self.port_value(&function.locals[*local].ty, "_output")
+                    self.port_value(&function.locals[*local].ty, "_output", value.at)
                 } else if function.mode == Mode::Lifecycle && Self::is_input(function, *local) {
                     // The analyser rejects it (`input.lifecycle`).
                     self.unsupported(value.at, "a temporal input read in `start`");
@@ -5019,6 +5113,16 @@ impl Emitter<'_> {
                     EndpointOperation::DeltaValue if growing_list(&endpoint.ty) => {
                         self.unsupported(value.at, "the delta of an unsized list");
                         "None".to_string()
+                    }
+                    // TYPE-16: a tuple's delta is "each position's
+                    // delta, null where it did not change", which the
+                    // provider makes of hgraph's `dict` of each
+                    // position that changed (`positions`).
+                    EndpointOperation::DeltaValue
+                        if let Some(shape) = self.delta_shape(&endpoint.ty, value.at) =>
+                    {
+                        self.natives = true;
+                        format!("_core.positions({input}.delta_value, {shape})")
                     }
                     // END-3: what the input published this cycle. A
                     // fixed list's is hgraph's `dict` of each position
@@ -5126,6 +5230,11 @@ impl Emitter<'_> {
                 let condition = self.expression(function, condition);
                 let then = self.expression(function, then);
                 format!("({then} if {condition} else None)")
+            }
+            ExprKind::Tuple(entries)
+                if function.mode == Mode::Graph && self.connects(function, value) =>
+            {
+                self.connected_tuple(function, value, entries)
             }
             ExprKind::Tuple(entries) => {
                 let entries: Vec<String> = entries
@@ -5359,7 +5468,7 @@ impl Emitter<'_> {
                 if matches!(function.mode, Mode::Node | Mode::Stop)
                     && let Some(port) = self.input_port(function, value)
                 {
-                    return self.port_value(&value.ty, &port);
+                    return self.port_value(&value.ty, &port, value.at);
                 }
                 let Some(field) = field_of(self.program, whole, *member) else {
                     // A property of a delta.
@@ -5416,9 +5525,26 @@ impl Emitter<'_> {
                     self.natives = true;
                     return format!("_core.entry_of({base}, {index})");
                 }
+                // TYPE-9: a tuple's position is its own connection, the
+                // field of its position (`tuple_annotation`), under a
+                // constant index (EXPR-3).
+                if matches!(base.ty, Type::Tuple(_)) {
+                    let base = self.expression(function, base);
+                    let key = self.position_key(function, index);
+                    return format!("{base}[{key}]");
+                }
                 let base = self.expression(function, base);
                 let index = self.expression(function, index);
                 format!("{base}[{index}]")
+            }
+            // In a hook a position of a temporal tuple is read through
+            // the position's own port (TYPE-9), as a field is.
+            ExprKind::Index { base, .. }
+                if matches!(function.mode, Mode::Node | Mode::Stop)
+                    && matches!(base.ty, Type::Tuple(_))
+                    && let Some(port) = self.input_port(function, value) =>
+            {
+                self.port_value(&value.ty, &port, value.at)
             }
             ExprKind::Index { base, index } => {
                 let Some(read) = element_read(&base.ty) else {
@@ -5957,6 +6083,154 @@ impl Emitter<'_> {
         written
     }
 
+    /// What the assignment of `value`, written `written`, to `place`, a
+    /// part of the node's `out`, writes: the port it assigns, and what it
+    /// assigns the port.
+    ///
+    /// TIME-7: "`inject out` exposes that same result for reads,
+    /// assignment, and admitted piecewise mutation." EXPR-3: "The
+    /// place's root is ... in a `when`, `out`". TYPE-9 maps a struct's
+    /// fields, a tuple's positions and a fixed list's positions to
+    /// children of their own, each a port of hgraph's: `out.ask = 1`
+    /// assigns the port of `ask`, `_output["ask"].value = 1`, which
+    /// publishes that field alone, and `out` read after it holds it. A
+    /// dictionary's entry is published as the change of that key,
+    /// `{key: value}`. A part that is assigned whole publishes whole, a
+    /// struct's fields each, and a `delta<T>` publishes that change, as
+    /// an assignment to `out` does. A place inside a part that
+    /// publishes whole, a field of an `atomic<Quote>` or an element of
+    /// an unsized list, gives that part a new value with the place
+    /// changed, published whole.
+    fn assigned_to_out(
+        &mut self,
+        function: &Function,
+        place: &Expr,
+        value: &Expr,
+        written: String,
+    ) -> Option<(String, String)> {
+        // The steps from `out` in to the place, the outermost first.
+        let mut steps = Vec::new();
+        let mut at = place;
+        while let ExprKind::Field { base, .. } | ExprKind::Index { base, .. } = &at.kind {
+            steps.push(at);
+            at = base;
+        }
+        steps.reverse();
+        let mut port = "_output".to_string();
+        // The part the port holds.
+        let mut part = at;
+        for (taken, step) in steps.iter().enumerate() {
+            let child = match &step.kind {
+                ExprKind::Field { base, member } => field_of(self.program, &base.ty, *member)
+                    .map(|field| string(&name(&field.name))),
+                ExprKind::Index { base, index } => match &base.ty {
+                    Type::Tuple(_) => Some(self.position_key(function, index)),
+                    // A fixed list's position, by a constant inside it,
+                    // or by an index the provider holds to it: "An index
+                    // outside a list fails where it is evaluated".
+                    Type::List {
+                        size: Some(size), ..
+                    } => {
+                        let inside = constant_position(index).is_some_and(|at| {
+                            matches!(size.value, ConstantValue::Int(count)
+                                if i64::try_from(at).is_ok_and(|at| at < count))
+                        });
+                        let written = self.expression(function, index);
+                        if inside {
+                            Some(written)
+                        } else {
+                            self.natives = true;
+                            port = format!("_core.child({port}, {written})");
+                            part = step;
+                            continue;
+                        }
+                    }
+                    // A key of a dictionary: the change of that key.
+                    Type::Dict { .. } if taken + 1 == steps.len() => {
+                        let key = self.expression(function, index);
+                        let published = self.published_to(&step.ty, value, written);
+                        return Some((format!("{port}.value"), format!("{{{key}: {published}}}")));
+                    }
+                    Type::Dict { .. } => {
+                        self.unsupported(place.at, "an assignment inside an entry of `out`");
+                        return None;
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            // A field of an atomic struct is in a part that publishes
+            // whole.
+            let child = child.filter(|_| !matches!(part.ty, Type::Atomic(_)));
+            let Some(child) = child else {
+                break;
+            };
+            port = format!("{port}[{child}]");
+            part = step;
+        }
+        if std::ptr::eq(part, place) {
+            let published = self.published_to(&place.ty, value, written);
+            return Some((format!("{port}.value"), published));
+        }
+        let changed = self.changed_within(function, place, part, written)?;
+        let published = self.published_to(&part.ty, part, changed);
+        Some((format!("{port}.value"), published))
+    }
+
+    /// The value `stop`, a part of `out` that publishes whole, holds once
+    /// `place`, inside it, is given `value`: each value on the way given
+    /// a new one, as `assigned_by_copy` gives a `var`'s, read from the
+    /// port of `out` it is held in.
+    fn changed_within(
+        &mut self,
+        function: &Function,
+        place: &Expr,
+        stop: &Expr,
+        value: String,
+    ) -> Option<String> {
+        if std::ptr::eq(place, stop) {
+            return Some(value);
+        }
+        let (base, changed) = match &place.kind {
+            ExprKind::Field { base, member } => {
+                // TYPE-9: an `atomic<V>` of a struct holds the whole
+                // struct, whose fields are the struct's.
+                let whole = match &base.ty {
+                    Type::Atomic(payload) => &**payload,
+                    other => other,
+                };
+                let Some(field) = field_of(self.program, whole, *member) else {
+                    self.unsupported(place.at, "an assignment to this member");
+                    return None;
+                };
+                let held = self.expression(function, base);
+                (
+                    base,
+                    format!("_core.with_field({held}, {}={value})", name(&field.name)),
+                )
+            }
+            ExprKind::Index { base, index } => {
+                let with = match element_read(&base.ty) {
+                    Some("item") => "with_item",
+                    Some(_) => "with_entry",
+                    None => {
+                        self.unsupported(place.at, "an assignment to this element");
+                        return None;
+                    }
+                };
+                let held = self.expression(function, base);
+                let index = self.expression(function, index);
+                (base, format!("_core.{with}({held}, {index}, {value})"))
+            }
+            _ => {
+                self.unsupported(place.at, "an assignment to this place");
+                return None;
+            }
+        };
+        self.natives = true;
+        self.changed_within(function, base, stop, changed)
+    }
+
     /// What the assignment of `value` to `place` gives the place's
     /// root: the root as it is assigned, and its new value.
     ///
@@ -6415,6 +6689,7 @@ impl Emitter<'_> {
                     }
                 } else {
                     let written = self.expression(function, &argument.value);
+                    let written = self.narrowed(function, &parameter.ty, &argument.value, written);
                     let read_from =
                         function
                             .copies
@@ -6613,10 +6888,68 @@ impl Emitter<'_> {
             self.unsupported(value.at, "a delta published to an unsized list");
             return written;
         }
-        if result != Some(&value.ty) {
+        match result {
+            Some(result) if whole_value(result, value) => self.bundle_of(result, value.at, written),
+            _ => written,
+        }
+    }
+
+    /// `value`, written `written` in a graph, where a connection of the
+    /// temporal struct `ty` is expected: the connection as it is, or,
+    /// where it is of a struct that inherits from the abstract `ty`, a
+    /// bundle of `ty` made of the fields `ty` has, each the value's own
+    /// field. TYPE-3: "A struct is a value where an abstract struct it
+    /// inherits from is expected". hgraph binds a bundle to the schema it
+    /// was made with alone, and the abstract struct's bundle has its own
+    /// fields (`struct_annotation`).
+    fn narrowed(
+        &mut self,
+        function: &Function,
+        ty: &Type,
+        value: &Expr,
+        written: String,
+    ) -> String {
+        let Type::Named {
+            module,
+            declaration,
+            kind: NamedKind::Struct,
+            ..
+        } = ty
+        else {
+            return written;
+        };
+        let below =
+            matches!(value.ty, Type::Named { kind: NamedKind::Struct, .. } if value.ty != *ty);
+        if function.mode != Mode::Graph || !below || !self.connects(function, value) {
             return written;
         }
-        self.bundle_of(&value.ty, value.at, written)
+        let fields: Vec<String> = match self.program.modules[*module].details.get(*declaration) {
+            Some(Detail::Struct(read)) => read
+                .members
+                .iter()
+                .map(|member| name(&member.name))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let Some(bundle) = self.annotation(ty, true, value.at) else {
+            return written;
+        };
+        self.natives = true;
+        format!("_core.narrowed({written}, {bundle}, {})", tuple(&fields))
+    }
+
+    /// What publishes `value`, written `written`, to a part of `out` of
+    /// the type `ty` (TIME-7): a whole value as `bundle_of` gives it, a
+    /// null as hgraph's `Null` where `ty` publishes it whole, and a
+    /// `delta<ty>` as it is.
+    fn published_to(&mut self, ty: &Type, value: &Expr, written: String) -> String {
+        if !whole_value(ty, value) {
+            return written;
+        }
+        if publishes_whole_null(ty) {
+            return self.published(written);
+        }
+        self.bundle_of(ty, value.at, written)
     }
 
     /// `written`, a whole value of `ty`, as a temporal value of `ty`
@@ -6650,42 +6983,170 @@ impl Emitter<'_> {
             }
             _ => {}
         }
-        let Type::Named {
-            module,
-            declaration,
-            kind: NamedKind::Struct,
-            ..
-        } = ty
-        else {
+        let simple = match ty {
+            Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } => !inherited(self.program, *module, *declaration),
+            Type::Tuple(_) => false,
+            _ => return written,
+        };
+        let Some(shape) = self.whole_shape(ty, at) else {
             return written;
         };
-        let nested = match self.program.modules[*module].details.get(*declaration) {
-            // A struct's bundle takes a field's update as that field's
-            // own: a struct field's as its fields, a set field's, a
-            // `TSS`, as members added, and a list's or a dictionary's
-            // by position or key, so none is replaced whole.
-            Some(Detail::Struct(read)) => read.members.iter().any(|member| {
-                matches!(
-                    member.ty,
-                    Type::Named {
-                        kind: NamedKind::Struct,
-                        ..
-                    } | Type::Set(_)
-                        | Type::List { .. }
-                        | Type::Dict { .. }
-                )
-            }),
-            _ => true,
-        };
-        if nested {
-            self.unsupported(
-                at,
-                "a whole struct published where a field is a temporal struct, set, list or dictionary",
-            );
-            return written;
-        }
         self.natives = true;
-        format!("_core.bundled({written})")
+        // A struct of its own fields, each of which publishes whole, is
+        // published by the fields its class has.
+        if simple && shape.flat {
+            return format!("_core.bundled({written})");
+        }
+        format!("_core.bundled({written}, {})", shape.text)
+    }
+
+    /// How a whole value of `ty`, a part of what a temporal struct or
+    /// tuple publishes, is given to hgraph (`bundle_of`), as the
+    /// provider's `bundled` reads it: `None` for a part that publishes
+    /// whole, a `dict` of each field's for a struct, a tuple of each
+    /// position's for a tuple, and `[None]` for a fixed list of
+    /// elements that publish whole. `None`, reported, for a part not
+    /// written yet.
+    ///
+    /// TIME-7: a complete value is "published whole". TYPE-9 maps a
+    /// struct's and a tuple's parts "to child fields", so a whole value
+    /// sets each part: a struct's or a tuple's field by its own parts, a
+    /// fixed list by a tuple of its elements, and a set as the members
+    /// it has now, hgraph's `TSS` removing those it no longer has. A
+    /// field of an abstract struct is a field of the struct below it
+    /// that the value is, read by its name. A dictionary's `TSD` would
+    /// take its keys' changes, and not remove a key the value has not,
+    /// and a fixed list with an element that is null or composite is
+    /// not written whole yet.
+    fn whole_shape(&mut self, ty: &Type, at: Location) -> Option<Shape> {
+        match ty {
+            Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let program = self.program;
+                let (Some(Detail::Struct(read)), Some(types)) = (
+                    program.modules[*module].details.get(*declaration),
+                    program.field_types(ty),
+                ) else {
+                    self.unsupported(at, &format!("a whole `{ty}` published"));
+                    return None;
+                };
+                let mut flat = true;
+                let mut written = Vec::new();
+                for (member, field) in read.members.iter().zip(&types) {
+                    let part = self.whole_shape(field, at)?;
+                    flat &= part.leaf;
+                    written.push(format!("{}: {}", string(&name(&member.name)), part.text));
+                }
+                Some(Shape {
+                    text: format!("{{{}}}", written.join(", ")),
+                    leaf: false,
+                    flat,
+                })
+            }
+            Type::Tuple(elements) => {
+                let mut flat = true;
+                let mut written = Vec::new();
+                for element in elements {
+                    let part = self.whole_shape(element, at)?;
+                    flat &= part.leaf;
+                    written.push(part.text);
+                }
+                Some(Shape {
+                    text: format!("({},)", written.join(", ")),
+                    leaf: false,
+                    flat,
+                })
+            }
+            Type::List {
+                element,
+                size: Some(_),
+            } if publishes_whole(element) && !is_nullable(element) => Some(Shape {
+                text: "[None]".to_string(),
+                leaf: false,
+                flat: true,
+            }),
+            Type::List { .. } => {
+                self.unsupported(
+                    at,
+                    "a whole list published where an element is temporal composite or nullable",
+                );
+                None
+            }
+            Type::Dict { .. } => {
+                self.unsupported(at, "a whole dictionary published to a temporal dictionary");
+                None
+            }
+            Type::Parameter { .. } | Type::Unknown => {
+                self.unsupported(at, &format!("a whole `{ty}` published"));
+                None
+            }
+            _ => Some(Shape {
+                text: "None".to_string(),
+                leaf: true,
+                flat: true,
+            }),
+        }
+    }
+
+    /// How hgraph's delta of a temporal value of `ty` is read where it
+    /// holds a tuple (TYPE-16), as the provider's `positions` reads it:
+    /// a tuple of each position's for a tuple, a `dict` of each field
+    /// that holds one for a struct. `None` where `ty` holds no tuple, and
+    /// hgraph's delta is the program's as it is. A list or a dictionary
+    /// of what holds a tuple is reported: its delta is not read yet.
+    fn delta_shape(&mut self, ty: &Type, at: Location) -> Option<String> {
+        match ty {
+            Type::Tuple(elements) => {
+                let parts: Vec<String> = elements
+                    .iter()
+                    .map(|element| {
+                        self.delta_shape(element, at)
+                            .unwrap_or_else(|| "None".to_string())
+                    })
+                    .collect();
+                Some(format!("({},)", parts.join(", ")))
+            }
+            Type::Named {
+                module,
+                declaration,
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let program = self.program;
+                let (Some(Detail::Struct(read)), Some(types)) = (
+                    program.modules[*module].details.get(*declaration),
+                    program.field_types(ty),
+                ) else {
+                    return None;
+                };
+                let parts: Vec<String> = read
+                    .members
+                    .iter()
+                    .zip(&types)
+                    .filter_map(|(member, field)| {
+                        let part = self.delta_shape(field, at)?;
+                        Some(format!("{}: {part}", string(&name(&member.name))))
+                    })
+                    .collect();
+                (!parts.is_empty()).then(|| format!("{{{}}}", parts.join(", ")))
+            }
+            Type::List { element: inner, .. } | Type::Dict { value: inner, .. } => {
+                if self.delta_shape(inner, at).is_some() {
+                    self.unsupported(at, "the delta of a list or a dictionary that holds a tuple");
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// The port of a node's temporal input that `value` reads, where it
@@ -6704,21 +7165,30 @@ impl Emitter<'_> {
                 let base = self.input_port(function, base)?;
                 Some(format!("{base}[{}]", string(&name(&field.name))))
             }
+            // A tuple's position, under a constant index, is the field
+            // of its position (`tuple_annotation`).
+            ExprKind::Index { base, index } if matches!(base.ty, Type::Tuple(_)) => {
+                let index = constant_position(index)?;
+                let base = self.input_port(function, base)?;
+                Some(format!("{base}[{}]", string(&position(index))))
+            }
             _ => None,
         }
     }
 
     /// What the port `port`, of a temporal value of `ty`, holds, read in
     /// a hook. A struct's bundle holds a value of the struct, made from
-    /// each field's port in turn (TYPE-9); a list's and a dictionary's
-    /// children hold its elements; any other port holds its `value`.
-    fn port_value(&mut self, ty: &Type, port: &str) -> String {
-        self.port_value_at(ty, port, 0)
+    /// each field's port in turn (TYPE-9), and a tuple's a tuple of each
+    /// position's; a list's and a dictionary's children hold its
+    /// elements; any other port holds its `value`. The read is at `at`,
+    /// where what is not written yet is reported.
+    fn port_value(&mut self, ty: &Type, port: &str, at: Location) -> String {
+        self.port_value_at(ty, port, 0, at)
     }
 
     /// `port_value` of a port read inside `depth` comprehensions, whose
     /// names `_child{depth}` and `_key{depth}` are its own.
-    fn port_value_at(&mut self, ty: &Type, port: &str, depth: usize) -> String {
+    fn port_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         match ty {
             // TYPE-9: "lists to child positions". An unsized list is a
             // whole tuple (`list_annotation`), and a list of the
@@ -6731,7 +7201,7 @@ impl Emitter<'_> {
             }
             Type::List { element, .. } => {
                 let child = format!("_child{depth}");
-                let read = self.port_value_at(element, &child, depth + 1);
+                let read = self.port_value_at(element, &child, depth + 1, at);
                 return format!("[{read} for {child} in {port}]");
             }
             // TYPE-9: "dictionaries to keyed children". A dictionary's
@@ -6741,8 +7211,22 @@ impl Emitter<'_> {
             }
             Type::Dict { value, .. } => {
                 let (key, child) = (format!("_key{depth}"), format!("_child{depth}"));
-                let read = self.port_value_at(value, &child, depth + 1);
+                let read = self.port_value_at(value, &child, depth + 1, at);
                 return format!("{{{key}: {read} for {key}, {child} in {port}.items()}}");
+            }
+            // TYPE-9: tuples map "to child fields": a tuple of each
+            // position's value, from the field of its position
+            // (`tuple_annotation`).
+            Type::Tuple(elements) => {
+                let reads: Vec<String> = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| {
+                        let child = format!("{port}[{}]", string(&position(index)));
+                        self.port_value_at(element, &child, depth, at)
+                    })
+                    .collect();
+                return format!("({},)", reads.join(", "));
             }
             _ => {}
         }
@@ -6761,17 +7245,79 @@ impl Emitter<'_> {
         let Some((module, declaration, members)) = fields else {
             return format!("{port}.value");
         };
-        let class = self.type_name(module, declaration);
+        // An abstract struct's value is of a struct below it, which its
+        // bundle does not say (`struct_annotation`).
+        let class = match self.struct_class(ty) {
+            Some(class) if !inherited(self.program, module, declaration) => class,
+            _ => {
+                self.unsupported(at, &format!("a whole value of the temporal `{ty}`"));
+                return "None".to_string();
+            }
+        };
+        let types = self.program.field_types(ty).unwrap_or_default();
         let fields: Vec<String> = members
             .iter()
-            .map(|member| {
+            .zip(&types)
+            .map(|(member, field_ty)| {
                 let field = name(&member.name);
-                let read =
-                    self.port_value_at(&member.ty, &format!("{port}[{}]", string(&field)), depth);
+                let child = format!("{port}[{}]", string(&field));
+                let read = self.port_value_at(field_ty, &child, depth, at);
                 format!("{field}={read}")
             })
             .collect();
         format!("{class}({})", fields.join(", "))
+    }
+
+    /// The name of the field of the tuple position that `index` names
+    /// (`tuple_annotation`), as Python text: `"_0"` for a literal, and
+    /// for another constant, `pair[1 - 1]` or a constant of a module, the
+    /// provider's `_core.position(index)`, of the index as it is
+    /// evaluated. EXPR-7: "A tuple's index is a constant within its
+    /// length", which the analyser has held it to.
+    fn position_key(&mut self, function: &Function, index: &Expr) -> String {
+        match constant_position(index) {
+            Some(at) => string(&position(at)),
+            None => {
+                self.natives = true;
+                let index = self.expression(function, index);
+                format!("_core.position({index})")
+            }
+        }
+    }
+
+    /// `value`, a tuple of `entries` written in a graph where one entry
+    /// is a connection: the tuple's own connection, hgraph's bundle
+    /// (`tuple_annotation`) made of each entry's, with no node of its
+    /// own (TYPE-9: tuples map "to child fields"). An entry that is a
+    /// value, known where the graph is built, is a constant connection
+    /// of its position's type, which hgraph makes of a value that
+    /// publishes whole and is not null. A connection of a struct whose
+    /// position is an abstract struct it inherits from is narrowed to
+    /// it (`narrowed`).
+    fn connected_tuple(&mut self, function: &Function, value: &Expr, entries: &[Expr]) -> String {
+        let Some(bundle) = self.annotation(&value.ty, true, value.at) else {
+            return "None".to_string();
+        };
+        let mut given = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            if !self.connects(function, entry)
+                && !(publishes_whole(&entry.ty) && !is_nullable(&entry.ty))
+            {
+                self.unsupported(entry.at, "a composite value in a tuple of connections");
+                return "None".to_string();
+            }
+            let written = self.expression(function, entry);
+            // A connection of a struct where its position is an abstract
+            // struct it inherits from is that struct's bundle (TYPE-3).
+            let written = match &value.ty {
+                Type::Tuple(positions) if index < positions.len() => {
+                    self.narrowed(function, &positions[index], entry, written)
+                }
+                _ => written,
+            };
+            given.push(format!("{}={written}", position(index)));
+        }
+        format!("{bundle}.from_ts({})", given.join(", "))
     }
 
     /// True when `value`, written in a graph, is a field of a
@@ -6807,7 +7353,7 @@ impl Emitter<'_> {
         };
         matches!(
             base.ty,
-            Type::List { size: Some(_), .. } | Type::Dict { .. }
+            Type::List { size: Some(_), .. } | Type::Dict { .. } | Type::Tuple(_)
         ) && self.connects(function, base)
     }
 
@@ -6839,6 +7385,8 @@ impl Emitter<'_> {
                         .any(|argument| self.connects(function, &argument.value))
             }
             ExprKind::Widen(inner) => self.connects(function, inner),
+            // A tuple is a connection where one of its entries is.
+            ExprKind::Tuple(entries) => entries.iter().any(|entry| self.connects(function, entry)),
             // ERR-7: a capture is "read through two connections".
             ExprKind::Capture(_) | ExprKind::Captured { .. } => true,
             // ERR-3: "In composition a test of a connection is an
@@ -6941,7 +7489,7 @@ impl Emitter<'_> {
                     parameters.push(format!("{python}: {annotation}"));
                     // What the input holds, a struct's value made
                     // from its bundle's fields (TYPE-9).
-                    let read = self.port_value(ty, &python);
+                    let read = self.port_value(ty, &python, at);
                     // FN-12: "A fixed-size list is valid as any list is
                     // (TIME-9)": hgraph's `valid` of it.
                     match self.left_out(target, index, parameter) {
@@ -7398,8 +7946,20 @@ impl Emitter<'_> {
             let signature = instances
                 .find(self.program, (*module, *declaration), generics)
                 .map_or(signature, |instance| &instance.signature);
+            // An input is of its parameter's type where the function has
+            // no generic parameter, as the run's replay is
+            // (`run_wiring`), and of the type its trace is of otherwise.
+            let own = signature.generics.is_empty();
             let (written, bound) = self.bound(function, signature, arguments, |_, value| {
-                crate::instances::trace_payload(&value.ty)
+                let payload = crate::instances::trace_payload(&value.ty)?;
+                let parameter = arguments
+                    .iter()
+                    .find(|argument| std::ptr::eq(&argument.value, value))
+                    .and_then(|argument| signature.parameters.get(argument.parameter?));
+                Some(match parameter {
+                    Some(parameter) if own => parameter.ty.clone(),
+                    _ => payload,
+                })
             });
             let node = self.lifted(
                 (*module, *declaration),
@@ -7636,11 +8196,28 @@ impl Emitter<'_> {
             Type::Trace { cell, .. }
                 if is_nullable(cell) || matches!(&**cell, Type::Delta(of) if is_nullable(of))
         );
+        // A trace of a fixed list whose elements publish whole, where a
+        // cell may be a whole list (TST-5, TIME-7: "a value that is a T
+        // is published whole").
+        let fixed_list = matches!(
+            ty,
+            Type::Trace { cell, .. }
+                if matches!(&**cell, Type::Delta(of) if matches!(&**of,
+                    Type::List { element, size: Some(_) }
+                        if publishes_whole(element) && !is_nullable(element)))
+        );
         let written: Vec<String> = cells
             .iter()
             .map(|cell| match &cell.value {
                 // `_`: nothing is published.
                 None => "None".to_string(),
+                // A whole fixed list is the publication of each of its
+                // positions, the delta its `TSL` records for it.
+                Some(value) if fixed_list && matches!(value.ty, Type::List { .. }) => {
+                    let value = self.expression(function, value);
+                    self.natives = true;
+                    format!("_core.whole_list({value})")
+                }
                 // A published null is hgraph's `Null`, the tick of a
                 // value that is unset: `None` in a trace is silence.
                 Some(Expr {
@@ -7807,6 +8384,24 @@ fn field_of<'p>(program: &'p Program, ty: &Type, member: usize) -> Option<&'p Me
     };
     match program.modules[*module].details.get(*declaration) {
         Some(Detail::Struct(read)) => read.members.get(member),
+        _ => None,
+    }
+}
+
+/// The name of a temporal tuple's field for the position `index`, in
+/// hgraph's bundle with no name that the tuple is (`tuple_annotation`):
+/// `_0`, `_1`. A tuple's fields are its positions, and no name of the
+/// program's.
+fn position(index: usize) -> String {
+    format!("_{index}")
+}
+
+/// The position a constant index names, `pair[1]`: EXPR-3 has a
+/// tuple's position "under a constant index". `None` for an index that
+/// is no literal integer.
+fn constant_position(index: &Expr) -> Option<usize> {
+    match index.kind {
+        ExprKind::Literal(Value::Int(at)) => usize::try_from(at).ok(),
         _ => None,
     }
 }
@@ -8114,6 +8709,16 @@ fn inherited(program: &Program, module: usize, declaration: usize) -> bool {
 /// True for a type written `T?` (TYPE-14).
 fn is_nullable(ty: &Type) -> bool {
     matches!(ty, Type::Nullable(_))
+}
+
+/// True where `value` is published to a place of the type `ty` as a
+/// whole value, and false where it is a `delta<ty>`. TIME-7: "The place
+/// expects T (EXPR-5), so a value that is a T is published whole ... A
+/// value that is no T and is a `delta<T>` is published as that change."
+/// A value of a struct is a T where T is an abstract struct it inherits
+/// from (TYPE-3), and where T publishes whole `delta<T>` is T itself.
+fn whole_value(ty: &Type, value: &Expr) -> bool {
+    value.ty == *ty || value.ty != Type::delta(ty.clone())
 }
 
 /// True for a type hgraph holds as one value under `TS[...]`, so that a

@@ -47,6 +47,7 @@ import functools as _functools
 import json as _json
 import math as _math
 import re as _re
+import sys as _sys
 import zoneinfo as _zoneinfo
 from fractions import Fraction as _Fraction
 
@@ -431,6 +432,11 @@ def struct(name, fields, by_value=False):
     arguments (see `applied`), and each field is equal. The fields are
     always compared: a value is not taken to equal itself, since a
     field of it may be a NaN.
+
+    The class is of the module that makes it, the module of the struct's
+    own: hgraph knows a class, and a bundle's schema (see `schema`), by
+    its module and its name, so two modules' structs of one name are two
+    types to it too.
     """
 
     def equal(self, other):
@@ -457,6 +463,7 @@ def struct(name, fields, by_value=False):
             "_hgl_fields": tuple(fields),
             "_hgl_by_value": by_value,
         },
+        module=_sys._getframe(1).f_globals.get("__name__", __name__),
     )
 
 
@@ -477,7 +484,11 @@ def applied(struct, arguments):
     key = (struct, arguments)
     made = _applications.get(key)
     if made is None:
-        made = type(f"{struct.__name__}<{arguments}>", (struct,), {"__slots__": ()})
+        made = type(
+            f"{struct.__name__}<{arguments}>",
+            (struct,),
+            {"__slots__": (), "__module__": struct.__module__},
+        )
         _applications[key] = made
     return made
 
@@ -528,7 +539,11 @@ def schema(struct, fields):
 
     `fields` is each field's name and its temporal type, in the
     struct's order. The schema is made once for a class, so that every
-    annotation of the struct names one type to hgraph.
+    annotation of the struct names one type to hgraph. It is of the
+    class's module, named after the class: hgraph knows a schema by its
+    module and its name, so two modules' structs of one name, and two
+    applications of a generic struct, are two types (TYPE-3: "Structs
+    are nominal").
     """
     made = _schemas.get(struct)
     if made is None:
@@ -539,6 +554,16 @@ def schema(struct, fields):
         )
         _schemas[struct] = made
     return made
+
+
+def narrowed(port, bundle, fields):
+    """A temporal struct's connection, `port`, where an abstract struct
+    it inherits from is expected (the language's TYPE-3: "A struct is a
+    value where an abstract struct it inherits from is expected"), as
+    hgraph's bundle `bundle` of the abstract struct: each of its
+    `fields` the struct's own field's connection. It is made where the
+    graph is built, and adds no node."""
+    return bundle.from_ts(**{field: port[field] for field in fields})
 
 
 def struct_delta(**fields):
@@ -604,6 +629,14 @@ def list_delta(updated=None, removed=(), size_modified=None):
         made[position] = _REMOVE
     made.size_modified = size_modified
     return made
+
+
+def whole_list(value):
+    """The delta a fixed list publishes for a whole value of it (the
+    language's TIME-7: "a value that is a T is published whole"), as a
+    trace's cell holds it (TST-5): each position updated with its
+    element."""
+    return list_delta(updated=dict(enumerate(value)))
 
 
 def size_modified(delta):
@@ -684,13 +717,63 @@ def removed(delta):
     return frozenset(key for key, change in delta.items() if _removes(change))
 
 
-def bundled(value):
-    """What a temporal struct publishes for a whole value of it (TYPE-9):
-    each field, as hgraph's bundle takes it. The compiler gives it only
-    a struct whose fields each publish whole. A field that is null is
-    published as a null, hgraph's `Null` (see `published`): `None` would
-    leave the field as it was."""
-    return {field: published(getattr(value, field)) for field in value._hgl_fields}
+def bundled(value, shape=None):
+    """What a temporal struct or tuple publishes for a whole value of it
+    (TYPE-9: "Temporalization recursively maps tuples/structs to child
+    fields"): each part, as hgraph's bundle takes it. A part that is
+    null is published as a null, hgraph's `Null` (see `published`):
+    `None` would leave the part as it was.
+
+    With no `shape` the value is a struct whose fields each publish
+    whole, every field its class has. Otherwise `shape` is what the
+    compiler wrote for the value's type: `None` for a part that
+    publishes whole; a `dict` of each field's shape for a struct, which
+    names the fields of the type and not of the struct below it that a
+    value of an abstract one is; a tuple of each position's for a tuple,
+    which hgraph's bundle takes position by position; and `[None]` for a
+    fixed list of elements that publish whole, as a tuple of them. A set
+    is given as the set it is, which hgraph's `TSS` takes as its members
+    now, removing those it no longer has."""
+    if shape is None:
+        return {field: published(getattr(value, field)) for field in value._hgl_fields}
+    return _bundled(value, shape)
+
+
+def _bundled(value, shape):
+    if shape is None:
+        return published(value)
+    if isinstance(shape, dict):
+        return {field: _bundled(getattr(value, field), part) for field, part in shape.items()}
+    if isinstance(shape, tuple):
+        return tuple(_bundled(item, part) for item, part in zip(value, shape))
+    return tuple(_bundled(element, shape[0]) for element in value)
+
+
+def position(index):
+    """The field of a temporal tuple's position `index`, `_0`, `_1`
+    (the language's TYPE-9: tuples map "to child fields"), for an index
+    that is a constant other than a literal, `pair[1 - 1]`."""
+    return f"_{index}"
+
+
+def positions(delta, shape):
+    """hgraph's delta of a temporal value that holds a tuple, as the
+    program reads it (the language's TYPE-16: a tuple's delta is
+    "`tuple<delta<A>?, delta<B>?>`: each position's delta, null where it
+    did not change").
+
+    hgraph's bundle that a tuple is gives a `dict` of each position that
+    changed, by the position's field, `_0`, `_1`. `shape` is what the
+    compiler wrote for the type: a tuple of each position's shape for a
+    tuple, a `dict` of the shape of each field that holds a tuple for a
+    struct, whose delta is a `dict` of the fields that changed, and
+    `None` for a part that holds no tuple. A null is a part that did not
+    change; a published null, hgraph's `Null`, is kept."""
+    if delta is None or shape is None:
+        return delta
+    if isinstance(shape, tuple):
+        return tuple(positions(delta.get(f"_{index}"), part) for index, part in enumerate(shape))
+    return {field: positions(change, shape.get(field)) for field, change in delta.items()}
 
 
 def item(sequence, index):
@@ -700,6 +783,18 @@ def item(sequence, index):
     if not 0 <= index < len(sequence):
         raise HglError(f"the index {index} is outside a sequence of {len(sequence)}")
     return sequence[index]
+
+
+def child(port, index):
+    """The port of the position `index` of a fixed list's port, which a
+    part of `out` is assigned through (the language's TIME-7). An index
+    outside the list fails, as an element's does (EXPR-3: "An index
+    outside a list fails where it is evaluated"); Python's own would
+    count a negative one back from the end."""
+    size = len(port)
+    if not 0 <= index < size:
+        raise HglError(f"the index {index} is outside a sequence of {size}")
+    return port[index]
 
 
 def entry(dictionary, key):
