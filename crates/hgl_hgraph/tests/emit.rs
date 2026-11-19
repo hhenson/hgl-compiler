@@ -4759,7 +4759,7 @@ fn a_temporal_list_or_dictionary_is_written_by_its_children() {
     python.assert_writes(&[
         "-> _hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]:".to_string(),
         "        return _core.list_replaced(_output, [])".to_string(),
-        "        return (_core.position_of(values, 1).value if _core.position_of(values, 1).valid else _core.unset_read())".to_string(),
+        "        return (_core.list_position(values, 1).value if _core.list_position(values, 1).valid else _core.unset_read())".to_string(),
         "    return _core.list_replaced(_output, doubled(values=_core.list_value(values)))".to_string(),
         format!("-> {pair}:"),
         "    return _core.list_within(_core.list_delta(updated={slot.value: reading.value}), 2)".to_string(),
@@ -4911,7 +4911,7 @@ fn collection_validity_and_a_lists_delta_are_written() {
         "(_core.valid_of(pair, (\"list\", None)) and pair.all_valid)",
         "_output: _hg.TS_OUT[_hg.TSL[_hg.TS[_py.int], _hg.Size[-1]]] = None",
         "return _core.list_applied(_output, _core.list_delta(size_modified=size.value))",
-        "        return _core.list_published(_output, _published[0])",
+        "        return _core.published_into(_output, _published[0], \"list\")",
         "        return _core.removed(pair.delta_value)",
     ]);
 }
@@ -4967,12 +4967,12 @@ fn a_growing_list_is_an_unbounded_tsl() {
         .to_string(),
         // END-3: the delta read is hgraph's `TSLDelta`.
         "        return _core.list_applied(_output, values.delta_value)\n".to_string(),
-        "_core.valid_of(values, (\"list\", None)), values.all_valid, _core.position_of(values, 1).valid".to_string(),
+        "_core.valid_of(values, (\"list\", None)), values.all_valid, _core.list_position(values, 1).valid".to_string(),
         // TIME-7: `out` by position and by delta.
         "        _core.list_child(_output, 1).value = 9\n".to_string(),
         "        _output.value = _core.list_applied(_output, _core.list_delta(size_modified=_core.neg__i64(value=1)))\n".to_string(),
         // SOURCE-1: what a source yields is applied as it is due.
-        "        return _core.list_published(_output, _published[0])\n".to_string(),
+        "        return _core.published_into(_output, _published[0], \"list\")\n".to_string(),
         // FN-3: a branch's constant is the provider's node.
         format!("        return _core.constant_of({list})(_hg.const(True), given=_core.Held((_core.copied(no_values()), \"list\")))\n"),
         // A lifted helper's empty result ticks through its `_output`.
@@ -5021,13 +5021,12 @@ fn a_growing_lists_delta_runs_on_hgraph() {
 
 /// What the language does not settle of a growing list fails as the
 /// graph runs, named as not written: an entry at or past a size written
-/// with it, which hgraph fails the run for, and a removed position the
-/// list never held, which hgraph drops (TYPE-16). So does an index of
+/// with it, which hgraph fails the run for (TYPE-16). So does an index of
 /// `out` past the list (EXPR-3: "An index outside a list fails where it
-/// is evaluated"), which hgraph would grow the list to, and an empty
-/// list inside a value a source yields, which hgraph 0.9.5's `TSL` does
-/// not tick for and which a source's statements make with no port of
-/// the output (TIME-9).
+/// is evaluated"), which hgraph would grow the list to, and an empty list
+/// assigned to a position of `out`, which hgraph 0.9.5's `TSL` does not
+/// tick for and which has no port of its own where it is written
+/// (TIME-9).
 #[test]
 #[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
 fn a_list_form_not_written_fails_as_the_graph_runs() {
@@ -5041,20 +5040,16 @@ fn a_list_form_not_written_fails_as_the_graph_runs() {
     let described = outcomes(&emitted, &all, &ran);
     let expected = [
         (
-            "an_entry_past_the_size_written_with_it failed unwritten.hgl:25:9",
+            "an_entry_past_the_size_written_with_it failed unwritten.hgl:24:9",
             "NotImplementedError: the hgraph target does not write an updated position at or past the size a list's delta gives it yet",
         ),
         (
-            "a_removed_position_never_held failed unwritten.hgl:29:9",
-            "NotImplementedError: the hgraph target does not write a removed position past an unsized list's end yet",
-        ),
-        (
-            "a_position_of_out_past_the_list failed unwritten.hgl:33:9",
+            "a_position_of_out_past_the_list failed unwritten.hgl:28:9",
             "HglError: the index 5 is outside a sequence of 3",
         ),
         (
-            "an_empty_list_yielded_inside_a_struct failed unwritten.hgl:50:9",
-            "NotImplementedError: the hgraph target does not write an empty unsized list inside a value a source yields or a dictionary's entry holds yet",
+            "an_empty_list_assigned_to_a_position_of_out failed unwritten.hgl:50:9",
+            "NotImplementedError: the hgraph target does not write an empty unsized list assigned to an entry or a list's position of `out` yet",
         ),
     ];
     assert_eq!(described.len(), expected.len(), "{described:#?}");
@@ -5067,28 +5062,74 @@ fn a_list_form_not_written_fails_as_the_graph_runs() {
 }
 
 /// What hgraph 0.9.5 takes of a growing list in no way the language
-/// has is reported: an unsized list's delta inside a struct's, a list's
-/// or a dictionary's delta the program makes, which hgraph applies with
-/// no negative size and which the provider counts only at the node's own
-/// output (TYPE-16); and an element of an unsized list's connection in a
-/// graph, where hgraph's `getitem_` fails the run once the list no
-/// longer holds the position, which the language has a child that is not
-/// valid (TIME-1, EXPR-7).
+/// has is reported: an unsized list's delta inside a list's or a
+/// dictionary's delta the program makes, which hgraph applies with no
+/// negative size and whose position or key the delta may add, with no
+/// port of the node's output yet to count the size from (TYPE-16); and
+/// an element of an unsized list of composites selected in a graph,
+/// which the provider's `position_in` does not take. A struct's and a
+/// tuple's delta that holds one is counted (`published_into`).
 #[test]
 fn a_growing_list_form_hgraph_does_not_take_is_reported() {
     let emitted = emit(&[fixture!(
         "a_growing_list_form_hgraph_does_not_take_is_reported",
         "m.hgl"
     )]);
-    let nested = "the hgraph target does not write an unsized list's delta inside the delta of a struct, a list or a dictionary yet";
+    let nested = "the hgraph target does not write an unsized list's delta inside the delta of a list or a dictionary yet";
     assert_eq!(
         emitted.reported,
         [
-            format!("m.hgl:4:40 target.unsupported: {nested}"),
-            format!("m.hgl:7:51 target.unsupported: {nested}"),
-            format!("m.hgl:10:56 target.unsupported: {nested}"),
-            "m.hgl:15:33 target.unsupported: the hgraph target does not write an element of an unsized list's connection in a graph: hgraph 0.9.5's `getitem_` fails where the list does not hold it yet".to_string(),
+            format!("m.hgl:4:51 target.unsupported: {nested}"),
+            format!("m.hgl:7:56 target.unsupported: {nested}"),
+            "m.hgl:12:34 target.unsupported: the hgraph target does not write an element of an unsized list of composites yet".to_string(),
         ]
+    );
+}
+
+/// TIME-1, ERR-14: a position a growing list does not hold, before it
+/// publishes, while it is short and after a shrink, is a child that is
+/// not valid, as a dictionary's absent key is (`list_position`), and so
+/// is one selected in a graph (`position_in`, EXPR-7). TYPE-16: a
+/// removed position the list never held is ignored, as a dictionary's
+/// absent key is (hhenson/hgl_spec#124, by analogy); a tuple's and a
+/// struct's delta that holds a growing list's is counted from what the
+/// list holds (`published_into`), by a node and by a source when it is
+/// due, which also makes a struct's empty list tick. END-4: an
+/// invalidated list is emptied first (`invalidated`).
+const LIST_POSITIONS: (&str, &str) = fixture!("demo.list_positions.hgl");
+
+/// What the target writes for them.
+#[test]
+fn a_growing_lists_position_is_an_endpoint_of_its_own() {
+    let emitted = emit_clean(&[LIST_POSITIONS]);
+    let python = emitted.module("demo.list_positions");
+    python.assert_writes(&[
+        "_core.list_position(values, 1).valid".to_string(),
+        "_core.child_modified(_core.list_position(values, 1))".to_string(),
+        "_core.checked_child_result(_core.list_position(values, index.value), lambda _port: ".to_string(),
+        "        return _core.published_into(_output, (None, _core.list_delta(size_modified=_core.neg__i64(value=1)),), (None, \"list\",))\n".to_string(),
+        "_core.published_into(_output, _core.struct_delta(items=_core.list_delta(size_modified=_core.neg__i64(value=command.value))), {\"items\": \"list\"})".to_string(),
+        "        return _core.published_into(_output, _published[0], {\"items\": \"list\"})\n".to_string(),
+        "_core.bundled(Basket(owner=\"b\", items=[]), {\"owner\": None, \"items\": \"list\"}, _core.DEFERRED)".to_string(),
+        "        _core.invalidated(_output, \"list\")\n".to_string(),
+        "        _core.invalidated(_output, {\"items\": \"list\"})\n".to_string(),
+        "_core.position_in(edited(command=command), _hg.const(1, tp=_hg.TS[_py.int]))".to_string(),
+        "_core.position_in(edited(command=command), index)".to_string(),
+    ]);
+}
+
+/// They run on hgraph; `the_generated_tests_pass_on_hgraph` runs them too.
+#[test]
+#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
+fn a_growing_lists_position_runs_on_hgraph() {
+    let hgraph = on_hgraph("hgraph_list_positions");
+    let emitted = emit_clean(&[LIST_POSITIONS]);
+    let ran = hgraph.run_all(&emitted);
+    let all: Vec<usize> = (0..emitted.output.tests.len()).collect();
+    let described = outcomes(&emitted, &all, &ran);
+    assert!(
+        described.iter().all(|outcome| outcome.ends_with(" passed")),
+        "{described:#?}"
     );
 }
 

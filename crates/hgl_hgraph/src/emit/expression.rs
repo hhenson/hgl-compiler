@@ -135,7 +135,18 @@ impl Emitter<'_> {
                     }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
-                    EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                    // hgraph's unbounded `TSL` keeps its positions when
+                    // it is invalidated, which the next delta read would
+                    // name removed: the provider empties each list first.
+                    EndpointOperation::Invalidate => {
+                        match list_parts_shape(self.program, &endpoint.ty) {
+                            Some(shape) => {
+                                self.natives = true;
+                                format!("_core.invalidated({input}, {shape})")
+                            }
+                            None => format!("{input}.invalidate()"),
+                        }
+                    }
                     // TIME-9: input activity controls delivery of notifications.
                     EndpointOperation::Activate => format!("{input}.make_active()"),
                     EndpointOperation::Passivate => format!("{input}.make_passive()"),
@@ -537,20 +548,35 @@ impl Emitter<'_> {
                 // hgraph's `TSL` by a position known where the graph is
                 // built, and from its `TSD` by a key that may be a
                 // connection: a key that ticks selects another child.
-                if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
-                    self.unsupported(value.at, "a list's element at a position that ticks");
-                    return "None".to_string();
-                }
                 // TIME-1: "A child of a collection ... is an endpoint
                 // whether or not it is valid". hgraph's `getitem_` of an
                 // unbounded `TSL` fails the run where the list no longer
-                // holds the position, where the child is not valid.
-                if growing_list(&base.ty) {
-                    self.unsupported(
-                        value.at,
-                        "an element of an unsized list's connection in a graph: hgraph 0.9.5's \
-                         `getitem_` fails where the list does not hold it",
-                    );
+                // holds the position, so the provider's node selects it,
+                // by a position known where the graph is built or one that
+                // ticks: a connection that is not valid while the list does
+                // not hold the position, as a dictionary's absent key's is.
+                if let Type::List {
+                    element,
+                    size: None,
+                } = &base.ty
+                {
+                    if !publishes_whole(element) {
+                        self.unsupported(value.at, "an element of an unsized list of composites");
+                        return "None".to_string();
+                    }
+                    let connected = self.connects(function, index);
+                    let base = self.expression(function, base);
+                    let index = self.expression(function, index);
+                    let index = if connected {
+                        index
+                    } else {
+                        format!("_hg.const({index}, tp=_hg.TS[_py.int])")
+                    };
+                    self.natives = true;
+                    return format!("_core.position_in({base}, {index})");
+                }
+                if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
+                    self.unsupported(value.at, "a list's element at a position that ticks");
                     return "None".to_string();
                 }
                 // ERR-6: a dictionary's brackets "are strict
@@ -973,6 +999,9 @@ impl Emitter<'_> {
             }
             ExprKind::Index { base, index } => {
                 let of = match &base.ty {
+                    // TIME-1: a position an unsized list does not hold is
+                    // a child that is not valid, as an absent key's is.
+                    Type::List { size: None, .. } => "list_position",
                     Type::List { .. } => "position_of",
                     // An absent key's entry is a child that is not valid
                     // (TIME-1), read or named alike.
@@ -1083,17 +1112,18 @@ impl Emitter<'_> {
         validity_shape(self.program, ty).map_or(String::new(), |shape| format!(", {shape}"))
     }
 
-    /// Reports `argument`, a property of a delta of a struct, a list or
-    /// a dictionary that the program makes, where its value holds an
+    /// Reports `argument`, a property of a delta of a list or a
+    /// dictionary that the program makes, where its value holds an
     /// unsized list's delta (TYPE-16): hgraph applies such a nested
     /// `TSLDelta` as it is, and fails the run for a negative size, which
-    /// the provider counts only for the list at the node's own output
-    /// (`list_applied`).
+    /// the provider counts only for a list whose port the node's own
+    /// output has (`published_into`), and a position or a key the
+    /// delta adds has none yet. A struct's and a tuple's are counted.
     fn nested_list_delta(&mut self, argument: &Argument) {
         if holds_growing_list(self.program, &argument.value.ty) {
             self.unsupported(
                 argument.value.at,
-                "an unsized list's delta inside the delta of a struct, a list or a dictionary",
+                "an unsized list's delta inside the delta of a list or a dictionary",
             );
         }
     }
@@ -1528,7 +1558,6 @@ impl Emitter<'_> {
             let program = self.program;
             let mut written = Vec::new();
             for argument in arguments {
-                self.nested_list_delta(argument);
                 let given = self.expression(function, &argument.value);
                 if let Some(field) = argument
                     .parameter

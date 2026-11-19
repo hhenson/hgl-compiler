@@ -646,11 +646,14 @@ impl Emitter<'_> {
             node_parameters.push("_clock: _hg.EvaluationClock = None".to_string());
         }
         node_parameters.push("_scheduler: _hg.SCHEDULER = None".to_string());
-        // TIME-7, TYPE-16: what a source yields to an unsized list is
-        // applied to the list as it is when it is due, on the node's own
-        // output (`list_published`).
-        let grows = signature.result.as_ref().is_some_and(growing_list);
-        if let (true, Some(result)) = (grows, &result) {
+        // TIME-7, TYPE-16: what a source yields to an unsized list, alone
+        // or in a struct or a tuple, is applied to each list as it is
+        // when it is due, on the node's own output (`published_into`).
+        let grows = signature
+            .result
+            .as_ref()
+            .and_then(|result| list_parts_shape(self.program, result));
+        if let (Some(_), Some(result)) = (&grows, &result) {
             node_parameters.push(format!("_output: {} = None", output_annotation(result)));
         }
         let returns = result
@@ -673,8 +676,11 @@ impl Emitter<'_> {
             "_published = _core.resume(_state._source, _clock.evaluation_time, _scheduler)",
         );
         self.line(1, "if _published is not None:");
-        if grows {
-            self.line(2, "return _core.list_published(_output, _published[0])");
+        if let Some(shape) = &grows {
+            self.line(
+                2,
+                &format!("return _core.published_into(_output, _published[0], {shape})"),
+            );
         } else {
             self.line(2, "return _published[0]");
         }

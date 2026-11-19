@@ -11,9 +11,8 @@ fn edited(command: i64) -> list<i64> {
     when {
         if command == 0 { return [1, 2, 3] }
         # TYPE-16 does not say what an entry at or past the size written
-        # with it is, nor a removed position the list never held.
+        # with it is.
         if command == 1 { return delta<list<i64>>(updated: [4: 1], size_modified: 2) }
-        if command == 2 { return delta<list<i64>>(removed: [7]) }
         # EXPR-3: "An index outside a list fails where it is evaluated".
         out[5] = 1
     }
@@ -25,27 +24,28 @@ test an_entry_past_the_size_written_with_it {
     let taken = eval(digits_of(command: [0, 1]))
 }
 
-test a_removed_position_never_held {
+test a_position_of_out_past_the_list {
     let taken = eval(digits_of(command: [0, 2]))
 }
 
-test a_position_of_out_past_the_list {
-    let taken = eval(digits_of(command: [0, 3]))
+# An empty list assigned to a position of `out`, which has no port of its
+# own where the assignment is written.
+fn rows(command: i64) -> list<list<i64>> {
+    inject out
+    when {
+        if command == 0 { return delta<list<list<i64>>>(size_modified: 1) }
+        out[0] = []
+    }
 }
 
-struct Basket {
-    items: list<i64>
+const fn width(values: list<list<i64>>) -> i64 {
+    var count: i64 = 0
+    for row in values { count += 1 }
+    return count
 }
 
-# A source's statements make what it yields before it is due, with no
-# port of the output to make an empty list in a struct tick through.
-fn baskets() -> Basket {
-    yield 0us: Basket(items: [1])
-    yield 1us: Basket(items: [])
-}
+fn row_width(command: i64) -> i64 => width(rows(command))
 
-fn basket_digits() -> i64 => digits(baskets().items)
-
-test an_empty_list_yielded_inside_a_struct {
-    let taken = eval(basket_digits())
+test an_empty_list_assigned_to_a_position_of_out {
+    let taken = eval(row_width(command: [0, 1]))
 }

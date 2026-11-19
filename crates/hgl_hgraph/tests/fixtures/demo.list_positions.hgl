@@ -1,0 +1,240 @@
+module demo.list_positions
+
+# A growing list's position it does not hold, a tuple's and a struct's
+# delta that holds a growing list's, invalidation, a removed position
+# never held, a source's struct with an empty list, and a position
+# selected in a graph (TIME-1, TYPE-16, END-3, END-4, TIME-7, EXPR-7).
+
+const fn digits(values: list<i64>) -> i64 {
+    var code: i64 = 0
+    for value in values { code = code * 10 + value }
+    return code
+}
+
+fn edited(command: i64) -> list<i64> {
+    when {
+        if command == 0 { return [1, 2, 3] }
+        if command == 1 { return delta<list<i64>>(size_modified: 1) }
+        if command == 2 { return [1, 2] }
+        if command == 3 { return delta<list<i64>>(removed: [1]) }
+        if command == 4 { return delta<list<i64>>(updated: [1: 8]) }
+        # A removed position the list never held.
+        if command == 5 { return delta<list<i64>>(removed: [7]) }
+        if command == 6 { return delta<list<i64>>(size_modified: -1) }
+        return [1]
+    }
+}
+
+# TIME-1: "A child of a collection ... is an endpoint whether or not it
+# is valid": a position the list does not hold, before it publishes,
+# while it is short and after a shrink, is a child that is not valid.
+fn second(probe: bool, values: list<i64>) -> list<bool, 3> {
+    when modified(probe) && valid([]) {
+        return [valid(values[1]), modified(values[1]), last_modified(values[1]) == null]
+    }
+}
+
+fn second_of(probe: bool, command: i64) -> list<bool, 3> => second(probe, edited(command))
+
+test a_position_the_list_does_not_hold_is_not_valid {
+    # Before the list publishes, while it is short, and after a shrink.
+    assert eval(second_of(probe: [true, true, true, true], command: [_, 7, 0, 1])) == [
+        [false, false, true],
+        [false, false, true],
+        [true, true, false],
+        [false, false, true],
+    ]
+    # A removed position, and the same written again.
+    assert eval(second_of(probe: [true, true, true], command: [0, 3, 4])) == [
+        [true, true, false],
+        [false, false, true],
+        [true, true, false],
+    ]
+}
+
+# The idiom for a run-time index: guarded by `valid(values[i])`.
+fn guarded_at(index: i64, values: list<i64>) -> i64 {
+    when {
+        if valid(values[index]) { return values[index] }
+        return -1
+    }
+}
+
+fn guarded_of(index: i64, command: i64) -> i64 => guarded_at(index, edited(command))
+
+# ERR-14: a run-time index of a child that is not valid gives an `err`
+# coded `value.unset_read` where a `result` is expected.
+fn checked_at(index: i64, values: list<i64>) -> result<i64, error> {
+    when valid(index) { return values[index] }
+}
+
+const fn code_of(outcome: result<i64, error>) -> str {
+    if is_ok(outcome) { return "ok" }
+    let code = outcome.error.code
+    if code == null { return "none" }
+    return code
+}
+
+fn at_of(index: i64, command: i64) -> str => code_of(checked_at(index, edited(command)))
+
+test a_runtime_index_past_the_list_is_a_child_that_is_not_valid {
+    assert eval(guarded_of(index: [1, _, _], command: [7, 0, 1])) == [-1, 2, -1]
+    assert eval(at_of(index: [1, _], command: [0, 1])) == ["ok", "value.unset_read"]
+    assert eval(at_of(index: [1, _], command: [0, 3])) == ["ok", "value.unset_read"]
+}
+
+# A read at a run-time index that fails, where no `result` is expected.
+fn read_at(index: i64, values: list<i64>) -> i64 {
+    when valid(index) { return values[index] }
+}
+
+fn read_of(index: i64, command: i64) -> i64 => read_at(index, edited(command))
+
+test a_runtime_read_past_the_list_fails_with_its_code {
+    assert raises("value.unset_read") { eval(read_of(index: [1, _], command: [0, 1])) }
+}
+
+# TYPE-16: a removed position the list never held: nothing is lost and
+# nothing fails, as for a dictionary's absent key.
+fn relayed(values: list<i64>) -> list<i64> {
+    when { return delta_value(values) }
+}
+
+fn relay_of(command: i64) -> list<i64> => relayed(edited(command))
+
+fn digits_of(command: i64) -> i64 => digits(edited(command))
+
+test a_removed_position_never_held_is_ignored {
+    assert eval(digits_of(command: [0, 5])) == [123, 123]
+    assert eval(relay_of(command: [0, 5])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        delta<list<i64>>(),
+    ]
+}
+
+# TYPE-16: a tuple's delta is "a tuple as any other" of each position's
+# delta, and a growing list's in it is counted from what the list holds.
+fn paired(command: i64) -> tuple<i64, list<i64>> {
+    when {
+        if command == 0 { return (7, [1, 2, 3]) }
+        if command == 1 { return (null, delta<list<i64>>(size_modified: -1)) }
+        if command == 2 { return (null, delta<list<i64>>(updated: [3: 4])) }
+        return (8, null)
+    }
+}
+
+fn paired_digits(command: i64) -> i64 => digits(paired(command)[1])
+
+fn paired_first(command: i64) -> i64 => paired(command)[0]
+
+test a_tuples_delta_holds_a_growing_lists {
+    assert eval(paired_digits(command: [0, 1, 1])) == [123, 12, 1]
+    assert eval(paired_digits(command: [0, 2])) == [123, 1234]
+    assert eval(paired_first(command: [0, 3])) == [7, 8]
+}
+
+# A struct's delta too.
+struct Basket {
+    owner: str
+    items: list<i64>
+}
+
+fn basket(command: i64) -> Basket {
+    when {
+        if command == 0 { return Basket(owner: "a", items: [1, 2, 3]) }
+        return delta<Basket>(items: delta<list<i64>>(size_modified: -command))
+    }
+}
+
+fn basket_digits(command: i64) -> i64 => digits(basket(command).items)
+
+test a_structs_delta_holds_a_growing_lists {
+    assert eval(basket_digits(command: [0, 1, 5])) == [123, 12, 0]
+}
+
+# A source yields a struct with an empty list, and a struct's delta, each
+# published as it is due.
+fn baskets() -> Basket {
+    yield 0us: Basket(owner: "a", items: [1])
+    yield 1us: Basket(owner: "b", items: [])
+}
+
+fn sourced_digits() -> i64 => digits(baskets().items)
+
+test a_source_yields_a_struct_with_an_empty_list {
+    assert eval(sourced_digits()) == [1, 0]
+}
+
+fn changed_baskets() -> Basket {
+    yield 0us: Basket(owner: "a", items: [1])
+    yield 1us: delta<Basket>(items: delta<list<i64>>(updated: [1: 5]))
+    yield 1us: delta<Basket>(items: delta<list<i64>>(size_modified: -2))
+}
+
+fn changed_digits() -> i64 => digits(changed_baskets().items)
+
+test a_source_yields_a_structs_delta {
+    assert eval(changed_digits()) == [1, 15, 0]
+}
+
+# END-4: "Invalidation clears validity, modification, payload, and
+# delta": the next delta is of an empty list.
+fn cleared(command: i64) -> list<i64> {
+    inject out
+    when {
+        if command == 0 { return [1, 2, 3] }
+        if command == 1 {
+            invalidate(out)
+            return
+        }
+        if command == 2 { return delta<list<i64>>(updated: [0: 5]) }
+        return []
+    }
+}
+
+fn cleared_items(command: i64) -> Basket {
+    inject out
+    when {
+        if command == 0 { return Basket(owner: "a", items: [1, 2, 3]) }
+        if command == 1 {
+            invalidate(out)
+            return
+        }
+        return delta<Basket>(owner: "b", items: delta<list<i64>>(updated: [0: 5]))
+    }
+}
+
+fn cleared_digits(command: i64) -> i64 => digits(cleared_items(command).items)
+
+test an_invalidated_list_holds_no_position {
+    assert eval(cleared(command: [0, 1, 2])) == [
+        delta<list<i64>>(updated: [0: 1, 1: 2, 2: 3], size_modified: 3),
+        _,
+        delta<list<i64>>(updated: [0: 5], size_modified: 1),
+    ]
+    assert eval(cleared(command: [0, 1, 3])) == [[1, 2, 3], _, []]
+}
+
+test an_invalidated_structs_list_holds_no_position {
+    assert eval(cleared_digits(command: [0, 1, 2])) == [123, _, 5]
+}
+
+# EXPR-7: a position selected in a graph, by a constant and by an index
+# that ticks: a connection that is not valid while the list does not hold
+# the position (TIME-1).
+fn second_in(command: i64) -> i64 => edited(command)[1]
+
+fn selected_in(index: i64, command: i64) -> i64 => edited(command)[index]
+
+fn state_in(probe: bool, value: i64) -> bool {
+    when modified(probe) && valid([]) { return valid(value) }
+}
+
+fn second_state(probe: bool, command: i64) -> bool => state_in(probe, second_in(command))
+
+test a_position_selected_in_a_graph {
+    assert eval(second_in(command: [0, 1, 2, 3, 4])) == [2, _, 2, _, 8]
+    assert eval(second_state(probe: [true, true, true, true], command: [0, 1, 2, 3])) ==
+        [true, false, true, false]
+    assert eval(selected_in(index: [0, 2, _, 1], command: [0, _, 6, _])) == [1, 3, _, 2]
+}
