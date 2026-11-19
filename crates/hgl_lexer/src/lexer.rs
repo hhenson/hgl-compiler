@@ -1134,7 +1134,8 @@ mod tests {
     #[test]
     fn built_in_type_names_are_reserved() {
         // The hard reserved words: the names of the types the language
-        // defines are reserved, as the scalar type names are.
+        // defines are reserved, as the scalar type names are, and so is
+        // `ref`, which is no type but a mode (TYPE-12, FN-16).
         assert_eq!(
             kinds_of(
                 "atomic tuple list set dict rolling_window result ref signal endpoint delta error"
