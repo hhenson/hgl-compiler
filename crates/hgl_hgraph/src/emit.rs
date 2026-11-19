@@ -5391,7 +5391,10 @@ impl Emitter<'_> {
             && growing_list(result)
             && result != &value.ty
         {
-            if matches!(&value.ty, Type::Delta(of) if growing_list(of)) {
+            // A source's generator has no `_output` to apply it to.
+            if function.mode == Mode::Node
+                && matches!(&value.ty, Type::Delta(of) if growing_list(of))
+            {
                 self.natives = true;
                 return format!("_core.list_applied(_output, {written})");
             }

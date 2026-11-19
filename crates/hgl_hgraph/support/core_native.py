@@ -462,7 +462,8 @@ def list_applied(output, delta):
     gone = {position for position, change in delta.items() if _removes(change)}
     size = size_modified(delta)
     if size is None:
-        size = min(gone) if gone else len(held)
+        # Only a `removed` that is the whole tail shrinks the list.
+        size = min(gone) if gone and gone == set(range(min(gone), len(held))) else len(held)
     if any(position < size for position in gone):
         raise NotImplementedError(
             "the hgraph target does not write a position removed inside an unsized list yet"

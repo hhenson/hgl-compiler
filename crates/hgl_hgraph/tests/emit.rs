@@ -7611,8 +7611,8 @@ fn a_temporal_collection_form_not_written_yet_is_reported() {
 /// entry is valid ... `all_valid` is true where every one is", hgraph's
 /// `valid` and `all_valid`. TYPE-16: "A delta written with a smaller
 /// `size_modified` and no `removed` shrinks the list": an unsized list
-/// applies it to what it last published. A fixed list's `removed` is
-/// not read: hgraph's bounded `TSL` does not report it.
+/// applies it to what it last published; a source, which has no
+/// `_output` here, does not yet. A fixed list's `removed` is not read: hgraph's bounded `TSL` does not report it.
 #[test]
 fn collection_validity_and_a_lists_delta_are_written() {
     let emitted = emit(&[(
@@ -7625,12 +7625,21 @@ fn collection_validity_and_a_lists_delta_are_written() {
             "fn resized(size: i64) -> list<i64> {\n",
             "    when { return delta<list<i64>>(size_modified: size) }\n",
             "}\n",
+            "fn shrinking() -> list<i64> {\n",
+            "    yield 1s: delta<list<i64>>(size_modified: 0)\n",
+            "}\n",
             "fn lost(pair: list<i64, 2>) -> set<i64> {\n",
             "    when { return delta_value(pair).removed }\n",
             "}\n",
         ),
     )]);
-    assert_eq!(emitted.reported, ["m.hgl:9:19 target.unsupported"]);
+    assert_eq!(
+        emitted.reported,
+        [
+            "m.hgl:9:15 target.unsupported",
+            "m.hgl:12:19 target.unsupported"
+        ]
+    );
     let python = emitted.text("_hgl/_m_m/__init__.py");
     for expected in [
         "pair.valid and pair.all_valid",
