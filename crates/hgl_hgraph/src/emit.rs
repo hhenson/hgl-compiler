@@ -5392,6 +5392,14 @@ impl Emitter<'_> {
             ExprKind::Widen(inner) => {
                 format!("_py.float({})", self.expression(function, inner))
             }
+            // Core's OPS-6: `convert<list<B>>(values)`.
+            ExprKind::ParentList(_) => {
+                self.unsupported(
+                    value.at,
+                    "a list of structs converted to a list of their parent",
+                );
+                "None".to_string()
+            }
             ExprKind::Unary {
                 operator: UnaryOperator::Not,
                 operand,
