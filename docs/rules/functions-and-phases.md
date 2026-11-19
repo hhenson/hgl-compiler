@@ -179,7 +179,7 @@ analyser: partial
 - The mark is recorded on the parameter and on the signature, and is no part of the type (`Parameter::reference`, `Signature::reference`): a caller, a graph among them, gives a `ref` parameter a connection of its type, and a `ref` result is a connection of its type
 - A mark on a value function, a value candidate, a graph, an operator, or a native implementation part that is a graph (`{}`) is `ref.position`, a code whose row is proposed; a node, a temporal candidate that is one, and a native temporal declaration with no body take it
 - In a hook a `ref` parameter, a child of one and `out` of a `ref` result are endpoints: the endpoint operations take them, and a read of the value or the `delta_value` of any of them is `ref.read`, a code whose row is proposed; an atomic projection, an iteration, a comparison and a call that reads one among them
-- A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`
+- A `return` to a `ref` result, and `out =` of one (proposed), names a temporal input of the node, `ref` or not, or a child of one: it is read as the designation it is (`EndpointOf`, `ChildEndpointOf`), of the result's type (EXPR-5), reads no payload and needs no admission; a value there is `type.mismatch`, and so is a source's `yield` to a `ref` result: a source has no temporal input to name (TIME-7: "A `ref` result takes no value")
 - Left: a native implementation part's marks matched with its declaration's (NATIVE-2)
 
 transpiler: partial
@@ -190,4 +190,4 @@ transpiler: partial
 - A reference the result holds already is not published again (TIME-10, END-10)
 - An ordinary value a graph gives a `ref` parameter, a literal, a constant, a `const` parameter or an all-scalar call, is wired as a constant connection of the parameter's type, which it designates (FN-3)
 - A struct's connection given to a `ref` parameter of a struct it inherits from, and a `ref` result given where one is expected, are narrowed as any connection is (TYPE-3); an eval of a `ref` result records what it designates
-- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node; a `ref` result of a source
+- Left, reported: a child of a `ref` parameter or result as an endpoint, and `all_valid` of one; a designation of a dictionary's entry, a struct's field, a tuple's position, an unsized list's position or a child deeper than one step; an input designated whole and by a position in one node
