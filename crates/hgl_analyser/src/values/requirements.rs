@@ -196,11 +196,21 @@ impl<'a> Typer<'a> {
             return;
         }
         let program = self.program;
+        // One that names a generic parameter of the declaration being
+        // read may yet be told where a call gives it: `either<C, X>` with
+        // `requires A == 1.0 || B == 2.0` holds for `X` 2.0 whatever `C`
+        // is. It is told for each instance ([`instances_hold`]).
+        let own: Vec<Location> = self
+            .signature
+            .generics
+            .iter()
+            .map(|generic| generic.at)
+            .collect();
         match held {
             Some(false) => self
                 .diagnostics
                 .emit(unmet(program, callee, at, &condition)),
-            None if unvalued => self
+            None if unvalued && !passes_on(generics, &own) => self
                 .diagnostics
                 .emit(untold(program, callee, at, &condition)),
             _ => {}
@@ -1173,95 +1183,100 @@ pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
         result: None,
         reference: false,
     };
-    // Each instance followed once, by what it is: its callee and its
-    // arguments.
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut waiting: std::collections::VecDeque<Made> = given
+    // The instances the calls that give every argument make, each once
+    // with every call it is made from: two calls of `wrap<1>` are one
+    // instance of it.
+    let mut roots: Vec<(Made, Vec<Location>)> = Vec::new();
+    let mut root_of: HashMap<String, usize> = HashMap::new();
+    for made in given
         .into_iter()
         .filter(|made| reaching.contains(&made.callee))
-        .collect();
-    let mut followed = 0;
-    while let Some(made) = waiting.pop_front() {
-        followed += 1;
-        if followed > INSTANCES {
-            // What is not followed is not told, and is not taken to hold
-            // (GEN-3): each call it is made from is reported, once, but
-            // one already rejected for a `requires` (ERR-9: "Do not
-            // demand cascaded diagnostics").
-            let mut from: Vec<Location> = vec![made.at];
-            from.extend(waiting.iter().map(|made| made.at));
-            from.sort_by_key(|at| (at.file, at.span.start));
-            from.dedup();
-            let rejected = |at: &Location| {
-                diagnostics.as_slice().iter().any(|earlier| {
-                    earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
-                        && earlier.primary.file == at.file
-                        && earlier.primary.span.start == at.span.start
-                })
-            };
-            from.retain(|at| !rejected(at));
-            for at in from {
-                diagnostics.emit(crate::local_error(
-                    Category::Constraint,
-                    codes::local::INSTANCE_LIMIT,
-                    at,
-                    format!(
-                        "this call makes more than {INSTANCES} instances, and the `requires` \
-                         of those past them are not told"
-                    ),
-                    "GEN-3",
-                ));
+    {
+        let key = format!("{:?}{:?}", made.callee, made.generics);
+        match root_of.get(&key) {
+            Some(&root) => roots[root].1.push(made.at),
+            None => {
+                root_of.insert(key, roots.len());
+                let at = made.at;
+                roots.push((made, vec![at]));
             }
-            return;
         }
-        let Some(inner) = passed.get(&made.callee) else {
-            continue;
-        };
-        let declared = own(made.callee);
-        let map: Vec<(Location, &Argument)> =
-            declared.iter().copied().zip(&made.generics).collect();
-        for call in inner {
-            let generics: Vec<Argument> = call
-                .generics
-                .iter()
-                .map(|argument| given_in(argument, &map, &declared))
-                .collect();
-            let (module, declaration) = call.callee;
-            let unit = &program.modules[module];
-            let (bindings, written, calls) = &tables[module];
-            if required(program, call.callee).is_none() {
-                if reaching.contains(&call.callee) {
-                    let key = format!("{:?}{generics:?}", call.callee);
-                    if seen.insert(key) {
-                        waiting.push_back(Made {
-                            callee: call.callee,
-                            generics,
-                            at: made.at,
-                        });
+    }
+    for (root, from) in roots {
+        // Each instance this one makes followed once, by what it is: its
+        // callee and its arguments.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut waiting: std::collections::VecDeque<Made> =
+            std::collections::VecDeque::from([root]);
+        let mut followed = 0;
+        while let Some(made) = waiting.pop_front() {
+            followed += 1;
+            if followed > INSTANCES {
+                // What is not followed is not told, and is not taken to
+                // hold (GEN-3): each call it is made from is reported, but
+                // one already rejected for a `requires` (ERR-9: "Do not
+                // demand cascaded diagnostics").
+                for &at in &from {
+                    let rejected = diagnostics.as_slice().iter().any(|earlier| {
+                        earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+                            && earlier.primary.file == at.file
+                            && earlier.primary.span.start == at.span.start
+                    });
+                    if !rejected {
+                        diagnostics.emit(crate::local_error(
+                            Category::Constraint,
+                            codes::local::INSTANCE_LIMIT,
+                            at,
+                            format!(
+                                "this call makes more than {INSTANCES} instances, and the \
+                                 `requires` of those past them are not told"
+                            ),
+                            "GEN-3",
+                        ));
                     }
                 }
-                continue;
+                break;
             }
-            let mut typer = super::Typer::bare(
-                program,
-                unit,
-                &unit.declarations[declaration],
-                &empty,
-                super::Tables {
-                    bindings,
-                    written,
-                    calls,
-                },
-                diagnostics,
-            );
-            typer.instance_met((made.at, call.at), call.callee, &generics);
-            let key = format!("{:?}{generics:?}", call.callee);
-            if reaching.contains(&call.callee) && seen.insert(key) {
-                waiting.push_back(Made {
-                    callee: call.callee,
-                    generics,
-                    at: made.at,
-                });
+            let Some(inner) = passed.get(&made.callee) else {
+                continue;
+            };
+            let declared = own(made.callee);
+            let map: Vec<(Location, &Argument)> =
+                declared.iter().copied().zip(&made.generics).collect();
+            for call in inner {
+                let generics: Vec<Argument> = call
+                    .generics
+                    .iter()
+                    .map(|argument| given_in(argument, &map, &declared))
+                    .collect();
+                if required(program, call.callee).is_some() {
+                    let (module, declaration) = call.callee;
+                    let unit = &program.modules[module];
+                    let (bindings, written, calls) = &tables[module];
+                    let mut typer = super::Typer::bare(
+                        program,
+                        unit,
+                        &unit.declarations[declaration],
+                        &empty,
+                        super::Tables {
+                            bindings,
+                            written,
+                            calls,
+                        },
+                        diagnostics,
+                    );
+                    for &at in &from {
+                        typer.instance_met((at, call.at), call.callee, &generics);
+                    }
+                }
+                let key = format!("{:?}{generics:?}", call.callee);
+                if reaching.contains(&call.callee) && seen.insert(key) {
+                    waiting.push_back(Made {
+                        callee: call.callee,
+                        generics,
+                        at: made.at,
+                    });
+                }
             }
         }
     }

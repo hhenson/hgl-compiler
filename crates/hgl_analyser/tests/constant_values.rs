@@ -1177,6 +1177,30 @@ fn the_instances_a_call_makes_are_followed_within_a_bound() {
         "const fn spin<const N: i64>(v: i64) -> i64 => every<N>(v) + spin<N * 2>(v) + spin<N * 2 + 1>(v)\n",
     );
     expect(&format!("{shared}const fn a() -> i64 => free<1>(1)\n"), &[]);
+    // One instance made from many calls is followed once: four thousand
+    // and more calls of `wrap<1>` are one instance of it, whose
+    // `requires` holds.
+    let calls: String = (0..4100)
+        .map(|index| format!("const fn c{index}() -> i64 => wrap<1>(1)\n"))
+        .collect();
+    expect(
+        &format!("{shared}const fn wrap<const N: i64>(v: i64) -> i64 => need<N>(v)\n{calls}"),
+        &[],
+    );
+    // A `requires` not told for a constant not worked out beside a
+    // parameter the call passes on is told for each instance: `B` may
+    // settle it whatever `C` is.
+    expect(
+        &format!(
+            "{shared}const fn two() -> f64 => 2.0\n\
+             const C: f64 = two()\n\
+             const fn either<const A: f64, const B: f64>(v: i64) -> i64 requires A == 1.0 || B == 2.0 => v\n\
+             const fn pass<const X: f64>(v: i64) -> i64 => either<C, X>(v)\n\
+             const fn a() -> i64 => pass<2.0>(1)\n\
+             const fn b() -> i64 => pass<3.0>(1)\n"
+        ),
+        &["12 requires.unmet"],
+    );
     expect(
         &format!(
             "{shared}const fn a() -> i64 => grow<1>(1)\n\

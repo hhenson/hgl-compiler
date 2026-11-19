@@ -1209,8 +1209,9 @@ A function and a struct with no generic parameter are held to a
 passes on a parameter of its own is told once the typed program is
 whole, for each instance a call that gives every argument makes, at any
 depth (`requirements::instances_hold`), and reported at that call. Only
-the calls that reach a `requires` are followed, and at most 4096
-instances in all; a call whose instances go past that is local
+the calls that reach a `requires` are followed, each instance once
+however many calls make it, and at most 4096 instances from one; a call
+whose instances go past that is local
 `generic.instance_limit`, for what is past it is not told. What
 is not told for a constant this compiler does not work out is reported
 as not known to hold; nothing else that cannot be told is reported.
