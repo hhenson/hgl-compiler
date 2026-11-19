@@ -187,8 +187,12 @@ impl Emitter<'_> {
             .collect();
         let has_state = !states.is_empty();
         if has_state {
-            parameters.push("_state: _hg.STATE = None".to_string());
             lifecycle.push("_state: _hg.STATE = None".to_string());
+        }
+        // FN-16: a `ref` result keeps in the node's `STATE` which
+        // endpoint it designates (`_core.Designation`).
+        if has_state || signature.reference {
+            parameters.push("_state: _hg.STATE = None".to_string());
         }
         // TIME-5: "`stop` reads a temporal input under manual
         // admission". hgraph gives a `stop` each input it names, as the
@@ -241,8 +245,31 @@ impl Emitter<'_> {
         // input, after its own (`Designated`). The node is then written
         // under another name too, and the graph of the function's own
         // name gives it each such input twice.
-        let designations = self.designated_inputs(&function, body);
-        let exposing = hidden || !designations.is_empty();
+        // Whether the body changes an input's activity, `activate` or
+        // `passivate`.
+        let mut changes = false;
+        hgl_analyser::hir::walk_statements(&body.statements, &mut |part| {
+            changes |= matches!(
+                part.kind,
+                ExprKind::Endpoint {
+                    operation: EndpointOperation::Passivate | EndpointOperation::Activate,
+                    ..
+                }
+            );
+        });
+        let designations = self.designated_inputs(&function, body, &active, changes);
+        let hiding = designations.iter().any(|port| port.hidden.is_some());
+        // FN-16: "its readers follow what that endpoint is bound to, a
+        // later re-binding upstream included, and the node is not woken
+        // for it". A node that designates is evaluated where a hidden
+        // `REF` input ticks, whatever else is valid, so no validity is
+        // the whole node's: each handler is guarded by its own.
+        let valid: Vec<usize> = if designations.is_empty() {
+            valid
+        } else {
+            Vec::new()
+        };
+        let exposing = hidden || hiding;
         let exposed = python;
         let node_name = if exposing {
             format!("_node_{python}")
@@ -255,8 +282,9 @@ impl Emitter<'_> {
         let declared: Vec<String> = parameters[..signature.parameters.len()].to_vec();
         let designated_parameters: Vec<String> = designations
             .iter()
-            .map(|(local, annotation)| {
-                format!("{}: {annotation}", designated_name(&body.locals[*local]))
+            .filter_map(|port| {
+                let annotation = port.hidden.as_ref()?;
+                Some(format!("{}: {annotation}", port.name))
             })
             .collect();
         parameters.splice(
@@ -378,11 +406,22 @@ impl Emitter<'_> {
             options.push("active=()".to_string());
             options.push("valid=()".to_string());
         } else {
-            // A hidden `REF` input wakes the node at no time, and need
-            // not be valid: its inputs are named where it has one.
+            // A hidden `REF` input wakes the node where what it is bound
+            // to changes, and need not be valid: its inputs are named
+            // where it has one.
             let named = !designations.is_empty();
+            let mut subscribed: Vec<String> = active
+                .iter()
+                .map(|&local| name(&body.locals[local].name))
+                .collect();
+            subscribed.extend(
+                designations
+                    .iter()
+                    .filter(|port| port.hidden.is_some())
+                    .map(|port| port.name.clone()),
+            );
             if (named || active.len() != inputs.len()) && !handlers.is_empty() {
-                options.push(format!("active={}", names(&active)));
+                options.push(format!("active={}", tuple(&subscribed)));
             }
             if (named || valid.len() != inputs.len()) && !handlers.is_empty() {
                 options.push(format!("valid={}", names(&valid)));
@@ -429,6 +468,34 @@ impl Emitter<'_> {
         if holds_input {
             self.line(1, &format!("_input_woke = {input_woke}"));
         }
+        // FN-16: what a `ref` result designates, kept through the
+        // evaluation by the provider, which follows a re-binding of the
+        // endpoint it designates. TIME-10: the node is not woken for
+        // that: where neither an active input nor its scheduler or its
+        // alarm woke it, it returns before any handler.
+        if signature.reference {
+            self.natives = true;
+            let ports: Vec<String> = designations
+                .iter()
+                .map(|port| format!("{}: {}", string(&port.name), port.name))
+                .collect();
+            self.line(
+                1,
+                &format!(
+                    "_designation = _core.Designation(_output, _state, {{{}}})",
+                    ports.join(", ")
+                ),
+            );
+            if hiding {
+                let woken = self.woken(body, &inputs, &active, changes, timer_woke.as_ref());
+                self.line(1, &format!("if not {woken}:"));
+                self.line(2, "return _designation.published()");
+            }
+        }
+        self.designated = designations
+            .iter()
+            .map(|port| (port.local, port.name.clone()))
+            .collect();
         let endpoint = |local: usize| endpoint_name(&body.locals[local]);
         for handler in &handlers {
             let mut guards: Vec<String> = Vec::new();
@@ -517,6 +584,12 @@ impl Emitter<'_> {
         }
         // `start` and `stop` are no evaluation a wake is due in.
         self.scheduled = None;
+        self.designated.clear();
+        // FN-7: "Completing a runtime handler without a write produces
+        // no tick", and a `ref` result's write is what the node returns.
+        if signature.reference {
+            self.line(1, "return _designation.published()");
+        }
         if self.text.len() == before {
             self.line(1, "pass");
         }
@@ -561,10 +634,12 @@ impl Emitter<'_> {
                 let python = name(&parameter.name);
                 format!("{python}={python}")
             }));
-            given.extend(designations.iter().map(|(local, _)| {
-                let input = &body.locals[*local];
-                format!("{}={}", designated_name(input), name(&input.name))
-            }));
+            given.extend(
+                designations
+                    .iter()
+                    .filter(|port| port.hidden.is_some())
+                    .map(|port| format!("{}={}", port.name, name(&body.locals[port.local].name))),
+            );
             self.line(0, "");
             self.line(0, "");
             self.line(0, "@_hg.graph");
@@ -577,17 +652,66 @@ impl Emitter<'_> {
         }
     }
 
+    /// Whether a temporal input or the node's scheduler or alarm woke
+    /// the node whose body is `body`: `inputs` are its
+    /// temporal inputs, `active` those a handler subscribes to, and
+    /// `timer` what says its scheduler or alarm woke it, where it injects
+    /// one, and `changes` whether the body changes an input's activity. An input wakes it where it is active and published or was
+    /// invalidated (END-4: "The transition to invalid notifies active
+    /// subscribers"), and the hidden `REF` inputs of its designations
+    /// (`designated_inputs`) do not.
+    fn woken(
+        &self,
+        body: &Body,
+        inputs: &[usize],
+        active: &[usize],
+        changes: bool,
+        timer: Option<&String>,
+    ) -> String {
+        // Where the body changes an input's activity (`changes`), each
+        // input is asked whether it is active.
+        let mut woke: Vec<String> = inputs
+            .iter()
+            .filter(|local| changes || active.contains(local))
+            .map(|&local| {
+                let input = name(&body.locals[local].name);
+                if changes {
+                    format!("(({input}.modified or {input}.invalidated) and {input}.active)")
+                } else {
+                    format!("{input}.modified or {input}.invalidated")
+                }
+            })
+            .collect();
+        woke.extend(timer.cloned());
+        match woke.as_slice() {
+            [] => "False".to_string(),
+            several => format!("({})", several.join(" or ")),
+        }
+    }
+
     /// Each temporal input of the node `function` whose body is `body`
-    /// that is no `ref` parameter and that a `return` to its `ref`
-    /// result, or an `out =` of it, designates (FN-16: "A parameter that
-    /// is not `ref` may be designated too"), with the annotation of the
-    /// hidden `REF` input the node is given for it (`Designated`): hgraph
-    /// makes a reference only from a `REF` input, and the input itself
-    /// stays the one the body reads and subscribes to. The input whole
-    /// is `REF` of its type, and a position of a fixed list a `TSL` of
+    /// that a `return` to its `ref` result, or an `out =` of it,
+    /// designates (FN-16: "A parameter that is not `ref` may be
+    /// designated too"), with the `REF` input the node reads it through
+    /// (`Port`). `active` are the inputs its handlers subscribe to, and
+    /// `changes` whether the body changes an input's activity.
+    ///
+    /// hgraph makes a reference only from a `REF` input, and the input
+    /// itself stays the one the body reads and subscribes to: an input
+    /// that is no `ref` parameter is given to the node a second time, as
+    /// a hidden `REF` input (`Designated`). So is a `ref` parameter that
+    /// may be passive: the hidden one is active, and wakes the node where
+    /// what the parameter is bound to is re-bound. The input whole is
+    /// `REF` of its type, and a position of a fixed list a `TSL` of
     /// `REF`s, which hgraph binds to the list's own positions. One
     /// designated both ways is reported.
-    fn designated_inputs(&mut self, function: &Function, body: &Body) -> Vec<(usize, String)> {
+    fn designated_inputs(
+        &mut self,
+        function: &Function,
+        body: &Body,
+        active: &[usize],
+        changes: bool,
+    ) -> Vec<Port> {
         use hgl_analyser::hir::{Node, walk_statement_nodes};
         let mut found: Vec<(usize, Designated, Location)> = Vec::new();
         walk_statement_nodes(&body.statements, &mut |node| {
@@ -604,7 +728,7 @@ impl Emitter<'_> {
                 found.push((local, how, value.at));
             }
         });
-        let mut inputs: Vec<(usize, String)> = Vec::new();
+        let mut inputs: Vec<Port> = Vec::new();
         let mut kinds: Vec<(usize, Designated)> = Vec::new();
         for (local, how, at) in found {
             match kinds.iter().find(|(seen, _)| *seen == local) {
@@ -617,6 +741,15 @@ impl Emitter<'_> {
                     continue;
                 }
                 None => kinds.push((local, how)),
+            }
+            // A `ref` parameter that is always active is its own port.
+            if function.is_reference(local) && active.contains(&local) && !changes {
+                inputs.push(Port {
+                    local,
+                    name: name(&body.locals[local].name),
+                    hidden: None,
+                });
+                continue;
             }
             let ty = function.locals[local].ty.clone();
             let annotation = match (how, &ty) {
@@ -643,7 +776,11 @@ impl Emitter<'_> {
                 (Designated::Position, _) => None,
             };
             if let Some(annotation) = annotation {
-                inputs.push((local, annotation));
+                inputs.push(Port {
+                    local,
+                    name: designated_name(&body.locals[local]),
+                    hidden: Some(annotation),
+                });
             }
         }
         inputs
@@ -1059,4 +1196,17 @@ pub(super) fn yields(statements: &[Stmt]) -> bool {
         Stmt::Expr(value) => within(value),
         _ => false,
     })
+}
+
+/// An input a node designates (FN-16), as the provider's `Designation`
+/// reads it (`Emitter::designated_inputs`).
+pub(super) struct Port {
+    /// The input, among the node's locals.
+    pub(super) local: usize,
+    /// The Python name of the `REF` input it is read through.
+    pub(super) name: String,
+    /// The annotation of that `REF` input where it is a hidden one the
+    /// node is given beside the input, and `None` where it is the input's
+    /// own.
+    pub(super) hidden: Option<String>,
 }

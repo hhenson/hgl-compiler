@@ -115,7 +115,13 @@ impl Emitter<'_> {
                 // designation changed, and its `last_modified` when it
                 // last did, which are the `REF`'s own.
                 if function.designates(inputs[0]) {
+                    // `out` of a `ref` result in a `when`: what it
+                    // designates is the provider's `Designation`'s.
+                    let kept = function.designating() && function.is_out(inputs[0]);
                     return match operation {
+                        EndpointOperation::Invalidate if kept => {
+                            "_designation.invalidate()".to_string()
+                        }
                         EndpointOperation::Valid => format!("{input}.valid"),
                         EndpointOperation::Modified => format!("{input}.modified"),
                         EndpointOperation::LastModified => {
@@ -1034,34 +1040,29 @@ impl Emitter<'_> {
         }
     }
 
-    /// The reference `value` designates, a designation (`designates`)
-    /// given to a `ref` result by a `return` or `out =` (FN-16). Of a
-    /// `ref` parameter it is the reference its `REF` input holds, its
-    /// `value`; of a temporal input that is no `ref` parameter, and of a
-    /// position of a fixed list that is one, it is the reference the
-    /// hidden `REF` input the node is given beside it holds
-    /// (`Designated`). `None`, reported, for one not written yet.
+    /// What `value` designates, a designation (`designates`) given to a
+    /// `ref` result by a `return` or `out =` (FN-16), as the provider's
+    /// `Designation` is told it: the name of the hidden `REF` input the
+    /// node is given for the input it names (`Designated`), and the
+    /// index of a fixed list's position where it names one. `None`,
+    /// reported, for one not written yet.
     pub(super) fn designation(&mut self, function: &Function, value: &Expr) -> Option<String> {
-        if let ExprKind::EndpointOf(local) = value.kind
-            && function.is_reference(local)
-        {
-            return Some(format!("{}.value", endpoint_name(&function.locals[local])));
-        }
+        let port = |emitter: &Self, local: usize| {
+            emitter
+                .designated
+                .iter()
+                .find(|(designated, _)| *designated == local)
+                .map(|(_, port)| string(port))
+        };
         match (designated(function, value), &value.kind) {
-            (Some((local, Designated::Whole)), _) => Some(format!(
-                "{}.value",
-                designated_name(&function.locals[local])
-            )),
+            (Some((local, Designated::Whole)), _) => port(self, local),
             (Some((local, Designated::Position)), ExprKind::ChildEndpointOf(child)) => {
                 let ExprKind::Index { index, .. } = &child.kind else {
                     return None;
                 };
+                let port = port(self, local)?;
                 let index = self.expression(function, index);
-                self.natives = true;
-                Some(format!(
-                    "_core.position_of({}, {index}).value",
-                    designated_name(&function.locals[local])
-                ))
+                Some(format!("{port}, {index}"))
             }
             _ => {
                 // hgraph gives a `REF` input of a list no reference of

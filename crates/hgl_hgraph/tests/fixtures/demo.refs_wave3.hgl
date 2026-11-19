@@ -1,0 +1,106 @@
+module demo.refs_wave3
+
+# FN-16: "A `return` to a `ref` result is given an expression that
+# names an endpoint: a temporal input of the node, `ref` or not, or a
+# child of one ... The result designates the logical endpoint that path
+# names: its readers follow what that endpoint is bound to, a later
+# re-binding upstream included, and the node is not woken for it."
+# Core's END-10: "its readers follow what that endpoint is bound to, and
+# the node is not woken by that endpoint's ticks."
+
+# Re-points its result where `use_b` ticks, and not where `a` or `b` is
+# re-bound upstream: both are passive.
+fn pick(use_b: bool, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(use_b) {
+        if use_b { return b }
+        return a
+    }
+}
+
+fn follow(value: i64) -> i64 {
+    when { return value }
+}
+
+# TIME-10: a `ref` parameter is modified where its designation changes.
+fn designations(ref target: i64) -> i64 {
+    state seen: i64 = 0
+    when {
+        seen += 1
+        return seen
+    }
+}
+
+# A `ref` parameter, designated by a node its re-binding does not wake.
+fn pass_on(once: bool, ref target: i64) -> ref i64 {
+    when modified(once) { return target }
+}
+
+# An input that is no `ref` parameter, designated whole.
+fn hold(once: bool, value: i64) -> ref i64 {
+    when modified(once) { return value }
+}
+
+# A generic one.
+fn pass_on_any<T>(once: bool, ref target: T) -> ref T {
+    when modified(once) { return target }
+}
+
+# Passivates `data`, which then publishes where `a` is re-bound: the
+# node is not woken, so `when modified(data)` is not reached (TIME-3:
+# "Passivating an input removes it as a wake source").
+fn steady(once: bool, data: i64, ref a: i64, ref b: i64) -> ref i64 {
+    when modified(once) {
+        passivate(data)
+        return a
+    }
+    when modified(data) { return b }
+}
+
+fn passed_on(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(pass_on(once, pick(use_b, a, b)))
+fn held(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(hold(once, pick(use_b, a, b)))
+fn passed_on_any(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    follow(pass_on_any(once, pick(use_b, a, b)))
+# Two re-bindings, a node that designates either of two.
+fn picked_twice(outer: bool, use_b: bool, use_d: bool, a: i64, b: i64, c: i64, d: i64) -> i64 =>
+    follow(pick(outer, pick(use_b, a, b), pick(use_d, c, d)))
+fn passed_on_designations(once: bool, use_b: bool, a: i64, b: i64) -> i64 =>
+    designations(pass_on(once, pick(use_b, a, b)))
+fn steady_of(once: bool, data: i64, use_b: bool, a: i64, b: i64, other: i64) -> i64 =>
+    follow(steady(once, data, pick(use_b, a, b), other))
+
+# `use_b` picks `b` at the start, then `a` at the third cycle, where `a`
+# does not tick: a reader that follows the re-binding samples what `a`
+# holds, 2, and then has `a`'s 4 and not `b`'s 11. `once` ticks at the
+# start alone.
+test a_designation_follows_a_re_binding_upstream {
+    assert eval(passed_on(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(held(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(passed_on_any(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [10, _, 2, 4]
+    assert eval(picked_twice(
+        outer: [false, _, _, true, _],
+        use_b: [true, _, false, _, _],
+        use_d: [false, _, _, _, true],
+        a:     [1, 2, _, _, _],
+        b:     [10, _, _, _, _],
+        c:     [100, _, _, _, _],
+        d:     [1000, _, _, _, _],
+    )) == [10, _, 2, 100, 1000]
+    # TIME-10: "A reference ticks where its designation changes": a
+    # reader of the result through a `ref` parameter is modified at the
+    # re-binding upstream.
+    assert eval(passed_on_designations(once: [true, _, _, _], use_b: [true, _, false, _], a: [1, 2, _, 4], b: [10, _, _, 11])) ==
+        [1, _, 2, _]
+    assert eval(steady_of(
+        once:  [true, _, _, _],
+        data:  [1, _, 5, _],
+        use_b: [true, _, false, _],
+        a:     [1, 2, _, 4],
+        b:     [10, _, _, 11],
+        other: [100, _, _, _],
+    )) == [10, _, 2, 4]
+}

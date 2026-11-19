@@ -5420,10 +5420,12 @@ const REFERENCES: (&str, &str) = fixture!("demo.references.hgl");
 /// A `ref` parameter and a `ref` result are hgraph's `REF` of their type,
 /// and a `signal` its `SIGNAL`. A node returns a `ref` parameter's value,
 /// the reference it holds, to re-point what follows it, and publishes no
-/// reference its result holds already (END-10). An input that is no `ref`
+/// reference its result holds already (END-10): the provider's
+/// `Designation` keeps what it designates. An input that is no `ref`
 /// parameter, and a fixed list's position of one, is designated through a
 /// hidden `REF` input that a graph of the function's name gives it the
-/// input twice. A graph passes a `ref` result on as it is, and hgraph
+/// input twice, which is active: the node returns before its handlers
+/// where no input of its own woke it. A graph passes a `ref` result on as it is, and hgraph
 /// binds an ordinary input, a lifted node's among them, to what it
 /// designates. A generic input is written for the connection's type. A
 /// `signal?` left out is bound to an output that never ticks (UNIT-8), by
@@ -5437,22 +5439,27 @@ fn a_ref_is_a_ref_and_a_signal_a_signal() {
     python.assert_writes(&[
         format!(
             "def pick(use_left: _hg.TS[_py.bool], left: {reference}, right: {reference}, \
-             _output: _hg.TS_OUT[{reference}] = None) -> {reference}:"
+             _output: _hg.TS_OUT[{reference}] = None, _state: _hg.STATE = None) -> {reference}:"
         ),
-        "        return _core.designation(_output, left.value)\n".to_string(),
-        "    if (target.valid and target.modified):\n        return _core.designation(_output, target.value)\n"
+        "    _designation = _core.Designation(_output, _state, {\"left\": left, \"right\": right})\n"
+            .to_string(),
+        "        return _designation.returned(\"left\")\n".to_string(),
+        "        if (target.valid and target.modified):\n            return _designation.returned(\"target\")\n"
             .to_string(),
         format!("def checked(target: {reference}) -> _hg.TS[_py.bool]:\n    if target.modified:\n        return target.valid\n"),
-        "@_hg.compute_node(active=(\"idx\",), valid=(\"idx\", \"items\"))\n\
+        "@_hg.compute_node(active=(\"idx\", \"_ref_items\"), valid=())\n\
          def _node_route(idx: _hg.TS[_py.int], items: _hg.TSL[_hg.TS[_py.int], _hg.Size[3]], \
          _ref_items: _hg.TSL[_hg.REF[_hg.TS[_py.int]], _hg.Size[3]], "
             .to_string(),
-        "        return _core.designation(_output, _core.position_of(_ref_items, idx.value).value)\n"
+        "    _designation = _core.Designation(_output, _state, {\"_ref_items\": _ref_items})\n\
+         \x20   if not (idx.modified or idx.invalidated):\n\
+         \x20       return _designation.published()\n"
             .to_string(),
+        "        return _designation.returned(\"_ref_items\", idx.value)\n".to_string(),
         "    return _node_route(idx=idx, items=items, _ref_items=items)\n".to_string(),
-        "        _core.designate(_output, _core.position_of(_ref_items, idx.value).value)\n"
+        "        _designation.designate(\"_ref_items\", idx.value)\n    return _designation.published()\n"
             .to_string(),
-        "        return _core.designation(_output, _ref_value.value)\n".to_string(),
+        "        return _designation.returned(\"_ref_value\")\n".to_string(),
         "    return _node_hold(flag=flag, value=value, _ref_value=value)\n".to_string(),
         "def counted(tick: _hg.SIGNAL, _state: _hg.STATE = None) -> _hg.TS[_py.int]:"
             .to_string(),
@@ -5520,6 +5527,46 @@ fn what_a_ref_cannot_be_given_yet_is_reported() {
             "m.hgl:12:19 target.unsupported: the hgraph target does not write a child of a `ref` parameter designated yet",
         ]
     );
+}
+
+/// FN-16: "The result designates the logical endpoint that path names:
+/// its readers follow what that endpoint is bound to, a later re-binding
+/// upstream included, and the node is not woken for it." TIME-10: "A
+/// reference ticks where its designation changes".
+const REFS_WAVE3: (&str, &str) = fixture!("demo.refs_wave3.hgl");
+
+/// A `ref` parameter a node may not be woken by is given to it a second
+/// time, as a hidden `REF` input that is active, as an input that is no
+/// `ref` parameter is: the provider's `Designation` follows a re-binding
+/// of the one the result designates, and the node returns before its
+/// handlers where no active input of its own woke it. No validity is the
+/// whole node's, so a re-binding to an endpoint that is not valid is
+/// followed too: each handler asks its own.
+#[test]
+fn a_designation_follows_a_re_binding_upstream() {
+    let emitted = emit_clean(&[REFS_WAVE3]);
+    let python = emitted.module("demo.refs_wave3");
+    let reference = "_hg.REF[_hg.TS[_py.int]]";
+    python.assert_writes(&[
+        format!(
+            "@_hg.compute_node(active=(\"once\", \"_ref_target\"), valid=())\n\
+             def _node_pass_on(once: _hg.TS[_py.bool], target: {reference}, \
+             _ref_target: {reference}, "
+        ),
+        "    _designation = _core.Designation(_output, _state, {\"_ref_target\": _ref_target})\n\
+         \x20   if not (once.modified or once.invalidated):\n\
+         \x20       return _designation.published()\n\
+         \x20   if once.valid and target.valid and once.modified:\n\
+         \x20       return _designation.returned(\"_ref_target\")\n\
+         \x20   return _designation.published()\n"
+            .to_string(),
+        "    return _node_pass_on(once=once, target=target, _ref_target=target)\n".to_string(),
+        // An input whose activity the body changes is asked whether it is
+        // active.
+        "    if not (((once.modified or once.invalidated) and once.active) or \
+         ((data.modified or data.invalidated) and data.active) or "
+            .to_string(),
+    ]);
 }
 
 /// TYPE-2: "Two `zoned_datetime` values are equal when both their

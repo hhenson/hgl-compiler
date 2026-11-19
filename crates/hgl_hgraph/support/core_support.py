@@ -1162,25 +1162,79 @@ def window_values(port):
     return list(values.tolist() if hasattr(values, "tolist") else values)
 
 
-def designation(output, reference):
-    """What a node publishes to its `ref` result, `output`, for
-    `reference`, the designation a `return` names (the language's FN-16):
-    the reference, or nothing where the result holds it already. TIME-10:
-    "A designation published again unchanged is no tick, and wakes no
-    subscriber", and core's END-10: "A publication of the designation it
-    holds is no tick". hgraph's reference output would tick for it, and
-    a `ref` parameter given it would be modified."""
-    if output.valid and output.value == reference:
+def _bound(port):
+    """What the `REF` input `port` designates: the reference it holds, or
+    `None` where it designates nothing."""
+    return port.value if port.valid else None
+
+
+class Designation:
+    """What a node's `ref` result, `output`, designates through one of
+    its evaluations (the language's FN-16, TIME-10; core's END-10).
+
+    FN-16: "The result designates the logical endpoint that path names:
+    its readers follow what that endpoint is bound to, a later re-binding
+    upstream included, and the node is not woken for it." `ports` has
+    each endpoint the node designates by name: the hidden `REF` input it
+    is given for it, which is active whatever the node's own activity
+    is. `state`, the node's `STATE`, keeps which one the result
+    designates, `_designates`: where that endpoint is re-bound, its
+    `REF` ticks, and the result designates what it is bound to now, the
+    node's handlers not entered for it (the generated node returns
+    first).
+
+    TIME-10: "A designation published again unchanged is no tick", and
+    END-10: "A publication of the designation it holds is no tick".
+    hgraph's reference output would tick for it, and a `ref` parameter
+    given it would be modified.
+    """
+
+    __slots__ = ("_output", "_state", "_ports", "_key")
+
+    def __init__(self, output, state, ports):
+        self._output = output
+        self._state = state
+        self._ports = ports
+        self._key = getattr(state, "_designates", None)
+        if self._key is not None:
+            port = self._port(self._key)
+            if port.modified:
+                self._write(_bound(port))
+
+    def _port(self, key):
+        """The hidden `REF` input of `key`: an endpoint's name, and the
+        position of a fixed list's where it is one."""
+        port = self._ports[key[0]]
+        return position_of(port, key[1]) if len(key) > 1 else port
+
+    def _write(self, reference):
+        if reference is not None and not (
+            self._output.valid and self._output.value == reference
+        ):
+            self._output.value = reference
+
+    def designate(self, *key):
+        """`out = items[idx]` (FN-16, proposed): the result designates the
+        endpoint `key` names (`_port`)."""
+        self._key = key
+        self._write(_bound(self._port(key)))
+
+    def returned(self, *key):
+        """`return items[idx]`: designates `key`, and gives what the node
+        returns (`published`)."""
+        self.designate(*key)
+        return self.published()
+
+    def invalidate(self):
+        """`invalidate(out)`: the result designates nothing."""
+        self._key = None
+        self._output.invalidate()
+
+    def published(self):
+        """What the node returns as it ends its evaluation: nothing, what
+        it designates is written to its output where it changes."""
+        self._state._designates = self._key
         return None
-    return reference
-
-
-def designate(output, reference):
-    """`out = items[idx]` of a `ref` result (the language's FN-16,
-    proposed): `output` designates what `reference` does, and does not
-    tick where it does already (`designation`)."""
-    if not (output.valid and output.value == reference):
-        output.value = reference
 
 
 def checked_child(port, read):
