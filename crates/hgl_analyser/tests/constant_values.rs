@@ -1106,6 +1106,57 @@ fn an_enum_construction_takes_an_integer_or_a_string() {
 
 // ---- The review of #218 ----
 
+/// GEN-3: "A call of a function whose `requires` does not hold with the
+/// generic arguments the call resolves is rejected." A call that passes
+/// on a generic value parameter of its own, `one_only<Y>`, resolves its
+/// arguments where a call gives `Y` a value: the `requires` is told
+/// there, at any depth, in a value function and in a graph, of a type
+/// as of a value. "Not told"
+/// is never "holds": one still not told where every argument is given,
+/// as of a constant this compiler does not work out, is rejected.
+#[test]
+fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
+    let shared = concat!(
+        "const fn one_only<const X: f64>(v: f64) -> f64 requires X == 1.0 => v * X\n",
+        "const fn outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
+        "const fn outer2<const Z: f64>(v: f64) -> f64 => outer<Z>(v)\n",
+        "fn temporal_outer<const Y: f64>(v: f64) -> f64 => one_only<Y>(v)\n",
+        "const fn int_only<const X: i64>(v: i64) -> i64 requires X == 1 => v * X\n",
+        "const fn int_outer<const Y: i64>(v: i64) -> i64 => int_only<Y>(v)\n",
+        "const fn two() -> f64 => 2.0\n",
+        "const C: f64 = two()\n",
+        "struct FBox<const X: f64> { v: i64 }\n",
+        "const fn not_two<T>(x: T) -> i64 requires !(T == FBox<2.0>) => 1\n",
+        "const fn wrap<const X: f64>(fb: FBox<X>) -> i64 => not_two(fb)\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> f64 => outer<1.0>(5.0) + outer2<1.0>(5.0)\n\
+             fn b(v: f64) -> f64 => temporal_outer<1.0>(v)\n\
+             const fn c() -> i64 => int_outer<1>(5) + wrap(FBox<1.0>(v: 1))\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a() -> f64 => outer<2.0>(5.0)\n\
+             const fn b() -> f64 => outer2<2.0>(5.0)\n\
+             fn c(v: f64) -> f64 => temporal_outer<2.0>(v)\n\
+             const fn d() -> i64 => int_outer<2>(5)\n\
+             const fn e() -> f64 => one_only<C>(1.0)\n\
+             const fn f() -> i64 => wrap(FBox<2.0>(v: 1))\n"
+        ),
+        &[
+            "13 requires.unmet",
+            "14 requires.unmet",
+            "15 requires.unmet",
+            "16 requires.unmet",
+            "17 requires.unmet",
+            "18 requires.unmet",
+        ],
+    );
+}
+
 /// GEN-3: a `requires` "may use type/category membership, equalities,
 /// the membership of a constant in a set of constants": of two generic
 /// value parameters too, `N == M` and `N in {M, 5}`, each told by the one

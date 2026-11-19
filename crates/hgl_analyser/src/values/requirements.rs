@@ -3,7 +3,9 @@
 //! body may call because its requirements name them (GEN-3, GEN-7,
 //! GEN-15, GEN-16). Part of the typing pass ([`super`]).
 
-use hgl_diagnostics::{Category, Code, Location};
+use std::collections::HashMap;
+
+use hgl_diagnostics::{Category, Code, Diagnostics, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
@@ -18,7 +20,8 @@ use crate::program::{Binding, Declaration, DeclarationKind, OperatorRef, Program
 use crate::read::is_type;
 use crate::syntax::{child, has_token, name_token, tokens};
 use crate::types::{
-    Argument, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Signature, Type,
+    Argument, Constant, ConstantValue, Detail, GenericKind, GenericParameter, NamedKind, Signature,
+    Type,
 };
 use crate::{codes, error};
 
@@ -180,13 +183,83 @@ impl<'a> Typer<'a> {
     pub(super) fn requires_met(
         &mut self,
         at: Location,
-        (module, declaration): (usize, usize),
+        callee: (usize, usize),
         generics: &[Argument],
     ) {
-        let program = self.program;
-        let Some((parameters, condition)) = required(program, (module, declaration)) else {
+        let Some((condition, held, unvalued)) = self.requires_told(callee, generics) else {
             return;
         };
+        // A construction that writes its generic arguments,
+        // `Sized<str>(value: "x")`, writes a type, of which the same
+        // has been reported ([`applications`]).
+        if self.unmet_reported(at) {
+            return;
+        }
+        let program = self.program;
+        match held {
+            Some(false) => self
+                .diagnostics
+                .emit(unmet(program, callee, at, &condition)),
+            None if unvalued => self
+                .diagnostics
+                .emit(untold(program, callee, at, &condition)),
+            _ => {}
+        }
+    }
+
+    /// Reports a `requires` that does not hold, or is not told for a
+    /// constant this compiler does not work out, for an instance a call
+    /// at `at` makes: `callee` with `generics`, called at `made` in the
+    /// body of what `at` calls ([`instances_hold`]).
+    fn instance_met(
+        &mut self,
+        (at, made): (Location, Location),
+        callee: (usize, usize),
+        generics: &[Argument],
+    ) {
+        let Some((condition, held, unvalued)) = self.requires_told(callee, generics) else {
+            return;
+        };
+        if self.unmet_reported(at) {
+            return;
+        }
+        let program = self.program;
+        let report = match held {
+            Some(false) => unmet(program, callee, at, &condition),
+            None if unvalued => untold(program, callee, at, &condition),
+            _ => return,
+        };
+        let name = &program.modules[callee.0].declarations[callee.1].name;
+        self.diagnostics.emit(report.with_related(
+            made,
+            format!(
+                "`{name}` is called here, with the generic arguments this call gives the \
+                 function it calls"
+            ),
+        ));
+    }
+
+    /// True where a `requires.unmet` has been reported at `at` already.
+    fn unmet_reported(&self, at: Location) -> bool {
+        self.diagnostics.as_slice().iter().any(|earlier| {
+            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
+                && earlier.primary.file == at.file
+                && earlier.primary.span.start == at.span.start
+        })
+    }
+
+    /// Whether the `requires` of `callee` holds with `generics` for its
+    /// generic parameters: the condition, whether it holds (`None` where
+    /// that is not told), and whether a constant it compares is one this
+    /// compiler does not work out ([`Condition::unvalued`]). `None` for a
+    /// callee that states no `requires`.
+    fn requires_told(
+        &mut self,
+        (module, declaration): (usize, usize),
+        generics: &[Argument],
+    ) -> Option<(SyntaxNode, Option<bool>, bool)> {
+        let program = self.program;
+        let (parameters, condition) = required(program, (module, declaration))?;
         let declared = &program.modules[module].declarations[declaration];
         // GEN-16: "a named operator requirement tests callability with
         // the supplied types."
@@ -207,6 +280,7 @@ impl<'a> Typer<'a> {
         let constant = |node: &SyntaxNode, ty: Option<&Type>| -> Option<ConstantValue> {
             this.read_in(declared.at.file, node, ty).ok()
         };
+        let unvalued = std::cell::Cell::new(false);
         let held = requires_holds(
             program,
             (module, declaration),
@@ -215,20 +289,10 @@ impl<'a> Typer<'a> {
             &Told {
                 constant: &constant,
                 callable: &callable,
+                unvalued: &unvalued,
             },
         );
-        // A construction that writes its generic arguments,
-        // `Sized<str>(value: "x")`, writes a type, of which the same
-        // has been reported ([`applications`]).
-        let reported = self.diagnostics.as_slice().iter().any(|earlier| {
-            earlier.code == Code::Catalogued(codes::REQUIRES_UNMET)
-                && earlier.primary.file == at.file
-                && earlier.primary.span.start == at.span.start
-        });
-        if held == Some(false) && !reported {
-            self.diagnostics
-                .emit(unmet(program, (module, declaration), at, &condition));
-        }
+        Some((condition, held, unvalued.get()))
     }
 
     /// Each of the constraint calls `calls`, written in the `requires`
@@ -995,6 +1059,223 @@ fn result_sets(node: &SyntaxNode, name: &str, sets: &mut Vec<SyntaxNode>) {
     }
 }
 
+/// A call, in a typed body, of a function or a struct with generic
+/// parameters: what it calls, what it gives those parameters, and where
+/// it is written.
+struct Made {
+    callee: (usize, usize),
+    generics: Vec<Argument>,
+    at: Location,
+}
+
+/// How many calls deep an instance is followed from a call that gives
+/// every generic argument. An instance past it makes no more: a
+/// recursion that gives a new argument each time,
+/// `count<N - 1>` in `count<const N: i64>`, makes instances without end.
+const INSTANCES_DEEP: usize = 64;
+
+/// Tells the `requires` of each instance a call makes.
+///
+/// GEN-3: "A call of a function whose `requires` does not hold with the
+/// generic arguments the call resolves is rejected." A call in a
+/// generic body that passes on a parameter of its own, `one_only<Y>(v)`
+/// in `outer<const Y: f64>`, resolves its arguments where a call gives
+/// `Y` a value: `outer<2.0>(5.0)` makes `one_only<2.0>`, whose
+/// `requires X == 1.0` does not hold. What is not told where the
+/// generic body is read is told here, for each call that gives every
+/// argument, through calls at any depth, and is reported at that call.
+/// Not told is never taken to hold: one still not told for a constant
+/// this compiler does not work out is reported too.
+pub(super) fn instances_hold(program: &Program, diagnostics: &mut Diagnostics) {
+    // The generic parameters of `(module, declaration)`, by where each
+    // is declared.
+    let own = |(module, declaration): (usize, usize)| -> Vec<Location> {
+        match program.modules[module].details.get(declaration) {
+            Some(Detail::Callable(signature)) => signature.generics.iter().map(|g| g.at).collect(),
+            Some(Detail::Struct(read)) => read.generics.iter().map(|g| g.at).collect(),
+            _ => Vec::new(),
+        }
+    };
+    // What each body makes that passes on a parameter of its own, by the
+    // declaration it is the body of; and what every body makes that
+    // gives every argument.
+    let mut passed: HashMap<(usize, usize), Vec<Made>> = HashMap::new();
+    let mut given: Vec<Made> = Vec::new();
+    for (index, module) in program.modules.iter().enumerate() {
+        for position in 0..module.declarations.len() {
+            let mut made = Vec::new();
+            if let Some(Some(body)) = module.bodies.get(position) {
+                made_in(&body.statements, &mut made);
+            }
+            for default in module
+                .defaults
+                .get(position)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                made_by(default, &mut made);
+            }
+            let declared = own((index, position));
+            for call in made {
+                if passes_on(&call.generics, &declared) {
+                    passed.entry((index, position)).or_default().push(call);
+                } else {
+                    given.push(call);
+                }
+            }
+        }
+        for body in module
+            .test_bodies
+            .iter()
+            .flatten()
+            .chain(&module.store_body)
+        {
+            made_in(&body.statements, &mut given);
+        }
+        if let Some(run) = &module.run_body {
+            made_by(&run.call, &mut given);
+            if let Some(config) = &run.config {
+                made_by(config, &mut given);
+            }
+        }
+        for constant in module.constants.iter().flatten() {
+            made_by(constant, &mut given);
+        }
+    }
+    if passed.is_empty() {
+        return;
+    }
+    let tables: Vec<_> = program.modules.iter().map(super::tables).collect();
+    let empty = Signature {
+        generics: Vec::new(),
+        parameters: Vec::new(),
+        result: None,
+    };
+    // Each instance followed once, by what it is: its callee and its
+    // arguments.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut waiting: std::collections::VecDeque<(Made, usize)> =
+        given.into_iter().map(|made| (made, 0)).collect();
+    while let Some((made, depth)) = waiting.pop_front() {
+        let Some(inner) = passed.get(&made.callee) else {
+            continue;
+        };
+        let declared = own(made.callee);
+        let map: Vec<(Location, &Argument)> =
+            declared.iter().copied().zip(&made.generics).collect();
+        for call in inner {
+            let generics: Vec<Argument> = call
+                .generics
+                .iter()
+                .map(|argument| given_in(argument, &map, &declared))
+                .collect();
+            let (module, declaration) = call.callee;
+            let unit = &program.modules[module];
+            let (bindings, written, calls) = &tables[module];
+            let mut typer = super::Typer::bare(
+                program,
+                unit,
+                &unit.declarations[declaration],
+                &empty,
+                super::Tables {
+                    bindings,
+                    written,
+                    calls,
+                },
+                diagnostics,
+            );
+            typer.instance_met((made.at, call.at), call.callee, &generics);
+            let key = format!("{:?}{generics:?}", call.callee);
+            if depth < INSTANCES_DEEP && seen.insert(key) {
+                waiting.push_back((
+                    Made {
+                        callee: call.callee,
+                        generics,
+                        at: made.at,
+                    },
+                    depth + 1,
+                ));
+            }
+        }
+    }
+}
+
+/// True where a generic argument names one of `declared`, the generic
+/// parameters of the declaration the call is written in.
+fn passes_on(generics: &[Argument], declared: &[Location]) -> bool {
+    !declared.is_empty()
+        && generics.iter().any(|argument| match argument {
+            Argument::Constant(constant) => constant.value.names_one_of(declared),
+            Argument::Type(ty) => ty.any_part(
+                &|part| matches!(part, Type::Parameter { at, .. } if declared.contains(at)),
+                &|constant| constant.value.names_one_of(declared),
+            ),
+        })
+}
+
+/// `argument`, a generic argument a call in a generic body gives, with
+/// what a call of that body gives its parameters, `map`, in place.
+fn given_in(argument: &Argument, map: &[(Location, &Argument)], declared: &[Location]) -> Argument {
+    match argument {
+        Argument::Constant(constant) => Argument::Constant(Constant {
+            text: constant.text.clone(),
+            value: constant.value.substituted(&|at| {
+                map.iter()
+                    .find(|(own, _)| *own == at)
+                    .and_then(|(_, given)| match given {
+                        Argument::Constant(given) => Some(given.value.clone()),
+                        Argument::Type(_) => None,
+                    })
+            }),
+        }),
+        Argument::Type(ty) => Argument::Type(placed(substitute_within(ty, map), declared)),
+    }
+}
+
+/// The calls of generic declarations `statements` make, at any depth.
+fn made_in(statements: &[hir::Stmt], made: &mut Vec<Made>) {
+    hir::walk_statements(statements, &mut |expression| made_at(expression, made));
+}
+
+/// The calls of generic declarations `expression` makes, at any depth.
+fn made_by(expression: &Expr, made: &mut Vec<Made>) {
+    expression.walk(&mut |expression| made_at(expression, made));
+}
+
+/// The call `expression` is, where it is one of a function or a struct
+/// it gives generic arguments.
+fn made_at(expression: &Expr, made: &mut Vec<Made>) {
+    let (callee, generics) = match &expression.kind {
+        ExprKind::Call {
+            callee:
+                Callee::Function {
+                    module,
+                    declaration,
+                    generics,
+                    ..
+                },
+            ..
+        } => ((*module, *declaration), generics.clone()),
+        ExprKind::Construct {
+            module,
+            declaration,
+            ..
+        } => match &expression.ty {
+            Type::Named { arguments, .. } => ((*module, *declaration), arguments.clone()),
+            _ => return,
+        },
+        _ => return,
+    };
+    if !generics.is_empty() {
+        made.push(Made {
+            callee,
+            generics,
+            at: expression.at,
+        });
+    }
+}
+
 /// What a candidate's condition is checked against at a call.
 pub(super) struct Condition<'c> {
     /// The value an option has at the call: what the call gives it, or
@@ -1014,6 +1295,37 @@ pub(super) struct Condition<'c> {
     /// Whether a named operator requirement written in the condition
     /// holds at the call (GEN-16). `None` when it cannot be told.
     pub(super) callable: &'c dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// Set where a comparison is not told because a value it compares
+    /// is one this compiler does not work out: a constant held by its
+    /// name, or one not worked out. Such a constant is not taken as
+    /// known, so a `requires` not told for it is not taken to hold.
+    pub(super) unvalued: &'c std::cell::Cell<bool>,
+}
+
+/// True where `value` is, or holds, a constant this compiler does not
+/// work out: one held by its name (`ConstantValue::Named`), or one not
+/// worked out. A generic value parameter is none: it is given its value
+/// where the call that gives it is read.
+fn unworked(value: &ConstantValue) -> bool {
+    match value {
+        ConstantValue::Named { .. } | ConstantValue::Unevaluated => true,
+        ConstantValue::Unary(_, operand) | ConstantValue::Constructed { from: operand, .. } => {
+            unworked(operand)
+        }
+        ConstantValue::Binary(_, left, right) => unworked(left) || unworked(right),
+        ConstantValue::List(values) | ConstantValue::Tuple(values) => values.iter().any(unworked),
+        _ => false,
+    }
+}
+
+/// [`ConstantValue::equals`] of two values a condition compares, noting
+/// in `of` where it is not told for a value not worked out.
+fn compared(left: &ConstantValue, right: &ConstantValue, of: &Condition) -> Option<bool> {
+    let told = left.equals(right);
+    if told.is_none() && (unworked(left) || unworked(right)) {
+        of.unvalued.set(true);
+    }
+    told
 }
 
 /// The generic parameters of a function or a struct that states a
@@ -1044,6 +1356,8 @@ struct Told<'t> {
     /// Whether a named operator requirement holds (GEN-16). `None`
     /// when it cannot be told.
     callable: &'t dyn Fn(&SyntaxNode) -> Option<bool>,
+    /// See [`Condition::unvalued`].
+    unvalued: &'t std::cell::Cell<bool>,
 }
 
 /// Whether `condition`, the `requires` of `declaration` of `module`,
@@ -1112,6 +1426,7 @@ fn requires_holds(
             type_of: &type_of,
             written: &written,
             callable: place.callable,
+            unvalued: place.unvalued,
         },
     )
 }
@@ -1144,6 +1459,40 @@ fn unmet(
     .with_related(
         Location::new(declared_in.files[declared.file].file, condition.span()),
         "the condition that does not hold",
+    )
+}
+
+/// The rejection of a call of a function, or an application of a
+/// struct, at `at`, whose `requires`, `condition`, is not told for a
+/// constant this compiler does not work out: such a constant is not
+/// taken as known (UNIT-13), so the `requires` is not taken to hold
+/// (GEN-3).
+fn untold(
+    program: &Program,
+    (module, declaration): (usize, usize),
+    at: Location,
+    condition: &SyntaxNode,
+) -> hgl_diagnostics::Diagnostic {
+    let declared_in = &program.modules[module];
+    let declared = &declared_in.declarations[declaration];
+    let what = match declared.kind {
+        DeclarationKind::Struct => "application",
+        _ => "call",
+    };
+    error(
+        Category::Constraint,
+        codes::REQUIRES_UNMET,
+        at,
+        format!(
+            "the `requires` of `{}` is not known to hold for this {what}: this compiler does \
+             not work out a constant it compares",
+            declared.name
+        ),
+        "GEN-3",
+    )
+    .with_related(
+        Location::new(declared_in.files[declared.file].file, condition.span()),
+        "the condition that is not told",
     )
 }
 
@@ -1285,7 +1634,7 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                 // X == 0.0` is the language's `==`: it holds for `-0.0`"
                 // (hhenson/hgl_spec#139, UNIT-13). Where the value is not
                 // known, whether it holds is not either.
-                (of.value_of)(&name)?.equals(&operand(constant, &name)?)
+                compared(&(of.value_of)(&name)?, &operand(constant, &name)?, of)
             } else if within {
                 let name = option(left)?;
                 if right.kind() != SyntaxKind::ConstraintSet {
@@ -1297,7 +1646,7 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
                 // not where it is known to be none.
                 let mut found = Some(false);
                 for member in right.children() {
-                    match operand(&member, &name).and_then(|member| value.equals(&member)) {
+                    match operand(&member, &name).and_then(|member| compared(&value, &member, of)) {
                         Some(true) => return Some(true),
                         Some(false) => {}
                         None => found = None,

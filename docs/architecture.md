@@ -843,7 +843,7 @@ is the text a target keys an instance by, one for each constant.
 | --- | --- | --- |
 | A type's identity | `declared::agree`: known to be the same | Not the same; `Unknown` agrees with any (ERR-9) |
 | A field's conflict, a parent's argument | `declared::may_be_one`: not known to differ | No conflict |
-| `requires` | `holds`: `equals` of the option's value and each operand | Not told: nothing reported |
+| `requires` | `holds`: `equals` of the option's value and each operand | Not told for a generic parameter the call passes on: told for each instance a call that gives every argument makes (`requirements::instances_hold`). Not told for a constant not worked out: `requires.unmet` |
 | A call's generic value argument | GEN-8 | `generic.argument_constant`: what is no constant, and one not worked out |
 | A `switch` label | CTRL-6: `equals` of two labels | No constant: local `switch.label_constant`. One not worked out is a label whose repeat is not judged |
 | A delta's key, a tuple's index | TYPE-16: `equals` of two keys; EXPR-7 | No overlap, and the element's type not known |
@@ -1196,7 +1196,12 @@ the struct applied:
 | A type written that applies a struct, at any depth, in any declaration: a signature, a body, a struct's field, a constant's type | The same |
 
 A function and a struct with no generic parameter are held to a
-`requires` they state too. Nothing is reported where it cannot be told.
+`requires` they state too. What cannot be told where a generic body
+passes on a parameter of its own is told once the typed program is
+whole, for each instance a call that gives every argument makes, at any
+depth (`requirements::instances_hold`), and reported at that call. What
+is not told for a constant this compiler does not work out is reported
+as not known to hold; nothing else that cannot be told is reported.
 A generic parameter of the declaration a call is written in is no one
 type, so a membership of it is not told; a named operator requirement
 of it is, by what that declaration states (GEN-7), a struct's as a
