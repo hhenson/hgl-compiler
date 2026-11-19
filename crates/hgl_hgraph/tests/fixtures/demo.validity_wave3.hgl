@@ -883,3 +883,65 @@ test a_nested_dictionarys_removal_within_a_struct_is_no_tick {
         _,
     ]
 }
+
+# TIME-1: a struct, a tuple or a fixed list read whole "requires
+# `all_valid` of it. So does one of a child that is a struct, a tuple or
+# a fixed list ... Elsewhere, `rows[i]` read whole, it is checked when it
+# runs: one that is not all valid fails it (`value.unset_read`), or gives
+# an `err` where its place takes a `result` (ERR-14)."
+fn write_pair_rows(step: i64) -> list<Pair, 2> {
+    when {
+        if step == 0 { return delta<list<Pair, 2>>(updated: [0: delta<Pair>(bid: 1, ask: 2)]) }
+        return delta<list<Pair, 2>>(updated: [1: delta<Pair>(bid: 3)])
+    }
+}
+
+fn row_at(rows: list<Pair, 2>, slot: i64) -> i64 {
+    when { return spread(rows[slot]) }
+}
+
+fn row_outcome(rows: list<Pair, 2>, slot: i64) -> str {
+    when {
+        let row: result<Pair, error> = rows[slot]
+        if is_ok(row) { return "ok" }
+        let code = row.error.code
+        if code == null { return "none" }
+        return code
+    }
+}
+
+fn first_row(rows: list<Pair, 2>) -> i64 {
+    when all_valid(rows[0]) { return spread(rows[0]) }
+}
+
+fn row_at_of(step: i64, slot: i64) -> i64 => row_at(write_pair_rows(step), slot)
+
+fn row_outcome_of(step: i64, slot: i64) -> str => row_outcome(write_pair_rows(step), slot)
+
+fn first_row_of(step: i64) -> i64 => first_row(write_pair_rows(step))
+
+test a_child_read_whole_at_a_runtime_index_is_checked_when_it_runs {
+    assert eval(row_at_of(step: [0, 1], slot: [0, _])) == [1, 1]
+    assert raises("value.unset_read") { eval(row_at_of(step: [0, 1], slot: [0, 1])) }
+    assert eval(row_outcome_of(step: [0, 1], slot: [0, 1])) == ["ok", "value.unset_read"]
+    assert eval(first_row_of(step: [0, 1])) == [1, 1]
+}
+
+fn write_tuple_rows(step: i64) -> list<tuple<i64, i64>, 1> {
+    when {
+        let first: delta<tuple<i64, i64>> = (step, null)
+        return delta<list<tuple<i64, i64>, 1>>(updated: [0: first])
+    }
+}
+
+fn tuple_row(rows: list<tuple<i64, i64>, 1>, slot: i64) -> result<tuple<i64, i64>, error> {
+    when { return rows[slot] }
+}
+
+const fn outcome_of(outcome: result<tuple<i64, i64>, error>) -> bool => is_ok(outcome)
+
+fn tuple_row_of(step: i64) -> bool => outcome_of(tuple_row(write_tuple_rows(step), 0))
+
+test a_tuple_child_not_all_valid_at_a_runtime_index_gives_an_err {
+    assert eval(tuple_row_of(step: [5])) == [false]
+}

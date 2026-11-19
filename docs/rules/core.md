@@ -408,7 +408,7 @@ transpiler: partial
 analyser: partial
 
 - A collection's child is an endpoint, valid or not: `valid`, `modified`, `delta_value` and `last_modified` take it, and `all_valid` where it is a collection; its value and delta are read where it is admitted (TIME-1); a read at an index known only when it runs is `CheckedChild` (ERR-14)
-- Left: a struct, a tuple or a fixed list read whole is admitted only where it is all valid, which core's rejection case `quote_without_admission` checks and is listed as not yet rejected
+- A struct, a tuple or a fixed list read whole, a child among them, is admitted only where it is all valid by its own `all_valid`, which core's rejection case `quote_without_admission` checks; one at an index known only when it runs fails with `value.unset_read` where it is not all valid, or gives that `err` (ERR-14)
 
 transpiler: partial
 

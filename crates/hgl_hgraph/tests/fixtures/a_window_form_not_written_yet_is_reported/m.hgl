@@ -21,7 +21,7 @@ fn cleared(price: f64) -> rolling_window<f64, 3, 1> {
     when { invalidate(out) }
 }
 fn quotes(quote: Quote) -> rolling_window<Quote, 3, 1> {
-    when { return quote }
+    when all_valid(quote) { return quote }
 }
 fn maybe(price: f64?) -> rolling_window<f64?, 3, 1> {
     when { return price }
