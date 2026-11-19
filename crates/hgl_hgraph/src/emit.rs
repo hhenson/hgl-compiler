@@ -6718,6 +6718,8 @@ impl Emitter<'_> {
         signature: &Signature,
         arguments: &[Argument],
     ) -> String {
+        // True where the callee is a node, which keeps what it is given.
+        let node = self.is_node(callee);
         let kept = self.kept_configuration(callee, generics, signature);
         let kept = |index: usize, value: String| {
             if kept[index] {
