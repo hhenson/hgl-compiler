@@ -20,7 +20,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{SyntaxKind, SyntaxNode};
 
-use super::{BOOL, Fact, Typer, not_null, nullable};
+use super::fit::{not_null, nullable};
+use super::{BOOL, Fact, Typer};
 use crate::hir::{EndpointOperation, Expr, ExprKind, Hook, LabelValue, LocalId};
 use crate::syntax::tokens;
 use crate::types::{Detail, NamedKind, Scalar, Type};

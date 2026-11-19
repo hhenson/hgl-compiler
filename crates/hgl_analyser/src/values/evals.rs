@@ -8,7 +8,8 @@ use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::calls::arguments_of;
-use super::{BOOL, Called, Typer, open, written_null};
+use super::fit::open;
+use super::{BOOL, Called, Typer, written_null};
 use crate::hir::{
     self, BinaryOperator, Body, Expr, ExprKind, Hook, Run, Stmt, Value, ValueCategory,
 };

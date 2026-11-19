@@ -8,8 +8,9 @@ use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode};
 use hgl_source::FileId;
 
+use super::Typer;
+use super::fit::{not_null, whole};
 use super::inference::placed;
-use super::{Typer, not_null, whole};
 use crate::constant::{Fault, Scope, Typed};
 use crate::declared::names_parameter;
 use crate::hir::{Expr, ExprKind, Value};

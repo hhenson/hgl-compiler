@@ -8,8 +8,9 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::candidates::{Given, Key, Wanted, typed_by_place};
 use super::constants::generic_default;
+use super::fit::{not_null, open};
 use super::inference::{bare_parameter, fixed, infer, placed, unsaid};
-use super::{Candidate, Typer, not_null, open};
+use super::{Candidate, Typer};
 use crate::declared::{agree, substitute_within};
 use crate::hir::{self, Callee, Expr, ExprKind, Form};
 use crate::program::{OperatorRef, Role};

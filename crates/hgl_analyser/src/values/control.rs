@@ -5,9 +5,8 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
-use super::{
-    BOOL, Fact, Typer, is_integer_literal, is_null, not_null, nullable, open, takes_its_type,
-};
+use super::fit::{is_integer_literal, not_null, nullable, open};
+use super::{BOOL, Fact, Typer, is_null, takes_its_type};
 use crate::constant::Fault;
 use crate::declared::agree;
 use crate::hir::{self, Expr, ExprKind, LocalId, Stmt, ValueCategory};

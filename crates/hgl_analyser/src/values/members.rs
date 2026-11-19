@@ -6,8 +6,9 @@
 use hgl_diagnostics::{Category, Location};
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
+use super::Typer;
+use super::fit::{not_null, open};
 use super::inference::{fixed, placed};
-use super::{Typer, not_null, open};
 use crate::constant::Fault;
 use crate::declared::substitute_within;
 use crate::hir::{Expr, ExprKind};

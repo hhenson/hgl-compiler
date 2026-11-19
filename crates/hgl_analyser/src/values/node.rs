@@ -8,7 +8,8 @@ use hgl_lexer::literal::decode_string;
 use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 
 use super::endpoints::endpoint_arguments;
-use super::{Fact, Typer, accepts_float, children, is_integer_literal, open};
+use super::fit::{accepts_float, is_integer_literal, open};
+use super::{Fact, Typer, children};
 use crate::hir::{self, Body, EndpointOperation, Expr, ExprKind, Hook, LocalId, Stmt};
 use crate::program::{Binding, LocalKind};
 use crate::syntax::{child, name_token, tokens, ungrouped};
