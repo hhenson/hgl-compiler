@@ -1252,7 +1252,12 @@ impl<'a> Emitter<'a> {
     /// is the result, and `_given[1]` the first place's new value. A
     /// function that fails raises, and the target leaves each place as
     /// it was (see where the call is written).
-    fn place_call(&mut self, function: &Function, value: &Expr, depth: usize) -> Option<String> {
+    pub(super) fn place_call(
+        &mut self,
+        function: &Function,
+        value: &Expr,
+        depth: usize,
+    ) -> Option<String> {
         let places = self.places_of(value);
         if places.is_empty() {
             return None;
@@ -2879,7 +2884,7 @@ impl<'a> Emitter<'a> {
     /// what the place holds, as it is. The function changes a list, a
     /// dictionary or a struct that is no value where it is, and gives
     /// back what the place is to hold.
-    fn given_place(&mut self, function: &Function, value: &Expr) -> String {
+    pub(super) fn given_place(&mut self, function: &Function, value: &Expr) -> String {
         if let Some((_, held)) = self.held.iter().find(|(at, _)| *at == value.at) {
             return held.clone();
         }
@@ -2889,7 +2894,7 @@ impl<'a> Emitter<'a> {
     /// What a local is written as where it is assigned or read as it
     /// is: a field of the node's state for a `state`, its name
     /// otherwise.
-    fn place(&mut self, function: &Function, local: usize) -> String {
+    pub(super) fn place(&mut self, function: &Function, local: usize) -> String {
         let declared = &function.locals[local];
         match declared.kind {
             LocalKind::State | LocalKind::Cache => format!("_state.{}", name(&declared.name)),
@@ -4829,7 +4834,7 @@ impl<'a> Emitter<'a> {
     /// publishes whole, a field of an `atomic<Quote>` or an element of
     /// an unsized list, gives that part a new value with the place
     /// changed, published whole.
-    fn assigned_to_out(
+    pub(super) fn assigned_to_out(
         &mut self,
         function: &Function,
         place: &Expr,
@@ -4964,7 +4969,7 @@ impl<'a> Emitter<'a> {
     /// what took one of them took a copy (`kept`). Any other value on
     /// the way is given a new one: `point.x = 1` makes `point` the
     /// `Point` whose `x` is 1, and `pair[0] = 1` a new tuple.
-    fn assigned(
+    pub(super) fn assigned(
         &mut self,
         function: &Function,
         place: &Expr,
@@ -5050,7 +5055,7 @@ impl<'a> Emitter<'a> {
     /// True for an index that is a literal, a name or a member of an
     /// enum, or one a call has evaluated already and holds: reading it
     /// cannot fail.
-    fn simple_index(&self, index: &Expr) -> bool {
+    pub(super) fn simple_index(&self, index: &Expr) -> bool {
         matches!(
             index.kind,
             ExprKind::Literal(_) | ExprKind::Local(_) | ExprKind::EnumMember { .. }
@@ -5059,7 +5064,7 @@ impl<'a> Emitter<'a> {
 
     /// Writes the lines a place's way in asks for before its statement
     /// (`steps`).
-    fn hoist(&mut self, depth: usize) {
+    pub(super) fn hoist(&mut self, depth: usize) {
         for line in std::mem::take(&mut self.hoisted) {
             self.line(depth, &line);
         }
@@ -7090,7 +7095,7 @@ fn reads_an_element(place: &Expr) -> bool {
 /// The indices of a place that are evaluated, from its root outward as
 /// they are written. Each is with what it is an index of, where reading
 /// that may fail.
-fn indices_of(place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
+pub(super) fn indices_of(place: &Expr) -> Vec<(Option<&Expr>, &Expr)> {
     let mut indices = Vec::new();
     for (step, base) in place_steps(place) {
         if let ExprKind::Index { index, .. } = &step.kind
