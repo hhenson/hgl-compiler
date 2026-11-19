@@ -323,7 +323,6 @@ The declarations are then read against one another:
 | Inheritance | TYPE-6 | No struct is its own ancestor. A group that inherit from one another is reported once, at its first struct |
 | A field of a struct and of a parent | TYPE-4 | The same type, and so the same optionality, the parent's generic arguments standing for its parameters |
 | A field two parents give | TYPE-4 | The same type. One field reached by two paths is one field |
-| A default two parents give | UNIT-9 | Each struct has one effective default per field, worked out parents first: its own declaration's, with a default or without one, or else its direct parents' effective defaults, their arguments in place. Two of those that are constant values of the field's concrete type and differ (a literal, `null`, an enum member, a module's constant, a minus before a number, a list or tuple of those; `x: T = 1` under `A<f64>` is `1.0`) are the local `default.conflict`, at the later parent, in that struct alone: below it the field's default is in conflict and is not reported again. Defaults that cannot be told apart are kept, and judged again below with its arguments in place. Where one parent gives a default and another none, the field has it, in either order |
 | A default of null | TYPE-4 | Only on an optional field: one whose type is written `T?`, `atomic<Node>?` included, or an `atomic<...>` of a nullable type, `atomic<T?>`. For `name = null` the type is the one the parent gives the field |
 | `name = value` | TYPE-4 | Overrides the default of a field a parent declares |
 | A member's name | TYPE-4, TYPE-7 | One member of a struct or enum has it |
@@ -1362,8 +1361,7 @@ the limit is the compiler's, not the language's. The analyser's codes
 are catalogued (`hgl_analyser::codes`), one of them a warning, but for
 the local ones in `codes::local`, for rejections the catalogue has no
 row for: `cache.input_read` (TIME-1), `doc.unknown_key` (SDOC-3),
-`default.conflict` (UNIT-9), `source.return_value` and `yield.in_value`
-(SOURCE-4). Its tests check each diagnostic's category and code against
+`source.return_value` and `yield.in_value` (SOURCE-4). Its tests check each diagnostic's category and code against
 the catalogue, or that list.
 `crates/hgl_lexer/tests/spec_tables.rs` compares the lexer's codes, reserved
 words and symbols with the pinned chapters, so a pin that changes one of

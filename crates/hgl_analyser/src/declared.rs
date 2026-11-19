@@ -838,22 +838,10 @@ impl Structs<'_> {
                 };
                 // The same field by another path is one field.
                 let listed = inherited
-                    .iter_mut()
-                    .find(|other| other.origin == field.origin && other.ty == field.ty);
-                match listed {
-                    // UNIT-9: where only one path gives it a default,
-                    // that is the default it has, whatever order the
-                    // parents are written in. Two that differ are
-                    // reported once the defaults are read.
-                    Some(first) if !first.has_default && field.has_default => {
-                        first.has_default = true;
-                        first.null_default = field.null_default;
-                        first.empty_default = field.empty_default;
-                        first.default_from = field.default_from;
-                        first.default_of = field.default_of;
-                    }
-                    Some(_) => {}
-                    None => inherited.push(field),
+                    .iter()
+                    .any(|other| other.origin == field.origin && other.ty == field.ty);
+                if !listed {
+                    inherited.push(field);
                 }
             }
         }
@@ -933,7 +921,7 @@ impl Structs<'_> {
         let Some(fields) = self.fields.get(&id) else {
             return members;
         };
-        for (position, field) in fields.all.iter().enumerate() {
+        for field in &fields.all {
             let member = Member {
                 name: field.name.clone(),
                 at: field.at,
@@ -947,14 +935,7 @@ impl Structs<'_> {
                         field,
                     }),
             };
-            // The first of `all` are the fields from the parents.
-            let inherited = position < fields.inherited.len();
             match members.iter_mut().find(|known| known.name == member.name) {
-                // UNIT-9: of two parents' fields of one name, one with
-                // a default gives the field that default, whatever
-                // order the parents are written in. Two that differ are
-                // reported once the defaults are read.
-                Some(known) if inherited && known.has_default && !member.has_default => {}
                 Some(known) => *known = member,
                 None => members.push(member),
             }
@@ -1945,7 +1926,7 @@ fn may_be_one(left: &Constant, right: &Constant) -> bool {
 /// The literal inside a constant that is one literal in parentheses or
 /// under a minus, with whether an odd number of minuses stand before
 /// it: `-(1.0)` gives `1.0`, negative.
-pub(crate) fn bare_literal(text: &str) -> (bool, &str) {
+fn bare_literal(text: &str) -> (bool, &str) {
     let mut negative = false;
     let mut rest = text.trim();
     loop {

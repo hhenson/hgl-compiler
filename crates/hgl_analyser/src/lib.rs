@@ -47,10 +47,7 @@
 //!   is one kind across an operator's candidates (GEN-13, GEN-6);
 //! * `documentation` checks that a documentation comment's `Args:` and
 //!   `Type Args:` keys name the declaration's parameters and generic
-//!   parameters (SDOC-3), and records nothing (SDOC-6);
-//! * `inherited` works out each struct's effective default for each
-//!   field, once `values` has read the defaults, and reports two from
-//!   its parents that differ (UNIT-9).
+//!   parameters (SDOC-3), and records nothing (SDOC-6).
 //!
 //! What an expression is, phases and constants are not checked yet.
 //!
@@ -80,7 +77,6 @@ mod documentation;
 mod forms;
 pub mod hir;
 mod imports;
-mod inherited;
 mod instance;
 mod phases;
 mod program;
@@ -476,9 +472,6 @@ pub mod codes {
         /// declaration it documents (SDOC-3). Local: the catalogue has
         /// no row for it.
         pub const DOC_UNKNOWN_KEY: &str = "doc.unknown_key";
-        /// A struct has a field from two parents with two different
-        /// defaults, and gives it none of its own (UNIT-9).
-        pub const DEFAULT_CONFLICT: &str = "default.conflict";
         /// A source's `return` has a value (SOURCE-4).
         pub const SOURCE_RETURN_VALUE: &str = "source.return_value";
         /// A source's `yield` stands inside a block or an `if` whose
@@ -486,10 +479,9 @@ pub mod codes {
         pub const YIELD_IN_VALUE: &str = "yield.in_value";
 
         /// Every local code of this stage.
-        pub const ALL: [&str; 5] = [
+        pub const ALL: [&str; 4] = [
             CACHE_INPUT_READ,
             DOC_UNKNOWN_KEY,
-            DEFAULT_CONFLICT,
             SOURCE_RETURN_VALUE,
             YIELD_IN_VALUE,
         ];
@@ -564,8 +556,6 @@ pub fn analyse(files: &[ParsedFile], diagnostics: &mut Diagnostics) -> Program {
     signatures::check(&program, diagnostics);
     documentation::check(&program, diagnostics);
     values::check(&mut program, diagnostics);
-    // UNIT-9: asked once each default has been read.
-    inherited::check(&program, diagnostics);
     // UNIT-13: asked of the typed program, where each call has the
     // definition it selected.
     cycles::check(&program, diagnostics);
