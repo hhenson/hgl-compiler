@@ -1044,6 +1044,45 @@ fn a_boolean_connective_short_circuits() {
     );
 }
 
+/// TYPE-7: a construction "takes one argument, by position, that is an
+/// `i64` or a `str`": one of another type, a `T?` among them (TYPE-14),
+/// constructs no member, and a member's number is no `T?` either.
+#[test]
+fn an_enum_construction_takes_an_integer_or_a_string() {
+    let shared = concat!(
+        "enum Mode { fast, slow }\n",
+        "const A: i64? = 0\n",
+        "const B: i64 = 1\n",
+        "struct Box<const X: Mode> { v: i64 }\n",
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Box<Mode(B)>, y: Box<Mode(\"slow\")>) -> Box<Mode.slow> => y\n\
+             const fn b(x: Box<Mode(1 + 0)>) -> Box<Mode.slow> => x\n\
+             const fn c<const N: i64>(x: Box<Mode(N)>) -> Box<Mode(N)> => x\n"
+        ),
+        &[],
+    );
+    expect(
+        &format!(
+            "{shared}const fn a(x: Box<Mode(A)>) -> Box<Mode.fast> => x\n\
+             const fn b(x: Box<Mode(1.0)>) -> i64 => 1\n\
+             const fn c<const N: i64?>(x: Box<Mode(N)>) -> i64 => 1\n"
+        ),
+        &[
+            "6 generic.argument_constant",
+            "7 generic.argument_constant",
+            "8 generic.argument_constant",
+        ],
+    );
+    // An enum member's number is an `i64`, and no `i64?`.
+    expect(
+        &format!("{shared}enum E {{ a = A, b = B }}\n"),
+        &["6 enum.value"],
+    );
+    expect(&format!("{shared}enum E {{ a = B, b = 2 }}\n"), &[]);
+}
+
 /// The types of the parameters of the function `name` of `m`.
 fn parameter_types(checked: &Checked, name: &str) -> Vec<Type> {
     let module = checked.program.module("m").expect("the module exists");

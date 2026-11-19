@@ -176,12 +176,15 @@ fn enum_members(node: &SyntaxNode, scope: &Scope, diagnostics: &mut Diagnostics)
                 let integer = Type::Scalar(Scalar::I64);
                 match crate::constant::typed(&number, Some(&integer), scope) {
                     Ok(read) => match (&read.value, read.ty()) {
-                        (ConstantValue::Int(value), _) => Some(*value),
-                        (value, Some(ty)) if *ty != integer => {
+                        // One of another type than `i64`, a `const A:
+                        // i64? = 0` among them (TYPE-14: "It does not
+                        // make null an admitted value of unqualified T").
+                        (value, Some(ty)) if *ty != integer && *ty != Type::Unknown => {
                             let what = crate::constant::kind_of(value, ty);
                             not_an_integer(&number, file, &what, diagnostics);
                             None
                         }
+                        (ConstantValue::Int(value), _) => Some(*value),
                         // A constant whose value is not worked out.
                         _ => None,
                     },

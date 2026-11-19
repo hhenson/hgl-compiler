@@ -1106,7 +1106,17 @@ fn constructed_member(node: &SyntaxNode, scope: &Scope, depth: u32) -> Result<Ty
         return Err(Fault::Reported);
     };
     let given = argument.children().next().ok_or(Fault::Reported)?;
-    let given = value(&given, None, scope, depth + 1)?.value;
+    let given = value(&given, None, scope, depth + 1)?;
+    // "that is an `i64` or a `str`": one known to be of another type, a
+    // `const A: i64? = 0` among them (TYPE-14), constructs no member
+    // here.
+    let input = |scalar: Scalar| Some(Type::Scalar(scalar));
+    if given.ty.as_ref().is_some_and(|known| {
+        !unknown(known) && given.ty != input(Scalar::I64) && given.ty != input(Scalar::Str)
+    }) {
+        return Ok(Typed::unevaluated(Some(ty)));
+    }
+    let given = given.value;
     let Some(members) = members(scope.program, of) else {
         return Ok(Typed::unevaluated(Some(ty)));
     };
