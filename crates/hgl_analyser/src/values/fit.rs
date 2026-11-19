@@ -78,31 +78,30 @@ impl<'a> Typer<'a> {
         self.fit(value, expected, what)
     }
 
-    /// The type `value` says the generic parameters of `pattern`, the
-    /// place it is given to, stand for; `listed` is true for a parameter
-    /// of a value function. GEN-11: "No type holds a reference
+    /// The type `value` says the generic parameters of the place it is
+    /// given to stand for; `listed` is true for a parameter of a value
+    /// function. GEN-11: "No type holds a reference
     /// (TYPE-12), so argument inference removes none: a generic binds
     /// from the type of the connection it is given, at a `ref` parameter
     /// as at any other (FN-16)." A connection given to a function's
     /// parameter in composition says it with the `?` that marks omission
     /// removed, which is no part of what it is given (TYPE-14), and a
-    /// window's given to a value function's `list<V>` as the list it
+    /// window's given to a value function's parameter as the list it
     /// holds (`lifted_window`).
-    pub(super) fn inferred_from(
-        &self,
-        pattern: &Type,
-        listed: bool,
-        value: &Expr,
-        takes: Takes,
-    ) -> Type {
+    ///
+    /// FN-1: a value function's "parameter and result types are ordinary
+    /// value types", and GEN-1: "ordinary positions require value
+    /// types", which a window is not (TYPE-12). TYPE-11: a window's
+    /// value "given to a lifted helper (FN-12), is a `list<V>` of the
+    /// values held". So what a window says of the parameter it is given
+    /// is that list, whatever the parameter's pattern: the `T` of
+    /// `list<T>` is V, and a bare `T` is `list<V>`.
+    pub(super) fn inferred_from(&self, listed: bool, value: &Expr, takes: Takes) -> Type {
         if takes != Takes::Parameters || !self.composes(value) {
             return value.ty.clone();
         }
         let given = value.ty.omission_removed();
-        if listed
-            && matches!(pattern, Type::List { size: None, .. })
-            && matches!(given, Type::RollingWindow { .. })
-        {
+        if listed && matches!(given, Type::RollingWindow { .. }) {
             return window_value(given);
         }
         given.clone()

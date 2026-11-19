@@ -166,7 +166,9 @@ impl Typer<'_> {
                     }),
                 ))
             }
-            ExprKind::Index { base, index } if collection(&base.ty) => {
+            // A window is no collection (TIME-9): its value is read as a
+            // list (TYPE-11), and a position of that list is no child.
+            ExprKind::Index { base, index } if collection(&base.ty) && !self.reads_window(base) => {
                 let (input, at, steps) = self.steps_of(base)?;
                 let step = self.step(&base.ty, index);
                 let steps = match (steps, step) {
@@ -179,6 +181,44 @@ impl Typer<'_> {
                 Some((input, at, steps))
             }
             _ => None,
+        }
+    }
+
+    /// True where `value` reads a child that is a window, of an input
+    /// or of `out`: a field, a position or an entry whose declared type
+    /// is a window, whatever its read is typed as (TYPE-11: a list).
+    fn reads_window(&self, value: &Expr) -> bool {
+        let window = |ty: &Type| matches!(ty, Type::RollingWindow { .. });
+        match &value.kind {
+            ExprKind::Field { base, member } => self
+                .program
+                .field_types(&base.ty)
+                .and_then(|fields| fields.get(*member).cloned())
+                .is_some_and(|field| window(&field)),
+            ExprKind::Index { base, index } => match &base.ty {
+                Type::List { element: child, .. } | Type::Dict { value: child, .. } => {
+                    window(child)
+                }
+                Type::Tuple(elements) => match self.step(&base.ty, index) {
+                    Some(Step::Position(position)) => usize::try_from(position)
+                        .ok()
+                        .and_then(|position| elements.get(position))
+                        .is_some_and(window),
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// True where `value` is `out` or a child of it, through fields and
+    /// indices (TIME-7).
+    fn rooted_at_out(&self, value: &Expr) -> bool {
+        match &value.kind {
+            ExprKind::Local(local) => Some(*local) == self.out,
+            ExprKind::Field { base, .. } | ExprKind::Index { base, .. } => self.rooted_at_out(base),
+            _ => false,
         }
     }
 
@@ -291,7 +331,16 @@ impl Typer<'_> {
             return value;
         }
         // TYPE-11: a window's value, "read in a hook ... is a `list<V>` of
-        // the values held, oldest first", a child's among them.
+        // the values held, oldest first", a child's among them. TIME-7:
+        // "`inject out` exposes that same result for reads": a window
+        // that is a child of `out` is read as its list too, and fails
+        // when it runs where it is not all valid, as an input's does.
+        if matches!(value.ty, Type::RollingWindow { .. }) && self.rooted_at_out(&value) {
+            return Expr {
+                ty: window_value(&value.ty),
+                ..value
+            };
+        }
         match self.child_of(&value) {
             None => value,
             Some(Child::Runtime) => {
