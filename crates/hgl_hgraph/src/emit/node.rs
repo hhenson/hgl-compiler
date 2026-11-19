@@ -96,9 +96,10 @@ impl Emitter<'_> {
                 Stmt::Hook {
                     hook: Hook::When,
                     condition,
+                    header: Some(header),
                     body,
                     ..
-                } => handlers.push(Handler::of(condition.as_ref(), body, &inputs)),
+                } => handlers.push(Handler::of(header, condition.as_ref(), body)),
                 Stmt::Declare { local, .. } => {
                     self.unsupported(body.locals[*local].at, "this declaration of a node");
                 }
@@ -867,100 +868,22 @@ struct Handler<'a> {
 }
 
 impl<'a> Handler<'a> {
-    /// Reads a handler's header. `inputs` is the node's temporal
-    /// inputs, which a selector with no argument, and one left out,
-    /// stand for.
-    fn of(condition: Option<&'a Expr>, body: &'a [Stmt], inputs: &[usize]) -> Handler<'a> {
-        // "when it stands alone in the header or appears as a
-        // top-level conjunct": the conjuncts, through each `&&`.
-        let mut conjuncts = Vec::new();
-        let mut to_do: Vec<&'a Expr> = condition.into_iter().collect();
-        while let Some(part) = to_do.pop() {
-            match &part.kind {
-                ExprKind::Binary {
-                    operator: BinaryOperator::And,
-                    left,
-                    right,
-                } => {
-                    // Popped last first: the left is read first.
-                    to_do.push(right);
-                    to_do.push(left);
-                }
-                _ => conjuncts.push(part),
-            }
-        }
-        // Every selector among the conjuncts adds what it names, as
-        // the analyser has it: `valid(a) && valid(b)` requires both.
-        // One with no argument names every input, and `valid([])`
-        // names none. With no selector of a kind, its default stands.
-        let mut subscribed: Option<Vec<usize>> = None;
-        let mut required: Option<Vec<usize>> = None;
-        let mut conditions = Vec::new();
-        let mut scheduled = false;
-        // TIME-3: "The empty selection `modified([])` subscribes to no
-        // input and selects a wake from the node's scheduler or alarm",
-        // and `modified(a)` "requires a publication on" `a`. Where both
-        // stand, which of the two runs the handler is not settled.
-        let mut empty: Option<Location> = None;
-        let mut names = false;
-        // TIME-3: "A header that is `scheduled()` alone is the
-        // exception: it requires no input to be valid".
-        let alone = matches!(
-            conjuncts.as_slice(),
-            [Expr {
-                kind: ExprKind::Endpoint {
-                    operation: EndpointOperation::Scheduled,
-                    ..
-                },
-                ..
-            }]
-        );
-        let add = |set: &mut Option<Vec<usize>>, named: &Option<Vec<usize>>| {
-            let set = set.get_or_insert_with(Vec::new);
-            for &local in named.as_deref().unwrap_or(inputs) {
-                if !set.contains(&local) {
-                    set.push(local);
-                }
-            }
-        };
-        for conjunct in conjuncts {
-            match &conjunct.kind {
-                ExprKind::Endpoint {
-                    operation: EndpointOperation::Modified,
-                    inputs: named,
-                } => {
-                    add(&mut subscribed, named);
-                    // TIME-3: scheduling and modification are distinct. An
-                    // explicit guard still checks its publications. The empty
-                    // selector listens for a scheduled wake instead.
-                    if named.as_ref().is_some_and(Vec::is_empty) {
-                        empty = empty.or(Some(conjunct.at));
-                    } else {
-                        names = true;
-                        conditions.push(conjunct);
-                    }
-                }
-                ExprKind::Endpoint {
-                    operation: EndpointOperation::Valid,
-                    inputs: named,
-                } => add(&mut required, named),
-                // The node says what `scheduled()` is: it depends on
-                // which of the scheduler and the alarm it injects.
-                ExprKind::Endpoint {
-                    operation: EndpointOperation::Scheduled,
-                    ..
-                } => scheduled = true,
-                _ => conditions.push(conjunct),
-            }
-        }
-        let selects = subscribed.is_some();
+    /// A handler as the analyser read its header (`hir::Header`):
+    /// what it subscribes to and requires, and the conjuncts of its
+    /// condition that are checked when it runs.
+    fn of(header: &'a Header, condition: Option<&'a Expr>, body: &'a [Stmt]) -> Handler<'a> {
+        let conjuncts = condition.map(Expr::conjuncts).unwrap_or_default();
         Handler {
-            subscribed: subscribed.unwrap_or_else(|| inputs.to_vec()),
-            required: required.unwrap_or_else(|| if alone { Vec::new() } else { inputs.to_vec() }),
-            conditions,
-            scheduled,
-            selects,
-            beside: empty.filter(|_| names),
+            subscribed: header.subscribed.clone(),
+            required: header.required.clone(),
+            conditions: header
+                .conditions
+                .iter()
+                .filter_map(|&position| conjuncts.get(position).copied())
+                .collect(),
+            scheduled: header.scheduled,
+            selects: header.selects,
+            beside: header.beside,
             body,
         }
     }
