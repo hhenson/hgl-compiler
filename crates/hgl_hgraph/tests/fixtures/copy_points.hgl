@@ -55,6 +55,13 @@ const fn absorb(var into: Ticket, other: Ticket) {
     into.size += other.size
 }
 
+# A call given a key and the entry it names: the entry is the one the
+# key named when the arguments were evaluated (FN-15).
+const fn rekeyed(var key: Key, var count: i64) {
+    key.side = 2
+    count += 1
+}
+
 # A `let` whose place changes no more while the name is in scope is a
 # reference.
 const fn size_after(by: i64) -> i64 {
@@ -152,6 +159,10 @@ test a_call_given_a_var_reference_copies_what_it_is_also_given {
     var other = ticket(2)
     absorb(mine, other)
     assert mine.size == 7 && other.size == 2
+    var key = Key(name: "a", side: 1)
+    var counts: dict<Key, i64> = [Key(name: "a", side: 1): 5]
+    rekeyed(key, counts[key])
+    assert key.side == 2 && counts == [Key(name: "a", side: 1): 6]
 }
 
 test a_struct_of_two_scalars_is_a_value {

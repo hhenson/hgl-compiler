@@ -6354,6 +6354,15 @@ fn a_struct_is_changed_where_it_is_and_copied_where_it_is_kept() {
         "    mine = _core.copied(initial)\n",
         // A copy: the owner's first case (FN-13's stable argument).
         "    _given = absorb(into=mine, other=_core.copied(mine))\n",
+        // A key held before a call that may change its source: the
+        // entry assigned is the one it named (FN-15).
+        concat!(
+            "    _at_1 = _core.copied(key)\n",
+            "    _arg_2 = _core.entry(counts, _at_1)\n",
+            "    _given = rekeyed(key=_arg_1, count=_arg_2)\n",
+            "    key = _given[1]\n",
+            "    counts = _core.set_entry(counts, _at_1, _given[2])\n",
+        ),
         // FN-15: what fails is given back beside what the parameter
         // holds, the place is assigned, and it is raised again.
         concat!(

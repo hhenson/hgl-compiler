@@ -1488,7 +1488,11 @@ impl Emitter<'_> {
                         }
                         indices += 1;
                         let held = format!("_at_{indices}");
+                        // A key that is a struct changed where it is is
+                        // held as a copy: the call may change its source,
+                        // and the place is the one named before it.
                         let written = self.expression(function, index);
+                        let written = self.copied(function, index, written);
                         self.line(depth, &format!("{held} = {written}"));
                         self.held.push((index.at, held));
                     }
@@ -3658,7 +3662,9 @@ impl Emitter<'_> {
                         }
                         held_indices += 1;
                         let held = format!("_at_{held_indices}");
+                        // Held as a copy, as a call's index is.
                         let written = self.expression(function, index);
+                        let written = self.copied(function, index, written);
                         self.line(depth, &format!("{held} = {written}"));
                         self.held.push((index.at, held));
                         held_here.push(index.at);
@@ -4958,6 +4964,18 @@ impl Emitter<'_> {
         }
     }
 
+    /// The key `index`, written `written`, as a dictionary keeps it where
+    /// it has none: a copy, where something else holds it and may change
+    /// it, a `Key` struct of a `var` say. One held before the statement
+    /// is a copy already (see `place_call`).
+    fn kept_key(&mut self, function: &Function, index: &Expr, written: String) -> String {
+        if self.held.iter().any(|(held, _)| *held == index.at) {
+            written
+        } else {
+            self.copied(function, index, written)
+        }
+    }
+
     /// True for an index that is a literal, a name or a member of an
     /// enum, or one a call has evaluated already and holds: reading it
     /// cannot fail.
@@ -5008,7 +5026,7 @@ impl Emitter<'_> {
                         key = held;
                     }
                     if assigned && kind == "k" && written.is_empty() {
-                        key = self.copied(function, index, key);
+                        key = self.kept_key(function, index, key);
                     }
                     format!("(\"{kind}\", {key})")
                 }
@@ -5074,10 +5092,8 @@ impl Emitter<'_> {
                 self.natives = true;
                 let held = self.expression(function, base);
                 let written = self.expression(function, index);
-                // A dictionary keeps a key it has not: a copy, where
-                // something else holds it and may change it.
                 let index = if matches!(base.ty, Type::Dict { .. }) {
-                    self.copied(function, index, written)
+                    self.kept_key(function, index, written)
                 } else {
                     written
                 };
