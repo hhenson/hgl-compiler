@@ -220,6 +220,12 @@ pub enum Type {
     },
     /// `error` (TYPE-13).
     Error,
+    /// What an error's `.context` holds when it is not null: "a
+    /// read-only nullable record of `.node: str`, `.phase: str` ... and
+    /// `.evaluation_time: datetime`" (ERR-4). Source writes no type for
+    /// it: it is a type of this compiler's, read through its three
+    /// parts.
+    ErrorContext,
     /// `delta<list<f64>>`
     Delta(Box<Type>),
     /// What an `eval` gives, and a trace written out for one: "a trace
@@ -289,7 +295,7 @@ impl Type {
         match of {
             // "A scalar, an enum, a `result`, an `error`, a native type,
             // a delta that is a type of its own: T itself".
-            Type::Scalar(_) | Type::Error | Type::Result { .. } => of,
+            Type::Scalar(_) | Type::Error | Type::ErrorContext | Type::Result { .. } => of,
             Type::Named {
                 kind: NamedKind::Enum | NamedKind::Native,
                 ..
@@ -538,6 +544,8 @@ impl fmt::Display for Type {
             Type::Atomic(payload) => write!(f, "atomic<{payload}>"),
             Type::Result { value, error } => write!(f, "result<{value}, {error}>"),
             Type::Error => f.write_str("error"),
+            // No type that source writes: named in words.
+            Type::ErrorContext => f.write_str("error context"),
             Type::Delta(shape) => write!(f, "delta<{shape}>"),
             // No type that source writes: named in words.
             Type::Trace { cell, .. } => write!(f, "trace of {cell}"),
