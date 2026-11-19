@@ -11045,28 +11045,12 @@ impl<'a> Typer<'a> {
             }
             Type::Error => return self.error_part(base, &name),
             Type::ErrorContext => return self.context_part(base, &name),
-            // ERR-4: "Nullable code/context observations require
-            // presence checking": a part of a context is read where a
-            // test against null has proved it present.
-            Type::Nullable(inner) if **inner == Type::ErrorContext => {
-                self.diagnostics.emit(
-                    error(
-                        Category::Type,
-                        codes::NULLABLE_REQUIRED_PRESENCE,
-                        base.at,
-                        format!(
-                            "this is `{}`: an error's context may be null, and `.{}` is \
-                             read where it is not",
-                            base.ty,
-                            name.text()
-                        ),
-                        "ERR-4",
-                    )
-                    .with_note(
-                        "bind the context with `let` and test it against null: \
-                         `if context == null { return ... }`",
-                    ),
-                );
+            // ERR-12: a member of the payload of a nullable is read
+            // where a test against null has proved it present. ERR-4:
+            // "Nullable code/context observations require presence
+            // checking".
+            Type::Nullable(inner) if has_members(inner) => {
+                self.unproved_payload(&base, &format!("`.{}`", name.text()));
                 return (ExprKind::Unread, Type::Unknown);
             }
             // TYPE-16: a set's delta has "the properties `added` and
@@ -11237,6 +11221,35 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Reports `base`, a nullable value, read for `what` of its payload
+    /// with no test against null that proves it present (ERR-12: "Using
+    /// it where T is required without that proof rejects with
+    /// `nullable.required_presence`"). What is read is then not known,
+    /// and nothing more is reported of it (ERR-9).
+    fn unproved_payload(&mut self, base: &Expr, what: &str) {
+        // ERR-4: "Nullable code/context observations require presence
+        // checking".
+        let rule = match &base.ty {
+            Type::Nullable(inner) if **inner == Type::ErrorContext => "ERR-4",
+            _ => "ERR-12",
+        };
+        self.diagnostics.emit(
+            error(
+                Category::Type,
+                codes::NULLABLE_REQUIRED_PRESENCE,
+                base.at,
+                format!(
+                    "this is `{}`, and {what} of it is read where it may be null",
+                    base.ty
+                ),
+                rule,
+            )
+            .with_note(
+                "bind it with `let` and test it against null: `if value == null { return ... }`",
+            ),
+        );
+    }
+
     /// `base[index]`: an element of a list or a tuple, or the value a
     /// dictionary has for a key (EXPR-7; ERR-6: "Ordinary/atomic
     /// dictionary brackets ... are strict point-in-time reads"). Any
@@ -11333,6 +11346,17 @@ impl<'a> Typer<'a> {
                     ),
                     "EXPR-7",
                 ));
+                (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
+            }
+            // ERR-12: an element of the payload of a nullable is read
+            // where a test against null has proved it present.
+            Type::Nullable(inner)
+                if matches!(
+                    **inner,
+                    Type::List { .. } | Type::Tuple(_) | Type::Dict { .. }
+                ) =>
+            {
+                self.unproved_payload(&base, "an element");
                 (self.expression(&index, Some(&Type::Unknown)), Type::Unknown)
             }
             _ => (self.expression(&index, Some(&Type::Unknown)), Type::Unknown),
@@ -14317,6 +14341,24 @@ fn label_of(label: &Expr) -> Option<Label> {
             _ => None,
         },
     }
+}
+
+/// True when a value of `ty` has members that `value.member` reads: a
+/// struct's fields, a native type's properties, a result's payloads, an
+/// error's and its context's parts, and a delta's properties. An
+/// `atomic<S>` under a `?` is an input that may be omitted, and is not
+/// one (TYPE-14).
+fn has_members(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Named {
+            kind: NamedKind::Struct | NamedKind::Native,
+            ..
+        } | Type::Result { .. }
+            | Type::Error
+            | Type::ErrorContext
+            | Type::Delta(_)
+    )
 }
 
 /// True when a type is known all the way down: no part of it is
