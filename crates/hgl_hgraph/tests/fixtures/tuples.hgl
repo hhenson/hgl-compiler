@@ -230,6 +230,11 @@ fn shape_id(id: i64, radius: i64) -> i64 => as_shape(id, radius).id
 fn square_id(id: i64) -> i64 => id_of(square(id))
 fn renamed_id(id: i64) -> i64 => id_changes(renamed(id))
 fn circle_changes(id: i64, radius: i64) -> i64 => id_changes(circle(id, radius))
+fn shape_and(parts: tuple<Shape, i64>) -> i64 {
+    when { return parts[0].id + parts[1] }
+}
+
+fn shape_pair(id: i64, radius: i64) -> i64 => shape_and((circle(id, radius), radius))
 fn kept_shape(id: i64, radius: i64) -> i64 {
     let shape: Shape = circle(id, radius)
     return id_of(shape)
@@ -242,6 +247,7 @@ test an_abstract_struct_ticks_by_its_own_fields {
     assert eval(renamed_id(id: [7, 8])) == [7, 8]
     assert eval(circle_changes(id: [1, _, 2], radius: [5, 6, _])) == [1, _, 2]
     assert eval(kept_shape(id: [1, _], radius: [5, 6])) == [1, _]
+    assert eval(shape_pair(id: [1, 2], radius: [3, _])) == [4, 5]
 }
 
 # TIME-7: a whole struct published sets each field, a struct field's by

@@ -6071,7 +6071,9 @@ impl Emitter<'_> {
     /// own (TYPE-9: tuples map "to child fields"). An entry that is a
     /// value, known where the graph is built, is a constant connection
     /// of its position's type, which hgraph makes of a value that
-    /// publishes whole and is not null.
+    /// publishes whole and is not null. A connection of a struct whose
+    /// position is an abstract struct it inherits from is narrowed to
+    /// it (`narrowed`).
     fn connected_tuple(&mut self, function: &Function, value: &Expr, entries: &[Expr]) -> String {
         let Some(bundle) = self.annotation(&value.ty, true, value.at) else {
             return "None".to_string();
@@ -6085,6 +6087,14 @@ impl Emitter<'_> {
                 return "None".to_string();
             }
             let written = self.expression(function, entry);
+            // A connection of a struct where its position is an abstract
+            // struct it inherits from is that struct's bundle (TYPE-3).
+            let written = match &value.ty {
+                Type::Tuple(positions) if index < positions.len() => {
+                    self.narrowed(function, &positions[index], entry, written)
+                }
+                _ => written,
+            };
             given.push(format!("{}={written}", position(index)));
         }
         format!("{bundle}.from_ts({})", given.join(", "))

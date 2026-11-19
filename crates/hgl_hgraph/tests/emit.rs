@@ -7739,6 +7739,9 @@ fn a_temporal_tuple_and_struct_are_written_by_their_parts() {
         format!("def id_of(shape: {shape}) -> _hg.TS[_py.int]:"),
         format!("    return _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
         format!("    shape = _core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",))"),
+        format!(
+            "from_ts(_0=_core.narrowed(circle(id=id, radius=radius), {shape}, (\"id\",)), _1=radius)"
+        ),
         "    return _core.bundled(Square(id=id.value, side=1), {\"id\": None})".to_string(),
         // TIME-7: a whole struct with a struct field and a set field.
         "{\"quote\": {\"bid\": None, \"ask\": None}, \"size\": None})".to_string(),
