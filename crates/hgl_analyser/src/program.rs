@@ -10,8 +10,9 @@ use hgl_parser::ast::{AstNode, SourceFile};
 use hgl_parser::{HasSpan, SyntaxNode};
 use hgl_source::FileId;
 
+use crate::declared::{names_one_of, substitute_within};
 use crate::hir::{Body, Expr, Run};
-use crate::types::{CallArguments, Detail, NamedKind, Type, WrittenType};
+use crate::types::{Argument, CallArguments, Detail, GenericKind, NamedKind, Type, WrittenType};
 
 /// Every module found in the files analysed, in order of module path.
 #[derive(Debug, Clone, Default)]
@@ -112,6 +113,54 @@ impl Program {
         self.modules
             .binary_search_by(|module| module.path.as_str().cmp(path))
             .ok()
+    }
+
+    /// The type of each field the struct `ty` has, in the struct's
+    /// order, with the generic arguments `ty` gives in place of the
+    /// struct's parameters. TYPE-4: "So has a struct's own field, with
+    /// the arguments the struct is given: the `value: T` of a
+    /// `Box<i64?>` is optional." `None` where `ty` is no struct. A field
+    /// whose type still names a parameter of the struct, one that is
+    /// given no argument, is not known, [`Type::Unknown`].
+    pub fn field_types(&self, ty: &Type) -> Option<Vec<Type>> {
+        let Type::Named {
+            module,
+            declaration,
+            arguments,
+            kind: NamedKind::Struct,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        let Some(Detail::Struct(read)) = self.modules.get(*module)?.details.get(*declaration)
+        else {
+            return None;
+        };
+        // An argument is given to each parameter before a type pack,
+        // place for place (GEN-2); a pack takes a sequence of them, which
+        // is not put in place here.
+        let map: Vec<(Location, &Argument)> = read
+            .generics
+            .iter()
+            .take_while(|generic| !matches!(generic.kind, GenericKind::Pack { .. }))
+            .map(|generic| generic.at)
+            .zip(arguments)
+            .collect();
+        let own: Vec<Location> = read.generics.iter().map(|generic| generic.at).collect();
+        Some(
+            read.members
+                .iter()
+                .map(|member| {
+                    let ty = substitute_within(&member.ty, &map);
+                    if names_one_of(&ty, &own) {
+                        Type::Unknown
+                    } else {
+                        ty
+                    }
+                })
+                .collect(),
+        )
     }
 }
 
