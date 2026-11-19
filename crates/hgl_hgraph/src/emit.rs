@@ -182,7 +182,7 @@ enum Lifts<'a> {
 }
 
 /// Names as a Python tuple of strings: `("a", "b")`.
-fn tuple(names: &[String]) -> String {
+pub(super) fn tuple(names: &[String]) -> String {
     let quoted: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
     // A tuple of one needs its comma.
     format!(
@@ -448,7 +448,7 @@ pub(crate) fn name(written: &str) -> String {
 /// number of `hgl_`, gets one more `hgl_`. No two names give one, as
 /// for [`name`]. The provider's `member` does the same for a member
 /// constructed from its name.
-fn member_name(written: &str) -> String {
+pub(super) fn member_name(written: &str) -> String {
     let mut rest = written;
     while let Some(inner) = rest.strip_prefix("hgl_") {
         rest = inner;
@@ -463,7 +463,7 @@ fn member_name(written: &str) -> String {
 /// `_hgl_4demo_4util` for `demo.util`. Each part of the path has its
 /// length before it, so that two paths never give one name, whatever
 /// `_` they hold: `a_.b` is `_hgl_2a__1b`, and `a._b` is `_hgl_1a_2_b`.
-fn alias(path: &str) -> String {
+pub(super) fn alias(path: &str) -> String {
     let parts: Vec<String> = path
         .split('.')
         .map(|part| format!("{}{part}", part.len()))
@@ -472,7 +472,7 @@ fn alias(path: &str) -> String {
 }
 
 /// A string as a Python literal.
-fn string(text: &str) -> String {
+pub(super) fn string(text: &str) -> String {
     let mut out = String::from("\"");
     for character in text.chars() {
         match character {
@@ -611,7 +611,7 @@ enum Timer {
 
 /// A type as part of a native function's name: `i64` as it is, and any
 /// other character than a letter or a digit as `_`.
-fn mangled(ty: &Type) -> String {
+pub(super) fn mangled(ty: &Type) -> String {
     ty.to_string()
         .chars()
         .map(|character| {
@@ -781,7 +781,7 @@ fn continued(statements: &[Stmt], rest: &[Stmt]) -> Vec<Stmt> {
 /// of one of those names is taken under a name of the target's own,
 /// `_taken_name`, which the child's first lines give it back
 /// (`Emitter::renamed`).
-fn taken_name(python: &str) -> String {
+pub(super) fn taken_name(python: &str) -> String {
     const KEPT: [&str; 7] = [
         "key",
         "cases",
@@ -1398,7 +1398,7 @@ impl<'a> Emitter<'a> {
     /// `_inst_`, the name the declaration would have, and the
     /// instance's generic arguments. The `_` first makes the name the
     /// target's own.
-    fn instance_name(&self, module: usize, declaration: usize, suffix: &str) -> String {
+    pub(super) fn instance_name(&self, module: usize, declaration: usize, suffix: &str) -> String {
         format!(
             "_inst_{}__{suffix}",
             self.definition_name(module, declaration)
@@ -1408,7 +1408,7 @@ impl<'a> Emitter<'a> {
     /// The Python name of what a call of `declaration` of `module`
     /// calls: the function, or for a declaration written by instance,
     /// its instance for the call's generic arguments `generics`.
-    fn called_name(
+    pub(super) fn called_name(
         &mut self,
         (module, declaration): (usize, usize),
         generics: &[GenericArgument],
@@ -1567,7 +1567,7 @@ impl<'a> Emitter<'a> {
     /// The Python name of the enum or the struct `declaration` of
     /// `module`. One of another module is named through that module, as
     /// a function is.
-    fn type_name(&mut self, module: usize, declaration: usize) -> String {
+    pub(super) fn type_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = name(&declared.declarations[declaration].name);
         self.piece.uses.insert((module, declaration, None));
@@ -8547,7 +8547,7 @@ impl<'a> Emitter<'a> {
     /// GEN-5 lets an operator have a temporal and a value candidate "of
     /// the same parameter types", as FN-4 lets a name have both. The
     /// value one of such a pair is `_value_impl_add__f64_i64`.
-    fn definition_name(&self, module: usize, index: usize) -> String {
+    pub(super) fn definition_name(&self, module: usize, index: usize) -> String {
         let declared = &self.program.modules[module];
         let declaration = &declared.declarations[index];
         if let DeclarationKind::Implementation(role, _) = declaration.kind {
@@ -8599,7 +8599,7 @@ impl<'a> Emitter<'a> {
     /// of another module is named through that module, which is
     /// imported under a name of its own: two modules may each have a
     /// `pick`, and this one a `pick` too.
-    fn function_name(&mut self, module: usize, declaration: usize) -> String {
+    pub(super) fn function_name(&mut self, module: usize, declaration: usize) -> String {
         let declared = &self.program.modules[module];
         let python = self.definition_name(module, declaration);
         self.piece.uses.insert((module, declaration, None));
@@ -9289,7 +9289,7 @@ impl<'a> Emitter<'a> {
 /// type has its module's path before it: two modules may each declare
 /// a `Quote`. `None` for a type that is not whole as the module is
 /// written: one that names a generic parameter, or is not known.
-fn canonical(program: &Program, ty: &Type) -> Option<String> {
+pub(super) fn canonical(program: &Program, ty: &Type) -> Option<String> {
     let one = |ty: &Type| canonical(program, ty);
     Some(match ty {
         Type::Scalar(scalar) => scalar.as_str().to_string(),
@@ -9378,7 +9378,7 @@ fn canonical_constant(constant: &Constant) -> Option<String> {
 /// hgraph's bundle with no name that the tuple is (`tuple_annotation`):
 /// `_0`, `_1`. A tuple's fields are its positions, and no name of the
 /// program's.
-fn position(index: usize) -> String {
+pub(super) fn position(index: usize) -> String {
     format!("_{index}")
 }
 
@@ -9514,7 +9514,7 @@ fn owns(program: &Program, function: &Function, local: usize) -> bool {
 /// An endpoint of a node, an input or its `inject out`, as the node's
 /// code names it: an input by its name, and the node's own output as
 /// hgraph's `_output`.
-fn endpoint_name(endpoint: &Local) -> String {
+pub(super) fn endpoint_name(endpoint: &Local) -> String {
     if endpoint.kind == LocalKind::Inject {
         "_output".to_string()
     } else {
