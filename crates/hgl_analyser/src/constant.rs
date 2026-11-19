@@ -316,8 +316,10 @@ pub(crate) fn fit(
     program: &Program,
 ) -> Result<ConstantValue, Fault> {
     // TYPE-7: "With no enum type expected, `.member` rejects": `any` is
-    // no enum's type.
-    if read.open == Open::Member && expected == Some(&Type::Scalar(Scalar::Any)) {
+    // no enum's type, nor gives one to a list's or a tuple's elements.
+    if expected == Some(&Type::Scalar(Scalar::Any))
+        && (read.open == Open::Member || implies(&read.value))
+    {
         return Err(Fault::NoEnum);
     }
     let Some(expected) = expected.filter(|expected| !unknown(expected)) else {
@@ -1671,11 +1673,15 @@ pub(crate) fn combined(
         }
     }
     // EXPR-6: "Boolean connectives short-circuit left to right": the
-    // right operand of `false &&` and of `true ||` is not needed, and
-    // need not be worked out (`binary` holds it to a `bool`).
-    match (operator, left) {
-        (Op::And, V::Bool(false)) => return V::Bool(false),
-        (Op::Or, V::Bool(true)) => return V::Bool(true),
+    // right operand of `false &&` and of `true ||` is not needed where
+    // it is a parameter or a constant not yet given its value, which
+    // `binary` holds to a `bool`. One not worked out stays so: it may
+    // be an operation of no type (`1 + "a"`) as well as one that fails.
+    match (operator, left, right) {
+        (Op::And, V::Bool(false), V::Parameter { .. } | V::Named { .. }) => {
+            return V::Bool(false);
+        }
+        (Op::Or, V::Bool(true), V::Parameter { .. } | V::Named { .. }) => return V::Bool(true),
         _ => {}
     }
     if matches!(left, V::Unknown) || matches!(right, V::Unknown) {
