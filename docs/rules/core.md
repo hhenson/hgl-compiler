@@ -348,13 +348,14 @@ transpiler: partial
 - A fixed list's delta, `REMOVE` for a position that lost its value; an unsized list's, hgraph 0.9.5's `TSLDelta`: the new size where it moves, never a negative one, and on a shrink the dropped tail in `removed`, also for a smaller `size_modified` alone and a negative one, which the provider counts from what the list holds, to empty at most; growth by an entry after the last and past it, the positions between not valid
 - A fixed list's entry past its bounds, and a `size_modified` that moves its size, fails the write
 - A child's (`_core.child_delta`), which fails with `value.unset_read` where it is not valid
-- Left: an entry at or past a `size_modified` written with it, and a removed position the list never held, which neither rule settles: each fails as the graph runs, named as not written
+- A removed position the list does not hold lost no value, and is ignored: nothing fails and nothing is lost (the owner's decision on hhenson/hgl_spec#124, as for a dictionary's absent key)
+- An entry at or past a `size_modified` written with it contradicts the delta and fails the write as the graph runs, with no execution code (the owner's decision on hhenson/hgl_spec#124: "a failure"); a constant one is not yet rejected when compiled (TYPE-16)
 
 ## END-4
 
 transpiler: partial
 
-- hgraph: `invalidate(out)` clears the output
+- hgraph: `invalidate(out)` clears the output; one that holds an unsized list empties each list first (`_core.invalidated`), since hgraph's `TSL` keeps its positions, which the next delta read would name removed
 - An active input's transition to invalid wakes the node
 - In a body or handler guard, `modified(input)` is false on invalidation, whether the input is active or passive
 - Repeated scalar invalidation is silent and a scalar producer's last action decides its final validity
@@ -401,7 +402,7 @@ analyser: done
 
 transpiler: partial
 
-- hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed or an unsized list (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
+- hgraph: a child's endpoint is hgraph's child of the input or of `out`, `_core.position_of` of a fixed list and `_core.list_position` of an unsized one (hgraph 0.9.5's unbounded `TSL`), a bundle's field and `_core.entry_port`; a position an unsized list does not hold, before it publishes, while it is short or after a shrink, is a child that is not valid, as an absent key is; a child admitted is read through it, never through its siblings, and its delta as a direct input's of its type is (`language_delta`, a tuple's by `_core.positions`); a read at a run-time index fails with `value.unset_read` where the child is not valid, or gives `err` where a `result<T, error>` is expected
 
 ## CAP-1
 

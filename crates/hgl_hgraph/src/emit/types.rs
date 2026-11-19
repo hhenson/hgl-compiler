@@ -319,6 +319,55 @@ pub(super) fn holds_growing_list(program: &Program, ty: &Type) -> bool {
     within(program, ty, 0)
 }
 
+/// Where a temporal value of `ty`, an unsized list, a struct or a tuple,
+/// holds an unsized list through its own fields and positions, the
+/// provider's shape of it for `published_into` and `invalidated`:
+/// `"list"` for the list, a `dict` of the fields that hold one for a
+/// struct, and a tuple of each position's, `None` where it holds none,
+/// for a tuple. `None` where `ty` holds none so: a fixed list's and a
+/// dictionary's are each hgraph's child that a delta may add, and a
+/// delta of one that holds an unsized list's is reported where it is
+/// made (`nested_list_delta`).
+pub(super) fn list_parts_shape(program: &Program, ty: &Type) -> Option<String> {
+    fn within(program: &Program, ty: &Type, depth: usize) -> Option<String> {
+        if depth > HELD_DEPTH {
+            return None;
+        }
+        match ty {
+            Type::List { size: None, .. } => Some("\"list\"".to_string()),
+            Type::Tuple(elements) => {
+                let parts: Vec<Option<String>> = elements
+                    .iter()
+                    .map(|element| within(program, element, depth + 1))
+                    .collect();
+                if parts.iter().all(Option::is_none) {
+                    return None;
+                }
+                let written: Vec<String> = parts
+                    .into_iter()
+                    .map(|part| part.unwrap_or_else(|| "None".to_string()))
+                    .collect();
+                Some(format!("({},)", written.join(", ")))
+            }
+            Type::Named {
+                kind: NamedKind::Struct,
+                ..
+            } => {
+                let written: Vec<String> = fields_of(program, ty)?
+                    .into_iter()
+                    .filter_map(|(member, field)| {
+                        let part = within(program, &field, depth + 1)?;
+                        Some(format!("{}: {part}", string(&name(&member.name))))
+                    })
+                    .collect();
+                (!written.is_empty()).then(|| format!("{{{}}}", written.join(", ")))
+            }
+            _ => None,
+        }
+    }
+    within(program, ty, 0)
+}
+
 /// Where a temporal value of `ty` holds a list, fixed or unsized, as a
 /// part at any depth, itself among them: the provider's shape of it for
 /// `valid_of` and `all_valid_of`, `("list", part)`, `("fields", {name:

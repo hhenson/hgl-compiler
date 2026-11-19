@@ -135,7 +135,18 @@ impl Emitter<'_> {
                     }
                     // END-4: "Invalidation clears validity,
                     // modification, payload, and delta."
-                    EndpointOperation::Invalidate => format!("{input}.invalidate()"),
+                    // hgraph's unbounded `TSL` keeps its positions when
+                    // it is invalidated, which the next delta read would
+                    // name removed: the provider empties each list first.
+                    EndpointOperation::Invalidate => {
+                        match list_parts_shape(self.program, &endpoint.ty) {
+                            Some(shape) => {
+                                self.natives = true;
+                                format!("_core.invalidated({input}, {shape})")
+                            }
+                            None => format!("{input}.invalidate()"),
+                        }
+                    }
                     // TIME-9: input activity controls delivery of notifications.
                     EndpointOperation::Activate => format!("{input}.make_active()"),
                     EndpointOperation::Passivate => format!("{input}.make_passive()"),
@@ -537,20 +548,35 @@ impl Emitter<'_> {
                 // hgraph's `TSL` by a position known where the graph is
                 // built, and from its `TSD` by a key that may be a
                 // connection: a key that ticks selects another child.
-                if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
-                    self.unsupported(value.at, "a list's element at a position that ticks");
-                    return "None".to_string();
-                }
                 // TIME-1: "A child of a collection ... is an endpoint
                 // whether or not it is valid". hgraph's `getitem_` of an
                 // unbounded `TSL` fails the run where the list no longer
-                // holds the position, where the child is not valid.
-                if growing_list(&base.ty) {
-                    self.unsupported(
-                        value.at,
-                        "an element of an unsized list's connection in a graph: hgraph 0.9.5's \
-                         `getitem_` fails where the list does not hold it",
-                    );
+                // holds the position, so the provider's node selects it,
+                // by a position known where the graph is built or one that
+                // ticks: a connection that is not valid while the list does
+                // not hold the position, as a dictionary's absent key's is.
+                if let Type::List {
+                    element,
+                    size: None,
+                } = &base.ty
+                {
+                    if !publishes_whole(element) {
+                        self.unsupported(value.at, "an element of an unsized list of composites");
+                        return "None".to_string();
+                    }
+                    let connected = self.connects(function, index);
+                    let base = self.expression(function, base);
+                    let index = self.expression(function, index);
+                    let index = if connected {
+                        index
+                    } else {
+                        format!("_hg.const({index}, tp=_hg.TS[_py.int])")
+                    };
+                    self.natives = true;
+                    return format!("_core.position_in({base}, {index})");
+                }
+                if matches!(base.ty, Type::List { .. }) && self.connects(function, index) {
+                    self.unsupported(value.at, "a list's element at a position that ticks");
                     return "None".to_string();
                 }
                 // ERR-6: a dictionary's brackets "are strict
@@ -973,6 +999,9 @@ impl Emitter<'_> {
             }
             ExprKind::Index { base, index } => {
                 let of = match &base.ty {
+                    // TIME-1: a position an unsized list does not hold is
+                    // a child that is not valid, as an absent key's is.
+                    Type::List { size: None, .. } => "list_position",
                     Type::List { .. } => "position_of",
                     // An absent key's entry is a child that is not valid
                     // (TIME-1), read or named alike.
@@ -1083,17 +1112,18 @@ impl Emitter<'_> {
         validity_shape(self.program, ty).map_or(String::new(), |shape| format!(", {shape}"))
     }
 
-    /// Reports `argument`, a property of a delta of a struct, a list or
-    /// a dictionary that the program makes, where its value holds an
+    /// Reports `argument`, a property of a delta of a list or a
+    /// dictionary that the program makes, where its value holds an
     /// unsized list's delta (TYPE-16): hgraph applies such a nested
     /// `TSLDelta` as it is, and fails the run for a negative size, which
-    /// the provider counts only for the list at the node's own output
-    /// (`list_applied`).
+    /// the provider counts only for a list whose port the node's own
+    /// output has (`published_into`), and a position or a key the
+    /// delta adds has none yet. A struct's and a tuple's are counted.
     fn nested_list_delta(&mut self, argument: &Argument) {
         if holds_growing_list(self.program, &argument.value.ty) {
             self.unsupported(
                 argument.value.at,
-                "an unsized list's delta inside the delta of a struct, a list or a dictionary",
+                "an unsized list's delta inside the delta of a list or a dictionary",
             );
         }
     }
@@ -1243,15 +1273,22 @@ impl Emitter<'_> {
             // TYPE-9: "lists to child positions". A list's value is each
             // child's, in order: hgraph's own tuple of them, fixed or
             // unbounded, where each child publishes whole, made a Python
-            // `list`. A required element that is not valid, one removed or
-            // past a gap, leaves no whole value (`list_value`); an optional
-            // one is null.
-            Type::List { element, .. } if whole_scalar(element) => {
+            // `list` (`list_value`). TIME-1's table: a position of an
+            // unsized list "that holds no value, a gap or one removed
+            // (TYPE-16), reads in the whole value ... as that type's value
+            // for 'not set' where it has one", NaN for an `f64`; an
+            // optional element reads null, "as an optional child that is
+            // not valid is in any whole value (TYPE-15)", of a fixed list
+            // too; any other fails the read, and so does a fixed list
+            // that is not all valid.
+            Type::List { element, size } if publishes_whole(element) => {
                 self.natives = true;
-                return format!("_core.list_value({port})");
-            }
-            Type::List { element, .. } if publishes_whole(element) => {
-                return format!("_py.list({port}.value)");
+                let hole = match (&**element, size) {
+                    (Type::Nullable(_), _) => ", None",
+                    (Type::Scalar(Scalar::F64), None) => ", _py.float(\"nan\")",
+                    _ => "",
+                };
+                return format!("_core.list_value({port}{hole})");
             }
             // An element of composites is read as a part is
             // (`part_value_at`): each of its own required parts where it is
@@ -1347,11 +1384,12 @@ impl Emitter<'_> {
     /// `part_value` of a port read inside `depth` comprehensions.
     fn part_value_at(&mut self, ty: &Type, port: &str, depth: usize, at: Location) -> String {
         let read = self.port_value_at(ty, port, depth, at);
-        // A list of required elements that publish whole is read whole
-        // from its `TSL` where each of them is valid, and fails otherwise
-        // (`list_value`). One of composites reads each element as a part,
-        // whose own optional parts may be invalid.
-        if matches!(ty, Type::List { element, .. } if whole_scalar(element)) {
+        // A list of elements that publish whole is read whole from its
+        // `TSL`, which holds it to its own `valid` and fills or fails at
+        // a position that holds no value (`list_value`). One of
+        // composites reads each element as a part, whose own optional
+        // parts may be invalid.
+        if matches!(ty, Type::List { element, .. } if publishes_whole(element)) {
             return read;
         }
         let ready = self.valid_test(ty, port);
@@ -1528,7 +1566,6 @@ impl Emitter<'_> {
             let program = self.program;
             let mut written = Vec::new();
             for argument in arguments {
-                self.nested_list_delta(argument);
                 let given = self.expression(function, &argument.value);
                 if let Some(field) = argument
                     .parameter

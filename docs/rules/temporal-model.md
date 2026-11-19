@@ -16,7 +16,7 @@ transpiler: done
 
 - hgraph: an input's `valid`, `modified`, `value` and `delta_value`
 - Silence runs no node; an equal publication is a tick; `valid` reads an invalid input in `when valid([])`
-- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.5's unbounded `TSL`)
+- A child is hgraph's own child of the input (`_core.position_of`, `quote["bid"]`, `_core.entry_port`, one not valid where the key is absent); a read checked when it runs fails with `value.unset_read` where the child is not valid (`_core.checked_child`); an unsized list's position is its own, valid or not (hgraph 0.9.5's unbounded `TSL`), and one it does not hold is a child that is not valid (`_core.list_position`): `valid` and `modified` false, `last_modified` null, a read failing with `value.unset_read` or giving that `err` where a `result` is expected
 
 ## TIME-2
 
@@ -107,7 +107,8 @@ transpiler: partial
 - A whole dictionary published removes each key it has not (`_core.dict_replaced`)
 - An unsized list's `out`, hgraph 0.9.5's unbounded `TSL`: a whole value replaces what it held, a delta's size is counted from what it holds, `out[i] = v` is `_core.list_child(_output, i)`, which fails past the list, and two writes in one evaluation publish their sum (END-5); a publication that changes nothing hgraph sees, an empty list first among them, still ticks
 - A part of `out` read is its own port, a fixed list's and an unsized list's position among them
-- Left: a place inside an entry of a dictionary `out`; an empty unsized list inside a value a source yields or an entry of `out` holds, which hgraph does not tick for and which has no port there, fails as the graph runs
+- A struct's or a tuple's delta that holds an unsized list's delta is published through the output, each list's size counted from what it holds (`_core.published_into`); a source's node publishes what it yields so when it is due, an empty list in a struct among them
+- Left: a place inside an entry of a dictionary `out`; an empty unsized list assigned to an entry or a list's position of `out`, which hgraph does not tick for and which has no port of its own where it is written, fails as the graph runs
 
 ## TIME-8
 
