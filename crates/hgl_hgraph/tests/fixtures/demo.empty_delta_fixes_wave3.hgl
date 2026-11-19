@@ -1,0 +1,116 @@
+module demo.empty_delta_fixes_wave3
+
+# TIME-7, as the specification's `main` has it (the owner's decision on
+# hhenson/hgl_spec#124, written there by hhenson/hgl_spec#141, after this
+# compiler's pin): "A delta that names no change ... ticks only where it
+# changes validity. Where a `list<V>`, a dictionary or a set is not valid,
+# never published or invalidated, it makes the value valid and empty, and
+# ticks. Where it is valid the delta changes nothing, and is no tick ... A
+# struct, a tuple and a `list<V, N>` are valid where a child is (TIME-9),
+# and such a delta of one, `delta<Quote>()`, sets no child: it changes no
+# validity, and is never a tick. ... A value published whole, the same
+# again or empty, is no delta, and ticks as any publication does". Core's
+# END-4: "Invalidation clears validity, modification, payload, and delta."
+
+# Each reader below publishes at each wake (TIME-3): what the value holds,
+# ten for each member, key or element and the sum of them, or -1 where it
+# is not valid. A tick that does not come, or a value emptied or kept, is
+# seen in what it publishes.
+const fn member_total(members: set<i64>) -> i64 {
+    var total: i64 = 0
+    for member in members { total += member + 10 }
+    return total
+}
+
+const fn entry_total(book: dict<str, i64>) -> i64 {
+    var total: i64 = 0
+    for key, price in book { total += price + 10 }
+    return total
+}
+
+const fn element_total(readings: list<i64>) -> i64 {
+    var total: i64 = 0
+    for reading in readings { total += reading + 10 }
+    return total
+}
+
+fn members_read(members: set<i64>) -> i64 {
+    when valid([]) {
+        if valid(members) { return member_total(members) }
+        return -1
+    }
+}
+
+fn book_read(book: dict<str, i64>) -> i64 {
+    when valid([]) {
+        if valid(book) { return entry_total(book) }
+        return -1
+    }
+}
+
+fn readings_read(readings: list<i64>) -> i64 {
+    when valid([]) {
+        if valid(readings) { return element_total(readings) }
+        return -1
+    }
+}
+
+fn relay_members(members: set<i64>) -> set<i64> {
+    when { return delta_value(members) }
+}
+
+# A struct and a tuple that hold a set: each reader publishes what the set
+# holds where it is modified.
+struct Bag {
+    members: set<i64>
+    count: i64
+}
+
+fn bag_members(bag: Bag) -> i64 {
+    when valid([]) {
+        if valid(bag.members) && modified(bag.members) { return member_total(bag.members) }
+        return -1
+    }
+}
+
+fn pair_members(pair: tuple<i64, set<i64>>) -> i64 {
+    when valid([]) {
+        if valid(pair[1]) && modified(pair[1]) { return member_total(pair[1]) }
+        return -1
+    }
+}
+
+# ---- 2. A source's set, as a node's ----
+#
+# SOURCE-1: a `yield` publishes as a `return` does (TIME-7). A delta that
+# names no change ticks where it makes the set valid, and not after; a
+# whole empty set, given again, ticks each time.
+fn yielded_members() -> set<i64> {
+    yield 1s: delta<set<i64>>()
+    yield 1s: delta<set<i64>>()
+    yield 1s: []
+    yield 1s: []
+    yield 1s: delta<set<i64>>(added: [1])
+    yield 1s: delta<set<i64>>(removed: [9])
+    yield 1s: delta<set<i64>>(added: [2])
+}
+
+fn yielded_members_read() -> i64 => members_read(yielded_members())
+
+test a_source_set_ticks_as_a_node_does {
+    assert eval(yielded_members_read(), RunConfig(length: 8s)) == [
+        1s: 0, 3s: 0, 4s: 0, 5s: 11, 7s: 23,
+    ]
+}
+
+# A struct's set yielded whole, empty, twice.
+fn yielded_bags() -> Bag {
+    yield 1s: Bag(members: [], count: 1)
+    yield 1s: Bag(members: [], count: 1)
+}
+
+fn yielded_bag_members() -> i64 => bag_members(yielded_bags())
+
+test a_sources_struct_with_an_empty_set_ticks_its_set {
+    assert eval(yielded_bag_members(), RunConfig(length: 3s)) == [1s: 0, 2s: 0]
+}
