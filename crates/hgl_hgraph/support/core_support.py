@@ -1568,19 +1568,12 @@ def set_replaced(output, value):
 
     TIME-7: "A value published whole, the same again or empty, is no
     delta, and ticks as any publication does". hgraph's `TSS` does not
-    tick for one that leaves it as it was, and is made to: an empty one
-    by `clear`, which publishes the set emptied, and one the same again
-    that is not empty by one of its members removed and added again in
-    this evaluation, which leaves the set as it was and nothing in the
-    delta read. Nothing more is then published."""
-    if not value:
-        output.clear()
-    elif output.valid and not output.modified and frozenset(output.value) == value:
-        member = next(iter(value))
-        output.remove(member)
-        output.add(member)
-    else:
+    tick for an empty one where it holds none, valid or not, and is made
+    to (`clear`), which publishes the set emptied; nothing more is then
+    published. One the same again that is not empty does not tick."""
+    if value:
         return value
+    output.clear()
     return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
 
 
@@ -1603,11 +1596,8 @@ def whole_delta(value, keys, fixed=False, size=0, shape=None):
     if isinstance(value, (set, frozenset)):
         added, removed = frozenset(value - keys), frozenset(keys - value)
         members = added | removed
-        # hgraph's `TSS` takes a `frozenset` as all it now holds, and the
-        # empty one as nothing: a whole value that changes nothing is the
-        # delta that names no change (TIME-7).
         if not members:
-            return _set_delta(added=frozenset(), removed=frozenset(), tp=object)
+            return frozenset()
         return _set_delta(added=added, removed=removed, tp=type(next(iter(members))))
     if isinstance(value, dict):
         made = {key: _REMOVE for key in keys if key not in value}
