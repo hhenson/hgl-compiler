@@ -24,7 +24,7 @@ use hgl_parser::{HasSpan, SyntaxKind, SyntaxNode, SyntaxToken};
 use hgl_source::FileId;
 
 use crate::program::{Declaration, DeclarationKind, Phase, Program, Role};
-use crate::read::{child, tokens};
+use crate::syntax::{child, tokens};
 use crate::types::Detail;
 use crate::{codes, error};
 

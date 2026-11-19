@@ -7184,7 +7184,9 @@ fn a_graph_sets_the_store_where_it_is_built() {
 
 /// OPS-4: "`convert<T>(value)` converts a value to the type T." OPS-6
 /// says what each conversion yields, OPS-7 which can fail, and OPS-8
-/// their options.
+/// their options. Its tests assert what core's own
+/// (`tests/implementation/conversions.hgl`, run by `check_core.py`)
+/// does not.
 const CONVERSIONS: &str = concat!(
     "module demo.converted\n",
     "const fn as_float(value: i64) -> f64 => convert<f64>(value)\n",
@@ -7221,48 +7223,12 @@ const CONVERSIONS: &str = concat!(
     "fn floats(value: i64) -> f64 => convert<f64>(value)\n",
     "fn wholes(value: f64) -> i64 => convert<i64>(value, rounding: .half_even, invalid: .fail)\n",
     "test conversions {\n",
-    "    assert as_float(3) == 3.0\n",
-    // "False for zero, true otherwise; NaN is true".
-    "    assert as_flag(0.0) == false\n",
-    "    assert as_flag(0.5)\n",
-    "    assert as_flag(0.0 /{zero: .nan} 0.0)\n",
-    "    assert convert<bool>(7) && !convert<bool>(0)\n",
-    // "0 or 1".
-    "    assert convert<i64>(true) == 1 && convert<i64>(false) == 0\n",
-    "    assert convert<f64>(true) == 1.0\n",
-    "    assert convert<str>(false) == \"false\" && convert<str>(true) == \"true\"\n",
-    // OPS-8: each rounding. `.truncate`, the default, is toward zero.
-    "    assert as_whole(2.9) == 2 && as_whole(-2.9) == -2\n",
-    "    assert rounded(-2.5, .floor) == -3 && rounded(-2.5, .ceiling) == -2\n",
-    "    assert rounded(2.5, .half_even) == 2 && rounded(3.5, .half_even) == 4\n",
-    "    assert rounded(2.5, .half_up) == 3 && rounded(-2.5, .half_up) == -3\n",
-    "    assert rounded(2.5, .half_down) == 2 && rounded(-2.5, .half_down) == -2\n",
-    "    assert rounded(2.6, .half_down) == 3 && rounded(2.4, .half_up) == 2\n",
-    // OPS-7: "an `f64` that is NaN, an infinity, or outside `i64` once
-    // rounded" fails.
+    // OPS-8: the value of an `ok` a conversion gives, and the code of
+    // an `err`.
     "    assert whole_of(2.9) == 2\n",
-    "    assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)\n",
-    "    assert is_err(checked(1.0 / 0.0)) && is_err(checked(-1.0 / 0.0))\n",
-    "    assert is_err(checked(9223372036854775808.0))\n",
     "    assert whole_of(-9223372036854775808.0) == -9223372036854775807 - 1\n",
-    // OPS-8: `nan` is "the value a NaN converts to".
-    "    assert convert<i64>(0.0 /{zero: .nan} 0.0, nan: -1, invalid: .fail) == -1\n",
-    // OPS-8: under `.fail` "a failure is an escaping HGL error with
-    // that code".
-    "    assert raises(\"convert.invalid\") { as_whole(1e19) }\n",
-    "    assert raises(\"convert.invalid\") { as_whole(0.0 /{zero: .nan} 0.0) }\n",
-    "    assert raises(\"convert.invalid\") { convert<bool>(\"yes\", invalid: .fail) }\n",
-    "    assert raises(\"convert.invalid\") { convert<i64>(\"three\", invalid: .fail) }\n",
-    "    assert raises(\"convert.invalid\") { convert<f64>(\"two\", invalid: .fail) }\n",
-    // "The value of the literal the text is", and a failure for "text
-    // that is no literal of the type asked for".
+    "    assert invalid(0.0 /{zero: .nan} 0.0) && !invalid(1.0)\n",
     "    assert flag_of(\"true\") && is_ok(flag(\"false\")) && !flag_of(\"false\")\n",
-    "    assert is_err(flag(\"True\")) && is_err(flag(\"\"))\n",
-    // UTF-8, there and back.
-    "    assert round_trip(\"h\\u{e9}llo\") == \"h\\u{e9}llo\"\n",
-    // "The start of that date, in UTC", and "the date of the instant".
-    "    assert convert<datetime>(@2026-03-01) == @2026-03-01T00:00:00Z\n",
-    "    assert convert<date>(@2026-03-01T23:59:59Z) == @2026-03-01\n",
     "    assert eval(floats(value: [1, 2])) == [1.0, 2.0]\n",
     "    assert eval(wholes(value: [0.5, 1.5, 2.5])) == [0, 2, 2]\n",
     "}\n",
@@ -7282,51 +7248,13 @@ const CONVERSIONS: &str = concat!(
     "}\n",
     "fn shown(value: f64) -> str => convert<str>(value)\n",
     "test numbers_as_text {\n",
-    "    assert convert<str>(42) == \"42\" && convert<str>(-3) == \"-3\"\n",
-    "    assert convert<str>(-9223372036854775807 - 1) == \"-9223372036854775808\"\n",
-    "    assert convert<str>(3.0) == \"3.0\" && convert<str>(-2.5) == \"-2.5\"\n",
-    "    assert convert<str>(0.1 + 0.2) == \"0.30000000000000004\"\n",
-    "    assert convert<str>(-0.0) == \"-0.0\"\n",
-    "    assert convert<str>(1000000000000000.0) == \"1000000000000000.0\"\n",
-    "    assert convert<str>(10000000000000000.0) == \"1e16\"\n",
-    "    assert convert<str>(1e21) == \"1e21\" && convert<str>(1.5e300) == \"1.5e300\"\n",
-    "    assert convert<str>(0.0001) == \"0.0001\" && convert<str>(0.00001) == \"1e-5\"\n",
-    "    assert convert<str>(1.5e-7) == \"1.5e-7\"\n",
-    "    assert convert<str>(0.0 /{zero: .nan} 0.0) == \"nan\"\n",
-    "    assert convert<str>(1.0 / 0.0) == \"inf\" && convert<str>(-1.0 / 0.0) == \"-inf\"\n",
     "    assert eval(shown(value: [2.5, 1e21])) == [\"2.5\", \"1e21\"]\n",
     "}\n",
     // OPS-6: text as a number, a literal of the type after one `-`;
     // OPS-7: any other text fails.
     "test text_as_numbers {\n",
-    "    assert convert<i64>(\"42\", invalid: .fail) == 42\n",
-    "    assert convert<i64>(\"-3\", invalid: .fail) == -3\n",
-    "    assert convert<i64>(\"0x1F\", invalid: .fail) == 31\n",
-    "    assert convert<i64>(\"-0b101\", invalid: .fail) == -5\n",
-    "    assert convert<i64>(\"1_000\", invalid: .fail) == 1000\n",
     "    assert convert<i64>(\"010\", invalid: .fail) == 10\n",
-    "    assert convert<i64>(\"-9223372036854775808\", invalid: .fail) == -9223372036854775807 - 1\n",
-    "    assert is_err(convert<i64>(\"9223372036854775808\"))\n",
-    "    assert is_err(convert<i64>(\"three\")) && is_err(convert<i64>(\"\"))\n",
-    "    assert is_err(convert<i64>(\" 3\")) && is_err(convert<i64>(\"3 \"))\n",
-    "    assert is_err(convert<i64>(\"+3\")) && is_err(convert<i64>(\"--3\"))\n",
-    "    assert is_err(convert<i64>(\"3.0\")) && is_err(convert<i64>(\"1__0\"))\n",
     "    assert is_err(convert<i64>(\"0X1F\")) && is_err(convert<i64>(\"1_\"))\n",
-    "    assert convert<f64>(\"2.5\", invalid: .fail) == 2.5\n",
-    "    assert convert<f64>(\"-1e5\", invalid: .fail) == -100000.0\n",
-    "    assert convert<f64>(\"3\", invalid: .fail) == 3.0\n",
-    "    assert convert<f64>(\"1_0.5E1\", invalid: .fail) == 105.0\n",
-    "    assert convert<f64>(\"inf\", invalid: .fail) == 1.0 / 0.0\n",
-    "    assert convert<f64>(\"-inf\", invalid: .fail) == -1.0 / 0.0\n",
-    "    let nan = convert<f64>(\"nan\", invalid: .fail)\n",
-    "    assert nan != nan\n",
-    // "The text a number converts to converts back to that number".
-    "    assert again(\"0.30000000000000004\") == \"0.30000000000000004\"\n",
-    "    assert again(\"1e21\") == \"1e21\" && again(\"-0.0\") == \"-0.0\"\n",
-    "    assert again(\"nan\") == \"nan\" && again(\"-inf\") == \"-inf\"\n",
-    "    assert is_err(convert<f64>(\"1e999\")) && is_err(convert<f64>(\".5\"))\n",
-    "    assert is_err(convert<f64>(\"NaN\")) && is_err(convert<f64>(\"+inf\"))\n",
-    "    assert is_err(convert<f64>(\"2.5 \")) && is_err(convert<f64>(\"1e\"))\n",
     "    assert is_err(convert<f64>(\"5.\")) && is_err(convert<f64>(\"-nan\"))\n",
     // Text of 8192 digits: zeros before a number change nothing, and a
     // number of that many digits is outside `i64` and rounds to an
@@ -8448,31 +8376,12 @@ fn a_graph_loop_form_not_written_yet_is_reported() {
 const TUPLES: &str = include_str!("fixtures/tuples.hgl");
 
 /// TYPE-3: "Structs are nominal". A module whose structs have the names
-/// of `demo.tuples`'s, with other fields.
+/// of `demo.tuples`'s, with other fields. Two modules' structs of one
+/// name, a generic one among them, each a bundle and an atomic value,
+/// are two types to hgraph: hgraph knows a class and a bundle's schema
+/// by its module and its name. `the_generated_tests_pass_on_hgraph`
+/// loads the modules together, and each one's tests pass.
 const TUPLES_NAMES: &str = include_str!("fixtures/tuples_names.hgl");
-
-/// Two modules' structs of one name, a generic one among them, each a
-/// bundle and an atomic value, are two types to hgraph: the modules load
-/// together and each one's tests pass. hgraph knows a class and a
-/// bundle's schema by its module and its name, and each struct's are of
-/// its own module. Needs hgraph, as above.
-#[test]
-#[ignore = "needs a Python with hgraph, named by HGL_HGRAPH_PYTHON"]
-fn structs_of_one_name_in_two_modules_are_two_types_on_hgraph() {
-    let hgraph = on_hgraph("hgraph_struct_names");
-    let emitted = emit_clean(&[("tuples.hgl", TUPLES), ("tuples_names.hgl", TUPLES_NAMES)]);
-    let ran = hgraph.run_all(&emitted);
-    let not_passed: Vec<String> = emitted
-        .output
-        .tests
-        .iter()
-        .zip(&ran)
-        .filter(|(_, ran)| **ran != Ran::Passed)
-        .map(|(test, ran)| format!("{}: {ran:?}", test.identity()))
-        .collect();
-    assert_eq!(not_passed, Vec::<String>::new());
-    assert_eq!(ran.len(), 6);
-}
 
 /// A tuple is hgraph's bundle with no name, a field for each position;
 /// a generic struct's bundle has the field types its arguments give; an
