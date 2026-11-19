@@ -1328,6 +1328,18 @@ fn compared(left: &ConstantValue, right: &ConstantValue, of: &Condition) -> Opti
     told
 }
 
+/// [`same_type`] of two types a condition compares, noting in `of` where
+/// it is not told for a constant in either that is not worked out:
+/// `FBox<C>` beside `FBox<2.0>`, `C` computed by a call.
+fn typed_alike(left: &Type, right: &Type, of: &Condition) -> Option<bool> {
+    let told = same_type(left, right);
+    let unworked_in = |ty: &Type| ty.any_part(&|_| false, &|constant| unworked(&constant.value));
+    if told.is_none() && (unworked_in(left) || unworked_in(right)) {
+        of.unvalued.set(true);
+    }
+    told
+}
+
 /// The generic parameters of a function or a struct that states a
 /// `requires`, and the condition it states. `None` for one that states
 /// none.
@@ -1593,11 +1605,11 @@ pub(super) fn holds(node: &SyntaxNode, of: &Condition) -> Option<bool> {
             // while `X` is not given.
             if let Some(ty) = option(left).and_then(|name| (of.type_of)(&name)) {
                 return if has_token(node, SyntaxKind::EqEq) {
-                    same_type(&(of.written)(right)?, &ty)
+                    typed_alike(&(of.written)(right)?, &ty, of)
                 } else if within && right.kind() == SyntaxKind::ConstraintSet {
                     let mut found = Some(false);
                     for member in right.children() {
-                        match same_type(&(of.written)(&member)?, &ty) {
+                        match typed_alike(&(of.written)(&member)?, &ty, of) {
                             Some(true) => return Some(true),
                             Some(false) => {}
                             None => found = None,

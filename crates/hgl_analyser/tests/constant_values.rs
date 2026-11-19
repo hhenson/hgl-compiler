@@ -1146,7 +1146,9 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
              fn c(v: f64) -> f64 => temporal_outer<2.0>(v)\n\
              const fn d() -> i64 => int_outer<2>(5)\n\
              const fn e() -> f64 => one_only<C>(1.0)\n\
-             const fn f() -> i64 => wrap(FBox<2.0>(v: 1))\n"
+             const fn f() -> i64 => wrap(FBox<2.0>(v: 1))\n\
+             const fn only_two<T>(x: T) -> i64 requires T == FBox<2.0> => 1\n\
+             const fn g() -> i64 => only_two(FBox<C>(v: 1))\n"
         ),
         &[
             "13 requires.unmet",
@@ -1155,6 +1157,7 @@ fn a_requires_is_told_where_a_passed_on_parameter_is_given() {
             "16 requires.unmet",
             "17 requires.unmet",
             "18 requires.unmet",
+            "20 requires.unmet",
         ],
     );
 }
