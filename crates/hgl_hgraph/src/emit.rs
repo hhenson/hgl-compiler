@@ -179,7 +179,7 @@ pub(crate) fn module(
 /// arguments become inputs; scalar arguments and omitted defaults bind
 /// as configuration").
 #[derive(Clone)]
-enum Bound {
+pub(super) enum Bound {
     /// By a connection: an input of the lifted node, of this type.
     Input(Type),
     /// By a value known where the graph is built, of this type.
@@ -188,7 +188,7 @@ enum Bound {
 
 /// What a lifted node calls.
 #[derive(Clone, Copy)]
-enum Lifts<'a> {
+pub(super) enum Lifts<'a> {
     /// A function of the program, or a candidate with a body, with
     /// what the call gives its generic parameters: one written by
     /// instance is called by its instance for those.
@@ -393,7 +393,7 @@ fn in_calendar(date: CalendarDate, time: ClockTime, minutes: i16) -> bool {
 /// result, or the T of a `result<T, error>`. A candidate that can fail
 /// is declared once for each value of its policy (NUM-9, OPS-8), and
 /// the provider has one function for the two, which takes the policy.
-fn given(signature: &Signature) -> Option<&Type> {
+pub(super) fn given(signature: &Signature) -> Option<&Type> {
     match signature.result.as_ref()? {
         Type::Result { value, .. } => Some(value),
         other => Some(other),
@@ -1231,7 +1231,7 @@ impl<'a> Emitter<'a> {
     /// natives, where what it is for is declared in core, the module
     /// `module`, and the provider defines it (NATIVE-7). `None` for
     /// any other.
-    fn native_function(&self, module: usize, python: String) -> Option<String> {
+    pub(super) fn native_function(&self, module: usize, python: String) -> Option<String> {
         (Some(module) == self.program.core() && provides(&python)).then_some(python)
     }
 
@@ -4633,7 +4633,7 @@ impl<'a> Emitter<'a> {
     /// analysed program: a default names no parameter and no local
     /// (UNIT-7), so it means the same wherever it is written, and a
     /// function it calls is named through its own module.
-    fn arguments(
+    pub(super) fn arguments(
         &mut self,
         function: &Function,
         callee: (usize, usize),
@@ -4760,7 +4760,7 @@ impl<'a> Emitter<'a> {
     /// input written `T?` with no default may be left out, "an input
     /// that is then never valid" (`never_valid`); any other parameter
     /// takes what `left_out` gives it.
-    fn left_out_of_call(
+    pub(super) fn left_out_of_call(
         &mut self,
         callee: (usize, usize),
         generics: &[GenericArgument],
@@ -4821,7 +4821,7 @@ impl<'a> Emitter<'a> {
     /// `written`, configuration a node is given, inside `_core.Held(...)`
     /// where `kept`: an object hgraph keeps as it is (`held`,
     /// `kept_configuration`). Otherwise `written` as it is.
-    fn held_value(&mut self, kept: bool, written: String) -> String {
+    pub(super) fn held_value(&mut self, kept: bool, written: String) -> String {
         if !kept {
             return written;
         }
@@ -4838,7 +4838,7 @@ impl<'a> Emitter<'a> {
     /// the node is written by instance: a parameter declared a `T` is a
     /// list where `T` is one (GEN-2), and the node written for it takes
     /// the list out.
-    fn kept_configuration(
+    pub(super) fn kept_configuration(
         &mut self,
         callee: (usize, usize),
         generics: &[GenericArgument],
@@ -4870,7 +4870,7 @@ impl<'a> Emitter<'a> {
     /// as an hgraph node that a call names: a temporal function with a
     /// runtime body that is no source. A source's name is the graph
     /// that wires its node.
-    fn is_node(&self, (module, declaration): (usize, usize)) -> bool {
+    pub(super) fn is_node(&self, (module, declaration): (usize, usize)) -> bool {
         let declared_in = &self.program.modules[module];
         declared_in.declarations[declaration].kind.role() == Some(Role::Temporal)
             && declared_in.phases.get(declaration).copied().flatten() == Some(Phase::Node)
@@ -4927,7 +4927,7 @@ impl<'a> Emitter<'a> {
     /// `CmpResult` (OPS-3), gives its member's name: the provider
     /// declares no enum of the program's. The member is read from the
     /// enum by that name, as `Side("buy")` is (TYPE-7).
-    fn native_result(&mut self, result: Option<&Type>, called: String) -> String {
+    pub(super) fn native_result(&mut self, result: Option<&Type>, called: String) -> String {
         match result {
             Some(Type::Named {
                 module,
@@ -5493,7 +5493,7 @@ impl<'a> Emitter<'a> {
     ///
     /// The text is in two parts, and the name is not put in for a mark
     /// in it: a mark could as well be in a string a program wrote.
-    fn lifted_node(&mut self, of: &str, before: String, after: String) -> String {
+    pub(super) fn lifted_node(&mut self, of: &str, before: String, after: String) -> String {
         let text = (before, after);
         if let Some((_, known)) = self.lifts.iter().find(|(written, _)| *written == text) {
             return known.clone();
@@ -5529,7 +5529,7 @@ impl<'a> Emitter<'a> {
     /// invalid. Otherwise, an argument whose value contract admits null
     /// does not require a valid input: bind null when it is invalid.
     /// Every other input must satisfy ordinary `valid(input)`."
-    fn lifted(
+    pub(super) fn lifted(
         &mut self,
         target: (usize, usize),
         lifts: Lifts,
@@ -5642,7 +5642,7 @@ impl<'a> Emitter<'a> {
     /// how each parameter of `signature` is then bound in a lifted
     /// node: as an input where `input` gives the argument a type, as
     /// configuration otherwise.
-    fn bound(
+    pub(super) fn bound(
         &mut self,
         function: &Function,
         signature: &Signature,
@@ -5692,7 +5692,7 @@ impl<'a> Emitter<'a> {
 
     /// A call: of a function of the program, or of a native candidate
     /// of core, which the target's own provider has a function for.
-    fn call(
+    pub(super) fn call(
         &mut self,
         function: &Function,
         callee: &Callee,
@@ -5897,7 +5897,7 @@ impl<'a> Emitter<'a> {
     /// `run(call, config)` (RUN-3), whose value is the run's output as
     /// an eval's is." `real_time` is true for that form, and the
     /// harness is told so with `_real_time=True`.
-    fn eval(
+    pub(super) fn eval(
         &mut self,
         function: &Function,
         call: &Expr,
@@ -6010,7 +6010,7 @@ impl<'a> Emitter<'a> {
     /// operation reads (TYPE-12), and no abstract struct, whose value is
     /// of a struct below it, nor a generic one whose arguments have no
     /// text of their own.
-    fn whole_readable(&self, ty: &Type) -> bool {
+    pub(super) fn whole_readable(&self, ty: &Type) -> bool {
         match ty {
             Type::RollingWindow { .. } => false,
             Type::Nullable(inner) => self.whole_readable(inner),
@@ -6043,7 +6043,7 @@ impl<'a> Emitter<'a> {
     /// field or an entry, publishes whole: a scalar, an enum or a
     /// nullable one. A list's element is not nullable: hgraph's whole
     /// tuple of a list holds no null (see `bundle_of`).
-    fn parts_publish_whole(&self, ty: &Type) -> bool {
+    pub(super) fn parts_publish_whole(&self, ty: &Type) -> bool {
         match ty {
             Type::List { element, .. } => whole_scalar(element),
             Type::Set(_) => true,
@@ -6372,7 +6372,7 @@ fn is_null(value: &Expr) -> bool {
 /// What a call calls, and its arguments: a function of the program, or
 /// the candidate of an operator the call resolved to. `None` for any
 /// other expression, and for a call of what is not yet known.
-fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
+pub(super) fn called(value: &Expr) -> Option<(usize, usize, &[Argument])> {
     let ExprKind::Call {
         callee, arguments, ..
     } = &value.kind
